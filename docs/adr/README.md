@@ -25,6 +25,8 @@ is signal, don't delete it.
 | [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted |
+| [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
+| [0012](0012-monomorphize-templates-on-the-flat-module.md) | Monomorphize templates on the flat module, with shallow inference | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

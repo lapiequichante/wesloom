@@ -29,12 +29,20 @@
 //! `@builtin(position)` names a WGSL builtin, and by the time resolution
 //! runs, `@if` and `@macro` are already gone
 //! ([`crate::cond`] runs first).
+//!
+//! # What runs here
+//!
+//! [`resolve`] owns the pass order, because getting it wrong produces
+//! failures that look like something else: conditional translation per
+//! module before any renaming, then flattening, then template instantiation
+//! ([`mod@crate::mono`]) on the flat module, then dead-code elimination.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::*;
 use crate::cond::{self, Bindings};
 use crate::diagnostic::{Diagnostic, Diagnostics};
+use crate::mono::{self, Origins};
 use crate::parse::parse;
 
 /// The module sources available to a compilation.
@@ -133,11 +141,21 @@ pub fn resolve(modules: &Modules, root: &str, bindings: &Bindings) -> Result<Mod
     // readable and matches what a person would write.
     let mut out = Module::default();
     let mut seen_directives = BTreeSet::new();
+    // Which file each declaration came from. The flat module mixes spans
+    // from every module, so a later pass needs this to point a diagnostic
+    // at the right source.
+    let mut origins = Origins::new();
 
     for path in resolver.order.clone() {
         let module = resolver.parsed.get(&path).expect("loaded").clone();
         let is_root = path == root;
         let renamed = resolver.rewrite(&module, &path, is_root);
+
+        for declaration in &renamed.declarations {
+            if let Some(name) = declaration.name() {
+                origins.insert(name.to_string(), path.clone());
+            }
+        }
 
         for directive in renamed.directives {
             // `enable f16;` from two modules is one directive in the output.
@@ -152,6 +170,11 @@ pub fn resolve(modules: &Modules, root: &str, bindings: &Bindings) -> Result<Mod
     if resolver.diagnostics.has_errors() {
         return Err(resolver.diagnostics);
     }
+
+    // Templates are instantiated on the flat module: a template and its call
+    // sites can live in different files, so this is the first point at which
+    // all of them are visible.
+    mono::apply(&mut out, &origins)?;
 
     // Everything the root does not reach is dead weight in the output and,
     // worse, can fail to compile for reasons the author never sees. Drop it.

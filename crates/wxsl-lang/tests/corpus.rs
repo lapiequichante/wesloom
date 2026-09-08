@@ -2,9 +2,10 @@
 //!
 //! Unit tests cover the cases I thought of; this one covers the cases the
 //! library actually contains. It reads `wxsl-stdlib`'s shader tree by
-//! relative path rather than by a dependency, because `wxsl-stdlib` will
-//! depend on *this* crate once the migration in
-//! ADR 0011 completes, and a dev-dependency the other way would be a cycle.
+//! relative path rather than by a dependency: `wxsl-stdlib` ships shader
+//! source and node descriptors and does not compile anything itself, so it
+//! has no reason to depend on this crate, and a dev-dependency the other
+//! way would leave the two able to drift silently.
 //!
 //! Skips itself if the tree is not where it expects, so this cannot fail for
 //! someone building the crate in isolation.
@@ -287,4 +288,70 @@ fn macro_bindings_change_the_compiled_lighting_pass() {
         "debug normals should not light anything"
     );
     assert!(default.contains("sample_light"), "the default path lights");
+}
+
+/// A template that uses `components(T)`, for the test below.
+const RAW_TEMPLATE: &str = r#"
+fn widen<T: f32 | vec3f>(v: T, k: f32) -> T {
+    let lanes = f32(components(T)) * k;
+    return v * T(lanes);
+}
+"#;
+
+/// A root that calls that template at two types, beside a real stdlib
+/// function, for the test below.
+const RAW_ROOT: &str = r#"
+import package::demo::widen::widen;
+import package::math::safe_normalize::safe_normalize_vec3f;
+
+@fragment
+fn fs() -> @location(0) vec4f {
+    let direction = safe_normalize_vec3f(vec3f(1.0, 2.0, 3.0));
+    let scaled = widen(direction, 0.5);
+    let single = widen(0.25f, 2.0);
+    return vec4f(scaled * single, 1.0);
+}
+"#;
+
+#[test]
+fn a_template_compiles_against_the_real_shader_library() {
+    // The unit tests instantiate templates against sources written for the
+    // occasion. This one puts a template in front of the shader tree the
+    // project actually ships, so the pass has to survive real imports,
+    // real macros and the ABI modules.
+    let Some(root) = shader_root() else {
+        eprintln!("skipping: wxsl-stdlib/shaders not found");
+        return;
+    };
+    let mut modules = library(&root);
+    modules.insert("package::demo::widen", RAW_TEMPLATE);
+    modules.insert("package::demo::main", RAW_ROOT);
+
+    let wgsl = match compile(&modules, "package::demo::main", &Bindings::new()) {
+        Ok(wgsl) => wgsl,
+        Err(diagnostics) => panic!(
+            "{}",
+            diagnostics.render(&|path| modules.get(path).map(str::to_string))
+        ),
+    };
+
+    // Two instantiations, named by origin and by type, and no template left.
+    assert!(
+        wgsl.contains("fn package_demo_widen_widen_f32(v: f32, k: f32) -> f32"),
+        "{wgsl}"
+    );
+    assert!(
+        wgsl.contains("fn package_demo_widen_widen_vec3f(v: vec3f, k: f32) -> vec3f"),
+        "{wgsl}"
+    );
+    assert!(!wgsl.contains("widen<"), "{wgsl}");
+    assert!(!wgsl.contains("components("), "{wgsl}");
+    // `components(T)` folded to a literal in each copy.
+    assert!(wgsl.contains("f32(1) * k"), "{wgsl}");
+    assert!(wgsl.contains("f32(3) * k"), "{wgsl}");
+    // And a real stdlib function still came through beside it.
+    assert!(
+        wgsl.contains("fn package_math_safe_normalize_safe_normalize_vec3f("),
+        "{wgsl}"
+    );
 }

@@ -396,6 +396,14 @@ fn evaluate(expr: &Expr, values: &Bindings) -> Result<Value, Diagnostic> {
             let right = evaluate(&binary.right, values)?;
             binary_value(binary.op, left, right, binary.span)
         }
+        // `components(T)` folds during template instantiation, which runs
+        // after this pass and per instantiation. Saying so is worth more
+        // than the generic message, because the code reads as if it should
+        // work.
+        Expr::Call(call) if call.callee.name.node == "components" => Err(unsupported(
+            call.span,
+            "`components` is folded when a template is instantiated, which is after              conditional translation, so an `@if` cannot use it",
+        )),
         other => Err(unsupported(
             other.span(),
             "a condition may only use macros, literals and operators",

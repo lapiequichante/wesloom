@@ -27,8 +27,8 @@
 //!
 //! Complete and in use: `wxsl-render` compiles every shader through this
 //! crate, and the `wesl` dependency it replaced is gone. Templates are
-//! parsed and checked but not yet monomorphized — no shipped shader declares
-//! a generic function, so nothing needs it yet.
+//! monomorphized ([`mod@crate::mono`]), so a generic function reaches the
+//! backend as one concrete copy per type it is used at.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -39,6 +39,7 @@ pub mod cond;
 pub mod diagnostic;
 pub mod emit;
 pub mod lexer;
+pub mod mono;
 pub mod parse;
 pub mod resolve;
 pub mod span;
@@ -54,6 +55,7 @@ pub use compile::{compile, compile_to_wxsl};
 pub use cond::{Bindings, Value};
 pub use diagnostic::{Diagnostic, Diagnostics, Severity};
 pub use emit::{emit, emit_wgsl};
+pub use mono::Origins;
 pub use parse::{parse, parse_expr};
 pub use resolve::{mangle, resolve, Modules};
 pub use span::{Span, Spanned};

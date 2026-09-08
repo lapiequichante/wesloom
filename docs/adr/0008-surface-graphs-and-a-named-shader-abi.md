@@ -64,6 +64,15 @@ module cannot see declarations in the root module that imports it, so
     because a WXSL module cannot reach into the root module importing it.
   - The whole macro set is part of the shader variant cache key, since
     neither kind of macro shows up in the root module's own declarations.
+
+  > **Superseded in part by [ADR 0011](0011-own-the-shading-language.md).**
+  > The generated `package::wxsl::macros` module is gone. Owning the
+  > compiler removed the constraint that produced it: a macro is now a
+  > `const` marked `@macro` in the file that uses it, carrying its own
+  > default, and bindings reach every module in the compilation. Flags and
+  > numbers are one mechanism rather than two. The cache key still folds in
+  > the whole macro set, for the same reason as before — the bindings reach
+  > imported modules, so they are not visible in the root's declarations.
 - **The render path is not a macro variable.** `wxsl_deferred` is bound by
   the renderer from the active pipeline's `RenderPath` and overwrites anything
   a graph pinned under that name: a graph that could choose its own entry

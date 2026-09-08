@@ -89,15 +89,14 @@ lets a graph type-check a call to it. A function with no descriptor is
 unreachable from a graph, and `src/shaders.rs`'s test will fail if the file
 is not listed in `MODULES` at all.
 
-**Polymorphism over value types belongs in `registry.rs`, not here.**
-WGSL has no user-function overloading, and WXSL's generics do not work
-(tested; see [ADR 0003](../../../docs/adr/0003-wesl-as-the-shading-language.md)).
-A node definition needs concrete socket types anyway, so the `for ty in
-ValueType::FLOATS` loop is the expansion mechanism. Two patterns, and the
-choice is not about taste:
+**Polymorphism over value types is expanded by `registry.rs`.**
+A node definition needs concrete socket types — a graph type-checks against
+them — so the `for ty in ValueType::FLOATS` loop is the expansion mechanism
+whichever way the function itself is written. Three patterns, and the choice
+is not about taste:
 
 * **Expression family** — no `.wxsl` file at all. The loop builds the
-  expression per type with `ty.wesl_type()`, so there is exactly one source
+  expression per type with `ty.wxsl_type()`, so there is exactly one source
   of truth. Right whenever the body is one expression, which is more often
   than it looks: a scalar guard like `if abs(span) < 1e-8 { … }` does not
   generalize — for the vector types that comparison is a `vec<bool>` and
@@ -105,22 +104,38 @@ choice is not about taste:
   collapses the body to an expression. `math.remap`, `math.inverse_lerp` and
   `math.wrap` are built this way; `registry.rs`'s `guarded` helper is the
   reshaping.
-* **One WXSL function per type**, named `<name>_<wesl_type>`. Right when the
-  function is a *reduction*, where a scalar guard is legitimate because the
-  reduced value is scalar however wide the input is, and where a named
-  intermediate earns its keep. `math/safe_normalize.wxsl` is the example.
-  Write the suffix in exactly one place — the loop in `registry.rs` — and
-  the existing test that every called function exists will catch a typo.
+* **One templated WXSL function.** `fn f<T: f32 | vec2f | vec3f | vec4f>`,
+  called as `f<vec3f>(…)` from the loop, instantiated per type by the
+  compiler ([ADR 0012](../../../docs/adr/0012-monomorphize-templates-on-the-flat-module.md)).
+  Right when the body is more than one expression but is genuinely the same
+  code at every width. `components(T)` is available inside it as an integer
+  literal — the number of scalar components — for the cases that need the
+  width. Note that `@if` cannot test `components(T)`: conditional
+  translation runs before instantiation, and `cond` says so if you try.
+* **One WXSL function per type**, named `<name>_<wxsl_type>`. Right when the
+  bodies genuinely differ — typically a *reduction*, where a scalar guard is
+  legitimate because the reduced value is scalar however wide the input is.
+  `math/safe_normalize.wxsl` is the example. Write the suffix in exactly one
+  place — the loop in `registry.rs` — and the existing test that every
+  called function exists will catch a typo.
+
+One node per type is still one node per type in all three: the sockets are
+concrete, so the ids stay `math.remap.f32`, `math.remap.vec3f` and so on.
+Collapsing a family to a single node with a type-variable socket resolved by
+connection is the follow-up ADR 0012 names, not something templates alone
+buy.
 
 `select(false_value, true_value, cond)` takes a vector `cond` and chooses
 per component, which is usually the semantics you want anyway: one
 degenerate component should collapse only itself.
 
-**A function that reads a macro variable must declare it on its node.** The
-macro's `const` declaration is generated per compilation into
-`package::wxsl::macros`, and only for macros in the effective set — which
-is built from the declarations of the nodes a graph uses. Declare it in
-`registry.rs` (see `generative.fbm3`) or the import will not resolve.
+**A function that reads a macro variable must declare it in its own file,
+and on its node.** In the file: `@macro const WXSL_FBM_OCTAVES: i32 = 5;`,
+which is both the declaration and the default, so the module compiles on its
+own. On the node in `registry.rs` (see `generative.fbm3`): that is what puts
+the macro in a graph's effective set, so the graph and a single node instance
+can override it. A macro used in an `@if` but never declared is an error
+naming the file and the line — not a silent `false`.
 
 **Guard the degenerate cases.** A zero-length vector, a zero-width range, a
 zero-radius falloff: these arrive from a graph far more often than from

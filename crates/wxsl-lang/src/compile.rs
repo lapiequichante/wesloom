@@ -10,13 +10,17 @@
 //!    branch that is dropped should never have its references resolved.
 //! 3. **resolution**: mangle each imported declaration by origin, rewrite
 //!    references (respecting shadowing), concatenate dependencies first.
-//! 4. **dead-code elimination** from the root's declarations, so a library
+//! 4. **monomorphization** of templates, on the flat module — a template
+//!    and its call sites can be in different files, so this is the first
+//!    point at which all of them are visible.
+//! 5. **dead-code elimination** from the root's declarations, so a library
 //!    module's unused half cannot fail to compile for reasons the shader
-//!    author never sees.
-//! 5. **emit WGSL**, refusing anything that is still WXSL-only — which
+//!    author never sees. After instantiation, so an unused instantiation
+//!    goes with it.
+//! 6. **emit WGSL**, refusing anything that is still WXSL-only — which
 //!    catches a skipped pass here rather than inside `wgpu`.
 //!
-//! Steps 2 to 4 live in [`mod@crate::resolve`], which owns the ordering.
+//! Steps 2 to 5 live in [`mod@crate::resolve`], which owns the ordering.
 
 use crate::cond::Bindings;
 use crate::diagnostic::Diagnostics;
@@ -195,5 +199,87 @@ mod tests {
         let error =
             compile(&Modules::new(), "package::absent", &Bindings::new()).expect_err("no root");
         assert!(error.to_string().contains("no module"), "{error}");
+    }
+    #[test]
+    fn a_template_from_another_module_is_instantiated_at_the_call_site() {
+        // The template and the call are in different files, which is why
+        // instantiation runs on the flat module rather than per file.
+        let mut modules = library();
+        modules.insert(
+            "package::math::scale",
+            "fn scale<T: f32 | vec3f>(v: T, k: f32) -> T { return v * T(k); }\n",
+        );
+        modules.insert(
+            "package::main",
+            "import package::math::scale::scale;\n\
+             @fragment\n\
+             fn fs() -> @location(0) vec4f {\n\
+             \x20   let tint = vec3f(0.5);\n\
+             \x20   return vec4f(scale(tint, 2.0), 1.0);\n}\n",
+        );
+
+        let wgsl = match compile(&modules, "package::main", &Bindings::new()) {
+            Ok(wgsl) => wgsl,
+            Err(diagnostics) => panic!(
+                "{}",
+                diagnostics.render(&|path| modules.get(path).map(str::to_string))
+            ),
+        };
+        // Mangled by resolution, then instantiated: both names survive in
+        // the one identifier, which is what makes a GPU capture readable.
+        assert!(
+            wgsl.contains("fn package_math_scale_scale_vec3f(v: vec3f, k: f32) -> vec3f"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("package_math_scale_scale_vec3f(tint, 2.0)"),
+            "{wgsl}"
+        );
+        assert!(!wgsl.contains("<T"), "{wgsl}");
+        assert!(!wgsl.contains("T(k)"), "{wgsl}");
+    }
+
+    #[test]
+    fn a_template_the_root_never_calls_reaches_nothing() {
+        let mut modules = library();
+        modules.insert(
+            "package::math::scale",
+            "fn scale<T: f32 | vec3f>(v: T, k: f32) -> T { return v * T(k); }\n",
+        );
+        modules.insert(
+            "package::main",
+            "import package::math::scale::scale;\n\
+             @fragment\n\
+             fn fs() -> @location(0) vec4f { return vec4f(1.0); }\n",
+        );
+        let wgsl = compile(&modules, "package::main", &Bindings::new()).expect("compiles");
+        assert!(!wgsl.contains("scale"), "{wgsl}");
+    }
+
+    #[test]
+    fn a_bad_instantiation_points_at_the_file_that_wrote_the_call() {
+        let mut modules = library();
+        modules.insert(
+            "package::math::scale",
+            "fn scale<T: f32 | vec3f>(v: T, k: f32) -> T { return v * T(k); }\n",
+        );
+        modules.insert(
+            "package::main",
+            "import package::math::scale::scale;\n\
+             @fragment\n\
+             fn fs() -> @location(0) vec4f {\n\
+             \x20   let tint = vec2f(0.5);\n\
+             \x20   return vec4f(scale(tint, 2.0), 0.0, 1.0);\n}\n",
+        );
+        let error =
+            compile(&modules, "package::main", &Bindings::new()).expect_err("vec2f is not allowed");
+        let rendered = error.render(&|path| modules.get(path).map(str::to_string));
+        assert!(rendered.contains("package::main"), "{rendered}");
+        assert!(
+            rendered.contains("must be one of: f32 | vec3f"),
+            "{rendered}"
+        );
+        // The caret has to land on the call, in the caller file.
+        assert!(rendered.contains("scale(tint, 2.0)"), "{rendered}");
     }
 }

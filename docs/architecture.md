@@ -203,13 +203,30 @@ the four cheaper alternatives it rejected first.
 | `grammar` | LALRPOP, over the token stream rather than raw text |
 | `cond` | evaluate `@if`, bind `@macro const` values — per module, before renaming |
 | `resolve` | inline imports, mangle by origin, rewrite references respecting shadowing |
+| `mono` | instantiate templates, one copy per set of type arguments |
 | — | dead-code elimination from the root's declarations |
 | `emit` | WGSL, refusing anything still WXSL-only |
 
-The pass order is an invariant, not a preference: `cond` must run before
-renaming, because an `@if` names macros in its own module's vocabulary and a
-dropped branch should never have its references resolved. `resolve` takes the
-bindings and calls `cond` itself rather than trusting callers to sequence it.
+The pass order is an invariant, not a preference:
+
+* `cond` must run before renaming, because an `@if` names macros in its own
+  module's vocabulary and a dropped branch should never have its references
+  resolved.
+* `mono` must run after flattening, because a template and its call sites
+  can be in different files, so no per-module pass sees all of them.
+* dead-code elimination must run after `mono`, so an instantiation whose
+  only caller was itself dropped goes with it.
+
+`resolve` takes the bindings and sequences all of this itself rather than
+trusting callers to get it right.
+
+Templates carry one builtin, `components(T)` — the number of scalar
+components in a type, folded to an integer literal, so it works as an array
+size or a loop bound. Type arguments are written explicitly (which is what
+the node graph emits, since a graph knows every socket's type) or inferred
+from the arguments by a deliberately shallow rule that errors rather than
+guesses. [ADR 0012](adr/0012-monomorphize-templates-on-the-flat-module.md)
+records why, and what a full type checker would have cost.
 
 The backend's refusal is deliberate. If an unresolved import, an
 uninstantiated template or a surviving `@if` reaches it, the error names the
