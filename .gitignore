@@ -1,0 +1,13 @@
+/target/
+**/target/
+
+# Workspace of libraries only (no binaries yet) — don't pin dependency
+# versions for consumers. Revisit once examples/binaries land.
+Cargo.lock
+
+# Editor/OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,22 @@
+[package]
+name = "wesloom"
+description = "WESL shader node graphs on wgpu, with an optional visual node editor. See README for feature flags."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wesloom-core = { workspace = true }
+wesloom-render = { workspace = true, optional = true }
+wesloom-editor = { workspace = true, optional = true }
+wesloom-stdlib = { workspace = true, optional = true }
+
+[features]
+default = ["render", "stdlib"]
+render = ["dep:wesloom-render"]
+editor = ["dep:wesloom-editor", "render"]
+stdlib = ["dep:wesloom-stdlib"]

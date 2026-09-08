@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wesloom-core",
+    "crates/wesloom-render",
+    "crates/wesloom-editor",
+    "crates/wesloom-stdlib",
+    "crates/wesloom",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.82"
+authors = ["Florian Villard"]
+repository = "https://github.com/CHANGEME/wesloom"
+homepage = "https://github.com/CHANGEME/wesloom"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+wesloom-core = { path = "crates/wesloom-core", version = "0.0.0" }
+wesloom-render = { path = "crates/wesloom-render", version = "0.0.0" }
+wesloom-editor = { path = "crates/wesloom-editor", version = "0.0.0" }
+wesloom-stdlib = { path = "crates/wesloom-stdlib", version = "0.0.0" }
+
+# Pinned once real implementation starts (see docs/adr/0003 for the WESL
+# toolchain choice and docs/adr/0004 for the GUI toolkit choice):
+# wesl = "..."       # https://crates.io/crates/wesl (WESL -> WGSL compiler)
+# wgpu = "..."       # https://crates.io/crates/wgpu
+# egui = "..."       # https://crates.io/crates/egui (behind the `editor` feature only)
+
+[profile.dev.package."*"]
+opt-level = 1
