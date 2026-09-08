@@ -52,6 +52,9 @@ struct Object {
     normal_matrix: mat4x4f,
 }
 
+// The frame group (`abi::GROUP_FRAME`): built once per frame. `object` shares
+// it despite changing per draw, addressed by a dynamic offset rather than
+// costing a quarter of the four-slot budget. See ADR 0010.
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> scene: Scene;
 @group(0) @binding(2) var<uniform> object: Object;

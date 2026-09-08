@@ -8,6 +8,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
+use wesloom_core::abi;
 
 /// Maximum lights the scene uniform carries.
 ///
@@ -262,11 +263,18 @@ impl ObjectUniform {
     }
 }
 
-/// The uniform buffers and bind group for group 0.
+/// The uniform buffers and bind group for the frame group
+/// ([`abi::GROUP_FRAME`]).
 ///
 /// One instance is shared by every pipeline: the bindings are the same for
 /// forward, for the deferred material pass, and for the deferred lighting
 /// pass, so the layout is created once and reused.
+///
+/// The object transform shares this group even though it changes per draw
+/// ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by-update-frequency.md)).
+/// It is still a whole-buffer binding rather than a dynamic offset, which is
+/// exactly right for the one-object demo and is where a multi-draw scene
+/// would switch `has_dynamic_offset` on without moving the binding.
 pub struct SceneBindings {
     camera: wgpu::Buffer,
     scene: wgpu::Buffer,
@@ -302,22 +310,26 @@ impl SceneBindings {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("wesloom scene bindings"),
-            entries: &[entry(0), entry(1), entry(2)],
+            entries: &[
+                entry(abi::BINDING_CAMERA),
+                entry(abi::BINDING_SCENE),
+                entry(abi::BINDING_OBJECT),
+            ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("wesloom scene bindings"),
             layout: &layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: abi::BINDING_CAMERA,
                     resource: camera.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: abi::BINDING_SCENE,
                     resource: scene.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: abi::BINDING_OBJECT,
                     resource: object.as_entire_binding(),
                 },
             ],

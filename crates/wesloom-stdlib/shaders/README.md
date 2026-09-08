@@ -39,7 +39,7 @@ explains the split.
 
 | Module | What it holds |
 |---|---|
-| `bindings.wesl` | Camera/scene/object uniforms, light sampling. **Host-shared layout**: mirrored by `wesloom-render`'s `scene` module. |
+| `bindings.wesl` | The frame bind group: camera/scene/object uniforms, light sampling. **Host-shared layout**: mirrored by `wesloom-render`'s `scene` module. |
 | `surface.wesl` | `SurfaceContext` and `Surface`, the graph's input and output. |
 | `vertex.wesl` | The vertex stage, shared by both paths, and the context builder. |
 | `shading.wesl` | `shade_surface`: the lighting model. Called by *both* paths. |
@@ -49,6 +49,23 @@ explains the split.
 Editing any of these means editing `wesloom_core::abi` in the same change:
 the struct field tables there are the Rust half of the same contract, in the
 same order.
+
+### Bind groups
+
+`maxBindGroups` is 4, and all four are allocated up front by how often their
+contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by-update-frequency.md)).
+`wesloom_core::abi::BIND_GROUPS` is the Rust half of this table.
+
+| # | Slot | Declared in | Holds |
+|---|---|---|---|
+| 0 | `frame` | `bindings.wesl` | Camera, scene, object transforms |
+| 1 | `material` | *generated* | A graph's parameters and textures |
+| 2 | `user` | — | Nothing here. The application's slot. |
+| 3 | `pass` | `lighting_pass.wesl` | G-buffer, and future shadow/IBL resources |
+
+Nothing in this crate may bind `@group(2)`, and only pass plumbing may bind
+`@group(3)`: a library function must compile in either render path, and group
+3 is occupied in deferred. A test in `src/shaders.rs` enforces both.
 
 ## Authoring rules
 

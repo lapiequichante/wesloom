@@ -119,6 +119,28 @@ entry directly, the deferred lighting pass after unpacking the G-buffer — so
 the two cannot drift apart in what lighting means. `crates/wesloom/tests/`
 asserts they render the same image.
 
+## Bind groups
+
+WebGPU guarantees only four bind groups, so all four are allocated up front,
+ordered by how often their contents change — a backend may disturb
+higher-numbered groups when a lower one is rebound.
+
+| # | Slot | Rebound | Holds |
+|---|---|---|---|
+| 0 | `frame` | per frame | Camera, scene lighting, object transforms |
+| 1 | `material` | per material | A graph's parameters, textures, samplers |
+| 2 | `user` | whenever | Nothing wesloom binds — the application's slot |
+| 3 | `pass` | per pass | The G-buffer, and future shadow/IBL resources |
+
+Object transforms share the frame group despite changing per draw: a
+dynamic offset addresses them for free, where a group of their own would
+cost a quarter of the budget. That leaves the application one free slot, not
+two — the honest cost of the deferred path needing somewhere to put the
+G-buffer while a graph still has to compile for either path.
+`wesloom_core::abi::BIND_GROUPS` is the single declaration, and a test in
+`wesloom-stdlib` asserts the shipped `.wesl` binds the groups it names. See
+[ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md).
+
 ## Macro variables
 
 Not everything a node needs can be a socket value: a loop bound has to be a

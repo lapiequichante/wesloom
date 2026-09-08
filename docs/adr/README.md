@@ -24,6 +24,7 @@ is signal, don't delete it.
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
 | [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
+| [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

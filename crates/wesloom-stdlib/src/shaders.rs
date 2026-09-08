@@ -87,6 +87,7 @@ pub fn module(path: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use wesloom_core::abi;
 
     #[test]
     fn module_paths_are_unique_and_non_empty() {
@@ -128,6 +129,86 @@ mod tests {
             .collect();
         let missing: Vec<&String> = found.iter().filter(|f| !listed.contains(*f)).collect();
         assert!(missing.is_empty(), "unlisted shader files: {missing:?}");
+    }
+
+    /// Every `@group(N)` a module declares, as `(module path, N)`.
+    fn declared_groups() -> Vec<(&'static str, u32)> {
+        let mut found = Vec::new();
+        for (path, source) in MODULES {
+            let mut rest = *source;
+            while let Some(at) = rest.find("@group(") {
+                rest = &rest[at + "@group(".len()..];
+                let end = rest.find(')').expect("@group( is closed");
+                let index: u32 = rest[..end]
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| panic!("`{path}` has a non-numeric @group"));
+                found.push((*path, index));
+                rest = &rest[end..];
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn shipped_shaders_bind_the_groups_the_abi_names() {
+        // Group indices are part of the ABI (ADR 0010) and are written twice:
+        // as constants in `wesloom_core::abi`, and by hand in the `.wesl`
+        // below. This is the test that keeps the two from drifting.
+        let groups = declared_groups();
+        assert!(!groups.is_empty(), "no @group declarations found at all");
+
+        for (path, index) in &groups {
+            assert!(
+                abi::BIND_GROUPS.iter().any(|slot| slot.index == *index),
+                "`{path}` binds @group({index}), which is not one of the four slots"
+            );
+            let slot = abi::BIND_GROUPS
+                .iter()
+                .find(|slot| slot.index == *index)
+                .expect("checked above");
+            assert!(
+                !slot.application_owned,
+                "`{path}` binds @group({index}), the application's own slot"
+            );
+        }
+
+        let frame: Vec<u32> = groups
+            .iter()
+            .filter(|(path, _)| *path == "package::wesloom::bindings")
+            .map(|(_, index)| *index)
+            .collect();
+        assert_eq!(frame, vec![abi::GROUP_FRAME; 3], "camera, scene, object");
+
+        let pass: Vec<u32> = groups
+            .iter()
+            .filter(|(path, _)| *path == abi::LIGHTING_PASS_MODULE)
+            .map(|(_, index)| *index)
+            .collect();
+        assert_eq!(
+            pass,
+            vec![abi::GROUP_PASS; abi::GBUFFER_TARGETS.len() + 1],
+            "one binding per G-buffer target, plus depth"
+        );
+    }
+
+    #[test]
+    fn the_frame_group_declares_the_bindings_the_abi_numbers() {
+        let source = module("package::wesloom::bindings").expect("bindings module");
+        for (binding, name) in [
+            (abi::BINDING_CAMERA, "camera"),
+            (abi::BINDING_SCENE, "scene"),
+            (abi::BINDING_OBJECT, "object"),
+        ] {
+            let declaration = format!(
+                "@group({}) @binding({binding}) var<uniform> {name}",
+                abi::GROUP_FRAME
+            );
+            assert!(
+                source.contains(&declaration),
+                "bindings.wesl is missing `{declaration}`"
+            );
+        }
     }
 
     #[test]

@@ -15,10 +15,15 @@ import package::wesloom::shading::shade_surface;
 import package::wesloom::surface::SurfaceContext;
 import package::space::tangent_basis::tangent_basis;
 
-@group(1) @binding(0) var gbuffer_base_color: texture_2d<f32>;
-@group(1) @binding(1) var gbuffer_normal: texture_2d<f32>;
-@group(1) @binding(2) var gbuffer_emissive: texture_2d<f32>;
-@group(1) @binding(3) var gbuffer_depth: texture_depth_2d;
+// The G-buffer lives in the pass group (`abi::GROUP_PASS`), not the material
+// group: this pass has no material, and overloading group 1 to mean
+// "material" in one pass and "G-buffer" in another is how you get
+// mystifying validation errors. See ADR 0010. Bindings are in
+// `abi::GBUFFER_TARGETS` order, with depth last.
+@group(3) @binding(0) var gbuffer_base_color: texture_2d<f32>;
+@group(3) @binding(1) var gbuffer_normal: texture_2d<f32>;
+@group(3) @binding(2) var gbuffer_emissive: texture_2d<f32>;
+@group(3) @binding(3) var gbuffer_depth: texture_depth_2d;
 
 // A fullscreen triangle covering the viewport, from three vertices and no
 // vertex buffer: (-1,-1), (3,-1), (-1,3).

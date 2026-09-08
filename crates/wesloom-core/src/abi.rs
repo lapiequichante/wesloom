@@ -71,6 +71,76 @@ pub const LIGHTING_PASS_VERTEX_ENTRY: &str = "lighting_vs";
 /// Fragment entry point of [`LIGHTING_PASS_MODULE`].
 pub const LIGHTING_PASS_FRAGMENT_ENTRY: &str = "lighting_fs";
 
+/// The four bind-group slots, fixed for the life of the ABI.
+///
+/// `maxBindGroups` is 4 in WebGPU and in `wgpu`, so this is the whole budget.
+/// Slots are ordered by how often their contents change, least often first,
+/// because a backend may disturb higher-numbered groups when a lower one is
+/// rebound. See
+/// [ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by-update-frequency.md)
+/// for why five update frequencies fit in four slots, and what it costs.
+pub const BIND_GROUPS: &[BindGroup] = &[
+    BindGroup {
+        index: GROUP_FRAME,
+        name: "frame",
+        doc: "Camera, scene lighting and object transforms. Built once per frame.",
+        application_owned: false,
+    },
+    BindGroup {
+        index: GROUP_MATERIAL,
+        name: "material",
+        doc: "A material's parameters, textures and samplers.",
+        application_owned: false,
+    },
+    BindGroup {
+        index: GROUP_USER,
+        name: "user",
+        doc: "Unused by wesloom: the slot an application binds its own resources in.",
+        application_owned: true,
+    },
+    BindGroup {
+        index: GROUP_PASS,
+        name: "pass",
+        doc: "Resources a pipeline shape needs, such as the G-buffer read by the deferred lighting pass.",
+        application_owned: false,
+    },
+];
+
+/// One entry of [`BIND_GROUPS`].
+pub struct BindGroup {
+    /// The `@group(N)` index.
+    pub index: u32,
+    /// Short name, used in labels and diagnostics.
+    pub name: &'static str,
+    /// What the slot holds.
+    pub doc: &'static str,
+    /// Whether node definitions and applications may bind into it.
+    pub application_owned: bool,
+}
+
+/// Per-frame data: camera, scene, and the object transforms
+/// (`package::wesloom::bindings`). Rebound once per frame.
+pub const GROUP_FRAME: u32 = 0;
+/// Per-material data: the parameters a graph exposes, plus its textures.
+pub const GROUP_MATERIAL: u32 = 1;
+/// The application's own slot. Nothing in wesloom binds here, and it is the
+/// only group a node definition may declare a binding in.
+pub const GROUP_USER: u32 = 2;
+/// Per-pass data, such as the G-buffer the deferred lighting pass samples.
+///
+/// Highest-numbered on purpose: rebinding it disturbs no other group, and it
+/// is bound once per pass, where the index costs nothing. Not offered to node
+/// authors — a graph must compile for either render path (ADR 0005), and a
+/// node claiming this slot would work in forward and collide in deferred.
+pub const GROUP_PASS: u32 = 3;
+
+/// [`GROUP_FRAME`] binding of the camera uniform.
+pub const BINDING_CAMERA: u32 = 0;
+/// [`GROUP_FRAME`] binding of the scene uniform (lights, ambient, time).
+pub const BINDING_SCENE: u32 = 1;
+/// [`GROUP_FRAME`] binding of the per-object transform uniform.
+pub const BINDING_OBJECT: u32 = 2;
+
 /// How much precision a G-buffer target needs.
 ///
 /// The ABI says what each target carries and therefore what precision it

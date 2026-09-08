@@ -179,6 +179,9 @@ impl MaterialPipelines {
         MaterialPipelines {
             layout: device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("wesloom material"),
+                // Only the frame group so far; the material group
+                // (`abi::GROUP_MATERIAL`) joins it when a graph can declare
+                // parameters. ADR 0010.
                 bind_group_layouts: &[Some(bind_group_layout)],
                 immediate_size: 0,
             }),
@@ -308,7 +311,7 @@ impl Pipeline for ForwardPipeline {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_bind_group(0, input.bindings.bind_group(), &[]);
+        pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
         for draw in input.draws {
             pass.set_pipeline(self.pipelines.get(device, draw.material, &color_targets));
             draw.mesh.draw(&mut pass);
@@ -434,7 +437,11 @@ impl DeferredPipeline {
             material_pipelines: MaterialPipelines::new(device, bindings.layout()),
             lighting_layout: device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("wesloom deferred lighting"),
-                bind_group_layouts: &[Some(bindings.layout()), Some(&gbuffer_layout)],
+                // Groups 1 (material) and 2 (user) are genuinely unbound
+                // here: the lighting pass has no material graph, and the
+                // G-buffer sits in `abi::GROUP_PASS`. `wgpu` takes `Option`s,
+                // so the holes are expressible. See ADR 0010.
+                bind_group_layouts: &[Some(bindings.layout()), None, None, Some(&gbuffer_layout)],
                 immediate_size: 0,
             }),
             lighting_pipelines: HashMap::new(),
@@ -543,7 +550,7 @@ impl Pipeline for DeferredPipeline {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, input.bindings.bind_group(), &[]);
+            pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
             for draw in input.draws {
                 pass.set_pipeline(self.material_pipelines.get(
                     device,
@@ -580,8 +587,8 @@ impl Pipeline for DeferredPipeline {
                 multiview_mask: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, input.bindings.bind_group(), &[]);
-            pass.set_bind_group(1, &gbuffer.bind_group, &[]);
+            pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
+            pass.set_bind_group(abi::GROUP_PASS, &gbuffer.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
         Ok(())
