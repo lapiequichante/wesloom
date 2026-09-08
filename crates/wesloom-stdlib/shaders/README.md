@@ -6,21 +6,53 @@ them:
 
 ```
 shaders/
+  wesloom/      the shader ABI: what a generated material module is written
+                against (see below) — not granular functions
   animation/
   color/
   distort/
-  filter/
+  filter/       (empty)
   generative/
   lighting/
   math/
-  sample/
+  sample/       (empty)
   sdf/
   space/
 ```
 
-## Authoring rule
+One function per file, named after the function, so a module path reads
+`package::lighting::pbr_direct::pbr_direct`. Where a function has a struct
+return or one tightly-coupled variant, both live in that file (see
+`lighting/pbr_direct_split.wesl`).
 
-Every function in this crate is **original code**. It's fine — encouraged,
+`filter/` and `sample/` are empty: both are mostly about sampling textures,
+which the node model does not carry yet. They stay as directories so the
+category layout is not a surprise later.
+
+## `wesloom/` — the shader ABI
+
+These are not library functions; they are the fixed vocabulary a generated
+material module is compiled against, and the plumbing of the two render
+paths. `wesloom_core::abi` names every item in them, and
+[ADR 0008](../../../docs/adr/0008-surface-graphs-and-a-named-shader-abi.md)
+explains the split.
+
+| Module | What it holds |
+|---|---|
+| `bindings.wesl` | Camera/scene/object uniforms, light sampling. **Host-shared layout**: mirrored by `wesloom-render`'s `scene` module. |
+| `surface.wesl` | `SurfaceContext` and `Surface`, the graph's input and output. |
+| `vertex.wesl` | The vertex stage, shared by both paths, and the context builder. |
+| `shading.wesl` | `shade_surface`: the lighting model. Called by *both* paths. |
+| `deferred.wesl` | The G-buffer struct, and packing/unpacking it. |
+| `lighting_pass.wesl` | The deferred lighting pass, compiled as its own root module. |
+
+Editing any of these means editing `wesloom_core::abi` in the same change:
+the struct field tables there are the Rust half of the same contract, in the
+same order.
+
+## Authoring rules
+
+**Every function in this crate is original code.** It's fine — encouraged,
 even — to look at how other libraries and engines solve a problem
 (LYGIA's category breakdown, [Babylon.js](https://github.com/BabylonJS/Babylon.js)'s
 shader techniques, papers, blog posts) for the *idea*: what the function
@@ -34,4 +66,20 @@ function was written with a specific external reference in mind for the
 good practice; it is not a substitute for the implementation being your
 own.
 
-None have been written yet — this directory is scaffolding.
+**A new function needs a node definition.** `src/registry.rs` describes each
+function's module, name, parameters and return shape; that descriptor is what
+lets a graph type-check a call to it. A function with no descriptor is
+unreachable from a graph, and `src/shaders.rs`'s test will fail if the file
+is not listed in `MODULES` at all.
+
+**A function that reads a macro variable must declare it on its node.** The
+macro's `const` declaration is generated per compilation into
+`package::wesloom::macros`, and only for macros in the effective set — which
+is built from the declarations of the nodes a graph uses. Declare it in
+`registry.rs` (see `generative.fbm3`) or the import will not resolve.
+
+**Guard the degenerate cases.** A zero-length vector, a zero-width range, a
+zero-radius falloff: these arrive from a graph far more often than from
+hand-written code, because a socket's default is frequently zero. Returning a
+sensible value beats emitting a NaN that shows up as black pixels three nodes
+downstream.

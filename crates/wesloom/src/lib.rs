@@ -17,8 +17,34 @@
 //! `docs/adr/0002-cargo-workspace-crate-boundaries.md` for why the split
 //! exists.
 //!
-//! This crate is currently scaffolding: it just re-exports its
-//! (also-scaffolding) dependencies.
+//! # Putting the halves together
+//!
+//! The renderer deliberately does not depend on the node library (the
+//! dependency arrow only points into `wesloom-core`), so an application has
+//! to hand the library's WESL modules to the renderer itself. With both
+//! features on, [`stdlib_library`] is that one line:
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use wesloom::render::{Renderer, TargetConfig};
+//!
+//! let registry = wesloom::stdlib::registry();
+//! let graph = wesloom::core::graph::Graph::new("empty");
+//! # let device: wgpu::Device = unimplemented!();
+//!
+//! let mut renderer = Renderer::new(
+//!     &device,
+//!     wesloom::stdlib_library(),
+//!     TargetConfig::new(1280, 720, wgpu::TextureFormat::Rgba8Unorm),
+//! )?;
+//! let material = wesloom::render::Material::from_graph(&graph, &registry)?;
+//! renderer.prepare(&device, &material)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! See `crates/wesloom/examples/pbr_cube.rs` for a complete program: a PBR
+//! cube, authored as a node graph, rendered through either path.
 
 pub use wesloom_core as core;
 
@@ -30,3 +56,28 @@ pub use wesloom_editor as editor;
 
 #[cfg(feature = "stdlib")]
 pub use wesloom_stdlib as stdlib;
+
+/// A [`ShaderLibrary`](wesloom_render::ShaderLibrary) preloaded with every
+/// WESL module `wesloom-stdlib` ships, including the shader ABI a generated
+/// material module is written against.
+///
+/// Available only with both `render` and `stdlib`, because it is precisely
+/// the bridge between them that neither crate may build itself.
+#[cfg(all(feature = "render", feature = "stdlib"))]
+pub fn stdlib_library() -> wesloom_render::ShaderLibrary {
+    let mut library = wesloom_render::ShaderLibrary::new();
+    library.insert_all(wesloom_stdlib::MODULES.iter().copied());
+    library
+}
+
+#[cfg(all(test, feature = "render", feature = "stdlib"))]
+mod tests {
+    #[test]
+    fn the_stdlib_library_satisfies_the_shader_abi() {
+        let library = super::stdlib_library();
+        library
+            .check_abi()
+            .expect("the stdlib ships every ABI module");
+        assert_eq!(library.len(), wesloom_stdlib::MODULES.len());
+    }
+}

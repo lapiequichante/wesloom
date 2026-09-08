@@ -1,0 +1,74 @@
+// The lighting model, shared by both render paths.
+//
+// This is the single function that turns a `Surface` into a colour. The
+// forward path calls it straight from its fragment entry; the deferred
+// lighting pass calls it after unpacking the G-buffer. That sharing is what
+// makes the two paths agree: there is no second copy of the light loop to
+// drift out of sync.
+//
+// Two flag macros switch behaviour here (see `wesloom_core::abi::abi_macros`):
+//
+// * `wesloom_debug_normals` replaces shading with the world-space normal, as
+//   a whole alternative definition of `shade_surface` rather than a branch,
+//   so the light loop is not even compiled.
+// * `wesloom_tonemap` applies the filmic curve. Off means the raw linear
+//   value is encoded and written, which is what a comparison against a
+//   reference render wants.
+
+import package::color::linear_to_srgb::linear_to_srgb;
+import package::color::tonemap_filmic::tonemap_filmic;
+import package::lighting::ambient_environment::ambient_environment;
+import package::lighting::pbr_direct::pbr_direct;
+import package::wesloom::bindings::{sample_light, scene, WESLOOM_MAX_LIGHTS};
+import package::wesloom::surface::{Surface, SurfaceContext};
+
+@if(wesloom_debug_normals)
+fn shade_surface(surface: Surface, ctx: SurfaceContext) -> vec4f {
+    return vec4f(normalize(surface.normal) * 0.5 + vec3f(0.5), 1.0);
+}
+
+@if(!wesloom_debug_normals)
+fn shade_surface(surface: Surface, ctx: SurfaceContext) -> vec4f {
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+
+    var lit = vec3f(0.0);
+    let light_count = min(scene.light_count, WESLOOM_MAX_LIGHTS);
+    for (var index = 0u; index < light_count; index = index + 1u) {
+        let light = sample_light(index, ctx.world_position);
+        lit = lit
+            + pbr_direct(
+                normal,
+                view_direction,
+                light.direction,
+                light.radiance,
+                surface.base_color,
+                surface.metallic,
+                surface.roughness,
+            );
+    }
+
+    // Ambient stands in for everything the light loop cannot see, so it is
+    // what ambient occlusion attenuates.
+    lit = lit
+        + ambient_environment(
+            normal,
+            view_direction,
+            surface.base_color,
+            surface.metallic,
+            surface.roughness,
+            scene.ambient_sky,
+            scene.ambient_ground,
+        )
+            * saturate(surface.occlusion);
+    lit = lit + surface.emissive;
+
+    var color = lit * scene.exposure;
+    @if(wesloom_tonemap)
+    color = tonemap_filmic(color);
+
+    // The render targets are plain (non-`Srgb`) formats so that the forward
+    // path and the deferred lighting pass encode identically, which means
+    // encoding here rather than leaving it to the GPU.
+    return vec4f(linear_to_srgb(color), saturate(surface.alpha));
+}

@@ -23,17 +23,29 @@ rule.
 ## Before opening a PR
 
 ```sh
-cargo fmt --check
+cargo fmt --all --check
 cargo clippy --workspace --all-targets --no-default-features -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
 If your change touches crate boundaries or the feature-flag matrix, also
-run `cargo check --workspace --no-default-features` and
+run `cargo check -p wesloom --no-default-features` and
 `cargo check -p wesloom --features editor` — see
 [ADR 0002](docs/adr/0002-cargo-workspace-crate-boundaries.md) for why both
-matter.
+matter. (`--workspace --no-default-features` does not prove the headless
+claim: it still builds `wesloom-render`, whose `wgpu` dependency is not
+optional.)
+
+If your change touches the shader ABI, the pipelines, or the node library,
+also run the demo — it is the fastest way to see a regression:
+
+```sh
+cargo run -p wesloom --example pbr_cube -- --headless
+```
+
+It renders one frame per render path and reports how far apart they are;
+they should be identical to within 8-bit rounding.
 
 ## Commit / PR expectations
 

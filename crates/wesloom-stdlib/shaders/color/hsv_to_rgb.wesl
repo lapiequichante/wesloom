@@ -1,0 +1,16 @@
+// HSV to RGB. Hue in turns (0..1, wrapping), saturation and value in 0..1.
+//
+// Hue is in turns rather than degrees so adding time to it animates at a
+// predictable rate with no magic 360 in the graph.
+fn hsv_to_rgb(hsv: vec3f) -> vec3f {
+    let hue = fract(hsv.x) * 6.0;
+    // One triangle wave per channel, each peaking two sextants from the next:
+    // red at 0, green at 2, blue at 4, with the plateaus giving the secondary
+    // colours in between.
+    let ramp = clamp(
+        vec3f(abs(hue - 3.0) - 1.0, 2.0 - abs(hue - 2.0), 2.0 - abs(hue - 4.0)),
+        vec3f(0.0),
+        vec3f(1.0),
+    );
+    return hsv.z * mix(vec3f(1.0), ramp, saturate(hsv.y));
+}

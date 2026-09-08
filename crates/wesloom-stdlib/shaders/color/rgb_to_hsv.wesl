@@ -1,0 +1,20 @@
+// RGB to HSV. Hue comes back in turns (0..1), matching `hsv_to_rgb`.
+fn rgb_to_hsv(rgb: vec3f) -> vec3f {
+    let peak = max(rgb.r, max(rgb.g, rgb.b));
+    let valley = min(rgb.r, min(rgb.g, rgb.b));
+    let chroma = peak - valley;
+    if chroma <= 1e-6 {
+        return vec3f(0.0, 0.0, peak);
+    }
+    // Which primary is dominant fixes the 120-degree sector; the other two
+    // channels position the hue inside it.
+    var hue = 0.0;
+    if peak == rgb.r {
+        hue = (rgb.g - rgb.b) / chroma;
+    } else if peak == rgb.g {
+        hue = (rgb.b - rgb.r) / chroma + 2.0;
+    } else {
+        hue = (rgb.r - rgb.g) / chroma + 4.0;
+    }
+    return vec3f(fract(hue / 6.0), chroma / max(peak, 1e-6), peak);
+}

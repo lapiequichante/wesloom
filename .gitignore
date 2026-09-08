@@ -1,9 +1,16 @@
 /target/
 **/target/
 
-# Workspace of libraries only (no binaries yet) — don't pin dependency
-# versions for consumers. Revisit once examples/binaries land.
-Cargo.lock
+# Cargo.lock IS tracked. It was ignored while this was a workspace of
+# libraries with no dependencies; now that the `pbr_cube` example exists and
+# the tree pins a 0.x shader compiler (`wesl`, see ADR 0003), a reproducible
+# build for CI and for anyone running the demo is worth more than letting
+# consumers resolve freely — which a library consumer does anyway, since
+# Cargo ignores a dependency's lockfile.
+
+# Output the demo writes when `--out` is not given.
+pbr_cube_forward.png
+pbr_cube_deferred.png
 
 # Editor/OS cruft
 .vscode/

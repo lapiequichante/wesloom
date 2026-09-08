@@ -1,0 +1,12 @@
+// Cubic ease-in-out over 0..1, clamped outside it.
+//
+// Accelerates out of 0 and decelerates into 1, with matching slopes at the
+// midpoint.
+fn ease_in_out_cubic(t: f32) -> f32 {
+    let x = saturate(t);
+    if x < 0.5 {
+        return 4.0 * x * x * x;
+    }
+    let f = -2.0 * x + 2.0;
+    return 1.0 - f * f * f * 0.5;
+}

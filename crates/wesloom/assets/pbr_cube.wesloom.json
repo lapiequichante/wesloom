@@ -1,0 +1,146 @@
+{
+  "name": "pbr cube",
+
+  "//": [
+    "The node format. `macros` pins macro variables: WESLOOM_FBM_OCTAVES is a",
+    "loop bound inside generative/fbm3.wesl and wesloom_fbm_ridged is an @if",
+    "flag in the same file, so changing either recompiles the shader rather",
+    "than switching a runtime branch. wesloom_tonemap and wesloom_debug_normals",
+    "are honoured by the shader ABI itself; they are pinned here to show that",
+    "any macro name can be set from the format, declared by a node or not.",
+    "",
+    "Node ids are stable and edges refer to them, so nodes can be added and",
+    "removed without renumbering anything. `params` are the values on inputs",
+    "no edge feeds; an input with neither keeps its definition's default."
+  ],
+
+  "macros": {
+    "WESLOOM_FBM_OCTAVES": { "int": 5 },
+    "wesloom_fbm_ridged": { "flag": false },
+    "wesloom_tonemap": { "flag": true },
+    "wesloom_debug_normals": { "flag": false }
+  },
+
+  "nodes": [
+    {
+      "id": 1,
+      "def": "input.world_position",
+      "label": "surface point",
+      "position": [0.0, 0.0]
+    },
+    {
+      "id": 2,
+      "def": "math.multiply.vec3f",
+      "label": "noise scale",
+      "params": { "b": { "vec3": [3.0, 3.0, 3.0] } },
+      "position": [220.0, 0.0]
+    },
+    {
+      "id": 3,
+      "def": "generative.fbm3",
+      "label": "surface detail",
+      "params": { "lacunarity": { "f32": 2.1 }, "gain": { "f32": 0.55 } },
+      "position": [440.0, 0.0]
+    },
+    {
+      "id": 4,
+      "def": "math.remap.f32",
+      "label": "roughness range",
+      "params": {
+        "in_min": { "f32": 0.0 },
+        "in_max": { "f32": 1.0 },
+        "out_min": { "f32": 0.07 },
+        "out_max": { "f32": 0.55 }
+      },
+      "position": [680.0, -120.0]
+    },
+    {
+      "id": 5,
+      "def": "const.vec3f",
+      "label": "albedo (sRGB)",
+      "params": { "value": { "vec3": [0.95, 0.36, 0.18] } },
+      "position": [440.0, -260.0]
+    },
+    {
+      "id": 6,
+      "def": "color.srgb_to_linear",
+      "label": "to linear light",
+      "position": [680.0, -260.0]
+    },
+    {
+      "id": 7,
+      "def": "math.step.f32",
+      "label": "metal patches",
+      "params": { "edge": { "f32": 0.62 } },
+      "position": [680.0, 20.0]
+    },
+    {
+      "id": 8,
+      "def": "math.multiply.f32",
+      "label": "metallic",
+      "params": { "b": { "f32": 0.9 } },
+      "position": [900.0, 20.0]
+    },
+    {
+      "id": 9,
+      "def": "input.time",
+      "position": [0.0, 240.0]
+    },
+    {
+      "id": 10,
+      "def": "animation.pulse",
+      "label": "slow breath",
+      "params": { "frequency": { "f32": 0.22 }, "phase": { "f32": 0.0 } },
+      "position": [220.0, 240.0]
+    },
+    {
+      "id": 11,
+      "def": "convert.splat.vec3f",
+      "position": [440.0, 240.0]
+    },
+    {
+      "id": 12,
+      "def": "const.vec3f",
+      "label": "ember colour",
+      "params": { "value": { "vec3": [0.07, 0.018, 0.005] } },
+      "position": [440.0, 360.0]
+    },
+    {
+      "id": 13,
+      "def": "math.multiply.vec3f",
+      "label": "emissive",
+      "position": [680.0, 300.0]
+    },
+    {
+      "id": 14,
+      "def": "math.smootherstep.f32",
+      "label": "crevice occlusion",
+      "params": { "edge0": { "f32": 0.05 }, "edge1": { "f32": 0.75 } },
+      "position": [680.0, 150.0]
+    },
+    {
+      "id": 15,
+      "def": "output.surface",
+      "position": [1140.0, 0.0]
+    }
+  ],
+
+  "edges": [
+    { "from": { "node": 1, "socket": "out" }, "to": { "node": 2, "socket": "a" } },
+    { "from": { "node": 2, "socket": "out" }, "to": { "node": 3, "socket": "p" } },
+    { "from": { "node": 3, "socket": "out" }, "to": { "node": 4, "socket": "value" } },
+    { "from": { "node": 3, "socket": "out" }, "to": { "node": 7, "socket": "x" } },
+    { "from": { "node": 3, "socket": "out" }, "to": { "node": 14, "socket": "x" } },
+    { "from": { "node": 5, "socket": "out" }, "to": { "node": 6, "socket": "color" } },
+    { "from": { "node": 7, "socket": "out" }, "to": { "node": 8, "socket": "a" } },
+    { "from": { "node": 9, "socket": "out" }, "to": { "node": 10, "socket": "time" } },
+    { "from": { "node": 10, "socket": "out" }, "to": { "node": 11, "socket": "value" } },
+    { "from": { "node": 11, "socket": "out" }, "to": { "node": 13, "socket": "a" } },
+    { "from": { "node": 12, "socket": "out" }, "to": { "node": 13, "socket": "b" } },
+    { "from": { "node": 6, "socket": "out" }, "to": { "node": 15, "socket": "base_color" } },
+    { "from": { "node": 8, "socket": "out" }, "to": { "node": 15, "socket": "metallic" } },
+    { "from": { "node": 4, "socket": "out" }, "to": { "node": 15, "socket": "roughness" } },
+    { "from": { "node": 13, "socket": "out" }, "to": { "node": 15, "socket": "emissive" } },
+    { "from": { "node": 14, "socket": "out" }, "to": { "node": 15, "socket": "occlusion" } }
+  ]
+}

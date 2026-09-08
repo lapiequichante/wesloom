@@ -39,6 +39,31 @@ includes is `wesloom-core`. See
 [ADR 0002](adr/0002-cargo-workspace-crate-boundaries.md) for why the split
 exists and which edges must never appear.
 
+## Module map
+
+What lives where, now that the crates have contents. Each module's own doc
+comment is the detailed version.
+
+**`wesloom-core`** — `node` (value types, sockets, `WeslFunction`
+descriptors, `NodeDefinition`, the registry), `graph` (nodes, edges,
+validation, traversal, the serialized node format), `codegen` (graph → WESL,
+plus the generated macro module), `macros` (macro variables), `abi` (the
+shader ABI's names and field tables), `wesl` (identifier/float/hash helpers),
+`error`.
+
+**`wesloom-stdlib`** — `shaders` (the embedded `.wesl` sources, keyed by
+module path), `registry` (every function and operator as a node definition).
+
+**`wesloom-render`** — `path` (`RenderPath`), `library` (`ShaderLibrary`),
+`material` (a graph compiled to WESL), `variants` (WESL → WGSL and the
+variant cache), `pipeline` (the `Pipeline` trait, forward and deferred),
+`renderer` (the front end that hides the path switch), `scene` (camera,
+lights, uniform layouts), `mesh` (vertex format, cube), `gpu` (device setup,
+offscreen rendering and readback), `error`.
+
+**`wesloom`** — feature-gated re-exports, plus `stdlib_library()`, the one
+line that hands the node library's WESL to the renderer.
+
 ## Feature flags (`wesloom` facade crate)
 
 | Feature | Default | Adds | Implies |
@@ -57,14 +82,17 @@ features at all.
 
 ```mermaid
 graph TD
-    author["Graph authored<br/>(editor UI, or built programmatically)"] --> model
-    model["wesloom_core::graph::Graph"] --> codegen["wesloom_core::codegen<br/>(graph -> WESL source)"]
-    codegen --> weslsrc["WESL module<br/>(may import wesloom-stdlib nodes<br/>and/or hand-written WESL)"]
-    weslsrc --> compiler["wesl / wesl-cli<br/>(WESL -> WGSL, resolves imports,<br/>evaluates @if/@elif/@else)"]
-    compiler --> variants["wesloom_render::variants<br/>cache: (graph hash, RenderPath, features) -> wgpu shader module"]
+    author["Graph authored<br/>(editor UI, or built programmatically,<br/>or loaded from the node format)"] --> model
+    model["wesloom_core::graph::Graph<br/>(typed, acyclic, validated)"] --> codegen["wesloom_core::codegen<br/>(graph -> WESL source)"]
+    codegen --> weslsrc["one WESL module:<br/>imports + wesloom_material()<br/>+ @if-gated entry points"]
+    codegen --> macromod["generated macro module<br/>(numeric macro variables<br/>as const declarations)"]
+    library["wesloom_render::ShaderLibrary<br/>(the ABI + node functions,<br/>supplied by the application)"] --> compiler
+    weslsrc --> compiler["wesl<br/>(WESL -> WGSL: resolves imports,<br/>evaluates @if/@elif/@else)"]
+    macromod --> compiler
+    compiler --> variants["wesloom_render::variants<br/>cache: (source+macros hash, RenderPath)<br/>-> wgpu shader module"]
     path["Active RenderPath<br/>(Forward | Deferred)<br/>chosen by the application"] --> variants
-    variants --> pipeline["wesloom_render::pipeline<br/>(forward or deferred impl)"]
-    pipeline --> gpu["wgpu render pass"]
+    variants --> pipeline["wesloom_render::pipeline<br/>(forward: 1 pass;<br/>deferred: G-buffer + lighting pass)"]
+    pipeline --> gpu["wgpu render passes"]
 ```
 
 The `RenderPath` is a property of the *pipeline*, never of the *graph* — a
@@ -72,6 +100,50 @@ material graph is written once and works under either path because the
 path-specific differences are expressed as conditional compilation inside
 one WESL module, not as two separate graphs. See
 [ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md).
+
+## What a graph is responsible for
+
+A material graph describes a *surface*, not a whole shader: it compiles to
+one function taking the per-fragment `SurfaceContext` and returning a
+`Surface` (base colour, metallic, roughness, normal, emissive, occlusion,
+alpha). Codegen wraps that in the entry points, and the vertex stage, light
+loop and G-buffer packing are hand-written WESL in `wesloom-stdlib`.
+
+`wesloom_core::abi` is where the two halves agree on names and field
+layouts, and where the render-path flag and the macro variables the ABI
+honours are declared. See
+[ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md).
+
+Both paths call the *same* `shade_surface` function — the forward fragment
+entry directly, the deferred lighting pass after unpacking the G-buffer — so
+the two cannot drift apart in what lighting means. `crates/wesloom/tests/`
+asserts they render the same image.
+
+## Macro variables
+
+Not everything a node needs can be a socket value: a loop bound has to be a
+compile-time constant, and a lighting-model switch should remove code rather
+than pick between two results. Those are *macro variables*
+(`wesloom_core::macros`), declared by node definitions and pinned per graph
+in the node format:
+
+| Kind | Becomes | Example |
+|---|---|---|
+| `Flag(bool)` | a WESL conditional-translation feature (`@if(name)`) | `wesloom_fbm_ridged`, `wesloom_tonemap` |
+| `Int` / `Float` | a `const` in the generated macro module | `WESLOOM_FBM_OCTAVES` |
+
+Precedence, weakest first: the ABI's defaults, each node's declared default,
+what the graph pins, then what the application overrides. The whole set is
+part of the variant cache key, because neither kind shows up in the root
+module's own declarations.
+
+## The renderer takes its shaders from the application
+
+`wesloom-render` compiles WESL but ships none — it must not depend on
+`wesloom-stdlib` (ADR 0002), so the application hands it a `ShaderLibrary`.
+With both facade features on that is `wesloom::stdlib_library()`. This is
+also the seam for substituting an ABI module or adding hand-written WESL. See
+[ADR 0009](adr/0009-the-application-supplies-the-shader-library.md).
 
 ## Why WESL and not raw WGSL
 
@@ -89,7 +161,16 @@ and the alternatives it rejected.
 libraries under `crates/wesloom-stdlib/shaders/` (`math/`, `color/`,
 `space/`, `lighting/`, `generative/`, `sdf/`, `sample/`, `animation/`,
 `filter/`, `distort/`), one `.wesl` file per function — but every function
-is original code, not a port. An earlier plan to rewrite
+is original code, not a port. A `wesloom/` directory alongside them holds the
+shader ABI (ADR 0008), which is plumbing rather than granular functions.
+
+Two kinds of node come out of it. Arithmetic is an inline WESL expression
+generated per value type (`math.add.vec3f` is `{a} + {b}`), because wrapping
+an addition in a function call buys nothing. Everything with a body — PBR
+shading, noise, tonemapping, colour spaces — is a real WESL function
+described by a `WeslFunction` giving its module, name, parameters and return
+shape, so the WESL source stays the single definition of the behaviour and
+hand-written WESL can call the same function a graph does. An earlier plan to rewrite
 [LYGIA](https://lygia.xyz) into WESL was scrapped once its non-permissive
 license ([ADR 0006](adr/0006-lygia-port-licensing-and-isolation.md)) turned
 out to be a real adoption cost even fully isolated behind an opt-in
@@ -101,11 +182,33 @@ function.
 
 ## Current status
 
-Scaffolding only: the crate boundaries, feature flags, and this
-documentation exist; the graph model, codegen, `wgpu` pipelines, editor UI,
-and base node library are all unimplemented. Each module stub's doc comment
-says what belongs there and which ADR governs it — start from
-`crates/*/src/lib.rs`.
+Implemented and tested end to end, except the editor:
+
+| Area | State |
+|---|---|
+| `wesloom-core`: node/socket model, typed acyclic graph, validation, WESL codegen, macro variables, node format (serde) | done |
+| `wesloom-stdlib`: shader ABI, 215 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
+| `wesloom-render`: WESL→WGSL compilation, variant cache, forward and deferred pipelines, cube mesh, scene uniforms, offscreen rendering | done |
+| `wesloom`: facade, `stdlib_library()`, the `pbr_cube` demo | done |
+| `wesloom-editor` | **scaffolding** — module stubs only, no UI (ADR 0004) |
+
+The demo is the thing to run first:
+
+```sh
+cargo run -p wesloom --example pbr_cube              # windowed; F/D switch path
+cargo run -p wesloom --example pbr_cube -- --headless  # both paths to PNG
+cargo run -p wesloom --example pbr_cube -- --dump-wgsl # what the graph became
+```
+
+Test coverage worth knowing about, since it is what keeps the two halves of
+the shader ABI honest:
+
+- `crates/wesloom/tests/graph_to_wgsl.rs` compiles *every node in the
+  library* to WGSL on both render paths, plus the demo graph, macro
+  switching, and the node format's round trip. No GPU needed.
+- `crates/wesloom/tests/render_cube.rs` renders the cube through both paths
+  on a real device and asserts the images match. Skips when no adapter is
+  available.
 
 ## See also
 

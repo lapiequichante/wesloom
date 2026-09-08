@@ -1,34 +1,57 @@
 //! `wesloom-render`: the wgpu renderer.
 //!
-//! Owns everything that talks to `wgpu`: device/surface setup, the pipeline
+//! Owns everything that talks to `wgpu`: device setup, the pipeline
 //! abstraction, and the shader variant cache that lets a single node graph
 //! back both a forward and a deferred pipeline without the caller doing
 //! anything special to "switch".
 //!
 //! See `docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md`.
 //!
-//! This crate is currently scaffolding; see the module docs below for what
-//! each placeholder is expected to hold.
+//! # How a graph becomes a frame
+//!
+//! ```text
+//!   Graph ──codegen──> Material ──variants──> ShaderVariant ──> Pipeline ──> frame
+//!   (core)             (one WESL module,      (WGSL + wgpu       (forward or
+//!                       both paths in it)      module, per path)  deferred)
+//! ```
+//!
+//! [`material::Material`] is path-agnostic: it holds one WESL module whose
+//! two fragment entry points are gated by conditional translation.
+//! [`variants::ShaderVariants`] compiles that module per
+//! (macro set, [`path::RenderPath`]) and caches the result, and
+//! [`renderer::Renderer`] picks the pipeline to feed it to. Switching path at
+//! runtime is [`renderer::Renderer::set_path`] — no recompilation the second
+//! time, no second graph, ever.
+//!
+//! # This crate ships no shaders
+//!
+//! It compiles WESL but contains none: the shader ABI and the node library
+//! are `wesloom-stdlib`'s, and the dependency arrow only points *into*
+//! `wesloom-core` ([ADR 0002](../../docs/adr/0002-cargo-workspace-crate-boundaries.md)).
+//! The application supplies the modules through
+//! [`library::ShaderLibrary`], which is also how it can override an ABI
+//! module or add hand-written WESL of its own.
 
-pub mod path {
-    //! [`RenderPath`], the enum a pipeline is built for (forward, deferred,
-    //! future paths). Selecting a `RenderPath` is what drives which shader
-    //! variant gets requested from a compiled node graph.
-    //!
-    //! Placeholder: see `docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md`.
-}
+#![warn(missing_docs)]
 
-pub mod pipeline {
-    //! The pipeline trait(s) shared by forward and deferred implementations,
-    //! and the concrete forward/deferred pipelines themselves.
-    //!
-    //! Placeholder.
-}
+pub mod error;
+pub mod gpu;
+pub mod library;
+pub mod material;
+pub mod mesh;
+pub mod path;
+pub mod pipeline;
+pub mod renderer;
+pub mod scene;
+pub mod variants;
 
-pub mod variants {
-    //! The shader variant cache: keyed by (graph hash, [`path::RenderPath`],
-    //! active feature set) so a graph is only ever recompiled to WGSL once
-    //! per variant, and switching pipelines at runtime reuses cached WGSL.
-    //!
-    //! Placeholder.
-}
+pub use error::RenderError;
+pub use gpu::{GpuContext, OffscreenTarget};
+pub use library::ShaderLibrary;
+pub use material::Material;
+pub use mesh::{Mesh, Vertex};
+pub use path::RenderPath;
+pub use pipeline::{Pipeline, TargetConfig};
+pub use renderer::{RenderRequest, Renderer};
+pub use scene::{Camera, Light, Scene, SceneBindings};
+pub use variants::{ShaderVariant, ShaderVariants};

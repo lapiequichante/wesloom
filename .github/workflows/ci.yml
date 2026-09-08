@@ -18,18 +18,31 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
-  # Checked separately, not just via --all-features, because the point of
-  # the crate split (docs/adr/0002) is that no-default-features must never
-  # pull in a GUI toolkit or wgpu. See AGENTS.md.
+  # Checked separately, not just via --all-features, because the point of the
+  # crate split (docs/adr/0002) is that the facade with no features pulls in
+  # neither a GUI toolkit nor wgpu. Note that `--workspace
+  # --no-default-features` would NOT prove that: it still builds
+  # wesloom-render, whose wgpu dependency is not optional. See AGENTS.md.
   check-headless:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --workspace --no-default-features
+      - run: cargo check -p wesloom --no-default-features
+      - name: The graph model alone pulls in no renderer or GUI dependency
+        run: |
+          tree=$(cargo tree -p wesloom --no-default-features -e normal)
+          echo "$tree"
+          if echo "$tree" | grep -Eq 'wgpu|winit|egui|wesloom-render'; then
+            echo "::error::unexpected dependency in the headless build"
+            exit 1
+          fi
+      - name: The editor feature implies the renderer (ADR 0002)
+        run: cargo tree -p wesloom --features editor -e normal | grep -q wesloom-render
 
   clippy:
     strategy:
+      fail-fast: false
       matrix:
         features: ["--no-default-features", "", "--all-features"]
     runs-on: ubuntu-latest
@@ -46,3 +59,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --all-features
+      # `crates/wesloom/tests/render_cube.rs` needs a GPU adapter and skips
+      # itself when there is none, so the job above passing does not prove
+      # the renderer runs. Print whether it skipped, so a runner that quietly
+      # lost its GPU is visible in the log rather than looking like a pass.
+      # `graph_to_wgsl.rs` — every node, both render paths, through the real
+      # WESL compiler — runs everywhere and is the load-bearing suite.
+      - name: Report whether the GPU tests ran or skipped
+        run: cargo test -p wesloom --test render_cube -- --nocapture 2>&1 | tee out.txt | tail -20

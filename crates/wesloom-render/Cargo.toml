@@ -11,3 +11,7 @@ license.workspace = true
 
 [dependencies]
 wesloom-core = { workspace = true }
+wesl = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }

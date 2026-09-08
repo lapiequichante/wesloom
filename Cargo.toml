@@ -22,11 +22,22 @@ wesloom-render = { path = "crates/wesloom-render", version = "0.0.0" }
 wesloom-editor = { path = "crates/wesloom-editor", version = "0.0.0" }
 wesloom-stdlib = { path = "crates/wesloom-stdlib", version = "0.0.0" }
 
-# Pinned once real implementation starts (see docs/adr/0003 for the WESL
-# toolchain choice and docs/adr/0004 for the GUI toolkit choice):
-# wesl = "..."       # https://crates.io/crates/wesl (WESL -> WGSL compiler)
-# wgpu = "..."       # https://crates.io/crates/wgpu
-# egui = "..."       # https://crates.io/crates/egui (behind the `editor` feature only)
+# WESL -> WGSL compiler (ADR 0003). Pinned exactly: WESL is 0.x and its
+# import/conditional-translation syntax is still moving.
+wesl = "=0.4.4"
+# GPU API for wesloom-render (ADR 0005).
+wgpu = "30.0.1"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = { version = "0.33", features = ["bytemuck"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Demo/example-only (dev-dependencies; never in a library's dependency list).
+winit = "0.30"
+pollster = "1.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# egui = "..."  # added once the editor UI work starts; see docs/adr/0004.
 
 [profile.dev.package."*"]
 opt-level = 1

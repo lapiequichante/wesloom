@@ -17,11 +17,12 @@ see [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
 for why this is written from scratch rather than ported from an existing
 library.
 
-**Status: scaffolding.** As of this writing there is no rendering, no
-compiler integration, and no editor UI — just the crate boundaries, feature
-flags, and documentation this file is part of. Every module stub in the
-crates below has a doc comment saying what it's for and which ADR governs
-it; that's the source of truth for "what to build here," not this file.
+**Status: implemented, except the editor.** The graph model, WESL codegen,
+node library, and the forward/deferred `wgpu` renderer all work and are
+tested end to end; `crates/wesloom/examples/pbr_cube.rs` is the demo to run
+first. `wesloom-editor` is still module stubs with no UI. Each module's doc
+comment says what it holds and which ADR governs it; that's the source of
+truth for "what goes here," not this file.
 
 ## Map of the workspace
 
@@ -84,19 +85,37 @@ where new functions go.
 Run from the workspace root:
 
 ```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-cargo check --workspace --no-default-features   # must succeed with zero GUI/wgpu deps pulled in
+cargo check -p wesloom --no-default-features        # graph model only: no wgpu, no GUI
+cargo tree -p wesloom --no-default-features -e normal | grep -E 'wgpu|winit|egui'  # must print nothing
 ```
 
 Because the whole point of the feature split is that certain combinations
 must compile *without* certain dependencies, don't just check
 `--all-features` and call it done — at minimum also check
-`--no-default-features` and `-p wesloom --features editor` (which should
-pull in `wesloom-render` transitively, per ADR 0002) before considering a
-change to the crate/feature boundaries finished.
+`-p wesloom --no-default-features` and `-p wesloom --features editor` (which
+should pull in `wesloom-render` transitively, per ADR 0002) before
+considering a change to the crate/feature boundaries finished. Note that
+`--workspace --no-default-features` still builds `wesloom-render`, whose
+`wgpu` dependency is not optional — the "no wgpu" guarantee is about the
+facade crate's feature set, not about the workspace.
+
+### What the tests cover
+
+- `cargo test -p wesloom-core` — the graph model: typing, cycle rejection,
+  validation, codegen, macro precedence. Fast, no GPU, no shader compiler.
+- `cargo test -p wesloom --test graph_to_wgsl` — the real `wesl` compiler
+  over the real shader sources: **every node in the library** compiled on
+  both render paths, the demo graph, macro switching, node-format round trip.
+  This is the test that catches a node descriptor disagreeing with its WESL.
+- `cargo test -p wesloom --test render_cube` — renders on a real device and
+  compares the two paths' images. Skips (prints a note, passes) when no
+  adapter is available, so don't read a pass as proof it ran.
+- `cargo run -p wesloom --example pbr_cube -- --headless` — the fastest way
+  to see whether a change to the ABI or the pipelines still produces a
+  picture. Writes a PNG per path and reports how far apart they are.
 
 ## Conventions
 
@@ -106,15 +125,29 @@ change to the crate/feature boundaries finished.
 - Keep `wesloom-core` free of `wgpu` and GUI-toolkit dependencies, full
   stop — that boundary is the reason the crate exists.
 - New stdlib functions live under `crates/wesloom-stdlib/shaders/<category>/`
-  (see that directory's `README.md` for the category layout and the
-  originality rule).
+  (see that directory's `README.md` for the category layout, the originality
+  rule, and the three authoring rules that keep a function reachable from a
+  graph).
+- The shader ABI has two halves that must be edited together:
+  `wesloom_core::abi`'s tables and `crates/wesloom-stdlib/shaders/wesloom/`.
+  Same for the uniform layouts: `wesloom_render::scene`'s `#[repr(C)]`
+  structs mirror `shaders/wesloom/bindings.wesl`. See ADR 0008.
+- Anything a node needs that cannot be a socket value — a loop bound, a code
+  switch — is a macro variable (`wesloom_core::macros`), declared on the node
+  definition. Don't reach for string substitution or a second graph.
 - Prefer editing an existing ADR's "Consequences" section to record drift
   over silently diverging from what it says.
 
 ## Where things are
 
+- `crates/wesloom/examples/pbr_cube.rs` — the demo, and the shortest
+  complete example of the whole pipeline. `--dump-wesl` and `--dump-wgsl`
+  show what a graph compiles to, `--list-nodes` and `--list-macros` what is
+  available.
+- `crates/wesloom/assets/pbr_cube.wesloom.json` — the node format, with
+  comments in the file explaining it.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred
-  shader-switching design, feature-flag matrix.
+  shader-switching design, macro variables, feature-flag matrix.
 - `docs/adr/` — the decision log. Start at `docs/adr/README.md`.
 - `docs/glossary.md` — terms (WESL vs WGSL, node graph vs render graph,
   forward vs deferred, etc.) used without re-explanation elsewhere.

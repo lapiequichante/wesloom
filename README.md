@@ -3,9 +3,9 @@
 WESL shader node graphs on `wgpu`, with an optional visual node editor and
 an original, from-scratch library of base shader nodes.
 
-> **Status: scaffolding.** This repository currently contains the crate
-> layout, feature flags, and design documentation for the project — no
-> rendering, no `wesl` compiler integration, and no editor UI yet. See
+> **Status: working, except the visual editor.** Graphs are authored (in
+> code or in the node format), compiled to WESL, and rendered through a
+> forward or deferred `wgpu` pipeline; `wesloom-editor` is still stubs. See
 > [Current status](docs/architecture.md#current-status).
 
 ## What this is
@@ -27,14 +27,40 @@ an original, from-scratch library of base shader nodes.
   headless/runtime consumer never compiles a GUI toolkit just to use the
   graph model or renderer.
 
+## The demo
+
+```sh
+cargo run -p wesloom --example pbr_cube               # windowed; F/D switch render path
+cargo run -p wesloom --example pbr_cube -- --headless # one PNG per path, and their difference
+cargo run -p wesloom --example pbr_cube -- --dump-wgsl --path deferred
+```
+
+A cube whose PBR material — noise-driven roughness, stepped metallic
+patches, an sRGB albedo converted to linear light, a pulsing emissive — is
+[a node graph in a JSON file](crates/wesloom/assets/pbr_cube.wesloom.json),
+not code. Nothing in that graph mentions forward or deferred: the render path
+is a property of the pipeline, and the two fragment entry points are selected
+by WESL conditional translation from one generated module. In the window,
+`F` and `D` switch path and `N`/`T`/`R`/`Up`/`Down` change macro variables,
+each of which compiles a new shader variant once and then hits the cache.
+
+```text
+      forward path                          deferred path
+  ┌──────────────────────┐        ┌──────────────────┐   ┌────────────────┐
+  │ material -> shade    │        │ material ->      │   │ G-buffer ->    │
+  │ -> colour            │        │ G-buffer (3 RTs) │──>│ shade -> colour│
+  └──────────────────────┘        └──────────────────┘   └────────────────┘
+        one graph, one WESL module, two `@if`-gated fragment entry points
+```
+
 ## Workspace layout
 
 | Crate | What it is |
 |---|---|
-| [`wesloom-core`](crates/wesloom-core) | The node/socket/graph data model and graph → WESL codegen. No `wgpu`, no GUI toolkit. |
-| [`wesloom-render`](crates/wesloom-render) | The `wgpu` renderer: pipeline abstraction, forward/deferred shader-variant switching. |
-| [`wesloom-editor`](crates/wesloom-editor) | The visual node editor UI. |
-| [`wesloom-stdlib`](crates/wesloom-stdlib) | The base node library: original shader functions, written from scratch. |
+| [`wesloom-core`](crates/wesloom-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, and graph → WESL codegen. No `wgpu`, no GUI toolkit. |
+| [`wesloom-render`](crates/wesloom-render) | The `wgpu` renderer: WESL → WGSL compilation, the shader variant cache, and the forward and deferred pipelines. |
+| [`wesloom-editor`](crates/wesloom-editor) | The visual node editor UI. **Not implemented yet** — module stubs only. |
+| [`wesloom-stdlib`](crates/wesloom-stdlib) | The base node library: original shader functions written from scratch, plus the WESL side of the shader ABI. |
 | [`wesloom`](crates/wesloom) | The facade crate most consumers depend on; re-exports the above behind Cargo features. |
 
 Full crate graph, data flow diagrams, and the "why" behind this split live
