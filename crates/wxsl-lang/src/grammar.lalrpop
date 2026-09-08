@@ -1,0 +1,590 @@
+// The WXSL grammar.
+//
+// Fed by `crate::lexer`, not by LALRPOP's own lexer generator: `<` and `>`
+// arrive already classified as comparison operators or template delimiters,
+// which is a decision no amount of grammar lookahead can make (see the
+// lexer's module docs).
+//
+// Precedence is expressed the usual LR way, as a layer of nonterminals per
+// level, rather than with declared precedence — it makes the tree shape
+// obvious from the grammar and keeps LALRPOP from needing conflict
+// resolution rules.
+
+use crate::ast::*;
+use crate::parse::{binary, build_import, unary, ImportTail};
+use crate::span::{Span, Spanned};
+use crate::token::Tok;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = crate::parse::LexFailure;
+
+    enum Tok {
+        "ident" => Tok::Ident(<String>),
+        "int" => Tok::IntLit(<String>),
+        "float" => Tok::FloatLit(<String>),
+        "attr" => Tok::Attr(<String>),
+        "true" => Tok::True,
+        "false" => Tok::False,
+        "alias" => Tok::Alias,
+        "break" => Tok::Break,
+        "case" => Tok::Case,
+        "const" => Tok::Const,
+        "const_assert" => Tok::ConstAssert,
+        "continue" => Tok::Continue,
+        "continuing" => Tok::Continuing,
+        "default" => Tok::Default,
+        "discard" => Tok::Discard,
+        "else" => Tok::Else,
+        "enable" => Tok::Enable,
+        "fn" => Tok::Fn,
+        "for" => Tok::For,
+        "if" => Tok::If,
+        "import" => Tok::Import,
+        "let" => Tok::Let,
+        "loop" => Tok::Loop,
+        "override" => Tok::Override,
+        "requires" => Tok::Requires,
+        "return" => Tok::Return,
+        "struct" => Tok::Struct,
+        "switch" => Tok::Switch,
+        "var" => Tok::Var,
+        "while" => Tok::While,
+        "as" => Tok::As,
+        "(" => Tok::ParenOpen,
+        ")" => Tok::ParenClose,
+        "{" => Tok::BraceOpen,
+        "}" => Tok::BraceClose,
+        "[" => Tok::BracketOpen,
+        "]" => Tok::BracketClose,
+        "<t" => Tok::TemplateOpen,
+        "t>" => Tok::TemplateClose,
+        "," => Tok::Comma,
+        ";" => Tok::Semi,
+        ":" => Tok::Colon,
+        "::" => Tok::ColonColon,
+        "." => Tok::Dot,
+        "->" => Tok::Arrow,
+        "_" => Tok::Underscore,
+        "=" => Tok::Eq,
+        "==" => Tok::EqEq,
+        "!=" => Tok::NotEq,
+        "<" => Tok::Lt,
+        "<=" => Tok::Le,
+        ">" => Tok::Gt,
+        ">=" => Tok::Ge,
+        "+" => Tok::Plus,
+        "-" => Tok::Minus,
+        "*" => Tok::Star,
+        "/" => Tok::Slash,
+        "%" => Tok::Percent,
+        "!" => Tok::Not,
+        "~" => Tok::Tilde,
+        "&" => Tok::And,
+        "&&" => Tok::AndAnd,
+        "|" => Tok::Or,
+        "||" => Tok::OrOr,
+        "^" => Tok::Caret,
+        "<<" => Tok::Shl,
+        ">>" => Tok::Shr,
+        "+=" => Tok::PlusEq,
+        "-=" => Tok::MinusEq,
+        "*=" => Tok::StarEq,
+        "/=" => Tok::SlashEq,
+        "%=" => Tok::PercentEq,
+        "&=" => Tok::AndEq,
+        "|=" => Tok::OrEq,
+        "^=" => Tok::CaretEq,
+        "<<=" => Tok::ShlEq,
+        ">>=" => Tok::ShrEq,
+        "++" => Tok::PlusPlus,
+        "--" => Tok::MinusMinus,
+    }
+}
+
+// --- helpers ---------------------------------------------------------------
+
+#[inline]
+Sp: Span = <l:@L> <r:@R> => Span::new(l as u32, r as u32);
+
+Ident: Spanned<String> = <l:@L> <name:"ident"> <r:@R>
+    => Spanned::new(name, Span::new(l as u32, r as u32));
+
+// A possibly-empty comma-separated list with an optional trailing comma.
+//
+// Right-recursive on purpose. Every left-recursive or repetition-based
+// spelling of "optional trailing comma" is ambiguous in LR: after a comma
+// the parser cannot tell whether it is about to see another element or has
+// just consumed the trailing one. Recursing right moves that decision to a
+// single token of lookahead, which is exactly what LR(1) has.
+Comma<T>: Vec<T> = {
+    => vec![],
+    <items:CommaSome<T>> => items,
+};
+
+CommaSome<T>: Vec<T> = {
+    <t:T> => vec![t],
+    <t:T> "," => vec![t],
+    <t:T> "," <mut rest:CommaSome<T>> => { rest.insert(0, t); rest },
+};
+
+// --- top level -------------------------------------------------------------
+
+pub Module: Module = {
+    <directives:Directive*> <imports:Import*> <declarations:Declaration*>
+        => Module { directives, imports, declarations },
+};
+
+Directive: Directive = {
+    <l:@L> "enable" <names:Comma<Ident>> ";" <r:@R>
+        => Directive { kind: DirectiveKind::Enable, names, span: Span::new(l as u32, r as u32) },
+    <l:@L> "requires" <names:Comma<Ident>> ";" <r:@R>
+        => Directive { kind: DirectiveKind::Requires, names, span: Span::new(l as u32, r as u32) },
+};
+
+// --- imports ---------------------------------------------------------------
+
+Import: Import = {
+    <l:@L> "import" <spec:ImportSpec> ";" <r:@R> => {
+        let (segments, tail) = spec;
+        let span = Span::new(l as u32, r as u32);
+        build_import(segments, tail, span)
+    },
+};
+
+// Right-recursive so that after shifting `::` a single token of lookahead
+// (an identifier, or `{`) decides between a longer path and a brace list.
+ImportSpec: (Vec<Spanned<String>>, ImportTail) = {
+    <n:Ident> => (vec![n], ImportTail::Whole),
+    <n:Ident> "as" <a:Ident> => (vec![n], ImportTail::Alias(a)),
+    <n:Ident> "::" <rest:ImportSpec> => {
+        let (mut segments, tail) = rest;
+        segments.insert(0, n);
+        (segments, tail)
+    },
+    <n:Ident> "::" "{" <items:Comma<ImportBrace>> "}" => (vec![n], ImportTail::Items(items)),
+};
+
+ImportBrace: (Spanned<String>, Option<Spanned<String>>) = {
+    <n:Ident> => (n, None),
+    <n:Ident> "as" <a:Ident> => (n, Some(a)),
+};
+
+// --- declarations ----------------------------------------------------------
+
+Declaration: Declaration = {
+    <v:GlobalConst> => Declaration::Const(v),
+    <v:GlobalOverride> => Declaration::Override(v),
+    <v:GlobalVar> => Declaration::Var(v),
+    <a:AliasDecl> => Declaration::Alias(a),
+    <s:StructDecl> => Declaration::Struct(s),
+    <f:Function> => Declaration::Function(f),
+    <c:GlobalConstAssert> => Declaration::ConstAssert(c),
+};
+
+GlobalConst: GlobalValue = {
+    <l:@L> <attributes:Attribute*> "const" <name:Ident> <ty:(":" <TypeExpr>)?>
+        "=" <init:Expr> ";" <r:@R>
+        => GlobalValue {
+            attributes, address_space: vec![], name, ty, init: Some(init),
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+GlobalOverride: GlobalValue = {
+    <l:@L> <attributes:Attribute*> "override" <name:Ident> <ty:(":" <TypeExpr>)?>
+        <init:("=" <Expr>)?> ";" <r:@R>
+        => GlobalValue {
+            attributes, address_space: vec![], name, ty, init,
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+GlobalVar: GlobalValue = {
+    <l:@L> <attributes:Attribute*> "var" <address_space:TemplateList?>
+        <name:Ident> <ty:(":" <TypeExpr>)?> <init:("=" <Expr>)?> ";" <r:@R>
+        => GlobalValue {
+            attributes, address_space: address_space.unwrap_or_default(), name, ty, init,
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+AliasDecl: AliasDecl = {
+    <l:@L> <attributes:Attribute*> "alias" <name:Ident> "=" <ty:TypeExpr> ";" <r:@R>
+        => AliasDecl { attributes, name, ty, span: Span::new(l as u32, r as u32) },
+};
+
+StructDecl: StructDecl = {
+    <l:@L> <attributes:Attribute*> "struct" <name:Ident> <generics:GenericList?>
+        "{" <members:Comma<StructMember>> "}" <r:@R>
+        => StructDecl {
+            attributes, name, generics: generics.unwrap_or_default(), members,
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+StructMember: StructMember = {
+    <l:@L> <attributes:Attribute*> <name:Ident> ":" <ty:TypeExpr> <r:@R>
+        => StructMember { attributes, name, ty, span: Span::new(l as u32, r as u32) },
+};
+
+GlobalConstAssert: ConstAssert = {
+    <l:@L> <attributes:Attribute*> "const_assert" <expr:Expr> ";" <r:@R>
+        => ConstAssert { attributes, expr, span: Span::new(l as u32, r as u32) },
+};
+
+Function: Function = {
+    <l:@L> <attributes:Attribute*> "fn" <name:Ident> <generics:GenericList?>
+        "(" <params:Comma<Param>> ")"
+        <ret:("->" <Attribute*> <TypeExpr>)?>
+        <body:Block> <r:@R>
+        => {
+            let (return_attributes, return_type) = match ret {
+                Some((attrs, ty)) => (attrs, Some(ty)),
+                None => (vec![], None),
+            };
+            Function {
+                attributes, name, generics: generics.unwrap_or_default(), params,
+                return_attributes, return_type, body,
+                span: Span::new(l as u32, r as u32),
+            }
+        },
+};
+
+Param: Param = {
+    <l:@L> <attributes:Attribute*> <name:Ident> ":" <ty:TypeExpr> <r:@R>
+        => Param { attributes, name, ty, span: Span::new(l as u32, r as u32) },
+};
+
+// `<T: f32 | vec2f, U>` — WXSL's template parameters.
+GenericList: Vec<GenericParam> = "<t" <Comma<GenericParam>> "t>";
+
+GenericParam: GenericParam = {
+    <l:@L> <name:Ident> <constraints:(":" <ConstraintList>)?> <r:@R>
+        => GenericParam {
+            name, constraints: constraints.unwrap_or_default(),
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+ConstraintList: Vec<TypeExpr> = {
+    <t:TypeExpr> => vec![t],
+    <mut rest:ConstraintList> "|" <t:TypeExpr> => { rest.push(t); rest },
+};
+
+// --- types -----------------------------------------------------------------
+
+TypeExpr: TypeExpr = {
+    <l:@L> <name:Ident> <args:TemplateList?> <r:@R>
+        => TypeExpr {
+            name, template_args: args.unwrap_or_default(),
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+TemplateList: Vec<TemplateArg> = "<t" <Comma<TemplateArg>> "t>";
+
+TemplateArg: TemplateArg = <expr:Expr> => TemplateArg { <> };
+
+// --- statements ------------------------------------------------------------
+
+Block: Block = {
+    <l:@L> <attributes:Attribute*> "{" <statements:Statement*> "}" <r:@R>
+        => Block { attributes, statements, span: Span::new(l as u32, r as u32) },
+};
+
+Statement: Statement = {
+    <s:LocalDecl> ";" => s,
+    <s:StepOrAssign> ";" => s,
+    <l:@L> <attributes:Attribute*> "return" <value:Expr?> ";" <r:@R>
+        => Statement::Return(ReturnStatement { attributes, value, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> "break" ";" <r:@R>
+        => Statement::Break(Simple { attributes, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> "continue" ";" <r:@R>
+        => Statement::Continue(Simple { attributes, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> "discard" ";" <r:@R>
+        => Statement::Discard(Simple { attributes, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> "const_assert" <expr:Expr> ";" <r:@R>
+        => Statement::ConstAssert(ConstAssert { attributes, expr, span: Span::new(l as u32, r as u32) }),
+    <b:Block> => Statement::Block(b),
+    <s:IfStatement> => s,
+    <s:SwitchStatement> => s,
+    <s:LoopStatement> => s,
+    <s:ForStatement> => s,
+    <s:WhileStatement> => s,
+    ";" => Statement::Block(Block::default()),
+};
+
+LocalDecl: Statement = {
+    <l:@L> <attributes:Attribute*> "let" <name:Ident> <ty:(":" <TypeExpr>)?> "=" <init:Expr> <r:@R>
+        => Statement::Local(LocalValue {
+            attributes, kind: LocalKind::Let, address_space: vec![], name, ty,
+            init: Some(init), span: Span::new(l as u32, r as u32),
+        }),
+    <l:@L> <attributes:Attribute*> "const" <name:Ident> <ty:(":" <TypeExpr>)?> "=" <init:Expr> <r:@R>
+        => Statement::Local(LocalValue {
+            attributes, kind: LocalKind::Const, address_space: vec![], name, ty,
+            init: Some(init), span: Span::new(l as u32, r as u32),
+        }),
+    <l:@L> <attributes:Attribute*> "var" <address_space:TemplateList?> <name:Ident>
+        <ty:(":" <TypeExpr>)?> <init:("=" <Expr>)?> <r:@R>
+        => Statement::Local(LocalValue {
+            attributes, kind: LocalKind::Var,
+            address_space: address_space.unwrap_or_default(), name, ty, init,
+            span: Span::new(l as u32, r as u32),
+        }),
+};
+
+// An expression-led statement: an assignment, an increment, or a call.
+// Parsed as one production so the grammar never has to decide between them
+// before seeing what follows the expression.
+//
+// The expression here is `StmtExpr`, not `Expr`: a statement may not begin
+// with `(`. Without that restriction `@if(X) (a) = b;` is genuinely
+// ambiguous — the `(` could open the attribute's arguments or a
+// parenthesized assignment target — and WGSL has no statement form that
+// needs a leading paren anyway.
+StepOrAssign: Statement = {
+    <l:@L> <attributes:Attribute*> <target:StmtExpr> <op:AssignOp> <value:Expr> <r:@R>
+        => Statement::Assign(Assign {
+            attributes, target: Some(target), op, value, span: Span::new(l as u32, r as u32),
+        }),
+    <l:@L> <attributes:Attribute*> "_" "=" <value:Expr> <r:@R>
+        => Statement::Assign(Assign {
+            attributes, target: None, op: AssignOp::Assign, value,
+            span: Span::new(l as u32, r as u32),
+        }),
+    <l:@L> <attributes:Attribute*> <target:StmtExpr> "++" <r:@R>
+        => Statement::Step(Step { attributes, target, increment: true, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> <target:StmtExpr> "--" <r:@R>
+        => Statement::Step(Step { attributes, target, increment: false, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <attributes:Attribute*> <call:StmtExpr> <r:@R>
+        => Statement::Call(CallStatement { attributes, call, span: Span::new(l as u32, r as u32) }),
+};
+
+// An expression that may appear at the start of a statement: a name, a call,
+// or a member/index chain on either. Deliberately no parenthesized form, and
+// no pointer dereference: `*p.x` cannot be disambiguated from `(*p).x`
+// without a precedence level, and the shader library uses no pointers at
+// all. Add it with its own precedence when something needs it.
+StmtExpr: Expr = {
+    <l:@L> <base:StmtExpr> "[" <index:Expr> "]" <r:@R>
+        => Expr::Index(Box::new(IndexExpr { base, index, span: Span::new(l as u32, r as u32) })),
+    <l:@L> <base:StmtExpr> "." <member:Ident> <r:@R>
+        => Expr::Member(Box::new(MemberExpr { base, member, span: Span::new(l as u32, r as u32) })),
+    <l:@L> <name:Ident> <args:TemplateList?> "(" <call_args:Comma<Expr>> ")" <r:@R>
+        => Expr::Call(Box::new(CallExpr {
+            callee: NameExpr {
+                name, template_args: args.unwrap_or_default(),
+                span: Span::new(l as u32, r as u32),
+            },
+            args: call_args,
+            span: Span::new(l as u32, r as u32),
+        })),
+    <l:@L> <name:Ident> <args:TemplateList?> <r:@R>
+        => Expr::Name(NameExpr {
+            name, template_args: args.unwrap_or_default(),
+            span: Span::new(l as u32, r as u32),
+        }),
+};
+
+AssignOp: AssignOp = {
+    "=" => AssignOp::Assign,
+    "+=" => AssignOp::Add,
+    "-=" => AssignOp::Subtract,
+    "*=" => AssignOp::Multiply,
+    "/=" => AssignOp::Divide,
+    "%=" => AssignOp::Modulo,
+    "&=" => AssignOp::And,
+    "|=" => AssignOp::Or,
+    "^=" => AssignOp::Xor,
+    "<<=" => AssignOp::ShiftLeft,
+    ">>=" => AssignOp::ShiftRight,
+};
+
+IfStatement: Statement = {
+    <l:@L> <attributes:Attribute*> "if" <first:Expr> <then:Block>
+        <elifs:("else" "if" <Expr> <Block>)*>
+        <otherwise:("else" <Block>)?> <r:@R>
+        => {
+            let mut arms = vec![(first, then)];
+            arms.extend(elifs);
+            Statement::If(IfStatement { attributes, arms, otherwise, span: Span::new(l as u32, r as u32) })
+        },
+};
+
+SwitchStatement: Statement = {
+    <l:@L> <attributes:Attribute*> "switch" <selector:Expr>
+        "{" <clauses:SwitchClause*> "}" <r:@R>
+        => Statement::Switch(SwitchStatement {
+            attributes, selector, clauses, span: Span::new(l as u32, r as u32),
+        }),
+};
+
+SwitchClause: SwitchClause = {
+    <l:@L> <attributes:Attribute*> "case" <selectors:Comma<CaseSelector>> ":"? <body:Block> <r:@R>
+        => SwitchClause { attributes, selectors, body, span: Span::new(l as u32, r as u32) },
+    <l:@L> <attributes:Attribute*> "default" ":"? <body:Block> <r:@R>
+        => SwitchClause { attributes, selectors: vec![], body, span: Span::new(l as u32, r as u32) },
+};
+
+CaseSelector: CaseSelector = {
+    <e:Expr> => CaseSelector::Value(e),
+    <s:Sp> "default" => CaseSelector::Default(s),
+};
+
+LoopStatement: Statement = {
+    <l:@L> <attributes:Attribute*> "loop" <lb:@L> <ba:Attribute*> "{"
+        <statements:Statement*> <continuing:Continuing?> "}" <r:@R>
+        => Statement::Loop(LoopStatement {
+            attributes,
+            body: Block { attributes: ba, statements, span: Span::new(lb as u32, r as u32) },
+            continuing,
+            span: Span::new(l as u32, r as u32),
+        }),
+};
+
+Continuing: Continuing = {
+    <l:@L> <attributes:Attribute*> "continuing" <cb:@L> "{" <statements:Statement*>
+        <break_if:("break" "if" <Expr> ";")?> "}" <r:@R>
+        => Continuing {
+            attributes,
+            body: Block { attributes: vec![], statements, span: Span::new(cb as u32, r as u32) },
+            break_if,
+            span: Span::new(l as u32, r as u32),
+        },
+};
+
+ForStatement: Statement = {
+    <l:@L> <attributes:Attribute*> "for" "(" <init:ForInit?> ";" <condition:Expr?> ";"
+        <update:ForUpdate?> ")" <body:Block> <r:@R>
+        => Statement::For(ForStatement {
+            attributes, init: init.map(Box::new), condition, update: update.map(Box::new), body,
+            span: Span::new(l as u32, r as u32),
+        }),
+};
+
+ForInit: Statement = { <s:LocalDecl> => s, <s:StepOrAssign> => s };
+ForUpdate: Statement = <s:StepOrAssign> => s;
+
+WhileStatement: Statement = {
+    <l:@L> <attributes:Attribute*> "while" <condition:Expr> <body:Block> <r:@R>
+        => Statement::While(WhileStatement {
+            attributes, condition, body, span: Span::new(l as u32, r as u32),
+        }),
+};
+
+// --- attributes ------------------------------------------------------------
+
+Attribute: Attribute = {
+    <l:@L> <name:AttrName> <args:("(" <Comma<Expr>> ")")?> <r:@R>
+        => Attribute { name, args: args.unwrap_or_default(), span: Span::new(l as u32, r as u32) },
+};
+
+AttrName: Spanned<String> = <l:@L> <name:"attr"> <r:@R>
+    => Spanned::new(name, Span::new(l as u32, r as u32));
+
+// --- expressions -----------------------------------------------------------
+//
+// One nonterminal with LALRPOP precedence annotations, rather than a layer
+// of nonterminals per level. The layered spelling is the textbook one, but
+// here it is not LR(1): `Expr` appears in enough contexts that its follow
+// set covers most of the alphabet, and a chain of ten single-production
+// levels then cannot tell "reduce to the looser level" from "shift another
+// operator". Annotations put all levels in one nonterminal, so there is
+// nothing to reduce through. Level 0 binds tightest.
+
+Expr: Expr = {
+    #[precedence(level="0")]
+    Term,
+
+    #[precedence(level="1")]
+    <l:@L> "-" <e:Expr> <r:@R> => unary(UnaryOp::Negate, e, l, r),
+    #[precedence(level="1")]
+    <l:@L> "!" <e:Expr> <r:@R> => unary(UnaryOp::Not, e, l, r),
+    #[precedence(level="1")]
+    <l:@L> "~" <e:Expr> <r:@R> => unary(UnaryOp::BitNot, e, l, r),
+    #[precedence(level="1")]
+    <l:@L> "*" <e:Expr> <r:@R> => unary(UnaryOp::Deref, e, l, r),
+    #[precedence(level="1")]
+    <l:@L> "&" <e:Expr> <r:@R> => unary(UnaryOp::Ref, e, l, r),
+
+    #[precedence(level="2")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "*" <b:Expr> <r:@R> => binary(BinaryOp::Multiply, a, b, l, r),
+    #[precedence(level="2")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "/" <b:Expr> <r:@R> => binary(BinaryOp::Divide, a, b, l, r),
+    #[precedence(level="2")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "%" <b:Expr> <r:@R> => binary(BinaryOp::Modulo, a, b, l, r),
+
+    #[precedence(level="3")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "+" <b:Expr> <r:@R> => binary(BinaryOp::Add, a, b, l, r),
+    #[precedence(level="3")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "-" <b:Expr> <r:@R> => binary(BinaryOp::Subtract, a, b, l, r),
+
+    #[precedence(level="4")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "<<" <b:Expr> <r:@R> => binary(BinaryOp::ShiftLeft, a, b, l, r),
+    #[precedence(level="4")] #[assoc(side="left")]
+    <l:@L> <a:Expr> ">>" <b:Expr> <r:@R> => binary(BinaryOp::ShiftRight, a, b, l, r),
+
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "==" <b:Expr> <r:@R> => binary(BinaryOp::Equal, a, b, l, r),
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "!=" <b:Expr> <r:@R> => binary(BinaryOp::NotEqual, a, b, l, r),
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "<" <b:Expr> <r:@R> => binary(BinaryOp::Less, a, b, l, r),
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "<=" <b:Expr> <r:@R> => binary(BinaryOp::LessEqual, a, b, l, r),
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> ">" <b:Expr> <r:@R> => binary(BinaryOp::Greater, a, b, l, r),
+    #[precedence(level="5")] #[assoc(side="left")]
+    <l:@L> <a:Expr> ">=" <b:Expr> <r:@R> => binary(BinaryOp::GreaterEqual, a, b, l, r),
+
+    #[precedence(level="6")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "&" <b:Expr> <r:@R> => binary(BinaryOp::BitAnd, a, b, l, r),
+    #[precedence(level="7")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "^" <b:Expr> <r:@R> => binary(BinaryOp::BitXor, a, b, l, r),
+    #[precedence(level="8")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "|" <b:Expr> <r:@R> => binary(BinaryOp::BitOr, a, b, l, r),
+
+    #[precedence(level="9")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "&&" <b:Expr> <r:@R> => binary(BinaryOp::LogicalAnd, a, b, l, r),
+    #[precedence(level="10")] #[assoc(side="left")]
+    <l:@L> <a:Expr> "||" <b:Expr> <r:@R> => binary(BinaryOp::LogicalOr, a, b, l, r),
+};
+
+// A standalone expression, for attribute values and tests.
+pub ExprEntry: Expr = <e:Expr> => e;
+
+// Primary expressions plus postfix indexing and member access.
+Term: Expr = {
+    <l:@L> <base:Term> "[" <index:Expr> "]" <r:@R>
+        => Expr::Index(Box::new(IndexExpr { base, index, span: Span::new(l as u32, r as u32) })),
+    <l:@L> <base:Term> "." <member:Ident> <r:@R>
+        => Expr::Member(Box::new(MemberExpr { base, member, span: Span::new(l as u32, r as u32) })),
+    <l:@L> <text:"int"> <r:@R>
+        => Expr::Literal(Literal { kind: LiteralKind::Int, text, span: Span::new(l as u32, r as u32) }),
+    <l:@L> <text:"float"> <r:@R>
+        => Expr::Literal(Literal { kind: LiteralKind::Float, text, span: Span::new(l as u32, r as u32) }),
+    <l:@L> "true" <r:@R>
+        => Expr::Literal(Literal { kind: LiteralKind::Bool, text: "true".into(), span: Span::new(l as u32, r as u32) }),
+    <l:@L> "false" <r:@R>
+        => Expr::Literal(Literal { kind: LiteralKind::Bool, text: "false".into(), span: Span::new(l as u32, r as u32) }),
+    <l:@L> <name:Ident> <args:TemplateList?> "(" <call_args:Comma<Expr>> ")" <r:@R>
+        => Expr::Call(Box::new(CallExpr {
+            callee: NameExpr {
+                name, template_args: args.unwrap_or_default(),
+                span: Span::new(l as u32, r as u32),
+            },
+            args: call_args,
+            span: Span::new(l as u32, r as u32),
+        })),
+    <l:@L> <name:Ident> <args:TemplateList?> <r:@R>
+        => Expr::Name(NameExpr {
+            name, template_args: args.unwrap_or_default(),
+            span: Span::new(l as u32, r as u32),
+        }),
+    <l:@L> "(" <inner:Expr> ")" <r:@R>
+        => Expr::Paren(Box::new(ParenExpr { inner, span: Span::new(l as u32, r as u32) })),
+};

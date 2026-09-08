@@ -23,25 +23,25 @@ pipeline, with these features enabled" is decided consistently.
 
 ## Decision
 
-- `wesloom-render::path` defines a `RenderPath` enum (initially `Forward`
+- `wxsl-render::path` defines a `RenderPath` enum (initially `Forward`
   and `Deferred`). A `RenderPath` is a property of the active pipeline, set
   by the application, not stored on a graph.
-- A compiled graph is asked to produce WESL for a *given* `RenderPath` (and
-  the currently active feature set); `wesloom-core::codegen` expresses the
-  per-path differences using WESL's `@if`/`@elif`/`@else` conditional
+- A compiled graph is asked to produce WXSL for a *given* `RenderPath` (and
+  the currently active feature set); `wxsl-core::codegen` expresses the
+  per-path differences using WXSL's `@if`/`@elif`/`@else` conditional
   compilation (ADR 0003) inside one module, rather than maintaining
-  hand-diverged WESL per path. Concretely, a material graph compiles to one
-  WESL module with conditionally-compiled entry points/outputs; which
-  branch is active is selected by the condition passed to the WESL
+  hand-diverged WXSL per path. Concretely, a material graph compiles to one
+  WXSL module with conditionally-compiled entry points/outputs; which
+  branch is active is selected by the condition passed to the WXSL
   compiler for the pipeline currently being built, not by picking between
   separate files.
-- `wesloom-render::variants` owns a cache keyed by
+- `wxsl-render::variants` owns a cache keyed by
   `(graph content hash, RenderPath, active feature set)` mapping to
   already-compiled WGSL / `wgpu` shader modules. Switching the active
   `RenderPath` at runtime looks up or lazily compiles the variant for the
   new path; it does not require the caller to know that recompilation may
   be happening.
-- `wesloom-render::pipeline` defines the trait forward and deferred
+- `wxsl-render::pipeline` defines the trait forward and deferred
   pipelines both implement, so an application can hold "the current
   pipeline" as one trait object / enum and swap it without touching call
   sites that just want "render this scene with the current pipeline."
@@ -61,9 +61,9 @@ pipeline, with these features enabled" is decided consistently.
 
 ## Consequences
 
-- Every node's WESL implementation needs to either be genuinely
+- Every node's WXSL implementation needs to either be genuinely
   path-agnostic (most math/color utility nodes, including the base node
-  library, ADR 0007) or explicitly branch on `RenderPath` via WESL
+  library, ADR 0007) or explicitly branch on `RenderPath` via WXSL
   conditional compilation where the two paths' outputs actually differ (surface/output
   nodes near the end of a material graph).
 - The variant cache's key must include the active feature set, not just the

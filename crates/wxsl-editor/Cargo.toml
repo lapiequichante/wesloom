@@ -1,0 +1,14 @@
+[package]
+name = "wxsl-editor"
+description = "Optional visual node editor for wxsl graphs. Pulls in a GUI toolkit; never a dependency of wxsl-core or wxsl-render."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+# egui = "..."  # added once the editor UI work starts; see docs/adr/0004.

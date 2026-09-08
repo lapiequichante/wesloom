@@ -1,31 +1,34 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wesloom-core",
-    "crates/wesloom-render",
-    "crates/wesloom-editor",
-    "crates/wesloom-stdlib",
-    "crates/wesloom",
+    "crates/wxsl-core",
+    "crates/wxsl-lang",
+    "crates/wxsl-render",
+    "crates/wxsl-editor",
+    "crates/wxsl-stdlib",
+    "crates/wxsl",
 ]
 
 [workspace.package]
 edition = "2021"
 rust-version = "1.82"
 authors = ["Florian Villard"]
-repository = "https://github.com/CHANGEME/wesloom"
-homepage = "https://github.com/CHANGEME/wesloom"
+repository = "https://github.com/lapiequichante/wxsl"
+homepage = "https://github.com/lapiequichante/wxsl"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-wesloom-core = { path = "crates/wesloom-core", version = "0.0.0" }
-wesloom-render = { path = "crates/wesloom-render", version = "0.0.0" }
-wesloom-editor = { path = "crates/wesloom-editor", version = "0.0.0" }
-wesloom-stdlib = { path = "crates/wesloom-stdlib", version = "0.0.0" }
+wxsl-core = { path = "crates/wxsl-core", version = "0.0.0" }
+wxsl-lang = { path = "crates/wxsl-lang", version = "0.0.0" }
+wxsl-render = { path = "crates/wxsl-render", version = "0.0.0" }
+wxsl-editor = { path = "crates/wxsl-editor", version = "0.0.0" }
+wxsl-stdlib = { path = "crates/wxsl-stdlib", version = "0.0.0" }
 
-# WESL -> WGSL compiler (ADR 0003). Pinned exactly: WESL is 0.x and its
-# import/conditional-translation syntax is still moving.
-wesl = "=0.4.4"
-# GPU API for wesloom-render (ADR 0005).
+# Parser generator for the WXSL shading language (ADR 0011). Build
+# dependency of wxsl-lang only; `lalrpop-util` is the runtime half.
+lalrpop = { version = "0.22", default-features = false }
+lalrpop-util = { version = "0.22", default-features = false }
+# GPU API for wxsl-render (ADR 0005).
 wgpu = "30.0.1"
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.33", features = ["bytemuck"] }

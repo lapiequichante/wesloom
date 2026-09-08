@@ -10,24 +10,24 @@ The project must work as a real embeddable library for two very different
 consumers: an application shipping a visual shader-graph editor to end
 users (e.g. a tool for artists), and a runtime that just needs to load a
 graph authored elsewhere and compile/run it (e.g. a game loading a baked
-`.wesl`/graph asset with no editor UI in the shipped binary at all). The
+`.wxsl`/graph asset with no editor UI in the shipped binary at all). The
 second consumer must not pay — in compile time, binary size, or transitive
 dependencies — for a GUI toolkit it never uses.
 
 ## Decision
 
-The visual node editor lives entirely in `wesloom-editor` (ADR 0002),
-depends only on `wesloom-core`, and is reached through the `wesloom` facade
-only via an opt-in `editor` Cargo feature (default off). `wesloom-core`'s
+The visual node editor lives entirely in `wxsl-editor` (ADR 0002),
+depends only on `wxsl-core`, and is reached through the `wxsl` facade
+only via an opt-in `editor` Cargo feature (default off). `wxsl-core`'s
 graph/node/codegen types carry no notion of "how to draw this" — no widget
 trait, no color/layout metadata baked into the core node definition.
 Whatever visual representation a node needs (position, color, custom
 widgets for its inputs) is data the editor layer owns and associates with a
 core graph, not data the core graph owns about itself.
 
-Concretely: a `wesloom-core::graph::Graph` must be fully constructible,
+Concretely: a `wxsl-core::graph::Graph` must be fully constructible,
 serializable, and compilable with the `editor` feature (and therefore the
-whole `wesloom-editor` crate, and its GUI toolkit dependency) absent from
+whole `wxsl-editor` crate, and its GUI toolkit dependency) absent from
 the build entirely.
 
 ## Alternatives considered
@@ -37,7 +37,7 @@ the build entirely.
   grow (icons, widget kind per socket, layout hints), and once it's on the
   core trait every headless consumer carries it whether or not anything
   ever renders it. Keeping the core node trait describe only *interface*
-  (sockets, types, WESL emission) and letting the editor maintain its own
+  (sockets, types, WXSL emission) and letting the editor maintain its own
   side-table of per-node display data keeps that growth contained to the
   crate that actually needs it.
 - **Make the editor the primary crate and the headless path the "reduced"
@@ -53,9 +53,9 @@ the build entirely.
   it looks; if a node needs, say, a color picker in the editor, the editor
   decides that from the socket's *type*, not from editor-specific metadata
   stored on the node.
-- `wesloom-editor` needs its own persistence for display data (node
-  positions, etc.) alongside whatever `wesloom-core` uses to serialize the
+- `wxsl-editor` needs its own persistence for display data (node
+  positions, etc.) alongside whatever `wxsl-core` uses to serialize the
   graph itself — these are two related but separate documents, not one.
-- CI must verify `cargo check -p wesloom-core` and
+- CI must verify `cargo check -p wxsl-core` and
   `cargo check --workspace --no-default-features` both succeed with no GUI
   crate in the dependency tree (see `AGENTS.md`).

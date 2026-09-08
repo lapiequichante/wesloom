@@ -7,7 +7,7 @@ Status: Accepted
 ## Context
 
 [ADR 0006](0006-lygia-port-licensing-and-isolation.md) planned to rewrite
-[LYGIA](https://lygia.xyz) into WESL and ship it as `wesloom`'s base node
+[LYGIA](https://lygia.xyz) into WXSL and ship it as `wxsl`'s base node
 library, isolated into its own crate specifically because LYGIA's
 Prosperity Public License 3.0.0 is noncommercial-by-default (a 30-day trial
 for commercial use, then a paid license from the LYGIA project). Having
@@ -31,10 +31,10 @@ owned by any one library.
 
 ## Decision
 
-- Drop the LYGIA port. Delete `wesloom-lygia`; ADR 0006 stays in the repo
+- Drop the LYGIA port. Delete `wxsl-lygia`; ADR 0006 stays in the repo
   marked superseded by this one (see `docs/adr/README.md`'s "don't delete
   history" rule).
-- Replace it with **`wesloom-stdlib`**: an original shader function
+- Replace it with **`wxsl-stdlib`**: an original shader function
   library, written from scratch, organized the way LYGIA (and similar
   libraries) organize themselves — one small function per file, grouped
   into categories (`math/`, `color/`, `space/`, `lighting/`, `generative/`,
@@ -46,15 +46,15 @@ owned by any one library.
   papers, documented algorithms) approach a problem, especially where a
   more efficient formulation than the "obvious" one is known — but every
   function's code is written independently, not transcribed or lightly
-  renamed from any source. `crates/wesloom-stdlib/shaders/README.md` states
+  renamed from any source. `crates/wxsl-stdlib/shaders/README.md` states
   this as the authoring rule for anyone (human or agent) adding a function.
-- `wesloom-stdlib` is an ordinary crate under the workspace's default
+- `wxsl-stdlib` is an ordinary crate under the workspace's default
   MIT/Apache-2.0 — no special license file, no `publish = false`, no
   isolation for legal reasons. It stays a separate crate from
-  `wesloom-core` purely for the compile-time/binary-size reason ADR 0002
+  `wxsl-core` purely for the compile-time/binary-size reason ADR 0002
   already gives (a large, independently-growing library shouldn't bloat
   the crate every consumer needs).
-- Because there's no licensing reason to hide it anymore, `wesloom`'s
+- Because there's no licensing reason to hide it anymore, `wxsl`'s
   `stdlib` feature defaults **on** (unlike the old `lygia` feature, which
   defaulted off). `render` also stays on by default; only `editor` remains
   opt-in.
@@ -70,11 +70,11 @@ owned by any one library.
   restriction.** Not pursued: that's a business relationship and ongoing
   cost tied to one upstream project's terms, for functionality that can be
   written independently; it doesn't remove the constraint for anyone
-  downstream who redistributes `wesloom` further without also holding that
+  downstream who redistributes `wxsl` further without also holding that
   license.
 - **Vendor Babylon.js's Apache-2.0 shader code directly.** Rejected even
   though the license would technically allow it (with attribution/NOTICE):
-  the goal stated for this library is original, WESL-native
+  the goal stated for this library is original, WXSL-native
   implementations designed around this project's node/type system, not a
   transcription of another engine's GLSL — and mixing "some functions are
   literal ports, some are original" would blur the authoring rule above
@@ -83,13 +83,13 @@ owned by any one library.
 
 ## Consequences
 
-- `crates/wesloom-lygia/` is gone; anything in `docs/` or `AGENTS.md`
-  referencing it should point to `wesloom-stdlib` and this ADR instead
+- `crates/wxsl-lygia/` is gone; anything in `docs/` or `AGENTS.md`
+  referencing it should point to `wxsl-stdlib` and this ADR instead
   (this ADR's own PR updates all of those).
-- No `NOTICE.md`/porting-log ceremony is needed for `wesloom-stdlib` the
+- No `NOTICE.md`/porting-log ceremony is needed for `wxsl-stdlib` the
   way ADR 0006 required for the LYGIA port — normal PR review is enough,
   same as any other crate. The authoring rule
-  (`crates/wesloom-stdlib/shaders/README.md`) is a code-review concern, not
+  (`crates/wxsl-stdlib/shaders/README.md`) is a code-review concern, not
   a legal one: catch a too-close transcription the way you'd catch any
   other quality issue, not because a license depends on it.
 - Rebuilding a library as broad as LYGIA's from scratch is a materially
@@ -99,4 +99,4 @@ owned by any one library.
   description is inside a non-permissively-licensed source, treat that
   function the way ADR 0006 treated all of LYGIA: skip it, or isolate that
   one function's crate the same way, rather than quietly absorbing the
-  constraint into `wesloom-stdlib`.
+  constraint into `wxsl-stdlib`.

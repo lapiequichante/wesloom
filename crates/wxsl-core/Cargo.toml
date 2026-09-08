@@ -1,0 +1,22 @@
+[package]
+name = "wxsl-core"
+description = "GUI-agnostic shader node graph model, node/socket traits and WESL codegen glue for wxsl. No wgpu, no GUI toolkit."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+default = ["serde"]
+# Serialization of the graph model: the node format graphs are saved in, and
+# the macro values stored with them.
+serde = ["dep:serde"]
+
+[lints.rust]
+unsafe_code = "forbid"

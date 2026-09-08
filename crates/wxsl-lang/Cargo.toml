@@ -1,0 +1,19 @@
+[package]
+name = "wxsl-lang"
+description = "WXSL: lexer, parser, template monomorphization and WGSL backend for the WXSL shading language. No wgpu, no GUI toolkit."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+lalrpop-util = { workspace = true }
+
+[build-dependencies]
+lalrpop = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

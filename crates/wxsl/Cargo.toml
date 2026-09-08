@@ -1,0 +1,44 @@
+[package]
+name = "wxsl"
+description = "WESL shader node graphs on wgpu, with an optional visual node editor. See README for feature flags."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+wxsl-render = { workspace = true, optional = true }
+wxsl-editor = { workspace = true, optional = true }
+wxsl-stdlib = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+pollster = { workspace = true }
+winit = { workspace = true }
+image = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }
+
+[features]
+default = ["render", "stdlib"]
+render = ["dep:wxsl-render"]
+editor = ["dep:wxsl-editor", "render"]
+stdlib = ["dep:wxsl-stdlib"]
+
+[[example]]
+name = "pbr_cube"
+# The demo needs the renderer and the node library; without them there is
+# nothing to run, so cargo skips it instead of failing to build.
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "graph_to_wgsl"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "render_cube"
+required-features = ["render", "stdlib"]

@@ -1,0 +1,13 @@
+[package]
+name = "wxsl-stdlib"
+description = "Original WESL shader function library for wxsl's base nodes: granular, composable functions in the spirit of libraries like LYGIA, written from scratch."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }

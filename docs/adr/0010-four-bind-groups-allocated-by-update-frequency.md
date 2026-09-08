@@ -7,7 +7,7 @@ Status: Accepted
 ## Context
 
 WebGPU's `maxBindGroups` limit defaults to 4, and that is also `wgpu`'s
-default, so four is the budget every wesloom shader has to fit in. Some
+default, so four is the budget every wxsl shader has to fit in. Some
 backends disturb the bindings of higher-numbered groups when a lower one is
 rebound with an incompatible layout, which is why the near-universal
 convention is to order groups by update frequency, least frequent first.
@@ -23,8 +23,8 @@ Five things want a slot, and they update at five different rates:
 | whenever | whatever the application wants to bind itself |
 
 Four slots, five frequencies. Something must share, and until now the choice
-was implicit: `wesloom/bindings.wesl` put camera, scene *and* object in group
-0, and `wesloom/lighting_pass.wesl` put the G-buffer in group 1 because
+was implicit: `wxsl/bindings.wxsl` put camera, scene *and* object in group
+0, and `wxsl/lighting_pass.wxsl` put the G-buffer in group 1 because
 nothing else was using it. That works only for as long as group 1 has no
 other claimant, and the next thing we build — material parameter uniforms —
 is exactly such a claimant.
@@ -32,7 +32,7 @@ is exactly such a claimant.
 ## Decision
 
 Four named slots, fixed for the life of the ABI, declared once in
-`wesloom_core::abi` as [`GROUP_FRAME`], [`GROUP_MATERIAL`], [`GROUP_USER`]
+`wxsl_core::abi` as [`GROUP_FRAME`], [`GROUP_MATERIAL`], [`GROUP_USER`]
 and [`GROUP_PASS`]:
 
 | # | Name | Contents | Owner |
@@ -52,7 +52,7 @@ The pass group goes at 3 rather than 2 because rebinding the highest-numbered
 group disturbs nothing above it, and because a pass group is bound once per
 pass, where its index costs nothing either way.
 
-Group 2 is never touched by wesloom. Node definitions may declare bindings in
+Group 2 is never touched by wxsl. Node definitions may declare bindings in
 it; codegen emits the declarations, rejects two nodes claiming the same slot
 with different types, and reports the set on the generated shader so an
 application can check its layout before `wgpu` validation does.
@@ -91,13 +91,13 @@ application can check its layout before `wgpu` validation does.
   path needing a pass group, and of a graph having to compile for either path
   (ADR 0005) — a node claiming group 3 would work in forward and collide in
   deferred, so group 3 is not offered to node authors.
-- `wesloom/lighting_pass.wesl` moves its G-buffer bindings from group 1 to
+- `wxsl/lighting_pass.wxsl` moves its G-buffer bindings from group 1 to
   group 3, and the deferred pipeline layout becomes
   `[Some(frame), None, None, Some(pass)]`. `wgpu` takes `Option`s here, so
   the holes are expressible; the material group is genuinely unbound in the
   lighting pass, which is correct, because in deferred the material's
   parameters are consumed while packing the G-buffer.
-- Group indices become part of the ABI in the ADR 0008 sense: the `.wesl`
+- Group indices become part of the ABI in the ADR 0008 sense: the `.wxsl`
   source and the Rust constants must agree, so a test asserts that the
   shipped shaders declare the groups the constants name.
 - Material parameter uniforms have a home reserved before they are written,
