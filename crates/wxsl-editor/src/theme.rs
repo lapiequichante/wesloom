@@ -60,6 +60,16 @@ pub struct Palette {
     pub link_pending: Color,
     /// A link the pointer is over, which clicking would cut.
     pub link_hover: Color,
+    /// A keyword, in the WXSL/WGSL code panels (`fn`, `let`, `return`, …).
+    pub syntax_keyword: Color,
+    /// A built-in type name, in the code panels (`f32`, `vec3f`, `array`, …).
+    pub syntax_type: Color,
+    /// A numeric literal, in the code panels.
+    pub syntax_number: Color,
+    /// An attribute, in the code panels (`@fragment`, `@group(0)`, …).
+    pub syntax_attribute: Color,
+    /// A comment, in the code panels.
+    pub syntax_comment: Color,
 }
 
 impl Palette {
@@ -87,6 +97,11 @@ impl Palette {
         link: Color::rgb(0.62, 0.66, 0.74),
         link_pending: Color::rgb(0.98, 0.82, 0.45),
         link_hover: Color::rgb(0.98, 0.55, 0.45),
+        syntax_keyword: Color::rgb(0.55, 0.62, 0.98),
+        syntax_type: Color::rgb(0.45, 0.80, 0.75),
+        syntax_number: Color::rgb(0.85, 0.70, 0.45),
+        syntax_attribute: Color::rgb(0.90, 0.75, 0.45),
+        syntax_comment: Color::rgb(0.48, 0.52, 0.58),
     };
 }
 

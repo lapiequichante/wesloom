@@ -45,11 +45,28 @@ fn tokenize_raw(source: &str) -> Result<Vec<Spanned<Tok>>, Diagnostics> {
     Ok(raw)
 }
 
+/// Tokenize `source`, plus the span of every comment it skipped as trivia.
+///
+/// [`tokenize`] is what every compiler pass uses, and none of them need
+/// comments — they are not part of the grammar. The editor's code-panel
+/// highlighter is the one caller that wants them (to colour them rather
+/// than lose them), so this exists alongside `tokenize` instead of changing
+/// what every other caller gets.
+pub fn tokenize_with_comments(source: &str) -> Result<(Vec<Spanned<Tok>>, Vec<Span>), Diagnostics> {
+    let mut scanner = Scanner::new(source);
+    let raw = scanner.scan();
+    if scanner.diagnostics.has_errors() {
+        return Err(scanner.diagnostics);
+    }
+    Ok((disambiguate(raw), scanner.comments))
+}
+
 struct Scanner<'a> {
     source: &'a str,
     bytes: &'a [u8],
     at: usize,
     diagnostics: Diagnostics,
+    comments: Vec<Span>,
 }
 
 impl<'a> Scanner<'a> {
@@ -59,6 +76,7 @@ impl<'a> Scanner<'a> {
             bytes: source.as_bytes(),
             at: 0,
             diagnostics: Diagnostics::new(),
+            comments: Vec::new(),
         }
     }
 
@@ -92,12 +110,14 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 Some(b'/') if self.peek_at(1) == Some(b'/') => {
+                    let start = self.at as u32;
                     while let Some(byte) = self.peek() {
                         if byte == b'\n' {
                             break;
                         }
                         self.at += 1;
                     }
+                    self.comments.push(Span::new(start, self.at as u32));
                 }
                 Some(b'/') if self.peek_at(1) == Some(b'*') => self.skip_block_comment(),
                 _ => return,
@@ -136,6 +156,7 @@ impl<'a> Scanner<'a> {
                 }
             }
         }
+        self.comments.push(Span::new(start, self.at as u32));
     }
 
     fn next_token(&mut self) -> Option<Spanned<Tok>> {
@@ -797,5 +818,29 @@ mod tests {
         let tokens = tokenize(source).expect("lexes");
         assert_eq!(tokens[1].span.text(source), Some("hello"));
         assert_eq!(tokens[1].span.line_column(source), (1, 4));
+    }
+
+    #[test]
+    fn tokenize_with_comments_reports_line_and_block_comments_as_trivia_spans() {
+        let source = "// a line comment\nfn a() { /* nested /* block */ comment */ }";
+        let (tokens, comments) = tokenize_with_comments(source).expect("lexes");
+        assert_eq!(tokens.iter().filter(|t| t.node == Tok::Fn).count(), 1);
+        assert_eq!(comments.len(), 2);
+        assert_eq!(
+            comments[0].text(source),
+            Some("// a line comment"),
+            "the line comment stops before the newline"
+        );
+        assert_eq!(
+            comments[1].text(source),
+            Some("/* nested /* block */ comment */"),
+            "nesting is tracked the same way `tokenize` skips it"
+        );
+    }
+
+    #[test]
+    fn tokenize_with_comments_fails_the_same_way_tokenize_does() {
+        let error = tokenize_with_comments("fn a() { let x = `y`; }").expect_err("bad character");
+        assert!(error.to_string().contains("unexpected character"));
     }
 }

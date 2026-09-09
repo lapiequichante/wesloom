@@ -34,15 +34,17 @@ version:
 |---|---|---|---|
 | `wxsl-core` | nothing in-workspace | no | no |
 | `wxsl-render` | `wxsl-core` | no | yes |
-| `wxsl-editor` | `wxsl-core`, `wxsl-render` | no toolkit — it draws itself | yes (ADR 0013) |
+| `wxsl-editor` | `wxsl-core`, `wxsl-render`, `wxsl-lang` | no toolkit — it draws itself | yes (ADR 0013) |
 | `wxsl-stdlib` | `wxsl-core` | no | no |
 | `wxsl` (facade) | all of the above, behind features | never | via `render`/`editor` features |
 
-The dependency arrows point *into* `wxsl-core`, plus one more:
+The dependency arrows point *into* `wxsl-core`, plus two more:
 `wxsl-editor → wxsl-render`, because the editor draws itself with the
-renderer rather than with a GUI toolkit (ADR 0013). Never make `wxsl-core`
-or `wxsl-render` depend on `wxsl-editor` or `wxsl-stdlib` — that's the
-whole point of the split (ADR 0002).
+renderer rather than with a GUI toolkit (ADR 0013), and
+`wxsl-editor → wxsl-lang`, because its code-panel syntax highlighting
+reuses the compiler's own lexer rather than a second one (ADR 0016). Never
+make `wxsl-core` or `wxsl-render` depend on `wxsl-editor` or `wxsl-stdlib`
+— that's the whole point of the split (ADR 0002).
 
 ## Before you start a nontrivial change
 

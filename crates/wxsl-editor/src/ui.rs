@@ -29,6 +29,7 @@ use wxsl_render::ui::text::{FontId, GlyphCache, TextLayout, TextOptions};
 use wxsl_render::ui::Atlas;
 use wxsl_render::RenderError;
 
+use crate::highlight::Run;
 use crate::theme::Theme;
 
 /// A widget's identity, stable between frames.
@@ -935,6 +936,16 @@ impl<'a> Ui<'a> {
     /// *character count* times the advance, which is exact in a monospaced
     /// font and costs nothing.
     pub fn code_view(&mut self, id: Id, rect: Rect, text: &str) {
+        self.code_view_impl(id, rect, text, &[]);
+    }
+
+    /// [`Ui::code_view`], with `runs` (from [`crate::highlight::highlight`])
+    /// colouring the text instead of drawing it all in one colour.
+    pub fn highlighted_code_view(&mut self, id: Id, rect: Rect, text: &str, runs: &[Run]) {
+        self.code_view_impl(id, rect, text, runs);
+    }
+
+    fn code_view_impl(&mut self, id: Id, rect: Rect, text: &str, runs: &[Run]) {
         let theme = self.state.theme;
         if text.is_empty() {
             self.label(
@@ -949,6 +960,10 @@ impl<'a> Ui<'a> {
         let advance = self.mono_advance();
         let line_height = (theme.metrics.mono_text_size * 1.45).max(1.0);
         let lines: Vec<&str> = text.lines().collect();
+        // Each line's byte offset into `text`, so a run's byte range can be
+        // intersected against it — `.lines()` throws that away, and a run
+        // spanning a multi-line block comment needs it back.
+        let line_starts = line_start_offsets(text, &lines);
         let digits = digit_count(lines.len());
         let gutter = advance * digits as f32 + theme.metrics.padding;
         let widest = lines
@@ -978,11 +993,62 @@ impl<'a> Ui<'a> {
                 theme.palette.text_dim,
                 Align::Right,
             );
-            let line_rect = Rect::from_min_size(
-                Vec2::new(origin.x + gutter + theme.metrics.padding, y),
-                Vec2::new(content.x, line_height),
-            );
-            self.mono_label(line_rect, line, theme.palette.text, Align::Left);
+            let text_x = origin.x + gutter + theme.metrics.padding;
+            if runs.is_empty() {
+                let line_rect =
+                    Rect::from_min_size(Vec2::new(text_x, y), Vec2::new(content.x, line_height));
+                self.mono_label(line_rect, line, theme.palette.text, Align::Left);
+                continue;
+            }
+            let start = line_starts[row];
+            let end = start + line.len();
+            let from = runs.partition_point(|run| run.range.end <= start);
+            let mut cursor = 0usize;
+            for run in runs[from..].iter().take_while(|run| run.range.start < end) {
+                let seg_start = run.range.start.max(start) - start;
+                let seg_end = run.range.end.min(end) - start;
+                if seg_start > cursor {
+                    draw_code_run(
+                        self,
+                        line,
+                        cursor,
+                        seg_start,
+                        text_x,
+                        y,
+                        line_height,
+                        advance,
+                        content.x,
+                        theme.palette.text,
+                    );
+                }
+                draw_code_run(
+                    self,
+                    line,
+                    seg_start,
+                    seg_end,
+                    text_x,
+                    y,
+                    line_height,
+                    advance,
+                    content.x,
+                    run.kind.color(&theme.palette),
+                );
+                cursor = seg_end;
+            }
+            if cursor < line.len() {
+                draw_code_run(
+                    self,
+                    line,
+                    cursor,
+                    line.len(),
+                    text_x,
+                    y,
+                    line_height,
+                    advance,
+                    content.x,
+                    theme.palette.text,
+                );
+            }
         }
         area.end(self);
     }
@@ -1134,6 +1200,56 @@ fn digit_count(value: usize) -> usize {
         remaining /= 10;
     }
     digits
+}
+
+/// The byte offset of each of `lines` (as `text.lines()` produced them)
+/// into `text`.
+///
+/// `.lines()` splits on `\n` and strips one trailing `\r`, throwing the
+/// position away with the separator; a highlight run whose source span
+/// crosses a line boundary (a block comment, most often) needs it back to
+/// know which bytes of *this* line it covers.
+fn line_start_offsets(text: &str, lines: &[&str]) -> Vec<usize> {
+    let mut offset = 0usize;
+    let mut starts = Vec::with_capacity(lines.len());
+    for line in lines {
+        starts.push(offset);
+        offset += line.len();
+        if text[offset..].starts_with("\r\n") {
+            offset += 2;
+        } else if text[offset..].starts_with('\n') {
+            offset += 1;
+        }
+    }
+    starts
+}
+
+/// Draw `line[from..to]` at the column `from` lands on, in `color`.
+///
+/// A no-op for an empty range, which keeps [`Ui::code_view_impl`]'s segment
+/// loop from having to check before every call.
+#[allow(clippy::too_many_arguments)]
+fn draw_code_run(
+    ui: &mut Ui<'_>,
+    line: &str,
+    from: usize,
+    to: usize,
+    text_x: f32,
+    y: f32,
+    line_height: f32,
+    advance: f32,
+    width: f32,
+    color: Color,
+) {
+    if from >= to {
+        return;
+    }
+    let column = line[..from].chars().count();
+    let rect = Rect::from_min_size(
+        Vec2::new(text_x + advance * column as f32, y),
+        Vec2::new(width, line_height),
+    );
+    ui.mono_label(rect, &line[from..to], color, Align::Left);
 }
 
 /// A number, short enough for a control and long enough to be useful.

@@ -2857,6 +2857,7 @@ dependencies = [
  "glam",
  "wgpu",
  "wxsl-core",
+ "wxsl-lang",
  "wxsl-render",
 ]
 

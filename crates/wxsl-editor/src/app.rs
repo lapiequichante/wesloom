@@ -1159,8 +1159,18 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
 
     let body = Rect::from_min_max(body.min + Vec2::new(0.0, metrics.row_gap), body.max);
     match tab {
-        CodeTab::Wxsl => ui.code_view(Id::new("code.wxsl"), body, preview.wxsl()),
-        CodeTab::Wgsl => ui.code_view(Id::new("code.wgsl"), body, preview.wgsl()),
+        CodeTab::Wxsl => ui.highlighted_code_view(
+            Id::new("code.wxsl"),
+            body,
+            preview.wxsl(),
+            preview.wxsl_highlight(),
+        ),
+        CodeTab::Wgsl => ui.highlighted_code_view(
+            Id::new("code.wgsl"),
+            body,
+            preview.wgsl(),
+            preview.wgsl_highlight(),
+        ),
         CodeTab::Problems => {
             let errors = preview.status().errors();
             if errors.is_empty() {

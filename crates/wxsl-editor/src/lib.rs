@@ -59,6 +59,7 @@
 //! |---|---|
 //! | [`app`] | [`Editor`]: the panels, the frame, and the shortcuts |
 //! | [`canvas`] | the pan/zoom node canvas: layout, links, hit-testing, dragging |
+//! | [`highlight`] | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
 //! | [`palette`] | searching the node library |
 //! | [`preview`] | the offscreen material preview, and the compiled WXSL and WGSL |
 //! | [`ui`] | the immediate-mode layer: identity, interaction, widgets |
@@ -87,6 +88,7 @@
 
 pub mod app;
 pub mod canvas;
+pub mod highlight;
 pub mod palette;
 pub mod preview;
 pub mod theme;

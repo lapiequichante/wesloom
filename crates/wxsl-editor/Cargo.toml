@@ -15,5 +15,9 @@ wxsl-core = { workspace = true }
 # third-party GUI toolkit, and renders the material preview with its
 # pipelines. See docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md.
 wxsl-render = { workspace = true }
+# The code panels show WXSL and its compiled WGSL, and colour both with
+# wxsl-lang's own lexer (see `highlight.rs`) rather than a second, ad hoc
+# tokenizer that could drift from what the compiler actually accepts.
+wxsl-lang = { workspace = true }
 wgpu = { workspace = true }
 glam = { workspace = true }

@@ -30,6 +30,7 @@ graph LR
     render --> lang
     editor --> core
     editor --> render
+    editor --> lang
     stdlib --> core
     facade -. "render feature (default)" .-> render
     facade -. "editor feature" .-> editor
@@ -40,7 +41,10 @@ graph LR
 Arrows point from dependent to dependency. The only crate every build
 includes is `wxsl-core`. See
 [ADR 0002](adr/0002-cargo-workspace-crate-boundaries.md) for why the split
-exists and which edges must never appear.
+exists and which edges must never appear, and
+[ADR 0016](adr/0016-syntax-highlighting-reuses-wxsl-langs-lexer.md) for why
+`editor --> lang` exists (the code panels' syntax highlighting reuses the
+compiler's own lexer).
 
 ## Module map
 
@@ -71,7 +75,8 @@ from bytes the application supplies), `text` (the glyph cache and shaping),
 `input` (windowing-agnostic events), `renderer` (the UI pass).
 
 **`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `canvas`
-(the pan/zoom node canvas: layout, links, hit-testing, dragging), `palette`
+(the pan/zoom node canvas: layout, links, hit-testing, dragging), `highlight`
+(colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer), `palette`
 (searching the node library), `preview` (the offscreen material preview and
 the compiled WXSL and WGSL), `ui` (the immediate-mode layer: identity,
 interaction, widgets), `widgets` (editors per socket type), `theme`.

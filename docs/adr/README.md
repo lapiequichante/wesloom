@@ -30,6 +30,7 @@ is signal, don't delete it.
 | [0013](0013-the-editor-draws-itself-with-wxsl-render.md) | The editor draws itself with `wxsl-render` | Accepted |
 | [0014](0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md) | MSDF text, generated in-tree, from fonts the application supplies | Accepted |
 | [0015](0015-generic-sockets-for-arithmetic-nodes.md) | Generic sockets, resolved per node instance, for arithmetic nodes | Accepted |
+| [0016](0016-syntax-highlighting-reuses-wxsl-langs-lexer.md) | The editor's code-panel syntax highlighting reuses `wxsl-lang`'s lexer | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

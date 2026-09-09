@@ -25,6 +25,8 @@ use wxsl_render::{
     Scene, ShaderLibrary, TargetConfig,
 };
 
+use crate::highlight::{self, Run};
+
 /// How the preview is doing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PreviewStatus {
@@ -64,6 +66,12 @@ pub struct Preview {
     material: Option<Material>,
     wxsl: String,
     wgsl: String,
+    // Computed once, alongside `wxsl`/`wgsl`, rather than every frame the
+    // code panel draws: highlighting is a full lex of a file that can run
+    // to thousands of lines, and it only actually changes when the source
+    // does.
+    wxsl_highlight: Vec<Run>,
+    wgsl_highlight: Vec<Run>,
     status: PreviewStatus,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
@@ -102,6 +110,8 @@ impl Preview {
             material: None,
             wxsl: String::new(),
             wgsl: String::new(),
+            wxsl_highlight: Vec::new(),
+            wgsl_highlight: Vec::new(),
             status: PreviewStatus::Empty,
             spinning: true,
             angle: 0.6,
@@ -118,9 +128,19 @@ impl Preview {
         &self.wxsl
     }
 
+    /// [`Preview::wxsl`], coloured by [`crate::highlight`].
+    pub fn wxsl_highlight(&self) -> &[Run] {
+        &self.wxsl_highlight
+    }
+
     /// The WGSL the active render path compiled that WXSL to.
     pub fn wgsl(&self) -> &str {
         &self.wgsl
+    }
+
+    /// [`Preview::wgsl`], coloured by [`crate::highlight`].
+    pub fn wgsl_highlight(&self) -> &[Run] {
+        &self.wgsl_highlight
     }
 
     /// Whether the graph compiles, and what stopped it if not.
@@ -186,6 +206,7 @@ impl Preview {
         match Material::from_graph_with_macros(graph, registry, macros) {
             Ok(material) => {
                 self.wxsl = material.wxsl().to_string();
+                self.wxsl_highlight = highlight::highlight(&self.wxsl);
                 self.material = Some(material);
                 self.status = PreviewStatus::Ok;
                 self.refresh_wgsl(device);
@@ -208,6 +229,7 @@ impl Preview {
         };
         match self.renderer.material_wgsl(device, material) {
             Ok(wgsl) => {
+                self.wgsl_highlight = highlight::highlight(&wgsl);
                 self.wgsl = wgsl;
                 if self.status == PreviewStatus::Empty {
                     self.status = PreviewStatus::Ok;
@@ -215,6 +237,7 @@ impl Preview {
             }
             Err(error) => {
                 self.wgsl.clear();
+                self.wgsl_highlight.clear();
                 self.status = PreviewStatus::Failed(vec![error.to_string()]);
             }
         }
