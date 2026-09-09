@@ -460,11 +460,17 @@ struct App {
 impl App {
     fn create_state(&mut self, event_loop: &ActiveEventLoop) -> Result<State, Box<dyn Error>> {
         let (width, height) = self.options.size;
+        // Hidden at first: the platform paints a freshly created window's
+        // client area itself before anything here has drawn a frame — white,
+        // on Windows — and that paint can happen before `present_black_frame`
+        // below runs. Revealing the window only after that first present
+        // guarantees the first pixels shown are ours, not the platform's.
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title("wxsl — node editor")
-                    .with_inner_size(winit::dpi::LogicalSize::new(width, height)),
+                    .with_inner_size(winit::dpi::LogicalSize::new(width, height))
+                    .with_visible(false),
             )?,
         );
 
@@ -486,6 +492,20 @@ impl App {
                 eprintln!("warning: no linear surface format; colours will be washed out");
                 capabilities.formats[0]
             });
+
+        // Configure the surface and present one black frame *before* the
+        // slower setup below (loading fonts, compiling the UI shader and,
+        // with the GPU MSDF backend, its compute pipeline) and before the
+        // window is revealed, so there is never a frame with nothing drawn
+        // to it — just a black window that opens instantly and is still
+        // loading, rather than a stall.
+        let initial_size = window.inner_size();
+        surface.configure(
+            &gpu.device,
+            &surface_configuration(format, initial_size.width, initial_size.height),
+        );
+        present_black_frame(&gpu, &surface);
+        window.set_visible(true);
 
         let fonts = self
             .fonts
@@ -611,23 +631,74 @@ impl App {
     }
 }
 
+/// The surface configuration this example always uses, just parameterized
+/// on the format and size — shared so the very first, editor-less configure
+/// in [`App::create_state`] and every later resize agree on everything else.
+fn surface_configuration(
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> wgpu::SurfaceConfiguration {
+    wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        width: width.max(1),
+        height: height.max(1),
+        present_mode: wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        view_formats: vec![],
+    }
+}
+
 fn configure_surface(state: &mut State, width: u32, height: u32) {
-    let width = width.max(1);
-    let height = height.max(1);
     state.surface.configure(
         &state.gpu.device,
-        &wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: state.format,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width,
-            height,
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-        },
+        &surface_configuration(state.format, width, height),
     );
+}
+
+/// Clear the surface to black and present it, with no editor and no draw
+/// list — the whole point is that this can run before either exists. See
+/// the call site in [`App::create_state`] for why.
+fn present_black_frame(gpu: &GpuContext, surface: &wgpu::Surface<'_>) {
+    let frame = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+        // Nothing to present yet on this backend/platform combination; the
+        // window keeps its blank backdrop a little longer, which is no worse
+        // than before this existed.
+        _ => return,
+    };
+    let view = frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("initial black frame"),
+        });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("initial black frame"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+    gpu.queue.submit([encoder.finish()]);
+    gpu.queue.present(frame);
 }
 
 impl ApplicationHandler for App {
