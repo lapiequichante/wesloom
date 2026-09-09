@@ -1,10 +1,12 @@
 //! Colours and metrics, in one place.
 //!
 //! Everything the editor draws takes its colour and its size from here, so
-//! that a change of palette is one edit rather than a hunt. The defaults are
-//! a dark theme, because a shader editor's subject is a lit 3D preview and a
-//! bright interface next to it ruins the only thing on screen whose
-//! brightness matters.
+//! that a change of palette is one edit rather than a hunt. A new [`Theme`]
+//! starts dark ([`Palette::DARK`]), because a shader editor's subject is a
+//! lit 3D preview and a bright interface next to it ruins the only thing on
+//! screen whose brightness matters — but [`Palette::LIGHT`] is there too,
+//! and [`Theme::toggle_mode`] (the toolbar's "theme" button) switches
+//! between them without touching anything else about the theme.
 //!
 //! Colours are in the target's colour space, not linear — see
 //! [`wxsl_render::ui::Color`]. The UI pass converts nothing, which is what
@@ -103,6 +105,80 @@ impl Palette {
         syntax_attribute: Color::rgb(0.90, 0.75, 0.45),
         syntax_comment: Color::rgb(0.48, 0.52, 0.58),
     };
+
+    /// The light palette.
+    ///
+    /// Not a naive channel inversion of [`Palette::DARK`]: a colour picked
+    /// to read clearly on a near-black background (a pale syntax blue, a
+    /// light slate link) can all but vanish on a near-white one, so every
+    /// colour that carries meaning — text, borders, links, syntax colours,
+    /// `error`/`warning` — is deepened for the same contrast on the other
+    /// background, rather than mechanically flipped.
+    pub const LIGHT: Palette = Palette {
+        background: Color::rgb(0.95, 0.955, 0.965),
+        canvas: Color::rgb(0.90, 0.905, 0.915),
+        grid: Color::rgb(0.855, 0.86, 0.875),
+        grid_major: Color::rgb(0.78, 0.785, 0.80),
+        panel: Color::rgb(0.985, 0.985, 0.99),
+        panel_header: Color::rgb(0.90, 0.905, 0.92),
+        outline: Color::rgb(0.78, 0.78, 0.80),
+        node: Color::rgb(0.97, 0.97, 0.98),
+        node_header: Color::rgb(0.85, 0.855, 0.88),
+        selection: Color::rgb(0.85, 0.55, 0.08),
+        text: Color::rgb(0.12, 0.13, 0.16),
+        text_dim: Color::rgb(0.42, 0.44, 0.50),
+        text_on_accent: Color::rgb(0.06, 0.07, 0.09),
+        accent: Color::rgb(0.15, 0.47, 0.90),
+        control: Color::rgb(0.87, 0.87, 0.90),
+        control_hover: Color::rgb(0.79, 0.80, 0.84),
+        control_active: Color::rgb(0.70, 0.72, 0.78),
+        error: Color::rgb(0.78, 0.16, 0.16),
+        warning: Color::rgb(0.72, 0.48, 0.04),
+        link: Color::rgb(0.40, 0.44, 0.52),
+        link_pending: Color::rgb(0.75, 0.55, 0.10),
+        link_hover: Color::rgb(0.80, 0.32, 0.22),
+        syntax_keyword: Color::rgb(0.18, 0.28, 0.78),
+        syntax_type: Color::rgb(0.03, 0.45, 0.42),
+        syntax_number: Color::rgb(0.62, 0.40, 0.06),
+        syntax_attribute: Color::rgb(0.58, 0.42, 0.05),
+        syntax_comment: Color::rgb(0.45, 0.48, 0.53),
+    };
+}
+
+/// Which of the two built-in palettes a [`Theme`] is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeMode {
+    /// [`Palette::DARK`].
+    Dark,
+    /// [`Palette::LIGHT`].
+    Light,
+}
+
+impl ThemeMode {
+    /// This mode's palette.
+    pub fn palette(self) -> Palette {
+        match self {
+            ThemeMode::Dark => Palette::DARK,
+            ThemeMode::Light => Palette::LIGHT,
+        }
+    }
+
+    /// The other mode, for a toggle button.
+    pub fn toggled(self) -> Self {
+        match self {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Dark,
+        }
+    }
+
+    /// A short label for a toggle button: what this mode *is*, not what it
+    /// switches to.
+    pub fn name(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+        }
+    }
 }
 
 /// Sizes and spacings, in logical pixels before the scale factor.
@@ -198,8 +274,12 @@ impl Metrics {
 /// A palette, the metrics, and the scale they are at.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
-    /// Colours.
+    /// Colours. Kept in sync with `mode` — always `mode.palette()` — so
+    /// every place that reads `theme.palette` (nearly everywhere the editor
+    /// draws) does not also have to know about `mode`.
     pub palette: Palette,
+    /// Which palette `palette` currently is.
+    pub mode: ThemeMode,
     /// Sizes, already scaled.
     pub metrics: Metrics,
     /// Physical pixels per logical pixel.
@@ -213,10 +293,11 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// The default theme at a display scale.
+    /// The default theme (dark) at a display scale.
     pub fn new(scale: f32) -> Self {
         Theme {
-            palette: Palette::DARK,
+            palette: ThemeMode::Dark.palette(),
+            mode: ThemeMode::Dark,
             metrics: Metrics::DEFAULT.scaled(scale),
             scale: scale.max(0.1),
         }
@@ -226,6 +307,12 @@ impl Theme {
     pub fn set_scale(&mut self, scale: f32) {
         self.metrics = Metrics::DEFAULT.scaled(scale);
         self.scale = scale.max(0.1);
+    }
+
+    /// Switch to the other of the two built-in palettes.
+    pub fn toggle_mode(&mut self) {
+        self.mode = self.mode.toggled();
+        self.palette = self.mode.palette();
     }
 
     /// The colour a socket's type is drawn in.
@@ -326,5 +413,45 @@ mod tests {
             theme.category_color("something new"),
             theme.palette.node_header
         );
+    }
+
+    #[test]
+    fn a_new_theme_starts_dark_with_a_matching_palette() {
+        let theme = Theme::default();
+        assert_eq!(theme.mode, ThemeMode::Dark);
+        assert_eq!(theme.palette, Palette::DARK);
+    }
+
+    #[test]
+    fn toggling_switches_both_the_mode_and_the_palette() {
+        let mut theme = Theme::default();
+        theme.toggle_mode();
+        assert_eq!(theme.mode, ThemeMode::Light);
+        assert_eq!(theme.palette, Palette::LIGHT);
+        theme.toggle_mode();
+        assert_eq!(theme.mode, ThemeMode::Dark);
+        assert_eq!(theme.palette, Palette::DARK);
+    }
+
+    #[test]
+    fn toggling_keeps_the_metrics_and_scale() {
+        // A theme change should not also relayout the interface.
+        let mut theme = Theme::new(1.5);
+        theme.toggle_mode();
+        assert_eq!(theme.scale, 1.5);
+        assert_eq!(theme.metrics, Metrics::DEFAULT.scaled(1.5));
+    }
+
+    #[test]
+    fn the_light_palette_is_actually_light_and_the_dark_one_actually_dark() {
+        fn luminance(color: Color) -> f32 {
+            (color.r + color.g + color.b) / 3.0
+        }
+        assert!(luminance(Palette::LIGHT.background) > luminance(Palette::LIGHT.text));
+        assert!(luminance(Palette::DARK.text) > luminance(Palette::DARK.background));
+        // And the two backgrounds land on opposite sides of the two texts,
+        // rather than both palettes drifting to the same mid-grey.
+        assert!(luminance(Palette::LIGHT.background) > luminance(Palette::DARK.background));
+        assert!(luminance(Palette::LIGHT.text) < luminance(Palette::DARK.text));
     }
 }

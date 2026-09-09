@@ -13,7 +13,7 @@
 use glam::Vec2;
 use wxsl::core::graph::Graph;
 use wxsl::core::node::ValueType;
-use wxsl::editor::{Editor, EditorConfig};
+use wxsl::editor::{Editor, EditorConfig, ThemeMode};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::ui::input::{Key, MouseButton, UiEvent};
 use wxsl::render::ui::{MsdfBackend, UiTarget};
@@ -432,5 +432,49 @@ fn dragging_a_palette_row_onto_the_canvas_adds_a_node_there() {
     assert!(
         distance < 1.0,
         "the node landed at {position:?}, expected close to {dropped_at:?}"
+    );
+}
+
+#[test]
+fn clicking_the_theme_button_toggles_light_and_dark() {
+    // The button is pinned to the toolbar's top-right corner and always
+    // reaches the panel's right edge (its width only grows leftward to fit
+    // "theme: dark" vs "theme: light"), so a point a few pixels in from the
+    // top-right corner is inside it regardless of exactly how wide the
+    // label measures.
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    assert_eq!(editor.theme().mode, ThemeMode::Dark, "a new editor is dark");
+
+    let click = |editor: &mut Editor, time: f64| {
+        let point = Vec2::new(1270.0, 18.0);
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02);
+    };
+
+    click(&mut editor, 0.1);
+    assert_eq!(
+        editor.theme().mode,
+        ThemeMode::Light,
+        "one click should switch to the light theme"
+    );
+    click(&mut editor, 0.2);
+    assert_eq!(
+        editor.theme().mode,
+        ThemeMode::Dark,
+        "a second click should switch back"
     );
 }

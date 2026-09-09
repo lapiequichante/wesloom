@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!  ┌─────────────────────────────────────────────────────────────┐
-//!  │ toolbar: name · path · mesh · MSDF backend · add · fit      │
+//!  │ toolbar: name · path · mesh · msdf · add · fit · theme      │
 //!  ├───────────┬──────────────────────────────┬──────────────────┤
 //!  │ palette   │ node canvas                  │ preview          │
 //!  │ (search,  │ (pan, zoom, link, unlink,    │ selected node    │
@@ -256,6 +256,11 @@ impl Editor {
     /// The preview, for its compiled source and its status.
     pub fn preview(&self) -> &Preview {
         &self.preview
+    }
+
+    /// The active theme: its palette, metrics and scale.
+    pub fn theme(&self) -> Theme {
+        self.ui.theme
     }
 
     /// Whether the document has unsaved changes.
@@ -535,6 +540,9 @@ impl Editor {
         if requests.toggle_spin {
             self.preview.spinning = !self.preview.spinning;
         }
+        if requests.toggle_theme {
+            self.ui.theme.toggle_mode();
+        }
         if requests.fit {
             self.canvas
                 .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
@@ -575,6 +583,7 @@ struct Requests {
     dragging_definition: Option<String>,
     changed_graph: bool,
     toggle_spin: bool,
+    toggle_theme: bool,
     /// Turn the preview by this many pixels of drag.
     spin_drag: Option<f32>,
     fit: bool,
@@ -632,6 +641,21 @@ fn toolbar_panel(
         Vec2::new(inner.width(), metrics.row_height),
     );
     let gap = metrics.row_gap;
+
+    // The theme toggle, pinned to the top right: reserved before the
+    // left-flowing buttons below claim any of `row`, so it stays in the same
+    // place regardless of how many of them there are.
+    let theme_label = format!("theme: {}", theme.mode.name());
+    let theme_width = (ui.measure_ui(&theme_label).x + metrics.padding * 2.0).max(48.0);
+    let (right, row) = row.split_right(theme_width + gap);
+    let (_, theme_rect) = right.split_left(gap);
+    if ui
+        .button(Id::new("toolbar.theme"), theme_rect, &theme_label)
+        .clicked
+    {
+        requests.toggle_theme = true;
+    }
+
     let mut cursor = row;
 
     // The graph's name, editable.

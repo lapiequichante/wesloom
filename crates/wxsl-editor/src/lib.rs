@@ -99,4 +99,4 @@ pub use app::{CodeTab, Editor, EditorConfig};
 pub use canvas::{Canvas, View};
 pub use palette::NodePicker;
 pub use preview::{Preview, PreviewStatus};
-pub use theme::Theme;
+pub use theme::{Theme, ThemeMode};
