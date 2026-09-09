@@ -79,7 +79,8 @@ from bytes the application supplies), `text` (the glyph cache and shaping),
 (colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer), `palette`
 (searching the node library), `preview` (the offscreen material preview and
 the compiled WXSL and WGSL), `ui` (the immediate-mode layer: identity,
-interaction, widgets), `widgets` (editors per socket type), `theme`.
+interaction, widgets), `widgets` (editors per socket type, and the colour
+picker), `theme`.
 
 **`wxsl`** — feature-gated re-exports, plus `stdlib_library()`, the one
 line that hands the node library's WXSL to the renderer.
@@ -287,8 +288,13 @@ is original code, not a port. A `wxsl/` directory alongside them holds the
 shader ABI (ADR 0008), which is plumbing rather than granular functions.
 
 Two kinds of node come out of it. Arithmetic is an inline WXSL expression
-generated per value type (`math.add.vec3f` is `{a} + {b}`), because wrapping
-an addition in a function call buys nothing. Everything with a body — PBR
+(`math.add` is `{a} + {b}`), because wrapping an addition in a function call
+buys nothing. It is *one* node per operation, not one per operation and
+type: the definition declares the types it works over as a type parameter
+and its sockets carry it, resolved per graph node from whatever is connected,
+and the operators whose two operands WGSL lets differ (`f32 * vec3f`,
+`mat3x3f * vec3f`) declare two parameters and derive the result from both
+([ADR 0018](adr/0018-one-generic-node-per-operation.md)). Everything with a body — PBR
 shading, noise, tonemapping, colour spaces — is a real WXSL function
 described by a `WeslFunction` giving its module, name, parameters and return
 shape, so the WXSL source stays the single definition of the behaviour and
@@ -309,10 +315,10 @@ Implemented and tested end to end:
 | Area | State |
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
-| `wxsl-stdlib`: shader ABI, 215 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
+| `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
-| `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing | done |
+| `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing, per-node name and colour, light/dark themes | done |
 | `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `editor` demo | done |
 
 The demo is the thing to run first:

@@ -54,3 +54,9 @@ name = "editor_frame"
 # Drives the editor for a few frames on a real device; skips when there is no
 # adapter, like render_cube.rs.
 required-features = ["editor", "stdlib"]
+
+[[test]]
+name = "wgsl_types"
+# Checks `ValueType`'s operator typing rules against wgpu's own validator,
+# so it needs a device; skips when there is no adapter, like render_cube.rs.
+required-features = ["render", "stdlib"]

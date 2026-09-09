@@ -24,7 +24,6 @@ use std::fmt;
 use crate::error::{Direction, GraphError, GraphErrors};
 use crate::macros::{MacroDef, MacroSet, MacroValue};
 use crate::node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType};
-use crate::wxsl::WxslIdent;
 
 /// Identifier of a node within one graph.
 ///
@@ -108,6 +107,19 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub label: Option<String>,
+    /// Optional title-strip colour, as linear RGB.
+    ///
+    /// A property of *this* node, not of its kind: two `math.add` nodes in
+    /// one graph can be coloured differently, which is what makes colour
+    /// useful for grouping a graph by what its parts are *for* rather than
+    /// by what they are made of. `None` means the editor's default, which
+    /// is the same for every node. Meaningless to codegen, round-tripped so
+    /// it survives a save like [`Node::position`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub color: Option<[f32; 3]>,
     /// Editor canvas position. Meaningless to codegen, round-tripped so the
     /// layout survives a save/load.
     #[cfg_attr(
@@ -125,6 +137,7 @@ impl Node {
             params: BTreeMap::new(),
             generics: BTreeMap::new(),
             label: None,
+            color: None,
             position: None,
         }
     }
@@ -132,6 +145,12 @@ impl Node {
     /// Pin `value` on the input named `socket`.
     pub fn with_param(mut self, socket: impl Into<String>, value: Value) -> Self {
         self.params.insert(socket.into(), value);
+        self
+    }
+
+    /// Give the node a title-strip colour of its own.
+    pub fn with_color(mut self, color: [f32; 3]) -> Self {
+        self.color = Some(color);
         self
     }
 
@@ -161,6 +180,27 @@ pub struct Graph {
     edges: Vec<Edge>,
     macros: MacroSet,
     next_id: u32,
+}
+
+/// A socket's effective type given a specific resolution map, rather than
+/// necessarily the graph's *current* one for its node.
+///
+/// Split out from [`Graph::effective_type`] so [`Graph::set_generic`] can ask
+/// "what would this socket become if `param` were repinned to `ty`, before
+/// actually repinning it" — against a hypothetical map with that one change
+/// — to decide whether a downstream combined socket's connection would
+/// break, the same way it already does for a socket [`Socket::generic`]
+/// governs directly.
+fn effective_type_of(socket: &Socket, generics: &BTreeMap<String, ValueType>) -> Option<ValueType> {
+    if let Some(param) = &socket.generic {
+        return generics.get(param.as_str()).copied();
+    }
+    if let Some(combined) = &socket.combine {
+        let a = *generics.get(combined.a.as_str())?;
+        let b = *generics.get(combined.b.as_str())?;
+        return combined.rule.apply(a, b);
+    }
+    Some(socket.ty)
 }
 
 impl Graph {
@@ -198,13 +238,58 @@ impl Graph {
         self.add(Node::new(def))
     }
 
+    /// Add `node`, resolved and fed: every generic parameter its definition
+    /// declares takes its [`NodeDefinition::default_generics`] type, and
+    /// every input with no default of its own gets a value pinned.
+    ///
+    /// This is what an editor should use to place a node, and
+    /// [`Graph::add`] is what a deserializer and a test fixture use. A node
+    /// dropped on a canvas with nothing resolved reports
+    /// [`GraphError::UnresolvedGeneric`] and shows inputs with no value to
+    /// edit, which is a node complaining before it has been used; picking a
+    /// default type is a guess, but it is a guess anything else overrides —
+    /// connecting a wire retypes it ([`Graph::plan_retype`]) and so does
+    /// picking a type ([`Graph::set_generic`]).
+    pub fn add_resolved(&mut self, registry: &NodeRegistry, node: Node) -> NodeId {
+        let id = self.add(node);
+        if let Ok(def) = self.definition(registry, id) {
+            let defaults = def.default_generics();
+            if let Some(instance) = self.nodes.get_mut(&id) {
+                for (param, ty) in defaults {
+                    instance.generics.entry(param).or_insert(ty);
+                }
+            }
+        }
+        self.retype_params(registry, id);
+        id
+    }
+
     /// Remove a node and every edge touching it.
     ///
+    /// A surviving node on the other end of one of those edges forgets a
+    /// generic resolution the same way [`Graph::disconnect`] would, if that
+    /// was the edge keeping it constrained — see
+    /// [`Graph::refresh_generics`].
+    ///
     /// Returns the removed node, or `None` if there was no such node.
-    pub fn remove_node(&mut self, id: NodeId) -> Option<Node> {
+    pub fn remove_node(&mut self, registry: &NodeRegistry, id: NodeId) -> Option<Node> {
         let node = self.nodes.remove(&id)?;
+        let surviving: Vec<NodeId> = self
+            .edges
+            .iter()
+            .filter(|edge| edge.from.node == id || edge.to.node == id)
+            .filter_map(|edge| match (edge.from.node == id, edge.to.node == id) {
+                (false, _) => Some(edge.from.node),
+                (_, false) => Some(edge.to.node),
+                // An edge from `id` to itself: both ends are gone.
+                (true, true) => None,
+            })
+            .collect();
         self.edges
             .retain(|edge| edge.from.node != id && edge.to.node != id);
+        for survivor in surviving {
+            self.refresh_generics(registry, survivor);
+        }
         Some(node)
     }
 
@@ -303,7 +388,6 @@ impl Graph {
                     socket: from.clone(),
                     direction: Direction::Output,
                 })?;
-        let from_generic = from_socket.generic.clone();
         let produced = self.effective_type(from.node, from_socket);
 
         let to_def = self.definition(registry, to.node)?;
@@ -313,39 +397,65 @@ impl Graph {
                 socket: to.clone(),
                 direction: Direction::Input,
             })?;
-        let to_generic = to_socket.generic.clone();
         let expected = self.effective_type(to.node, to_socket);
 
-        /// Which side, if either, a successful connection should resolve.
-        enum Adopt {
-            Neither,
-            Source(WxslIdent),
-            Target(WxslIdent),
-        }
-        let (agreed, adopt) = match (produced, expected) {
-            (Some(p), Some(e)) if p == e => (Some(p), Adopt::Neither),
-            (Some(produced), Some(expected)) => {
-                return Err(GraphError::TypeMismatch {
-                    from,
-                    to,
-                    produced,
-                    expected,
+        // The generic parameters this connection has to change for the two
+        // ends to agree, if any. A resolution is a *default* until wiring
+        // backs it — it came from `NodeDefinition::default_generics`, from
+        // an explicit pick, or from `Graph::seedable_companions` — so
+        // dragging a wire onto a socket retypes the node where it can
+        // rather than being refused, which is the mirror image of
+        // `Graph::set_generic` disconnecting edges that no longer fit
+        // instead of refusing the repin. `Graph::plan_retype` is where
+        // "where it can" is decided: it refuses to break an edge that
+        // already exists, and a conflict with one of those is still a
+        // `TypeMismatch`.
+        //
+        // The target is tried first: dropping a wire onto an input is a
+        // statement about that input, and the source is usually the
+        // established side.
+        let mut plan: Vec<(NodeId, String, ValueType)> = Vec::new();
+        let mut retype = |graph: &Self, node, def, socket, wanted| {
+            graph
+                .plan_retype(registry, node, def, socket, wanted)
+                .map(|changes| {
+                    plan.extend(changes.into_iter().map(|(param, ty)| (node, param, ty)));
                 })
-            }
-            (Some(p), None) => (
-                Some(p),
-                Adopt::Target(to_generic.expect("an unresolved type implies a generic socket")),
-            ),
-            (None, Some(e)) => (
-                Some(e),
-                Adopt::Source(from_generic.expect("an unresolved type implies a generic socket")),
-            ),
-            // Neither side is resolved yet: nothing to check or adopt. The
-            // edge is still valid — a chain of unconstrained generics stays
-            // polymorphic until something anchors it; `Graph::validate`
-            // reports the whole chain as unresolved until it does.
-            (None, None) => (None, Adopt::Neither),
         };
+        match (produced, expected) {
+            (Some(p), Some(e)) if p == e => {}
+            (Some(p), Some(e)) => {
+                if retype(self, to.node, to_def, to_socket, p)
+                    .or_else(|| retype(self, from.node, from_def, from_socket, e))
+                    .is_none()
+                {
+                    return Err(GraphError::TypeMismatch {
+                        from,
+                        to,
+                        produced: p,
+                        expected: e,
+                    });
+                }
+            }
+            // One side has no type yet, which is not a mismatch: it is a
+            // combined socket whose parameters are unresolved, or a generic
+            // one nothing has pinned. Retyping the unresolved side to match
+            // is the adoption that makes a socket "take whatever it
+            // receives"; where there is nothing to adopt into, the edge is
+            // still valid and stays unresolved until whatever it derives
+            // from resolves.
+            (Some(p), None) => {
+                retype(self, to.node, to_def, to_socket, p);
+            }
+            (None, Some(e)) => {
+                retype(self, from.node, from_def, from_socket, e);
+            }
+            // Neither side is resolved: nothing to check or adopt. A chain
+            // of unconstrained generics stays polymorphic until something
+            // anchors it; `Graph::validate` reports the whole chain as
+            // unresolved until it does.
+            (None, None) => {}
+        }
 
         if self.edge_into(&to).is_some() {
             return Err(GraphError::InputAlreadyConnected { socket: to });
@@ -360,39 +470,28 @@ impl Graph {
             from: from.clone(),
             to: to.clone(),
         });
-        match adopt {
-            Adopt::Neither => {}
-            Adopt::Source(param) => self.resolve_generic(
-                registry,
-                from.node,
-                param.as_str(),
-                agreed.expect("adopting resolves from an already-agreed type"),
-            ),
-            Adopt::Target(param) => self.resolve_generic(
-                registry,
-                to.node,
-                param.as_str(),
-                agreed.expect("adopting resolves from an already-agreed type"),
-            ),
+        for (node, param, ty) in plan {
+            self.resolve_generic(registry, node, &param, ty);
         }
         Ok(())
     }
 
-    /// A socket's effective type: `socket.ty` when it is not generic, or
-    /// this node instance's resolution of [`Socket::generic`] otherwise
-    /// (`None` if that parameter has not been resolved yet).
+    /// A socket's effective type: `socket.ty` when it is neither generic nor
+    /// combined, this node instance's resolution of [`Socket::generic`], or
+    /// [`Socket::combine`]'s rule applied to two resolutions — `None` if
+    /// whichever of those applies has not been resolved yet (or, for a
+    /// combined socket, both are resolved but do not combine).
     ///
-    /// `pub(crate)` rather than a free function on [`Socket`] because
-    /// resolution is per graph *node*, not something a bare `Socket` (shared
-    /// across every instance of its [`NodeDefinition`]) can answer alone.
-    /// `codegen` is the other caller within this crate: once
-    /// [`Graph::validate`] has passed, every generic socket codegen touches
-    /// resolves to `Some`.
-    pub(crate) fn effective_type(&self, node: NodeId, socket: &Socket) -> Option<ValueType> {
-        match &socket.generic {
-            None => Some(socket.ty),
-            Some(param) => self.nodes.get(&node)?.generics.get(param.as_str()).copied(),
-        }
+    /// A method rather than a free function on [`Socket`] because resolution
+    /// is per graph *node*, not something a bare `Socket` (shared across
+    /// every instance of its [`NodeDefinition`]) can answer alone. `codegen`
+    /// is the other caller within this crate: once [`Graph::validate`] has
+    /// passed, every generic or combined socket codegen touches resolves to
+    /// `Some`. Public for the editor, which needs the same answer to colour
+    /// a port or label an inspector row by what a socket actually carries,
+    /// not the placeholder `socket.ty` shown before any instance resolved it.
+    pub fn effective_type(&self, node: NodeId, socket: &Socket) -> Option<ValueType> {
+        effective_type_of(socket, &self.nodes.get(&node)?.generics)
     }
 
     /// Resolve `node`'s generic parameter `param` to `ty`, then propagate
@@ -457,7 +556,253 @@ impl Graph {
                     self.enqueue_generic_neighbor(registry, &to, Direction::Input, &mut queue);
                 }
             }
+
+            for companion in self.seedable_companions(&def, node, &param, ty) {
+                queue.push_back((node, companion));
+            }
+            self.retype_params(registry, node);
         }
+    }
+
+    /// The change to `node`'s generic parameters that would make `socket`
+    /// carry `wanted`, or `None` if there is no such change.
+    ///
+    /// This is what makes "plug an `f32` into a socket showing `vec3f`"
+    /// retype the node instead of being refused. A socket's type is either
+    /// fixed (nothing to retype), one parameter (set it), or two combined
+    /// by a [`TypeRule`] (set whichever of them makes the rule give
+    /// `wanted` — one alone where that suffices, both otherwise).
+    ///
+    /// A plan is only returned when it breaks nothing: every parameter it
+    /// touches must allow the type, every [`Socket::combine`] socket on the
+    /// node must still derive a type, and every edge already touching the
+    /// node must still join two sockets of the same type. That last
+    /// condition is the whole difference between retyping and vandalism —
+    /// the node adapts where it can, and a genuine conflict with wiring
+    /// that already exists is still [`GraphError::TypeMismatch`], not a
+    /// wire silently dropped.
+    fn plan_retype(
+        &self,
+        registry: &NodeRegistry,
+        node: NodeId,
+        def: &NodeDefinition,
+        socket: &Socket,
+        wanted: ValueType,
+    ) -> Option<Vec<(String, ValueType)>> {
+        let candidates: Vec<Vec<String>> = if let Some(param) = &socket.generic {
+            vec![vec![param.as_str().to_string()]]
+        } else if let Some(combined) = &socket.combine {
+            let (a, b) = (
+                combined.a.as_str().to_string(),
+                combined.b.as_str().to_string(),
+            );
+            vec![vec![a.clone()], vec![b.clone()], vec![a, b]]
+        } else {
+            return None;
+        };
+
+        let current = self
+            .nodes
+            .get(&node)
+            .map(|instance| instance.generics.clone())
+            .unwrap_or_default();
+        candidates.into_iter().find_map(|params| {
+            if !params.iter().all(|param| {
+                def.generic(param)
+                    .is_some_and(|declared| declared.allowed.contains(&wanted))
+            }) {
+                return None;
+            }
+            let mut hypothetical = current.clone();
+            for param in &params {
+                hypothetical.insert(param.clone(), wanted);
+            }
+            if effective_type_of(socket, &hypothetical) != Some(wanted) {
+                return None;
+            }
+            self.hypothesis_holds(registry, node, def, &hypothetical)
+                .then(|| params.into_iter().map(|param| (param, wanted)).collect())
+        })
+    }
+
+    /// Whether `hypothetical` is a resolution `node` could actually take:
+    /// no combined socket is left with two types its rule cannot combine,
+    /// and every edge already touching the node still joins two sockets of
+    /// the same type.
+    ///
+    /// Neither check treats "not resolved yet" as a conflict. A combined
+    /// socket with only one of its two parameters known is simply not
+    /// derived yet, and an edge whose *other* end is unresolved is one
+    /// [`Graph::resolve_generic`] propagates into — which is how a chain of
+    /// generic nodes resolves together.
+    fn hypothesis_holds(
+        &self,
+        registry: &NodeRegistry,
+        node: NodeId,
+        def: &NodeDefinition,
+        hypothetical: &BTreeMap<String, ValueType>,
+    ) -> bool {
+        for socket in def.inputs.iter().chain(&def.outputs) {
+            let Some(combined) = &socket.combine else {
+                continue;
+            };
+            let (Some(&a), Some(&b)) = (
+                hypothetical.get(combined.a.as_str()),
+                hypothetical.get(combined.b.as_str()),
+            ) else {
+                continue;
+            };
+            if combined.rule.apply(a, b).is_none() {
+                return false;
+            }
+        }
+        for edge in &self.edges {
+            let (mine, theirs, direction) = if edge.to.node == node {
+                (def.input(&edge.to.socket), &edge.from, Direction::Output)
+            } else if edge.from.node == node {
+                (def.output(&edge.from.socket), &edge.to, Direction::Input)
+            } else {
+                continue;
+            };
+            let Some(mine) = mine else { continue };
+            let (Some(becomes), Ok(Some(other))) = (
+                effective_type_of(mine, hypothetical),
+                self.socket_type(registry, theirs, direction),
+            ) else {
+                continue;
+            };
+            if becomes != other {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Bring `node`'s pinned parameters in line with its resolved types:
+    /// convert any whose type no longer matches its socket, and pin one on
+    /// every unconnected input that would otherwise have no value at all.
+    ///
+    /// Both halves exist so that resolving a type leaves a node *usable*
+    /// rather than merely typed. A stale parameter is
+    /// [`GraphError::ParamTypeMismatch`] — picking `vec3f` on a
+    /// `math.add` whose operands were pinned to `0.5` has to carry them to
+    /// `vec3f(0.5)`, not report an error — and a generic input has no fixed
+    /// default to fall back on ([`Socket::default`] is always `None`
+    /// there), so without a pinned value it is
+    /// [`GraphError::MissingInput`] and the inspector has nothing to show.
+    /// Only inputs nothing feeds get a value; a connected one keeps
+    /// whatever the author last typed, converted, for when it is unplugged.
+    fn retype_params(&mut self, registry: &NodeRegistry, node: NodeId) {
+        let Ok(def) = self.definition(registry, node).cloned() else {
+            return;
+        };
+        let mut updates: Vec<(String, Value)> = Vec::new();
+        for socket in &def.inputs {
+            let Some(ty) = self.effective_type(node, socket) else {
+                continue;
+            };
+            let name = socket.name.as_str();
+            let pinned = self
+                .nodes
+                .get(&node)
+                .and_then(|n| n.params.get(name))
+                .copied();
+            match pinned {
+                Some(value) if value.ty() != ty => {
+                    updates.push((name.to_string(), value.converted_to(ty)));
+                }
+                Some(_) => {}
+                None => {
+                    let fed = socket.default_for(ty).is_some()
+                        || socket.optional
+                        || self.edge_into(&SocketRef::new(node, name)).is_some();
+                    if !fed {
+                        let value = ty.splat(0.0).unwrap_or_else(|| ty.zero());
+                        updates.push((name.to_string(), value));
+                    }
+                }
+            }
+        }
+        if let Some(instance) = self.nodes.get_mut(&node) {
+            for (name, value) in updates {
+                instance.params.insert(name, value);
+            }
+        }
+    }
+
+    /// The other parameters on `node` that resolving `param` to `ty` should
+    /// carry along: for every [`Socket::combine`] socket reading `param`,
+    /// the parameter on its other side.
+    ///
+    /// This is what keeps a two-parameter node usable from one connection.
+    /// `math.multiply` declares `A` and `B` so that `f32 * vec3f` is
+    /// expressible at all, but the overwhelmingly common case is two
+    /// operands of the *same* type — so wiring a `vec3f` into `a` resolves
+    /// `B` to `vec3f` as well, and the node is immediately complete instead
+    /// of sitting on an unresolved `B` until the second operand is touched
+    /// too. It is a default, not a constraint: pinning `B` afterwards
+    /// ([`Graph::set_generic`]) or wiring something else into `b` changes it
+    /// like any other resolution.
+    ///
+    /// A companion is only seeded when nothing else has a say — it is
+    /// unresolved, `ty` is one of the types it allows, and *no* remaining
+    /// edge touches a socket that reads it. That last condition is what
+    /// keeps a guess from overriding evidence: if `b` is already wired to a
+    /// chain of not-yet-anchored generic nodes, the type that chain
+    /// eventually adopts decides `B`, not `A`.
+    fn seedable_companions(
+        &self,
+        def: &NodeDefinition,
+        node: NodeId,
+        param: &str,
+        ty: ValueType,
+    ) -> Vec<String> {
+        let mut companions: Vec<String> = Vec::new();
+        for socket in def.inputs.iter().chain(&def.outputs) {
+            let Some(combined) = &socket.combine else {
+                continue;
+            };
+            let other = match (combined.a.as_str(), combined.b.as_str()) {
+                (a, b) if a == param => b,
+                (a, b) if b == param => a,
+                _ => continue,
+            };
+            if other == param
+                || companions.iter().any(|seen| seen == other)
+                || self.generic_type(node, other).is_some()
+                || !def
+                    .generic(other)
+                    .is_some_and(|declared| declared.allowed.contains(&ty))
+                || self.param_has_an_edge(def, node, other)
+            {
+                continue;
+            }
+            companions.push(other.to_string());
+        }
+        companions
+    }
+
+    /// Whether any edge on `node` touches a socket whose effective type
+    /// reads generic parameter `param` — the test for "something other than
+    /// a guess has a say in what this parameter is".
+    ///
+    /// A [`Socket::combine`] socket counts: an edge on `multiply`'s output
+    /// constrains `A` and `B` jointly (whatever they become, the rule
+    /// applied to them has to stay equal to the other end's type) even
+    /// though it cannot resolve either one by itself.
+    fn param_has_an_edge(&self, def: &NodeDefinition, node: NodeId, param: &str) -> bool {
+        let reads_param = |socket: &&Socket| {
+            socket
+                .referenced_params()
+                .any(|name| name.as_str() == param)
+        };
+        def.inputs.iter().filter(reads_param).any(|socket| {
+            self.edge_into(&SocketRef::new(node, socket.name.as_str()))
+                .is_some()
+        }) || def.outputs.iter().filter(reads_param).any(|socket| {
+            self.edge_from(&SocketRef::new(node, socket.name.as_str()))
+                .is_some()
+        })
     }
 
     /// If `socket` (on the side named by `direction`) is itself generic,
@@ -523,29 +868,44 @@ impl Graph {
             });
         }
 
-        let shares_param = |socket: &&Socket| {
+        // Every socket this repin touches: directly (`Socket::generic` names
+        // `param`) or as one of the two operands a combined socket derives
+        // from (`Socket::combine` names `param` as either one) — repinning
+        // `A` can just as well break `multiply`'s output as it can break
+        // `a` itself.
+        let references_param = |socket: &&Socket| {
             socket
-                .generic
-                .as_ref()
-                .is_some_and(|name| name.as_str() == param)
+                .referenced_params()
+                .any(|name| name.as_str() == param)
         };
+        // What every referencing socket would resolve to *after* the repin,
+        // not before — a hypothetical map with only `param` changed, so a
+        // combined socket's other parameter (still whatever it already was)
+        // is combined against the *new* value being pinned.
+        let mut hypothetical = self
+            .nodes
+            .get(&node)
+            .map(|instance| instance.generics.clone())
+            .unwrap_or_default();
+        hypothetical.insert(param.to_string(), ty);
+
         // Every input this repin would leave mismatched: an existing edge
-        // whose *other* end's effective type is no longer `ty`. Collected
-        // before mutating anything, since disconnecting is decided against
-        // the state before the repin.
+        // whose *other* end's effective type is no longer what this socket
+        // would become. Collected before mutating anything, since
+        // disconnecting is decided against the state before the repin.
         let mut mismatched = Vec::new();
-        for socket in def.inputs.iter().filter(shares_param) {
+        for socket in def.inputs.iter().filter(references_param) {
             let reference = SocketRef::new(node, socket.name.as_str());
             if let Some(edge) = self.edge_into(&reference) {
                 let other = self
                     .socket_type(registry, &edge.from, Direction::Output)
                     .unwrap_or(None);
-                if other != Some(ty) {
+                if other != effective_type_of(socket, &hypothetical) {
                     mismatched.push(reference);
                 }
             }
         }
-        for socket in def.outputs.iter().filter(shares_param) {
+        for socket in def.outputs.iter().filter(references_param) {
             for edge in self
                 .edges_from(node)
                 .filter(|edge| edge.from.socket == socket.name.as_str())
@@ -553,7 +913,7 @@ impl Graph {
                 let other = self
                     .socket_type(registry, &edge.to, Direction::Input)
                     .unwrap_or(None);
-                if other != Some(ty) {
+                if other != effective_type_of(socket, &hypothetical) {
                     mismatched.push(edge.to.clone());
                 }
             }
@@ -561,7 +921,7 @@ impl Graph {
 
         let disconnected = mismatched
             .into_iter()
-            .filter_map(|input| self.disconnect(&input))
+            .filter_map(|input| self.disconnect(registry, &input))
             .collect();
 
         self.nodes
@@ -569,6 +929,13 @@ impl Graph {
             .expect("checked to exist by `definition` above")
             .generics
             .insert(param.to_string(), ty);
+        // Picking one of `multiply`'s two operand types by hand should leave
+        // the node usable, exactly as wiring one of them does — see
+        // `Graph::seedable_companions` and `Graph::retype_params`.
+        for companion in self.seedable_companions(&def, node, param, ty) {
+            self.resolve_generic(registry, node, &companion, ty);
+        }
+        self.retype_params(registry, node);
         Ok(disconnected)
     }
 
@@ -596,9 +963,86 @@ impl Graph {
     }
 
     /// Remove the edge feeding `input`, if any, and return it.
-    pub fn disconnect(&mut self, input: &SocketRef) -> Option<Edge> {
+    ///
+    /// If that edge was the only thing keeping one of its two ends'
+    /// [`Socket::generic`] parameters constrained, that resolution is
+    /// forgotten too — otherwise a node that adopted, say, `f32` from a
+    /// since-removed wire would refuse a `vec3f` one next, even with
+    /// nothing at all connected to tell it not to. See
+    /// [`Graph::refresh_generics`] for exactly what "constrained"
+    /// means and the one case (a chain of generic nodes) it deliberately
+    /// does not chase through.
+    pub fn disconnect(&mut self, registry: &NodeRegistry, input: &SocketRef) -> Option<Edge> {
         let index = self.edges.iter().position(|edge| &edge.to == input)?;
-        Some(self.edges.remove(index))
+        let edge = self.edges.remove(index);
+        self.refresh_generics(registry, edge.to.node);
+        self.refresh_generics(registry, edge.from.node);
+        Some(edge)
+    }
+
+    /// Bring `node`'s generic resolutions back in line with its remaining
+    /// edges, after one was removed: forget every parameter no remaining
+    /// edge has a say in — falling back to
+    /// [`NodeDefinition::default_generics`] rather than to nothing — then
+    /// re-seed the companions of those that survived.
+    ///
+    /// Forgetting is what stops a node that adopted, say, `vec3f` from a
+    /// since-removed wire from staying `vec3f` with nothing connected to
+    /// say so; unwiring a node completely returns it to the type it had
+    /// when it was placed, not to no type at all — an unresolved parameter
+    /// is an error, and a node nobody has broken should not report one.
+    /// Retyping on the next connection is what makes that safe, so the
+    /// default is never a trap (see [`Graph::plan_retype`]). Re-seeding is
+    /// what stops the
+    /// forgetting from undoing a companion resolution that is still earned:
+    /// unplugging `multiply`'s output leaves `a` wired and `A` resolved, and
+    /// `B` — seeded from `A` in the first place — should simply be seeded
+    /// again rather than left blank. See [`Graph::seedable_companions`].
+    ///
+    /// Deliberately local rather than transitive: two generic nodes wired
+    /// together, anchored by a third concrete one, keep whatever they
+    /// resolved to if the edge removed is between the *two generic* nodes
+    /// (each still touches the other), even though neither is connected to
+    /// the concrete anchor anymore once that edge specifically is the one
+    /// that goes. A full re-derivation would need a reachability search over
+    /// every remaining edge on every disconnect; this covers the case that
+    /// actually gets reported (a node with no remaining connections at all
+    /// stuck on a stale resolution) without paying for that.
+    fn refresh_generics(&mut self, registry: &NodeRegistry, node: NodeId) {
+        let Ok(def) = self.definition(registry, node).cloned() else {
+            return;
+        };
+        let kept: Vec<(String, ValueType)> = def
+            .generics
+            .iter()
+            .filter(|param| self.param_has_an_edge(&def, node, param.name.as_str()))
+            .filter_map(|param| {
+                self.generic_type(node, param.name.as_str())
+                    .map(|ty| (param.name.as_str().to_string(), ty))
+            })
+            .collect();
+        let Some(instance) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        instance
+            .generics
+            .retain(|name, _| kept.iter().any(|(survivor, _)| survivor == name));
+        for (param, ty) in kept {
+            for companion in self.seedable_companions(&def, node, &param, ty) {
+                self.resolve_generic(registry, node, &companion, ty);
+            }
+        }
+        // Whatever neither an edge nor a seed accounts for falls back to the
+        // default, so a node the author has merely unplugged is never left
+        // reporting an unresolved parameter. Ordered after the re-seeding so
+        // a default never pre-empts a type something still asks for.
+        let defaults = def.default_generics();
+        if let Some(instance) = self.nodes.get_mut(&node) {
+            for (param, ty) in defaults {
+                instance.generics.entry(param).or_insert(ty);
+            }
+        }
+        self.retype_params(registry, node);
     }
 
     /// The edge feeding `input`, if any.
@@ -818,6 +1262,31 @@ impl Graph {
                     });
                 }
             }
+            // A combined socket (`Socket::combine`) whose two parameters
+            // are both resolved, but to types its rule does not combine — e.g.
+            // `multiply` fed `vec2f` and `vec3f`. Skipped when either
+            // parameter is still unresolved: that is already reported above,
+            // more precisely, and there is nothing sound to combine yet.
+            for socket in def.inputs.iter().chain(&def.outputs) {
+                let Some(combined) = &socket.combine else {
+                    continue;
+                };
+                let (Some(&a_ty), Some(&b_ty)) = (
+                    node.generics.get(combined.a.as_str()),
+                    node.generics.get(combined.b.as_str()),
+                ) else {
+                    continue;
+                };
+                if combined.rule.apply(a_ty, b_ty).is_none() {
+                    errors.push(GraphError::IncompatibleGenerics {
+                        node: id,
+                        socket: socket.name.as_str().to_string(),
+                        rule: combined.rule,
+                        a: (combined.a.as_str().to_string(), a_ty),
+                        b: (combined.b.as_str().to_string(), b_ty),
+                    });
+                }
+            }
         }
 
         let mut connected_inputs: BTreeSet<SocketRef> = BTreeSet::new();
@@ -835,7 +1304,10 @@ impl Graph {
                 let reference = SocketRef::new(id, name);
                 let fed = connected_inputs.contains(&reference)
                     || node.params.contains_key(name)
-                    || socket.default.is_some()
+                    || self
+                        .effective_type(id, socket)
+                        .and_then(|ty| socket.default_for(ty))
+                        .is_some()
                     || socket.optional;
                 if !fed {
                     // A generic socket that is also unresolved was already
@@ -1079,6 +1551,7 @@ mod wire {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::TypeRule;
     use crate::node::{Socket, ValueType};
 
     fn registry() -> NodeRegistry {
@@ -1117,6 +1590,19 @@ mod tests {
                 .input(Socket::new("a", ValueType::F32).generic("T"))
                 .output(Socket::new("out", ValueType::F32).generic("T"))
                 .expr("-{a}"),
+            NodeDefinition::builder("test.product", "Product")
+                .generic_param(crate::node::GenericParam::new(
+                    "A",
+                    vec![ValueType::F32, ValueType::Vec2, ValueType::Vec3],
+                ))
+                .generic_param(crate::node::GenericParam::new(
+                    "B",
+                    vec![ValueType::F32, ValueType::Vec2, ValueType::Vec3],
+                ))
+                .input(Socket::new("a", ValueType::F32).generic("A"))
+                .input(Socket::new("b", ValueType::F32).generic("B"))
+                .output(Socket::new("out", ValueType::F32).combine(TypeRule::Product, "A", "B"))
+                .expr("{a} * {b}"),
         ]);
         registry
     }
@@ -1162,13 +1648,18 @@ mod tests {
             .expect("vec3f is one of T's allowed types");
         assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
 
-        // `b` is still unconnected, but `T` is now vec3f, so it is a
-        // `MissingInput`, not still an `UnresolvedGeneric`.
-        let errors = graph.validate(&registry).expect_err("b unconnected");
-        assert!(matches!(
-            errors.0.as_slice(),
-            [GraphError::MissingInput { socket }] if socket.socket == "b"
-        ));
+        // `b` is still unconnected, but resolving `T` gave it a value of
+        // the type it turned out to be (`Graph::retype_params`), so there
+        // is nothing left unfed — a socket with a known type always has
+        // something to edit.
+        assert_eq!(
+            graph
+                .node(add)
+                .and_then(|node| node.params.get("b"))
+                .copied(),
+            Some(Value::Vec3([0.0; 3]))
+        );
+        graph.validate(&registry).expect("resolved and fed");
     }
 
     #[test]
@@ -1314,6 +1805,387 @@ mod tests {
     }
 
     #[test]
+    fn a_placed_node_starts_at_its_default_type_and_validates() {
+        // What an editor gets from dropping a node on the canvas: complete,
+        // not half-typed. Nothing is connected, so nothing has said what the
+        // type should be — but "no type at all" is an error, and a node
+        // nobody has touched should not report one.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_resolved(&registry, Node::new("test.generic_add"));
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::F32));
+        assert_eq!(
+            graph
+                .node(add)
+                .and_then(|node| node.params.get("a"))
+                .copied(),
+            Some(Value::F32(0.0)),
+            "a generic input has no fixed default, so it needs a pinned value"
+        );
+        graph.validate(&registry).expect("placed and complete");
+    }
+
+    #[test]
+    fn picking_a_type_carries_the_pinned_values_across() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_resolved(&registry, Node::new("test.generic_add"));
+        graph.set_param(add, "a", Value::F32(0.5));
+        graph
+            .set_generic(&registry, add, "T", ValueType::Vec3)
+            .expect("vec3f is allowed");
+        assert_eq!(
+            graph
+                .node(add)
+                .and_then(|node| node.params.get("a"))
+                .copied(),
+            Some(Value::Vec3([0.5; 3])),
+            "the value the author typed should widen, not become a mismatch"
+        );
+        graph.validate(&registry).expect("retyped and still fed");
+    }
+
+    #[test]
+    fn plugging_a_vector_into_a_scalar_socket_retypes_the_node() {
+        // The default `f32` is a default, not a refusal waiting to happen.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec");
+        let add = graph.add_resolved(&registry, Node::new("test.generic_add"));
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::F32));
+        graph
+            .wire(&registry, (source, "out"), (add, "a"))
+            .expect("a wire retypes what only a default backs");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+        graph.validate(&registry).expect("retyped and still fed");
+    }
+
+    #[test]
+    fn retyping_a_combined_output_solves_back_through_its_operands() {
+        // `out`'s type is derived, so nothing can adopt into it directly —
+        // but changing what it derives *from* does derive it, and that is a
+        // plan too. The smallest one wins: `vec3f * f32` is already a
+        // `vec3f`, so only `A` moves and the other operand stays a scalar
+        // the author can still type a single number into.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let mul = graph.add_resolved(&registry, Node::new("test.product"));
+        let sink = graph.add_node("test.vec"); // takes a vec3f
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::F32));
+        graph
+            .wire(&registry, (mul, "out"), (sink, "v"))
+            .expect("A can become vec3f, which makes the product one");
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::Vec3));
+        assert_eq!(graph.generic_type(mul, "B"), Some(ValueType::F32));
+
+        let def = registry.get("test.product").unwrap();
+        let out = def.output("out").unwrap();
+        assert_eq!(graph.effective_type(mul, out), Some(ValueType::Vec3));
+        graph.validate(&registry).expect("solved and fed");
+    }
+
+    #[test]
+    fn retyping_stops_where_it_would_break_an_edge_that_already_exists() {
+        // The line between adapting and vandalising: `out` is wired to
+        // something that really is an `f32`, so `a` cannot quietly become a
+        // `vec3f` and take that wire down with it.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let mul = graph.add_resolved(&registry, Node::new("test.product"));
+        let sink = graph.add_node("test.add"); // concrete f32 inputs
+        let vector = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (mul, "out"), (sink, "a"))
+            .expect("f32 * f32 is an f32");
+
+        let error = graph
+            .wire(&registry, (vector, "out"), (mul, "a"))
+            .expect_err("retyping A would break the output's edge");
+        assert!(
+            matches!(error, GraphError::TypeMismatch { .. }),
+            "{error:?}"
+        );
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::F32));
+        assert_eq!(graph.edges().len(), 1, "and nothing was disconnected");
+    }
+
+    #[test]
+    fn resolving_one_operand_seeds_the_other() {
+        // Two independent parameters exist so `f32 * vec3f` is expressible,
+        // not because two operands of different types are the common case —
+        // so wiring one operand leaves the node complete, not half-typed.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec");
+        let mul = graph.add_node("test.product");
+        graph
+            .wire(&registry, (source, "out"), (mul, "a"))
+            .expect("A resolves to vec3f");
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::Vec3));
+        assert_eq!(
+            graph.generic_type(mul, "B"),
+            Some(ValueType::Vec3),
+            "the other operand should follow, so the node is usable at once"
+        );
+        graph.set_param(mul, "b", Value::Vec3([2.0; 3]));
+        graph.validate(&registry).expect("complete from one wire");
+    }
+
+    #[test]
+    fn a_wire_beats_a_resolution_no_other_wire_backs() {
+        // The seeded `B` above is a default, so connecting a `f32` to `b`
+        // must retype it rather than be refused — which is exactly the
+        // reported bug: "connect a float and the other socket only accepts
+        // floats".
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let vector = graph.add_node("test.vec");
+        let scalar = graph.add_node("test.const");
+        let mul = graph.add_node("test.product");
+        graph
+            .wire(&registry, (vector, "out"), (mul, "a"))
+            .expect("A resolves to vec3f, B is seeded to match");
+        assert_eq!(graph.generic_type(mul, "B"), Some(ValueType::Vec3));
+        graph
+            .wire(&registry, (scalar, "out"), (mul, "b"))
+            .expect("a wire retypes a seeded parameter");
+        assert_eq!(graph.generic_type(mul, "B"), Some(ValueType::F32));
+
+        let def = registry.get("test.product").unwrap();
+        let out = def.output("out").unwrap();
+        assert_eq!(graph.effective_type(mul, out), Some(ValueType::Vec3));
+        graph.validate(&registry).expect("vec3f * f32 is valid");
+    }
+
+    #[test]
+    fn an_explicit_pick_is_also_only_a_default_until_a_wire_backs_it() {
+        // Same rule, reached the other way: nothing is connected to the
+        // node whose type was picked, so the pick loses to the wire. Once a
+        // wire *does* back it, `a_mismatched_connection_to_an_already_
+        // resolved_generic_is_rejected` is the case that applies instead.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let vector = graph.add_node("test.vec");
+        let negate = graph.add_node("test.generic_negate");
+        graph
+            .set_generic(&registry, negate, "T", ValueType::F32)
+            .expect("f32 is allowed");
+        graph
+            .wire(&registry, (vector, "out"), (negate, "a"))
+            .expect("the wire retypes an unbacked pick");
+        assert_eq!(graph.generic_type(negate, "T"), Some(ValueType::Vec3));
+    }
+
+    #[test]
+    fn disconnecting_everything_forgets_both_of_two_parameters() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.const"); // f32
+        let mul = graph.add_node("test.product");
+        graph
+            .wire(&registry, (source, "out"), (mul, "a"))
+            .expect("A resolves to f32, B is seeded to match");
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::F32));
+        assert_eq!(graph.generic_type(mul, "B"), Some(ValueType::F32));
+
+        graph
+            .disconnect(&registry, &SocketRef::new(mul, "a"))
+            .expect("there was an edge");
+        // Both are back to the default — the type the node would have been
+        // placed with — rather than to nothing, since an unresolved
+        // parameter is an error and nothing about the node is broken.
+        let default = registry.get("test.product").unwrap().default_generics();
+        assert_eq!(graph.generic_type(mul, "A"), Some(default["A"]));
+        assert_eq!(
+            graph.generic_type(mul, "B"),
+            Some(default["B"]),
+            "a seeded parameter is released with the one that seeded it"
+        );
+        graph.validate(&registry).expect("resolved and fed");
+    }
+
+    #[test]
+    fn unplugging_a_combined_output_keeps_what_the_operands_still_say() {
+        // `out` is the only edge that goes, and it never resolved anything
+        // by itself — but `a` is still wired, so `A` stays, and `B` (seeded
+        // from `A`) has to be seeded again rather than left blank.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec");
+        let mul = graph.add_node("test.product");
+        let sink = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (source, "out"), (mul, "a"))
+            .expect("A resolves to vec3f, B is seeded to match");
+        graph
+            .wire(&registry, (mul, "out"), (sink, "v"))
+            .expect("vec3f * vec3f is a vec3f");
+
+        graph
+            .disconnect(&registry, &SocketRef::new(sink, "v"))
+            .expect("there was an edge");
+        assert_eq!(graph.generic_type(mul, "A"), Some(ValueType::Vec3));
+        assert_eq!(graph.generic_type(mul, "B"), Some(ValueType::Vec3));
+    }
+
+    #[test]
+    fn disconnecting_every_edge_releases_a_generic_resolution() {
+        // The bug this pins down: a node that once resolved `T` to `f32`
+        // stayed stuck there forever, even fully disconnected — so it could
+        // never again accept a `vec3f`.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec"); // vec3f
+        let add = graph.add_node("test.generic_add");
+        graph
+            .wire(&registry, (source, "out"), (add, "a"))
+            .expect("resolves T to vec3f");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+
+        graph
+            .disconnect(&registry, &SocketRef::new(add, "a"))
+            .expect("there was an edge");
+        assert_eq!(
+            graph.generic_type(add, "T"),
+            Some(ValueType::F32),
+            "nothing constrains T anymore, so it falls back to the default"
+        );
+
+        let vec_source = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (vec_source, "out"), (add, "a"))
+            .expect("T is free to become vec3f now");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+    }
+
+    #[test]
+    fn removing_a_node_releases_a_surviving_neighbors_generic_resolution() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec"); // vec3f
+        let add = graph.add_node("test.generic_add");
+        graph
+            .wire(&registry, (source, "out"), (add, "a"))
+            .expect("resolves T to vec3f");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+
+        graph.remove_node(&registry, source).expect("it existed");
+        assert_eq!(
+            graph.generic_type(add, "T"),
+            Some(ValueType::F32),
+            "its only connection went with the node that made it, so `T` \
+             is back to the default rather than stuck or unresolved"
+        );
+        graph.validate(&registry).expect("resolved and fed");
+    }
+
+    #[test]
+    fn a_node_still_wired_to_another_generic_node_keeps_its_resolution() {
+        // The deliberately-scoped half of the same rule: removing the edge
+        // that anchored a *chain* does not chase back through it — see
+        // `Graph::refresh_generics`'s doc comment for why.
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let first = graph.add_node("test.generic_negate");
+        let second = graph.add_node("test.generic_negate");
+        graph
+            .wire(&registry, (first, "out"), (second, "a"))
+            .expect("both stay polymorphic");
+        let sink = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (second, "out"), (sink, "v"))
+            .expect("resolves the whole chain to vec3f");
+        assert_eq!(graph.generic_type(first, "T"), Some(ValueType::Vec3));
+        assert_eq!(graph.generic_type(second, "T"), Some(ValueType::Vec3));
+
+        graph
+            .disconnect(&registry, &SocketRef::new(sink, "v"))
+            .unwrap();
+        assert_eq!(
+            graph.generic_type(second, "T"),
+            Some(ValueType::Vec3),
+            "second is still wired to first, so it keeps its resolution"
+        );
+    }
+
+    #[test]
+    fn a_combined_output_adapts_to_a_scalar_and_a_vector_operand() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let scalar = graph.add_node("test.const"); // f32
+        let vector = graph.add_node("test.vec"); // vec3f
+        let mul = graph.add_node("test.product");
+        graph
+            .wire(&registry, (scalar, "out"), (mul, "a"))
+            .expect("A resolves to f32");
+        graph
+            .wire(&registry, (vector, "out"), (mul, "b"))
+            .expect("B resolves to vec3f");
+
+        let def = registry.get("test.product").unwrap();
+        let out = def.output("out").unwrap();
+        assert_eq!(graph.effective_type(mul, out), Some(ValueType::Vec3));
+        graph.validate(&registry).expect("f32 * vec3f is valid");
+    }
+
+    #[test]
+    fn mismatched_combined_operands_are_reported_but_do_not_block_connecting() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let two = graph.add_node("test.product");
+        graph
+            .set_generic(&registry, two, "A", ValueType::Vec2)
+            .unwrap();
+        graph
+            .set_generic(&registry, two, "B", ValueType::Vec3)
+            .unwrap();
+
+        let def = registry.get("test.product").unwrap();
+        let out = def.output("out").unwrap();
+        assert_eq!(
+            graph.effective_type(two, out),
+            None,
+            "vec2f and vec3f do not combine"
+        );
+        graph.set_param(two, "a", crate::node::Value::Vec2([0.0; 2]));
+        graph.set_param(two, "b", crate::node::Value::Vec3([0.0; 3]));
+        let errors = graph
+            .validate(&registry)
+            .expect_err("incompatible operands");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|e| matches!(e, GraphError::IncompatibleGenerics { .. })),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn repinning_one_combined_operand_disconnects_a_now_mismatched_output() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let mul = graph.add_node("test.product");
+        let sink = graph.add_node("test.vec"); // takes a vec3f
+        graph
+            .set_generic(&registry, mul, "A", ValueType::Vec3)
+            .unwrap();
+        graph
+            .set_generic(&registry, mul, "B", ValueType::F32)
+            .unwrap();
+        graph.wire(&registry, (mul, "out"), (sink, "v")).unwrap();
+
+        // Repinning B to vec2f makes the product of (vec3f, vec2f)
+        // incompatible, so the output no longer agrees with `sink`.
+        let disconnected = graph
+            .set_generic(&registry, mul, "B", ValueType::Vec2)
+            .expect("vec2f is allowed for B");
+        assert_eq!(disconnected.len(), 1, "the output's stale edge came back");
+        assert_eq!(disconnected[0].to.node, sink);
+        assert!(graph.edges().is_empty());
+    }
+
+    #[test]
     fn connect_rejects_unknown_sockets() {
         let registry = registry();
         let mut graph = Graph::new("g");
@@ -1348,7 +2220,9 @@ mod tests {
             Err(GraphError::InputAlreadyConnected { .. })
         ));
         // Unplugging frees the input again.
-        graph.disconnect(&SocketRef::new(add, "a")).unwrap();
+        graph
+            .disconnect(&registry, &SocketRef::new(add, "a"))
+            .unwrap();
         graph.wire(&registry, (b, "out"), (add, "a")).unwrap();
     }
 
@@ -1400,7 +2274,7 @@ mod tests {
         let a = graph.add_node("test.const");
         let b = graph.add_node("test.add");
         graph.wire(&registry, (a, "out"), (b, "a")).unwrap();
-        graph.remove_node(a).unwrap();
+        graph.remove_node(&registry, a).unwrap();
         assert!(graph.edges().is_empty());
         assert!(graph.node(a).is_none());
         // Ids are never reused, so old edges cannot be resurrected.

@@ -12,6 +12,8 @@
 pbr_cube_forward.png
 pbr_cube_deferred.png
 
+.agent-tmp
+
 # Editor/OS cruft
 .vscode/
 .idea/

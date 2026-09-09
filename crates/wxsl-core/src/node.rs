@@ -1,7 +1,7 @@
 //! Node and socket definitions: the typed interface a node kind describes to
 //! the graph, and the WXSL it emits.
 //!
-//! A [`NodeDefinition`] is the *kind* of a node (`math.add.vec3f`,
+//! A [`NodeDefinition`] is the *kind* of a node (`math.add`,
 //! `lighting.pbr_direct`, …): its typed input and output sockets, the macro
 //! variables it reads, and a [`NodeBody`] saying how it turns its inputs into
 //! WXSL. A node in a [`crate::graph::Graph`] is an *instance* of one of these,
@@ -73,7 +73,7 @@ impl ValueType {
 
     /// The float scalar and vector types, in increasing width.
     ///
-    /// This is the set the arithmetic node families are generated over: the
+    /// This is the set the arithmetic node families are generic over: the
     /// same `+` node makes sense for `f32` and `vec4f`, but not for `bool`.
     pub const FLOATS: &'static [ValueType] = &[
         ValueType::F32,
@@ -81,6 +81,28 @@ impl ValueType {
         ValueType::Vec3,
         ValueType::Vec4,
     ];
+
+    /// The float *vector* types, in increasing width — [`Self::FLOATS`]
+    /// without the scalar.
+    ///
+    /// The set for an operation that needs more than one component to mean
+    /// anything: `dot`, `normalize`, `cross`, `reflect`.
+    pub const VECTORS: &'static [ValueType] = &[ValueType::Vec2, ValueType::Vec3, ValueType::Vec4];
+
+    /// The square float matrix types.
+    pub const MATRICES: &'static [ValueType] = &[ValueType::Mat3, ValueType::Mat4];
+
+    /// Every type WGSL's `+`, `-` and `*` accept as an operand:
+    /// [`Self::FLOATS`] plus [`Self::MATRICES`].
+    ///
+    /// A `Vec` rather than a slice constant because it is what
+    /// [`GenericParam::new`] takes, and the two halves live in separate
+    /// constants that no `const fn` can concatenate.
+    pub fn operands() -> Vec<ValueType> {
+        let mut types = Self::FLOATS.to_vec();
+        types.extend_from_slice(Self::MATRICES);
+        types
+    }
 
     /// The WGSL/WXSL spelling of this type.
     pub fn wxsl_type(&self) -> &'static str {
@@ -97,7 +119,8 @@ impl ValueType {
         }
     }
 
-    /// The short suffix used in generated node ids (`math.add.vec3f`).
+    /// The short suffix used where a node id does name a type
+    /// (`convert.split.vec3f`, whose socket *count* is part of the type).
     pub fn suffix(&self) -> &'static str {
         self.wxsl_type()
     }
@@ -118,6 +141,62 @@ impl ValueType {
         self.component_count().is_some()
     }
 
+    /// Whether this is a float *vector* — `is_float` without the scalar.
+    pub fn is_vector(&self) -> bool {
+        matches!(self.component_count(), Some(2..=4))
+    }
+
+    /// Whether this is a float matrix.
+    pub fn is_matrix(&self) -> bool {
+        matches!(self, ValueType::Mat3 | ValueType::Mat4)
+    }
+
+    /// WGSL's typing of `+`, `-`, `/` and `%`: two equal types combine to
+    /// that type (including matrix with matrix, for `+`/`-`), and an `f32`
+    /// against a float vector spreads over its components in either order
+    /// (`f32 + vec3f` and `vec3f + f32` both give `vec3f`). Nothing else
+    /// combines — not two different vector widths, and not a scalar against
+    /// a matrix.
+    ///
+    /// `/` and `%` reject matrices outright where `+`/`-` accept two of the
+    /// same shape; that difference is expressed by what the node's
+    /// [`GenericParam::allowed`] lists, not here, so this stays one rule.
+    /// See [`TypeRule`].
+    pub fn componentwise(self, other: ValueType) -> Option<ValueType> {
+        if self == other {
+            return Some(self);
+        }
+        match (self, other) {
+            (ValueType::F32, wide) | (wide, ValueType::F32) if wide.is_vector() => Some(wide),
+            _ => None,
+        }
+    }
+
+    /// WGSL's typing of `*`: everything [`Self::componentwise`] allows, plus
+    /// the linear algebra — a scalar against a matrix gives that matrix, and
+    /// a matrix against a vector of its own size gives that vector, in
+    /// either order (`mat3x3f * vec3f` and `vec3f * mat3x3f` are both
+    /// `vec3f`).
+    ///
+    /// Two matrices combine only when equal, which for the square types
+    /// this enum carries is exactly WGSL's `matKxR * matCxK -> matCxR`.
+    /// See [`TypeRule`].
+    pub fn product(self, other: ValueType) -> Option<ValueType> {
+        if let Some(ty) = self.componentwise(other) {
+            return Some(ty);
+        }
+        match (self, other) {
+            (ValueType::F32, m) | (m, ValueType::F32) if m.is_matrix() => Some(m),
+            (ValueType::Mat3, ValueType::Vec3) | (ValueType::Vec3, ValueType::Mat3) => {
+                Some(ValueType::Vec3)
+            }
+            (ValueType::Mat4, ValueType::Vec4) | (ValueType::Vec4, ValueType::Mat4) => {
+                Some(ValueType::Vec4)
+            }
+            _ => None,
+        }
+    }
+
     /// The all-zero value of this type.
     pub fn zero(&self) -> Value {
         match self {
@@ -133,16 +212,32 @@ impl ValueType {
         }
     }
 
-    /// A float scalar/vector filled with `value`.
+    /// This type built from the single scalar `value`: every component of a
+    /// float scalar or vector, and the *diagonal* of a matrix.
     ///
-    /// Returns `None` for non-float types.
+    /// The diagonal is the only reading that makes sense for a matrix —
+    /// `mat3x3f(v)` is not even WGSL, and a matrix of all `v` is not a
+    /// useful value of anything, whereas `splat(1.0)` being the identity is
+    /// exactly the default a matrix socket wants. Returns `None` for the
+    /// types with no float components at all (`bool`, `i32`, `u32`).
     pub fn splat(&self, value: f32) -> Option<Value> {
+        /// A square matrix with `value` on the diagonal, column-major.
+        fn diagonal<const N: usize, const CELLS: usize>(value: f32) -> [f32; CELLS] {
+            let mut cells = [0.0; CELLS];
+            for index in 0..N {
+                cells[index * N + index] = value;
+            }
+            cells
+        }
+
         match self {
             ValueType::F32 => Some(Value::F32(value)),
             ValueType::Vec2 => Some(Value::Vec2([value; 2])),
             ValueType::Vec3 => Some(Value::Vec3([value; 3])),
             ValueType::Vec4 => Some(Value::Vec4([value; 4])),
-            _ => None,
+            ValueType::Mat3 => Some(Value::Mat3(diagonal::<3, 9>(value))),
+            ValueType::Mat4 => Some(Value::Mat4(diagonal::<4, 16>(value))),
+            ValueType::Bool | ValueType::I32 | ValueType::U32 => None,
         }
     }
 }
@@ -152,6 +247,72 @@ impl fmt::Display for ValueType {
         // `pad` so `{:<8}` in a listing actually aligns.
         f.pad(self.wxsl_type())
     }
+}
+
+/// Which of WGSL's operand-combining rules a [`Socket::combine`] socket
+/// derives its type by.
+///
+/// A generic socket's type *is* one resolved [`GenericParam`]; a combined
+/// socket's type is a *function* of two, and this says which function.
+/// There are exactly two because WGSL's arithmetic operators type in exactly
+/// two ways — `*` does linear algebra, the rest do not — and both are
+/// backed by a method on [`ValueType`] so the rule is stated once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeRule {
+    /// [`ValueType::componentwise`]: WGSL's `+`, `-`, `/` and `%`.
+    Componentwise,
+    /// [`ValueType::product`]: WGSL's `*`.
+    Product,
+}
+
+impl TypeRule {
+    /// The type `a` and `b` combine to under this rule, or `None` if they do
+    /// not combine at all.
+    pub fn apply(self, a: ValueType, b: ValueType) -> Option<ValueType> {
+        match self {
+            TypeRule::Componentwise => a.componentwise(b),
+            TypeRule::Product => a.product(b),
+        }
+    }
+
+    /// What this rule requires of its two operands, phrased for the error
+    /// message [`crate::error::GraphError::IncompatibleGenerics`] carries.
+    pub fn requirement(self) -> &'static str {
+        match self {
+            TypeRule::Componentwise => {
+                "the two must be the same type, or one of them f32 against a float vector"
+            }
+            TypeRule::Product => {
+                "the two must be the same type, one of them f32, or a matrix against a \
+                 vector of its own size"
+            }
+        }
+    }
+}
+
+impl fmt::Display for TypeRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            TypeRule::Componentwise => "componentwise",
+            TypeRule::Product => "product",
+        })
+    }
+}
+
+/// A socket type derived from two [`GenericParam`]s by a [`TypeRule`], for a
+/// port whose type depends on two independently-resolved operands rather
+/// than being equal to either one — `multiply`'s output, which is `vec3f`
+/// for `f32 * vec3f` just as much as for `vec3f * vec3f`.
+///
+/// See [`Socket::combine`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Combined {
+    /// Which of WGSL's rules combines the two.
+    pub rule: TypeRule,
+    /// The left operand's parameter name.
+    pub a: WxslIdent,
+    /// The right operand's parameter name.
+    pub b: WxslIdent,
 }
 
 /// A literal value: what an unconnected input carries, and what a constant
@@ -193,6 +354,58 @@ impl Value {
             Value::Vec4(_) => ValueType::Vec4,
             Value::Mat3(_) => ValueType::Mat3,
             Value::Mat4(_) => ValueType::Mat4,
+        }
+    }
+
+    /// This value's float components, or `None` for the types that have
+    /// none (`bool`, `i32`, `u32`). A matrix's are column-major.
+    pub fn components(&self) -> Option<&[f32]> {
+        match self {
+            Value::F32(value) => Some(core::slice::from_ref(value)),
+            Value::Vec2(values) => Some(values),
+            Value::Vec3(values) => Some(values),
+            Value::Vec4(values) => Some(values),
+            Value::Mat3(values) => Some(values),
+            Value::Mat4(values) => Some(values),
+            Value::Bool(_) | Value::I32(_) | Value::U32(_) => None,
+        }
+    }
+
+    /// This value re-expressed as `ty`, carrying across what it can.
+    ///
+    /// Components carry over in order and anything missing repeats the last
+    /// one, so `0.5` widens to `vec3f(0.5, 0.5, 0.5)` and `vec3f(1, 2, 3)`
+    /// narrows to `vec2f(1, 2)`. A matrix takes the first component on its
+    /// diagonal, which does not try to preserve a rotation — retyping a
+    /// matrix is rare, and pretending to keep a basis that no longer fits
+    /// would be worse than plainly starting from a scaled identity. A value
+    /// with no float components at all converts to `ty`'s zero.
+    ///
+    /// This is what keeps a pinned parameter meaningful when the socket it
+    /// sits on changes type — picking `vec3f` on a `math.add` whose operands
+    /// were `0.5` should leave them at `vec3f(0.5)`, not report a type
+    /// mismatch. See [`crate::graph::Graph::set_generic`].
+    pub fn converted_to(self, ty: ValueType) -> Value {
+        if self.ty() == ty {
+            return self;
+        }
+        let Some(components) = self.components() else {
+            return ty.zero();
+        };
+        let Some(&first) = components.first() else {
+            return ty.zero();
+        };
+        let last = *components.last().unwrap_or(&first);
+        let at = |index: usize| *components.get(index).unwrap_or(&last);
+        match ty {
+            ValueType::F32 => Value::F32(first),
+            ValueType::Vec2 => Value::Vec2([at(0), at(1)]),
+            ValueType::Vec3 => Value::Vec3([at(0), at(1), at(2)]),
+            ValueType::Vec4 => Value::Vec4([at(0), at(1), at(2), at(3)]),
+            // `splat` is the diagonal for a matrix, so this is `first` times
+            // the identity.
+            ValueType::Mat3 | ValueType::Mat4 => ty.splat(first).unwrap_or_else(|| ty.zero()),
+            ValueType::Bool | ValueType::I32 | ValueType::U32 => ty.zero(),
         }
     }
 
@@ -257,11 +470,11 @@ pub struct Socket {
     /// Value used when an input is left unconnected and the node instance
     /// pins no parameter. `None` on a non-optional input makes it mandatory.
     ///
-    /// Always `None` on a generic socket: a fixed [`Value`] would be the
-    /// wrong type for every resolution but one, so a generic input is
-    /// mandatory instead — connect something, or (via
+    /// Always `None` on a generic or combined socket: a fixed [`Value`]
+    /// would be the wrong type for every resolution but one, so such an
+    /// input is mandatory instead — connect something, or (via
     /// [`crate::graph::Graph::set_generic`]) pick the type explicitly, and
-    /// only then does an unconnected default become meaningful.
+    /// only then does an unconnected value become meaningful.
     pub default: Option<Value>,
     /// Whether the input may be left unfed entirely, with no value at all.
     ///
@@ -275,8 +488,27 @@ pub struct Socket {
     /// The [`GenericParam::name`] this socket's *effective* type is governed
     /// by, if any. `None` means `ty` is this socket's fixed, final type —
     /// the common case. See [`GenericParam`] for what a generic socket means
-    /// and how its type is resolved per graph node.
+    /// and how its type is resolved per graph node. Mutually exclusive with
+    /// [`Socket::combine`].
     pub generic: Option<WxslIdent>,
+    /// A default expressed as one `f32` to spread over every component of
+    /// the socket's *resolved* type, for a socket whose type only a node
+    /// instance knows.
+    ///
+    /// [`Socket::default`] cannot serve there — a fixed [`Value`] is the
+    /// wrong type for every resolution but one — but "1.0, whatever width
+    /// that turns out to be" is perfectly well defined, and it is exactly
+    /// what `clamp`'s `high` or `mix`'s `b` wants. Set by
+    /// [`Socket::with_splat_default`] on a generic or combined socket
+    /// (which stores the fixed [`Value`] instead when the type is already
+    /// concrete), and read through [`Socket::default_for`].
+    pub splat_default: Option<f32>,
+    /// How this socket's *effective* type is derived from two
+    /// [`GenericParam`]s, if it is — for a port that depends on two
+    /// independently-resolved operands rather than being equal to either
+    /// one. See [`Socket::combine`]. Mutually exclusive with
+    /// [`Socket::generic`].
+    pub combine: Option<Combined>,
 }
 
 impl Socket {
@@ -295,6 +527,8 @@ impl Socket {
             optional: false,
             doc: String::new(),
             generic: None,
+            splat_default: None,
+            combine: None,
         }
     }
 
@@ -313,16 +547,76 @@ impl Socket {
     ///
     /// # Panics
     ///
-    /// Panics if `param` is not a valid WXSL identifier.
+    /// Panics if `param` is not a valid WXSL identifier, or if
+    /// [`Socket::combine`] is already set — a socket's effective type
+    /// comes from exactly one of the two.
     pub fn generic(mut self, param: &str) -> Self {
+        assert!(
+            self.combine.is_none(),
+            "socket `{}` already combines two parameters and cannot also be generic over one",
+            self.name
+        );
         self.generic =
             Some(WxslIdent::new(param).expect("generic parameter name must be a valid identifier"));
         self
     }
 
+    /// Make this socket's effective type `rule` applied to generic
+    /// parameters `a` and `b`, instead of fixed at `ty` or governed by a
+    /// single parameter — for a port whose type depends on two
+    /// independently-resolved operands, e.g. `multiply`'s result being
+    /// `vec3f` for `f32 * vec3f` as much as for `vec3f * vec3f`, but equal
+    /// to neither `a` nor `b` alone. The declaring [`NodeDefinition`] must
+    /// declare matching [`GenericParam`]s, which the builder checks.
+    ///
+    /// Nothing *adopts* a type into a combined socket: its type is derived,
+    /// so connecting to it resolves nothing, and it stays unresolved until
+    /// both parameters it reads are. [`crate::graph::Graph::connect`] allows
+    /// such an edge and [`crate::graph::Graph::validate`] re-checks it once
+    /// there is something to check.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `a` or `b` are not valid WXSL identifiers, or if
+    /// [`Socket::generic`] is already set.
+    pub fn combine(mut self, rule: TypeRule, a: &str, b: &str) -> Self {
+        assert!(
+            self.generic.is_none(),
+            "socket `{}` is already generic over one parameter and cannot also combine two",
+            self.name
+        );
+        self.combine = Some(Combined {
+            rule,
+            a: WxslIdent::new(a).expect("generic parameter name must be a valid identifier"),
+            b: WxslIdent::new(b).expect("generic parameter name must be a valid identifier"),
+        });
+        self
+    }
+
+    /// Every [`GenericParam::name`] this socket's effective type reads: one
+    /// for [`Socket::generic`], two for [`Socket::combine`], none for a
+    /// socket fixed at `ty`.
+    pub fn referenced_params(&self) -> impl Iterator<Item = &WxslIdent> {
+        self.generic
+            .iter()
+            .chain(self.combine.iter().flat_map(|c| [&c.a, &c.b]))
+    }
+
     /// Whether this input must be fed by an edge, a parameter or a default.
     pub fn is_required(&self) -> bool {
-        !self.optional && self.default.is_none()
+        !self.optional && self.default.is_none() && self.splat_default.is_none()
+    }
+
+    /// This socket's default once its type is known: the fixed
+    /// [`Socket::default`], or [`Socket::splat_default`] spread over `ty`.
+    ///
+    /// `ty` is the socket's *effective* type — what
+    /// [`crate::graph::Graph::effective_type`] answers for the node
+    /// instance — so for an ordinary fixed socket this is just
+    /// [`Socket::default`] and the argument is ignored.
+    pub fn default_for(&self, ty: ValueType) -> Option<Value> {
+        self.default
+            .or_else(|| self.splat_default.and_then(|value| ty.splat(value)))
     }
 
     /// Give this socket a default value.
@@ -330,15 +624,20 @@ impl Socket {
     /// # Panics
     ///
     /// Panics if `value`'s type is not the socket's type, or if the socket
-    /// is generic — a fixed [`Value`] would be the wrong type for every
-    /// resolution but one, so a generic socket has no static default (see
-    /// [`Socket::generic`]).
+    /// is generic or combined — a fixed [`Value`] would be the wrong type
+    /// for every resolution but one, so neither has a static default (see
+    /// [`Socket::generic`]/[`Socket::combine`]).
     pub fn with_default(mut self, value: Value) -> Self {
         assert!(
             self.generic.is_none(),
             "socket `{}` is generic over `{}` and cannot have a fixed default",
             self.name,
             self.generic.as_ref().map(WxslIdent::as_str).unwrap_or(""),
+        );
+        assert!(
+            self.combine.is_none(),
+            "socket `{}` combines two parameters and cannot have a fixed default",
+            self.name,
         );
         assert_eq!(
             value.ty(),
@@ -354,14 +653,32 @@ impl Socket {
 
     /// Default this socket to a float scalar/vector filled with `value`.
     ///
+    /// On a generic or combined socket this stores the scalar itself
+    /// ([`Socket::splat_default`]) and spreads it over whatever type the
+    /// node instance resolves to; on a socket with a concrete type it
+    /// resolves to a fixed [`Value`] immediately. Callers do not need to
+    /// care which: "half, whatever width this turns out to be" is the same
+    /// intent either way.
+    ///
     /// # Panics
     ///
-    /// Panics if the socket is not a float scalar or vector.
-    pub fn with_splat_default(self, value: f32) -> Self {
-        let splat = self
-            .ty
-            .splat(value)
-            .unwrap_or_else(|| panic!("socket `{}` is not a float type", self.name));
+    /// Panics if the socket has a concrete type [`ValueType::splat`] cannot
+    /// build (`bool`, `i32`, `u32`). A generic socket cannot be checked
+    /// here — its parameter's allowed set is on the [`NodeDefinition`], not
+    /// the socket — so a splat default simply does not apply at a
+    /// resolution that has no float components (see
+    /// [`Socket::default_for`]).
+    pub fn with_splat_default(mut self, value: f32) -> Self {
+        if self.generic.is_some() || self.combine.is_some() {
+            self.splat_default = Some(value);
+            return self;
+        }
+        let splat = self.ty.splat(value).unwrap_or_else(|| {
+            panic!(
+                "socket `{}` has no float components to splat into",
+                self.name
+            )
+        });
         self.with_default(splat)
     }
 
@@ -490,7 +807,12 @@ pub enum NodeBody {
     /// arithmetic — anything with a body belongs in a [`WxslFunction`].
     Expr(Vec<String>),
     /// A call to a WXSL function.
-    Call(WxslFunction),
+    ///
+    /// Boxed: [`WxslFunction`] (a parameter list plus a return shape) is far
+    /// larger than every other variant here (a `Vec<String>`, one
+    /// [`WxslIdent`], or nothing), so leaving it inline would size every
+    /// `NodeBody` — most of which are not a call at all — to match.
+    Call(Box<WxslFunction>),
     /// Reads one field of the per-fragment surface context the renderer hands
     /// to the material function (world position, UV, view direction, …). The
     /// field set is part of the shader ABI, see [`crate::abi`].
@@ -553,7 +875,7 @@ impl GenericParam {
 /// The kind of a node: its typed interface plus the WXSL it emits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeDefinition {
-    /// Registry id, dotted and stable: `math.add.vec3f`, `lighting.pbr`.
+    /// Registry id, dotted and stable: `math.add`, `lighting.pbr`.
     /// This is what a serialized graph stores, so treat it as a public name.
     pub id: String,
     /// Human-readable name for the editor.
@@ -612,7 +934,7 @@ impl NodeDefinition {
         let mut def = NodeDefinition::builder(id, label).doc(doc).def;
         def.inputs = func.params.clone();
         def.outputs = func.outputs();
-        def.body = NodeBody::Call(func);
+        def.body = NodeBody::Call(Box::new(func));
         def
     }
 
@@ -641,6 +963,36 @@ impl NodeDefinition {
         self.generics
             .iter()
             .find(|param| param.name.as_str() == name)
+    }
+
+    /// The type every declared [`GenericParam`] resolves to when nothing has
+    /// said otherwise: the first of its allowed types.
+    ///
+    /// A node dropped on a canvas is complete rather than half-typed this
+    /// way — an unresolved parameter is an error
+    /// ([`crate::error::GraphError::UnresolvedGeneric`]) and a generic socket
+    /// whose type is unknown cannot even show a value to edit, so a fresh
+    /// node with no resolution at all is a node that reports problems before
+    /// it has been used. The first allowed type is a *default*, not a
+    /// commitment: connecting anything else retypes it
+    /// ([`crate::graph::Graph::connect`]), as does picking a type
+    /// ([`crate::graph::Graph::set_generic`]).
+    ///
+    /// The order of [`GenericParam::allowed`] is therefore load-bearing, and
+    /// so is picking allowed sets whose *first* entries actually combine:
+    /// `vector.transform`'s `M` starts at `mat3x3f` and its `V` at `vec3f`
+    /// because `mat3x3f * vec2f` is nothing at all.
+    pub fn default_generics(&self) -> BTreeMap<String, ValueType> {
+        self.generics
+            .iter()
+            .map(|param| {
+                let first = *param
+                    .allowed
+                    .first()
+                    .expect("`GenericParam::new` rejects an empty allowed set");
+                (param.name.as_str().to_string(), first)
+            })
+            .collect()
     }
 
     /// Whether this is the graph's terminal surface-output node.
@@ -758,7 +1110,7 @@ impl NodeDefinitionBuilder {
     pub fn call(mut self, func: WxslFunction) -> NodeDefinition {
         self.def.inputs = func.params.clone();
         self.def.outputs = func.outputs();
-        self.def.body = NodeBody::Call(func);
+        self.def.body = NodeBody::Call(Box::new(func));
         self.build()
     }
 
@@ -804,6 +1156,20 @@ impl NodeDefinitionBuilder {
                 self.def.outputs.len(),
                 exprs.len()
             );
+            // `{$T}` is substituted with the resolved WGSL spelling of
+            // generic parameter `T` (see `crate::codegen`), so a typo in one
+            // would otherwise only surface as a codegen error the first time
+            // someone used the node.
+            for expr in exprs {
+                for param in type_placeholders(expr) {
+                    assert!(
+                        self.def.generic(param).is_some(),
+                        "node `{}` references type placeholder `{{${param}}}`, \
+                         which is not a generic parameter it declares",
+                        self.def.id
+                    );
+                }
+            }
         }
         for socket in self.def.inputs.iter().chain(&self.def.outputs) {
             if let Some(param) = &socket.generic {
@@ -815,9 +1181,43 @@ impl NodeDefinitionBuilder {
                     self.def.id
                 );
             }
+            if let Some(combined) = &socket.combine {
+                for param in [&combined.a, &combined.b] {
+                    assert!(
+                        self.def.generic(param.as_str()).is_some(),
+                        "socket `{}` of `{}` combines generic parameter `{param}`, \
+                         which was never declared with `.generic_param(...)`",
+                        socket.name,
+                        self.def.id
+                    );
+                }
+            }
         }
         self.def
     }
+}
+
+/// Every `{$name}` type placeholder in an expression template, in order.
+///
+/// Deliberately the same scan `crate::codegen`'s template expansion does,
+/// down to treating `{{` as an escaped brace, so what the builder checks and
+/// what codegen substitutes cannot drift apart.
+fn type_placeholders(template: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        rest = &rest[open + 1..];
+        if let Some(stripped) = rest.strip_prefix('{') {
+            rest = stripped;
+            continue;
+        }
+        let Some(close) = rest.find('}') else { break };
+        if let Some(param) = rest[..close].strip_prefix('$') {
+            found.push(param);
+        }
+        rest = &rest[close + 1..];
+    }
+    found
 }
 
 /// The set of node definitions a graph is validated and compiled against.
@@ -961,6 +1361,85 @@ mod tests {
         NodeDefinition::builder("math.bogus", "Bogus")
             .output(Socket::new("out", ValueType::F32))
             .exprs(["1.0", "2.0"]);
+    }
+
+    #[test]
+    fn componentwise_spreads_a_scalar_and_rejects_everything_else() {
+        // Exactly the set `crates/wxsl/tests/graph_to_wgsl.rs` proves wgpu
+        // accepts for `+`, `-`, `/` and `%`.
+        for ty in ValueType::ALL {
+            assert_eq!(ty.componentwise(*ty), Some(*ty), "{ty} with itself");
+        }
+        for wide in ValueType::VECTORS {
+            assert_eq!(ValueType::F32.componentwise(*wide), Some(*wide));
+            assert_eq!(wide.componentwise(ValueType::F32), Some(*wide));
+        }
+        assert_eq!(ValueType::Vec2.componentwise(ValueType::Vec3), None);
+        // A scalar does *not* spread into a matrix: `mat3x3f + f32` is not
+        // WGSL, however much `vec3f + f32` is.
+        assert_eq!(ValueType::F32.componentwise(ValueType::Mat3), None);
+        assert_eq!(ValueType::Mat3.componentwise(ValueType::Mat4), None);
+    }
+
+    #[test]
+    fn product_adds_the_linear_algebra_on_top_of_componentwise() {
+        // Everything componentwise allows still holds.
+        assert_eq!(
+            ValueType::F32.product(ValueType::Vec3),
+            Some(ValueType::Vec3)
+        );
+        assert_eq!(
+            ValueType::Vec3.product(ValueType::Vec3),
+            Some(ValueType::Vec3)
+        );
+        // Plus what only `*` allows.
+        for m in ValueType::MATRICES {
+            assert_eq!(ValueType::F32.product(*m), Some(*m));
+            assert_eq!(m.product(ValueType::F32), Some(*m));
+            assert_eq!(m.product(*m), Some(*m));
+        }
+        assert_eq!(
+            ValueType::Mat3.product(ValueType::Vec3),
+            Some(ValueType::Vec3)
+        );
+        assert_eq!(
+            ValueType::Vec3.product(ValueType::Mat3),
+            Some(ValueType::Vec3)
+        );
+        assert_eq!(
+            ValueType::Mat4.product(ValueType::Vec4),
+            Some(ValueType::Vec4)
+        );
+        // And nothing more: a matrix only meets a vector of its own size.
+        assert_eq!(ValueType::Mat3.product(ValueType::Vec4), None);
+        assert_eq!(ValueType::Mat4.product(ValueType::Vec3), None);
+        assert_eq!(ValueType::Mat3.product(ValueType::Mat4), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot also be generic")]
+    fn a_combined_socket_cannot_also_be_generic() {
+        Socket::new("out", ValueType::F32)
+            .combine(TypeRule::Product, "A", "B")
+            .generic("A");
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot also combine")]
+    fn a_generic_socket_cannot_also_combine() {
+        Socket::new("out", ValueType::F32)
+            .generic("A")
+            .combine(TypeRule::Product, "A", "B");
+    }
+
+    #[test]
+    #[should_panic(expected = "combines generic parameter `B`")]
+    fn a_combined_socket_must_reference_declared_parameters() {
+        NodeDefinition::builder("math.bogus_combined", "Bogus")
+            .generic_param(GenericParam::new("A", vec![ValueType::F32]))
+            .input(Socket::new("a", ValueType::F32).generic("A"))
+            .output(Socket::new("out", ValueType::F32).combine(TypeRule::Product, "A", "B"))
+            .expr("{a}");
     }
 
     #[test]

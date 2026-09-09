@@ -299,14 +299,15 @@ fn widen<T: f32 | vec3f>(v: T, k: f32) -> T {
 "#;
 
 /// A root that calls that template at two types, beside a real stdlib
-/// function, for the test below.
+/// template, for the test below — so both a template written here and one
+/// the library ships have to instantiate in the same compilation.
 const RAW_ROOT: &str = r#"
 import package::demo::widen::widen;
-import package::math::safe_normalize::safe_normalize_vec3f;
+import package::math::safe_normalize::safe_normalize;
 
 @fragment
 fn fs() -> @location(0) vec4f {
-    let direction = safe_normalize_vec3f(vec3f(1.0, 2.0, 3.0));
+    let direction = safe_normalize<vec3f>(vec3f(1.0, 2.0, 3.0));
     let scaled = widen(direction, 0.5);
     let single = widen(0.25f, 2.0);
     return vec4f(scaled * single, 1.0);
@@ -349,7 +350,7 @@ fn a_template_compiles_against_the_real_shader_library() {
     // `components(T)` folded to a literal in each copy.
     assert!(wgsl.contains("f32(1) * k"), "{wgsl}");
     assert!(wgsl.contains("f32(3) * k"), "{wgsl}");
-    // And a real stdlib function still came through beside it.
+    // And the library's own template instantiated beside it.
     assert!(
         wgsl.contains("fn package_math_safe_normalize_safe_normalize_vec3f("),
         "{wgsl}"

@@ -89,41 +89,40 @@ lets a graph type-check a call to it. A function with no descriptor is
 unreachable from a graph, and `src/shaders.rs`'s test will fail if the file
 is not listed in `MODULES` at all.
 
-**Polymorphism over value types is expanded by `registry.rs`.**
-A node definition needs concrete socket types — a graph type-checks against
-them — so the `for ty in ValueType::FLOATS` loop is the expansion mechanism
-whichever way the function itself is written. Three patterns, and the choice
-is not about taste:
+**Polymorphism over value types is one generic node, not a family.**
+A node definition declares a `GenericParam` and its sockets carry it, so one
+node kind covers every type the parameter allows and resolves per instance
+from whatever is connected ([ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md),
+[ADR 0018](../../../docs/adr/0018-one-generic-node-per-operation.md)). Two
+patterns for the body, and the choice is not about taste:
 
-* **Expression family** — no `.wxsl` file at all. The loop builds the
-  expression per type with `ty.wxsl_type()`, so there is exactly one source
-  of truth. Right whenever the body is one expression, which is more often
-  than it looks: a scalar guard like `if abs(span) < 1e-8 { … }` does not
-  generalize — for the vector types that comparison is a `vec<bool>` and
-  `if` rejects it — but rewriting it as `select` both fixes that and
-  collapses the body to an expression. `math.remap`, `math.inverse_lerp` and
-  `math.wrap` are built this way; `registry.rs`'s `guarded` helper is the
-  reshaping.
-* **One templated WXSL function.** `fn f<T: f32 | vec2f | vec3f | vec4f>`,
-  called as `f<vec3f>(…)` from the loop, instantiated per type by the
-  compiler ([ADR 0012](../../../docs/adr/0012-monomorphize-templates-on-the-flat-module.md)).
+* **An expression** — no `.wxsl` file at all. Right whenever the body is one
+  expression, which is more often than it looks: a scalar guard like
+  `if abs(span) < 1e-8 { … }` does not generalize — for the vector types
+  that comparison is a `vec<bool>` and `if` rejects it — but rewriting it as
+  `select` both fixes that and collapses the body to an expression.
+  `math.remap`, `math.inverse_lerp` and `math.wrap` are built this way;
+  `registry.rs`'s `guarded` helper is the reshaping. Where the expression has
+  to *name* its type — a `select` fallback of the right width, a constructor
+  — `{$T}` expands to the resolved WGSL spelling.
+* **A templated WXSL function.** `fn f<T: f32 | vec2f | vec3f | vec4f>`,
+  which codegen calls as `f<vec3f>(…)` with the type argument written out,
+  instantiated per type by the compiler
+  ([ADR 0012](../../../docs/adr/0012-monomorphize-templates-on-the-flat-module.md)).
   Right when the body is more than one expression but is genuinely the same
-  code at every width. `components(T)` is available inside it as an integer
-  literal — the number of scalar components — for the cases that need the
-  width. Note that `@if` cannot test `components(T)`: conditional
-  translation runs before instantiation, and `cond` says so if you try.
-* **One WXSL function per type**, named `<name>_<wxsl_type>`. Right when the
-  bodies genuinely differ — typically a *reduction*, where a scalar guard is
-  legitimate because the reduced value is scalar however wide the input is.
-  `math/safe_normalize.wxsl` is the example. Write the suffix in exactly one
-  place — the loop in `registry.rs` — and the existing test that every
-  called function exists will catch a typo.
+  code at every width — `math/safe_normalize.wxsl` and
+  `math/smootherstep.wxsl` are the two. `components(T)` is available inside
+  it as an integer literal — the number of scalar components — for the cases
+  that need the width. Note that `@if` cannot test `components(T)`:
+  conditional translation runs before instantiation, and `cond` says so if
+  you try.
 
-One node per type is still one node per type in all three: the sockets are
-concrete, so the ids stay `math.remap.f32`, `math.remap.vec3f` and so on.
-Collapsing a family to a single node with a type-variable socket resolved by
-connection is the follow-up ADR 0012 names, not something templates alone
-buy.
+There is no third pattern. One WXSL function per type, named
+`<name>_<wxsl_type>`, is what `safe_normalize` used to be, and a template
+replaced it: a reduction's scalar guard (`dot(v, v)` is a scalar however wide
+`v` is) generalizes as unchanged inside a template as it did inside four
+copies. If a body ever genuinely differs by width, `@if` on a macro is the
+tool, not a copy per type.
 
 `select(false_value, true_value, cond)` takes a vector `cond` and chooses
 per component, which is usually the semantics you want anyway: one

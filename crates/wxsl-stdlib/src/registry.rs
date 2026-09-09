@@ -6,8 +6,7 @@
 //!   [`logic_nodes`], [`constant_nodes`]) are inline WXSL expressions over
 //!   WGSL's own built-ins — `{a} + {b}`, `mix({a}, {b}, {t})`. Wrapping an
 //!   addition in a function call would cost a WXSL module, an import and a
-//!   call per node for no gain, so these are generated per value type from
-//!   one table.
+//!   call per node for no gain.
 //! * **Functions** (everything else: [`color_nodes`], [`lighting_nodes`],
 //!   [`generative_nodes`], …) are calls to the `.wxsl` functions this crate
 //!   ships, each described by a
@@ -16,6 +15,20 @@
 //!   definition of the behaviour; the descriptor here is what lets the graph
 //!   type-check a call to it and lets codegen emit one
 //!   ([ADR 0003](../../../docs/adr/0003-wesl-as-the-shading-language.md)).
+//!
+//! **One node per operation, not one per operation and type.** A definition
+//! declares the types it works over as a [`GenericParam`] and its sockets
+//! carry it, so `math.add` is one registry entry covering `f32` through
+//! `mat4x4f`, resolved per graph node from whatever is connected — not
+//! `math.add.f32`, `math.add.vec2f`, … as separate node kinds
+//! ([ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md),
+//! [ADR 0018](../../../docs/adr/0018-one-generic-node-per-operation.md)).
+//! Where WGSL lets an operator's two operands differ — `f32 * vec3f`,
+//! `mat3x3f * vec3f`, `vec3f + f32` — the node declares *two* parameters and
+//! derives the result with a [`TypeRule`], which is the only way to say
+//! "these two may legitimately differ". `crates/wxsl/tests/wgsl_types.rs`
+//! checks those rules against `wgpu`'s validator, and is where the tables
+//! below came from.
 //!
 //! A function whose WXSL reads a macro variable declares that macro on its
 //! node definition (see [`generative_nodes`] and `shaders/generative/fbm3.wxsl`).
@@ -26,7 +39,7 @@
 use wxsl_core::abi;
 use wxsl_core::macros::{MacroDef, MacroValue};
 use wxsl_core::node::{
-    GenericParam, NodeDefinition, NodeRegistry, Socket, Value, ValueType, WxslFunction,
+    GenericParam, NodeDefinition, NodeRegistry, Socket, TypeRule, Value, ValueType, WxslFunction,
 };
 
 /// Every node definition in the library, including the ABI's input and
@@ -93,17 +106,58 @@ fn direction(name: &str, default: [f32; 3]) -> Socket {
     Socket::new(name, ValueType::Vec3).with_default(Value::Vec3(default))
 }
 
+/// A generic parameter named `name`, resolvable to any of `allowed`.
+///
+/// A free function rather than a `const` because [`GenericParam`] owns a
+/// `Vec` (a `ValueType` slice turned into one), so it cannot be a `const`
+/// itself.
+fn param(name: &str, allowed: &[ValueType]) -> GenericParam {
+    GenericParam::new(name, allowed.to_vec())
+}
+
+/// The single parameter `T` that most generic nodes declare: one type,
+/// shared by every socket carrying it, resolved per graph node from
+/// whatever is actually connected (or picked explicitly with
+/// [`wxsl_core::graph::Graph::set_generic`]).
+///
+/// The nodes that do *not* use this shape are the ones whose operands WGSL
+/// lets differ: those declare two parameters and derive the result with a
+/// [`TypeRule`] — see [`BINARY`] and `vector.transform`.
+fn shared(allowed: &[ValueType]) -> GenericParam {
+    param("T", allowed)
+}
+
+/// A socket carrying [`shared`]'s `T`, with no default.
+///
+/// The placeholder `F32` is never read: codegen always asks the graph for
+/// this node instance's *resolved* type instead (see
+/// [`wxsl_core::node::Socket::generic`]).
+fn generic_socket(name: &str) -> Socket {
+    Socket::new(name, ValueType::F32).generic("T")
+}
+
+/// A socket carrying `T`, defaulting to `default` spread over whatever `T`
+/// resolves to — `clamp`'s `high` is 1 at every width.
+///
+/// See [`wxsl_core::node::Socket::splat_default`]: a fixed [`Value`] would
+/// be the wrong type for every resolution but one, but a scalar to spread is
+/// well defined at all of them.
+fn generic_splat(name: &str, default: f32) -> Socket {
+    generic_socket(name).with_splat_default(default)
+}
+
 /// An expression that falls back to `fallback` where `span` is degenerate.
 ///
 /// The component-wise replacement for `if abs(span) < 1e-8 { return … }`,
 /// which only type-checks for `f32`: a vector comparison yields a
 /// `vec<bool>`, and `if` demands a scalar. `select(false, true, cond)` takes
 /// a vector condition and chooses per component.
-fn guarded(ty: ValueType, fallback: &str, value: &str, span: &str) -> String {
-    format!(
-        "select({fallback}, {value}, abs({span}) >= {}(1e-8))",
-        ty.wxsl_type()
-    )
+///
+/// `{$T}` is the resolved WGSL spelling of the node's generic parameter `T`
+/// (see [`wxsl_core::codegen`]), which is what lets one template serve every
+/// type `T` allows instead of one node per type.
+fn guarded(fallback: &str, value: &str, span: &str) -> String {
+    format!("select({fallback}, {value}, abs({span}) >= {{$T}}(1e-8))")
 }
 
 /// Build a node that calls a single-value WXSL function.
@@ -119,15 +173,35 @@ fn function_node(
     NodeDefinition::from_function(id, label, doc, WxslFunction::new(module, name, params, ret))
 }
 
+/// Build a node that calls a WXSL *template* — one function the compiler
+/// instantiates per type
+/// ([ADR 0012](../../../docs/adr/0012-monomorphize-templates-on-the-flat-module.md)) —
+/// generic over one parameter `T` restricted to `allowed`.
+///
+/// Codegen writes the type argument explicitly (`safe_normalize<vec3f>(v)`),
+/// which is the case ADR 0012 says never has to be inferred: the graph knows
+/// every socket's type exactly.
+fn template_node(
+    id: &str,
+    label: &str,
+    doc: &str,
+    allowed: &[ValueType],
+    func: WxslFunction,
+) -> NodeDefinition {
+    NodeDefinition::builder(id, label)
+        .doc(doc)
+        .generic_param(shared(allowed))
+        .call(func)
+}
+
 // ---------------------------------------------------------------------------
 // Operators
 // ---------------------------------------------------------------------------
 
-/// A per-type operator family: one node per float value type.
-struct Family {
-    /// Id stem: `math.{stem}` is the one generic node this family becomes,
-    /// e.g. `math.add` (was `math.add.f32`, `math.add.vec2f`, … as four
-    /// separate registry entries before generic sockets existed).
+/// A unary operator family: one generic node, covering every type its
+/// parameter allows.
+struct Unary {
+    /// Id stem: `math.{stem}` is the node this family becomes.
     stem: &'static str,
     /// Editor label.
     label: &'static str,
@@ -137,182 +211,238 @@ struct Family {
     expr: &'static str,
 }
 
-const BINARY: &[Family] = &[
-    Family {
+/// A binary operator family: one generic node, covering every combination of
+/// types WGSL accepts for it.
+struct Binary {
+    /// Id stem: `math.{stem}`.
+    stem: &'static str,
+    /// Editor label.
+    label: &'static str,
+    /// Description.
+    doc: &'static str,
+    /// Expression template over `a` and `b`.
+    expr: &'static str,
+    /// How the two operands' types relate.
+    ///
+    /// `None` — one shared parameter `T` on both operands and the result,
+    /// because the WGSL *builtin* behind this family (`pow`, `min`, `max`)
+    /// has a single `(T, T) -> T` overload and accepts nothing else.
+    ///
+    /// `Some(rule)` — two independent parameters `A` and `B` with the
+    /// result derived by `rule`, because the WGSL *operator* behind it also
+    /// spreads a scalar over a vector's components (`f32 + vec3f` is
+    /// `vec3f`), and `*` additionally does linear algebra (`mat3x3f *
+    /// vec3f` is `vec3f`). Two parameters is the only way to say "these two
+    /// may legitimately differ"; see [`wxsl_core::node::Socket::combine`].
+    rule: Option<TypeRule>,
+    /// Whether the operands may also be matrices. WGSL adds and subtracts
+    /// two matrices of the same shape and multiplies a matrix by a scalar,
+    /// a vector or another matrix — but `/` and `%` accept no matrix at
+    /// all, and neither does any of the builtins.
+    matrices: bool,
+}
+
+const BINARY: &[Binary] = &[
+    Binary {
         stem: "add",
         label: "Add",
-        doc: "Component-wise sum.",
+        doc: "Sum of two operands. Either may be a scalar spread over the \
+              other's components, and two matrices of the same shape add \
+              element-wise.",
         expr: "{a} + {b}",
+        rule: Some(TypeRule::Componentwise),
+        matrices: true,
     },
-    Family {
+    Binary {
         stem: "subtract",
         label: "Subtract",
-        doc: "Component-wise difference.",
+        doc: "Difference of two operands, with the same mixing rules as \
+              `math.add`.",
         expr: "{a} - {b}",
+        rule: Some(TypeRule::Componentwise),
+        matrices: true,
     },
-    Family {
+    Binary {
         stem: "multiply",
         label: "Multiply",
-        doc: "Component-wise product.",
+        doc: "Product of two operands. Either may be a scalar spread over \
+              the other's components, and a matrix may multiply a vector of \
+              its own size — which is how a basis from \
+              `space.tangent_basis` is applied to a direction — or another \
+              matrix of the same shape.",
         expr: "{a} * {b}",
+        rule: Some(TypeRule::Product),
+        matrices: true,
     },
-    Family {
+    Binary {
         stem: "divide",
         label: "Divide",
-        doc: "Component-wise quotient. Division by zero yields an infinity, \
-              which will spread; guard the divisor if it can reach zero.",
+        doc: "Quotient of two operands, either of which may be a scalar \
+              spread over the other's components. Division by zero yields \
+              an infinity, which will spread; guard the divisor if it can \
+              reach zero.",
         expr: "{a} / {b}",
+        rule: Some(TypeRule::Componentwise),
+        matrices: false,
     },
-    Family {
+    Binary {
         stem: "modulo",
         label: "Modulo",
-        doc: "Component-wise floating-point remainder, keeping the sign of \
-              the dividend. For a periodic wrap use `math.wrap` instead.",
+        doc: "Floating-point remainder, keeping the sign of the dividend. \
+              For a periodic wrap use `math.wrap` instead.",
         expr: "{a} % {b}",
+        rule: Some(TypeRule::Componentwise),
+        matrices: false,
     },
-    Family {
+    Binary {
         stem: "power",
         label: "Power",
         doc: "`a` raised to `b`, component-wise. Undefined for a negative \
               base with a fractional exponent.",
         expr: "pow({a}, {b})",
+        rule: None,
+        matrices: false,
     },
-    Family {
+    Binary {
         stem: "minimum",
         label: "Minimum",
         doc: "Component-wise smaller of the two.",
         expr: "min({a}, {b})",
+        rule: None,
+        matrices: false,
     },
-    Family {
+    Binary {
         stem: "maximum",
         label: "Maximum",
         doc: "Component-wise larger of the two.",
         expr: "max({a}, {b})",
+        rule: None,
+        matrices: false,
     },
 ];
 
-const UNARY: &[Family] = &[
-    Family {
+const UNARY: &[Unary] = &[
+    Unary {
         stem: "negate",
         label: "Negate",
         doc: "Flip the sign, component-wise.",
         expr: "-{a}",
     },
-    Family {
+    Unary {
         stem: "absolute",
         label: "Absolute",
         doc: "Drop the sign, component-wise.",
         expr: "abs({a})",
     },
-    Family {
+    Unary {
         stem: "sign",
         label: "Sign",
         doc: "-1, 0 or 1 per component.",
         expr: "sign({a})",
     },
-    Family {
+    Unary {
         stem: "floor",
         label: "Floor",
         doc: "Round down, component-wise.",
         expr: "floor({a})",
     },
-    Family {
+    Unary {
         stem: "ceil",
         label: "Ceil",
         doc: "Round up, component-wise.",
         expr: "ceil({a})",
     },
-    Family {
+    Unary {
         stem: "round",
         label: "Round",
         doc: "Round to nearest, halves to even.",
         expr: "round({a})",
     },
-    Family {
+    Unary {
         stem: "truncate",
         label: "Truncate",
         doc: "Drop the fractional part, towards zero.",
         expr: "trunc({a})",
     },
-    Family {
+    Unary {
         stem: "fraction",
         label: "Fraction",
         doc: "The fractional part, always in [0, 1).",
         expr: "fract({a})",
     },
-    Family {
+    Unary {
         stem: "saturate",
         label: "Saturate",
         doc: "Clamp to [0, 1], component-wise.",
         expr: "saturate({a})",
     },
-    Family {
+    Unary {
         stem: "square_root",
         label: "Square root",
         doc: "Component-wise square root; negative inputs give NaN.",
         expr: "sqrt({a})",
     },
-    Family {
+    Unary {
         stem: "inverse_square_root",
         label: "Inverse square root",
         doc: "1/sqrt, component-wise, as a single instruction.",
         expr: "inverseSqrt({a})",
     },
-    Family {
+    Unary {
         stem: "exponential",
         label: "Exponential",
         doc: "e raised to the input, component-wise.",
         expr: "exp({a})",
     },
-    Family {
+    Unary {
         stem: "exponential_2",
         label: "Exponential (base 2)",
         doc: "2 raised to the input, component-wise.",
         expr: "exp2({a})",
     },
-    Family {
+    Unary {
         stem: "logarithm",
         label: "Logarithm",
         doc: "Natural log, component-wise.",
         expr: "log({a})",
     },
-    Family {
+    Unary {
         stem: "logarithm_2",
         label: "Logarithm (base 2)",
         doc: "Base-2 log, component-wise.",
         expr: "log2({a})",
     },
-    Family {
+    Unary {
         stem: "sine",
         label: "Sine",
         doc: "Sine of an angle in radians.",
         expr: "sin({a})",
     },
-    Family {
+    Unary {
         stem: "cosine",
         label: "Cosine",
         doc: "Cosine of an angle in radians.",
         expr: "cos({a})",
     },
-    Family {
+    Unary {
         stem: "tangent",
         label: "Tangent",
         doc: "Tangent of an angle in radians.",
         expr: "tan({a})",
     },
-    Family {
+    Unary {
         stem: "arcsine",
         label: "Arcsine",
         doc: "Inverse sine, in radians. Input outside [-1, 1] gives NaN.",
         expr: "asin({a})",
     },
-    Family {
+    Unary {
         stem: "arccosine",
         label: "Arccosine",
         doc: "Inverse cosine, in radians. Input outside [-1, 1] gives NaN.",
         expr: "acos({a})",
     },
-    Family {
+    Unary {
         stem: "arctangent",
         label: "Arctangent",
         doc: "Inverse tangent, in radians.",
@@ -320,313 +450,338 @@ const UNARY: &[Family] = &[
     },
 ];
 
-/// The generic parameter every genericized arithmetic node declares: one
-/// type, shared by every socket that carries it, resolved per graph node
-/// from whatever is actually connected (or picked explicitly with
-/// [`wxsl_core::graph::Graph::set_generic`]).
+/// Arithmetic and the WGSL builtins that go with it, one generic node per
+/// family instead of one per family *and* type.
 ///
-/// A free function rather than a `const` because [`GenericParam`] owns a
-/// `Vec` (a `ValueType` array turned into one), so it cannot be a `const`
-/// itself.
-fn float_generic() -> GenericParam {
-    GenericParam::new("T", ValueType::FLOATS.to_vec())
-}
-
-/// A generic operand or output socket, carrying [`float_generic`]'s `T`.
-///
-/// The placeholder `F32` is never read: codegen always asks the graph for
-/// this node instance's *resolved* type instead (see
-/// [`wxsl_core::node::Socket::generic`]). Generic sockets have no default —
-/// a fixed [`Value`] would be the wrong type for every resolution but one —
-/// so connect both operands (or pick a type explicitly and then type them
-/// in) before the node validates.
-fn generic_socket(name: &str) -> Socket {
-    Socket::new(name, ValueType::F32).generic("T")
-}
-
-/// Arithmetic that works unchanged for every float type — `{a} + {b}` does
-/// not care whether `a` and `b` are `f32` or `vec4f` — as one generic node
-/// per family (`math.add`, `math.negate`, …) instead of one concretely-typed
-/// node per family *and* type (`math.add.f32`, `math.add.vec2f`, …, sixteen
-/// registry entries between the two tables below, before generic sockets
-/// existed). See [`crate::registry::float_generic`] and
-/// [ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md).
+/// `{a} + {b}` is the same WXSL whatever the operands are, so what used to
+/// differ between `math.add.f32`, `math.add.vec2f`, `math.add.vec3f` and
+/// `math.add.vec4f` was only the type annotation on otherwise identical
+/// sockets ([ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md)).
+/// The families whose operands WGSL lets differ declare two parameters and
+/// derive the result, rather than forcing one shared `T` on both — see
+/// [`Binary::rule`] and
+/// [ADR 0018](../../../docs/adr/0018-one-generic-node-per-operation.md).
 pub fn math_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();
     for family in BINARY {
-        defs.push(
-            NodeDefinition::builder(format!("math.{}", family.stem), family.label)
-                .category("math")
-                .doc(family.doc)
-                .generic_param(float_generic())
+        let allowed = if family.matrices {
+            ValueType::operands()
+        } else {
+            ValueType::FLOATS.to_vec()
+        };
+        let builder = NodeDefinition::builder(format!("math.{}", family.stem), family.label)
+            .category("math")
+            .doc(family.doc);
+        defs.push(match family.rule {
+            None => builder
+                .generic_param(param("T", &allowed))
                 .input(generic_socket("a"))
                 .input(generic_socket("b"))
                 .output(generic_socket("out"))
                 .expr(family.expr),
-        );
+            Some(rule) => builder
+                .generic_param(param("A", &allowed))
+                .generic_param(param("B", &allowed))
+                .input(Socket::new("a", ValueType::F32).generic("A"))
+                .input(Socket::new("b", ValueType::F32).generic("B"))
+                .output(Socket::new("out", ValueType::F32).combine(rule, "A", "B"))
+                .expr(family.expr),
+        });
     }
     for family in UNARY {
         defs.push(
             NodeDefinition::builder(format!("math.{}", family.stem), family.label)
                 .category("math")
                 .doc(family.doc)
-                .generic_param(float_generic())
+                .generic_param(shared(ValueType::FLOATS))
                 .input(generic_socket("a"))
                 .output(generic_socket("out"))
                 .expr(family.expr),
         );
     }
 
-    // Everything below is unchanged: operators whose sockets are not
-    // interchangeable operands (so a shared `T` would not mean the same
-    // thing on every socket, e.g. `mix`'s scalar `t` next to its vector `a`
-    // and `b`), generated per float type exactly as before this file's
-    // arithmetic families were genericized.
-    for ty in ValueType::FLOATS {
-        // Operators whose sockets are not interchangeable operands, so they
-        // are spelled out rather than generated from the table above.
-        defs.push(
-            NodeDefinition::builder(format!("math.clamp.{}", ty.suffix()), "Clamp")
-                .category("math")
-                .doc("Constrain to a range, component-wise.")
-                .input(splat("x", *ty, 0.0))
-                .input(splat("low", *ty, 0.0))
-                .input(splat("high", *ty, 1.0))
-                .output(out(*ty))
-                .expr("clamp({x}, {low}, {high})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("math.mix.{}", ty.suffix()), "Mix")
-                .category("math")
-                .doc("Linear blend: `a` at t=0, `b` at t=1, extrapolating outside.")
-                .input(splat("a", *ty, 0.0))
-                .input(splat("b", *ty, 1.0))
-                .input(scalar("t", 0.5))
-                .output(out(*ty))
-                .expr("mix({a}, {b}, {t})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("math.step.{}", ty.suffix()), "Step")
-                .category("math")
-                .doc("0 below the edge, 1 at or above it, component-wise.")
-                .input(splat("edge", *ty, 0.5))
-                .input(splat("x", *ty, 0.0))
-                .output(out(*ty))
-                .expr("step({edge}, {x})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("math.smoothstep.{}", ty.suffix()), "Smoothstep")
-                .category("math")
-                .doc(
-                    "Hermite ramp between two edges. For a continuous second \
-                      derivative use `math.smootherstep`.",
-                )
-                .input(splat("edge0", *ty, 0.0))
-                .input(splat("edge1", *ty, 1.0))
-                .input(splat("x", *ty, 0.5))
-                .output(out(*ty))
-                .expr("smoothstep({edge0}, {edge1}, {x})"),
-        );
-
-        // Range operators. These have a body in the mathematical sense — a
-        // span, and a guard for the degenerate case where it is zero — but
-        // they stay expressions rather than WXSL functions so that one
-        // template covers every float type. A scalar `if` cannot: for the
-        // vector types `abs(span) < 1e-8` is a `vec<bool>`, which `if`
-        // rejects. `guarded` reshapes it into a `select`, which also gives
-        // the better semantics — one degenerate component collapses only
-        // itself, not the whole vector. The span appears more than once in
-        // the emitted expression; the shader compiler folds it.
-        defs.push(
-            NodeDefinition::builder(
-                format!("math.inverse_lerp.{}", ty.suffix()),
-                "Inverse lerp",
-            )
+    // Operators whose sockets are not interchangeable operands, so they are
+    // spelled out rather than generated from a table. They are still one
+    // generic node each: every socket below either carries `T` or is a
+    // scalar that WGSL accepts at *every* type `T` allows, which is a fixed
+    // type rather than a per-type split.
+    defs.push(
+        NodeDefinition::builder("math.clamp", "Clamp")
+            .category("math")
+            .doc("Constrain to a range, component-wise.")
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("x", 0.0))
+            .input(generic_splat("low", 0.0))
+            .input(generic_splat("high", 1.0))
+            .output(generic_socket("out"))
+            .expr("clamp({x}, {low}, {high})"),
+    );
+    defs.push(
+        NodeDefinition::builder("math.mix", "Mix")
             .category("math")
             .doc(
-                "Where a value sits between two others, as a 0..1 factor —                  the inverse of `math.mix`. Components where `a == b` give 0.",
+                "Linear blend: `a` at t=0, `b` at t=1, extrapolating \
+                 outside. `t` is a scalar, which WGSL's `mix` accepts \
+                 against operands of any width.",
             )
-            .input(splat("a", *ty, 0.0))
-            .input(splat("b", *ty, 1.0))
-            .input(splat("value", *ty, 0.5))
-            .output(out(*ty))
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("a", 0.0))
+            .input(generic_splat("b", 1.0))
+            .input(scalar("t", 0.5))
+            .output(generic_socket("out"))
+            .expr("mix({a}, {b}, {t})"),
+    );
+    defs.push(
+        NodeDefinition::builder("math.step", "Step")
+            .category("math")
+            .doc("0 below the edge, 1 at or above it, component-wise.")
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("edge", 0.5))
+            .input(generic_splat("x", 0.0))
+            .output(generic_socket("out"))
+            .expr("step({edge}, {x})"),
+    );
+    defs.push(
+        NodeDefinition::builder("math.smoothstep", "Smoothstep")
+            .category("math")
+            .doc(
+                "Hermite ramp between two edges. For a continuous second \
+                 derivative use `math.smootherstep`.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("edge0", 0.0))
+            .input(generic_splat("edge1", 1.0))
+            .input(generic_splat("x", 0.5))
+            .output(generic_socket("out"))
+            .expr("smoothstep({edge0}, {edge1}, {x})"),
+    );
+
+    // Range operators. These have a body in the mathematical sense — a
+    // span, and a guard for the degenerate case where it is zero — but they
+    // stay expressions rather than WXSL functions so that one template
+    // covers every type `T` allows. A scalar `if` cannot: for the vector
+    // types `abs(span) < 1e-8` is a `vec<bool>`, which `if` rejects.
+    // `guarded` reshapes it into a `select`, which also gives the better
+    // semantics — one degenerate component collapses only itself, not the
+    // whole vector. The span appears more than once in the emitted
+    // expression; the shader compiler folds it.
+    defs.push(
+        NodeDefinition::builder("math.inverse_lerp", "Inverse lerp")
+            .category("math")
+            .doc(
+                "Where a value sits between two others, as a 0..1 factor — \
+                 the inverse of `math.mix`. Components where `a == b` give 0.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("a", 0.0))
+            .input(generic_splat("b", 1.0))
+            .input(generic_splat("value", 0.5))
+            .output(generic_socket("out"))
             .expr(guarded(
-                *ty,
-                &format!("{}(0.0)", ty.wxsl_type()),
+                "{$T}(0.0)",
                 "({value} - {a}) / ({b} - {a})",
                 "({b} - {a})",
             )),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("math.remap.{}", ty.suffix()), "Remap")
-                .category("math")
-                .doc(
-                    "Map a value from [in_min, in_max] onto [out_min, out_max].                      Not clamped: feed the result through `math.clamp` if the                      input can leave its stated range. A zero-width input range                      gives `out_min`.",
-                )
-                .input(splat("value", *ty, 0.0))
-                .input(splat("in_min", *ty, 0.0))
-                .input(splat("in_max", *ty, 1.0))
-                .input(splat("out_min", *ty, 0.0))
-                .input(splat("out_max", *ty, 1.0))
-                .output(out(*ty))
-                .expr(guarded(
-                    *ty,
-                    "{out_min}",
-                    "{out_min} + ({value} - {in_min}) * ({out_max} - {out_min})                      / ({in_max} - {in_min})",
-                    "({in_max} - {in_min})",
-                )),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("math.wrap.{}", ty.suffix()), "Wrap")
-                .category("math")
-                .doc(
-                    "Wrap a value into [low, high), the way a repeating texture                      coordinate does. Unlike `math.modulo` this is correct for                      negative inputs: wrapping -0.25 into 0..1 gives 0.75.",
-                )
-                .input(splat("value", *ty, 0.0))
-                .input(splat("low", *ty, 0.0))
-                .input(splat("high", *ty, 1.0))
-                .output(out(*ty))
-                .expr(guarded(
-                    *ty,
-                    "{low}",
-                    "{low} + ({high} - {low})                      * fract(({value} - {low}) / ({high} - {low}))",
-                    "({high} - {low})",
-                )),
-        );
-    }
+    );
+    defs.push(
+        NodeDefinition::builder("math.remap", "Remap")
+            .category("math")
+            .doc(
+                "Map a value from [in_min, in_max] onto [out_min, out_max]. \
+                 Not clamped: feed the result through `math.clamp` if the \
+                 input can leave its stated range. A zero-width input range \
+                 gives `out_min`.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("value", 0.0))
+            .input(generic_splat("in_min", 0.0))
+            .input(generic_splat("in_max", 1.0))
+            .input(generic_splat("out_min", 0.0))
+            .input(generic_splat("out_max", 1.0))
+            .output(generic_socket("out"))
+            .expr(guarded(
+                "{out_min}",
+                "{out_min} + ({value} - {in_min}) * ({out_max} - {out_min}) \
+                 / ({in_max} - {in_min})",
+                "({in_max} - {in_min})",
+            )),
+    );
+    defs.push(
+        NodeDefinition::builder("math.wrap", "Wrap")
+            .category("math")
+            .doc(
+                "Wrap a value into [low, high), the way a repeating texture \
+                 coordinate does. Unlike `math.modulo` this is correct for \
+                 negative inputs: wrapping -0.25 into 0..1 gives 0.75.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("value", 0.0))
+            .input(generic_splat("low", 0.0))
+            .input(generic_splat("high", 1.0))
+            .output(generic_socket("out"))
+            .expr(guarded(
+                "{low}",
+                "{low} + ({high} - {low}) \
+                 * fract(({value} - {low}) / ({high} - {low}))",
+                "({high} - {low})",
+            )),
+    );
 
     defs.push(
-        NodeDefinition::builder("math.arctangent2.f32", "Arctangent 2")
+        NodeDefinition::builder("math.arctangent2", "Arctangent 2")
             .category("math")
-            .doc("Angle of the vector (x, y) in radians, over the full circle.")
-            .input(scalar("y", 0.0))
-            .input(scalar("x", 1.0))
-            .output(out(ValueType::F32))
+            .doc(
+                "Angle of the vector (x, y) in radians, over the full \
+                 circle. Component-wise for the vector types, which makes \
+                 it a field of angles rather than one angle.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("y", 0.0))
+            .input(generic_splat("x", 1.0))
+            .output(generic_socket("out"))
             .expr("atan2({y}, {x})"),
     );
     defs
 }
 
 /// Vector algebra: the operations that change or collapse dimensionality.
+///
+/// One generic node each, over the *vector* types — `dot`, `normalize`,
+/// `reflect` and `refract` need more than one component to mean anything,
+/// so their parameter allows `vec2f | vec3f | vec4f` rather than
+/// [`ValueType::FLOATS`]. The reductions (`dot`, `length`, `distance`)
+/// output a fixed `f32` however wide the input is, which is a concrete type
+/// and not a per-type split.
 pub fn vector_nodes() -> Vec<NodeDefinition> {
-    let mut defs = Vec::new();
-    for ty in [ValueType::Vec2, ValueType::Vec3, ValueType::Vec4] {
-        defs.push(
-            NodeDefinition::builder(format!("vector.dot.{}", ty.suffix()), "Dot product")
-                .category("vector")
-                .doc(
-                    "Sum of component-wise products; the cosine of the angle \
-                      between two unit vectors.",
-                )
-                .input(splat("a", ty, 0.0))
-                .input(splat("b", ty, 0.0))
-                .output(out(ValueType::F32))
-                .expr("dot({a}, {b})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("vector.length.{}", ty.suffix()), "Length")
-                .category("vector")
-                .doc("Euclidean length.")
-                .input(splat("v", ty, 0.0))
-                .output(out(ValueType::F32))
-                .expr("length({v})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("vector.distance.{}", ty.suffix()), "Distance")
-                .category("vector")
-                .doc("Euclidean distance between two points.")
-                .input(splat("a", ty, 0.0))
-                .input(splat("b", ty, 0.0))
-                .output(out(ValueType::F32))
-                .expr("distance({a}, {b})"),
-        );
-        defs.push(
-            NodeDefinition::builder(format!("vector.normalize.{}", ty.suffix()), "Normalize")
-                .category("vector")
-                .doc(
-                    "Scale to unit length. A zero-length input gives NaN; use \
-                      `math.safe_normalize` where that is possible.",
-                )
-                .input(splat("v", ty, 0.0))
-                .output(out(ty))
-                .expr("normalize({v})"),
-        );
-    }
-
-    defs.push(
-        NodeDefinition::builder("vector.cross.vec3f", "Cross product")
+    vec![
+        NodeDefinition::builder("vector.dot", "Dot product")
+            .category("vector")
+            .doc(
+                "Sum of component-wise products; the cosine of the angle \
+                 between two unit vectors.",
+            )
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("a", 0.0))
+            .input(generic_splat("b", 0.0))
+            .output(out(ValueType::F32))
+            .expr("dot({a}, {b})"),
+        NodeDefinition::builder("vector.length", "Length")
+            .category("vector")
+            .doc("Euclidean length.")
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("v", 0.0))
+            .output(out(ValueType::F32))
+            .expr("length({v})"),
+        NodeDefinition::builder("vector.distance", "Distance")
+            .category("vector")
+            .doc("Euclidean distance between two points.")
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("a", 0.0))
+            .input(generic_splat("b", 0.0))
+            .output(out(ValueType::F32))
+            .expr("distance({a}, {b})"),
+        NodeDefinition::builder("vector.normalize", "Normalize")
+            .category("vector")
+            .doc(
+                "Scale to unit length. A zero-length input gives NaN; use \
+                 `math.safe_normalize` where that is possible.",
+            )
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("v", 0.0))
+            .output(generic_socket("out"))
+            .expr("normalize({v})"),
+        NodeDefinition::builder("vector.reflect", "Reflect")
+            .category("vector")
+            .doc(
+                "Mirror an incident direction about a normal. Both should be \
+                 unit length, and `incident` points *at* the surface.",
+            )
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("incident", 0.0))
+            .input(generic_splat("normal", 0.0))
+            .output(generic_socket("out"))
+            .expr("reflect({incident}, {normal})"),
+        NodeDefinition::builder("vector.refract", "Refract")
+            .category("vector")
+            .doc(
+                "Bend an incident direction through a surface. `eta` is the \
+                 ratio of refractive indices; total internal reflection \
+                 returns the zero vector.",
+            )
+            .generic_param(shared(ValueType::VECTORS))
+            .input(generic_splat("incident", 0.0))
+            .input(generic_splat("normal", 0.0))
+            .input(scalar("eta", 1.0 / 1.5))
+            .output(generic_socket("out"))
+            .expr("refract({incident}, {normal}, {eta})"),
+        NodeDefinition::builder("vector.transform", "Transform by matrix")
+            .category("vector")
+            .doc(
+                "Multiply a vector by a matrix of its own size — the way to \
+                 use a basis from `space.tangent_basis`, or any other \
+                 frame, on a direction. `M` and `V` resolve independently, \
+                 so a mat3x3f with a vec4f is reported rather than \
+                 silently accepted.",
+            )
+            .generic_param(param("M", ValueType::MATRICES))
+            // Not every vector: `Product` never combines a matrix with a
+            // `vec2f`, so offering one would be offering a type that can
+            // never resolve — and `V`'s first allowed type is what a freshly
+            // placed node starts at, which has to combine with `M`'s.
+            .generic_param(param("V", &[ValueType::Vec3, ValueType::Vec4]))
+            .input(
+                Socket::new("m", ValueType::Mat3)
+                    .generic("M")
+                    .with_splat_default(1.0),
+            )
+            .input(
+                Socket::new("v", ValueType::Vec3)
+                    .generic("V")
+                    .with_splat_default(1.0),
+            )
+            .output(Socket::new("out", ValueType::Vec3).combine(TypeRule::Product, "M", "V"))
+            .expr("{m} * {v}"),
+        // `cross` is the one vector operation WGSL defines for exactly one
+        // width, so this is a concrete node rather than a generic one with
+        // a single allowed type.
+        NodeDefinition::builder("vector.cross", "Cross product")
             .category("vector")
             .doc("The vector perpendicular to both inputs, right-handed.")
             .input(direction("a", [1.0, 0.0, 0.0]))
             .input(direction("b", [0.0, 1.0, 0.0]))
             .output(out(ValueType::Vec3))
             .expr("cross({a}, {b})"),
-    );
-    defs.push(
-        NodeDefinition::builder("vector.transform.mat3", "Transform by matrix")
-            .category("vector")
-            .doc(
-                "Multiply a vector by a 3x3 matrix — the way to use a basis \
-                  from `space.tangent_basis`, or any other frame, on a \
-                  direction.",
-            )
-            .input(Socket::new("m", ValueType::Mat3).with_default(Value::Mat3([
-                1.0, 0.0, 0.0, //
-                0.0, 1.0, 0.0, //
-                0.0, 0.0, 1.0,
-            ])))
-            .input(direction("v", [0.0, 0.0, 1.0]))
-            .output(out(ValueType::Vec3))
-            .expr("{m} * {v}"),
-    );
-    defs.push(
-        NodeDefinition::builder("vector.reflect.vec3f", "Reflect")
-            .category("vector")
-            .doc(
-                "Mirror an incident direction about a normal. Both should be \
-                  unit length, and `incident` points *at* the surface.",
-            )
-            .input(direction("incident", [0.0, -1.0, 0.0]))
-            .input(direction("normal", [0.0, 1.0, 0.0]))
-            .output(out(ValueType::Vec3))
-            .expr("reflect({incident}, {normal})"),
-    );
-    defs.push(
-        NodeDefinition::builder("vector.refract.vec3f", "Refract")
-            .category("vector")
-            .doc(
-                "Bend an incident direction through a surface. `eta` is the \
-                  ratio of refractive indices; total internal reflection \
-                  returns the zero vector.",
-            )
-            .input(direction("incident", [0.0, -1.0, 0.0]))
-            .input(direction("normal", [0.0, 1.0, 0.0]))
-            .input(scalar("eta", 1.0 / 1.5))
-            .output(out(ValueType::Vec3))
-            .expr("refract({incident}, {normal}, {eta})"),
-    );
-    defs
+    ]
 }
 
 /// Conversions between scalars and vectors: splat, combine, split.
 ///
 /// Sockets are matched by exact type, so these are how a graph changes
 /// dimensionality — no implicit promotion happens behind the author's back.
+///
+/// `convert.combine` and `convert.split` are the two families in this
+/// library that stay one node *per* type: how many sockets they have is
+/// part of what the type is (a `vec4f` split has four outputs, a `vec2f`
+/// split has two), and a [`GenericParam`] resolves a socket's type, not a
+/// node's socket list. `convert.splat` has the same one input and one
+/// output at every width, so it is generic like everything else — with
+/// `{$T}` naming the resolved type in the constructor it emits.
 pub fn convert_nodes() -> Vec<NodeDefinition> {
     let component_names = ["x", "y", "z", "w"];
     let mut defs = Vec::new();
 
+    defs.push(
+        NodeDefinition::builder("convert.splat", "Splat")
+            .category("convert")
+            .doc("Copy one scalar into every component.")
+            .generic_param(shared(ValueType::VECTORS))
+            .input(scalar("value", 0.0))
+            .output(generic_socket("out"))
+            .expr("{$T}({value})"),
+    );
+
     for ty in [ValueType::Vec2, ValueType::Vec3, ValueType::Vec4] {
         let count = ty.component_count().expect("float vector") as usize;
-
-        defs.push(
-            NodeDefinition::builder(format!("convert.splat.{}", ty.suffix()), "Splat")
-                .category("convert")
-                .doc("Copy one scalar into every component.")
-                .input(scalar("value", 0.0))
-                .output(out(ty))
-                .expr(format!("{}({{value}})", ty.wxsl_type())),
-        );
 
         let mut combine =
             NodeDefinition::builder(format!("convert.combine.{}", ty.suffix()), "Combine")
@@ -679,7 +834,11 @@ pub fn logic_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();
     for (stem, label, expr) in comparisons {
         defs.push(
-            NodeDefinition::builder(format!("compare.{stem}.f32"), *label)
+            // Scalar-only, and honestly so rather than as a family with
+            // one member: WGSL's comparison operators on vectors give a
+            // `vecN<bool>`, which `ValueType` does not carry, so there is
+            // no type for a generic output to resolve to.
+            NodeDefinition::builder(format!("compare.{stem}"), *label)
                 .category("compare")
                 .doc(
                     "Compare two scalars. Exact float comparison is rarely \
@@ -721,50 +880,51 @@ pub fn logic_nodes() -> Vec<NodeDefinition> {
     ));
     defs.push(boolean("not", "Not", "Invert a boolean.", "!{a}", false));
 
-    for ty in ValueType::FLOATS {
-        defs.push(
-            NodeDefinition::builder(format!("logic.select.{}", ty.suffix()), "Select")
-                .category("logic")
-                .doc(
-                    "Pick one of two values by a condition. Both inputs are \
-                      evaluated — this is a data selection, not a branch.",
-                )
-                .input(splat("if_false", *ty, 0.0))
-                .input(splat("if_true", *ty, 1.0))
-                .input(Socket::new("condition", ValueType::Bool).with_default(Value::Bool(false)))
-                .output(out(*ty))
-                .expr("select({if_false}, {if_true}, {condition})"),
-        );
-    }
+    defs.push(
+        NodeDefinition::builder("logic.select", "Select")
+            .category("logic")
+            .doc(
+                "Pick one of two values by a condition. Both inputs are \
+                 evaluated — this is a data selection, not a branch.",
+            )
+            .generic_param(shared(ValueType::FLOATS))
+            .input(generic_splat("if_false", 0.0))
+            .input(generic_splat("if_true", 1.0))
+            .input(Socket::new("condition", ValueType::Bool).with_default(Value::Bool(false)))
+            .output(generic_socket("out"))
+            .expr("select({if_false}, {if_true}, {condition})"),
+    );
     defs
 }
 
-/// Literal values, one node per type.
+/// Literal values: one generic node, plus `bool`.
 ///
 /// A constant node earns its place over typing the value into the consuming
 /// socket when several sockets should share one value: change it once and
 /// every consumer follows.
 pub fn constant_nodes() -> Vec<NodeDefinition> {
-    let mut defs = Vec::new();
-    for ty in ValueType::FLOATS {
-        defs.push(
-            NodeDefinition::builder(format!("const.{}", ty.suffix()), "Constant")
-                .category("const")
-                .doc("A literal value, shared by everything wired to it.")
-                .input(splat("value", *ty, 0.0))
-                .output(out(*ty))
-                .expr("{value}"),
-        );
-    }
-    defs.push(
+    vec![
+        NodeDefinition::builder("const.value", "Constant")
+            .category("const")
+            .doc(
+                "A literal value, shared by everything wired to it. A \
+                 matrix constant defaults to the identity, which is the \
+                 diagonal a splat default builds.",
+            )
+            .generic_param(shared(&ValueType::operands()))
+            .input(generic_splat("value", 1.0))
+            .output(generic_socket("out"))
+            .expr("{value}"),
+        // `bool` has no float components, so it is not one of `T`'s allowed
+        // types and cannot share the node above; a splat default has
+        // nothing to build there either.
         NodeDefinition::builder("const.bool", "Constant (boolean)")
             .category("const")
             .doc("A literal boolean.")
             .input(Socket::new("value", ValueType::Bool).with_default(Value::Bool(false)))
             .output(out(ValueType::Bool))
             .expr("{value}"),
-    );
-    defs
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -773,45 +933,49 @@ pub fn constant_nodes() -> Vec<NodeDefinition> {
 
 /// The `math/` functions: the ones with a body, which WGSL does not provide.
 pub fn math_function_nodes() -> Vec<NodeDefinition> {
-    vec![function_node(
-        "math.smootherstep.f32",
+    vec![template_node(
+        "math.smootherstep",
         "Smootherstep",
         "Quintic ramp between two edges, with a continuous second \
-             derivative — no crease where the ramp meets the flat parts.",
-        "package::math::smootherstep",
-        "smootherstep",
-        vec![scalar("edge0", 0.0), scalar("edge1", 1.0), scalar("x", 0.5)],
-        out(ValueType::F32),
+         derivative — no crease where the ramp meets the flat parts.",
+        ValueType::FLOATS,
+        WxslFunction::new(
+            "package::math::smootherstep",
+            "smootherstep",
+            vec![
+                generic_splat("edge0", 0.0),
+                generic_splat("edge1", 1.0),
+                generic_splat("x", 0.5),
+            ],
+            generic_socket("out"),
+        ),
     )]
 }
 
-/// `math.safe_normalize.*`: one node per vector type.
+/// `math.safe_normalize`: one node, over the vector types.
 ///
 /// Unlike the range operators, this one keeps a WXSL body. It is a
-/// *reduction* — `dot(v, v)` collapses to a scalar whatever the input width —
-/// so its guard is a scalar `if` that generalizes unchanged, and there is a
-/// real intermediate worth naming. WGSL has no user-function overloading, so
-/// the four bodies carry the `_<type>` suffix; the loop below is the only
-/// place that spelling is written.
+/// *reduction* — `dot(v, v)` collapses to a scalar whatever the input width
+/// — so its guard is a scalar `if` that generalizes unchanged, and there is
+/// a real intermediate worth naming. WGSL has no function overloading, but
+/// WXSL has templates: one `fn safe_normalize<T: vec2f | vec3f | vec4f>`,
+/// which the compiler instantiates per type actually used
+/// ([ADR 0012](../../../docs/adr/0012-monomorphize-templates-on-the-flat-module.md)).
 fn safe_normalize_nodes() -> Vec<NodeDefinition> {
-    [
-        (ValueType::Vec2, Value::Vec2([0.0, 1.0])),
-        (ValueType::Vec3, Value::Vec3([0.0, 1.0, 0.0])),
-        (ValueType::Vec4, Value::Vec4([0.0, 1.0, 0.0, 0.0])),
-    ]
-    .into_iter()
-    .map(|(ty, unit)| {
-        function_node(
-            &format!("math.safe_normalize.{}", ty.suffix()),
-            "Safe normalize",
-            "Normalize, returning zero instead of NaN for a zero-length              input. A NaN here spreads through everything downstream and              shows up as black or missing pixels far from its cause.",
+    vec![template_node(
+        "math.safe_normalize",
+        "Safe normalize",
+        "Normalize, returning zero instead of NaN for a zero-length \
+         input. A NaN here spreads through everything downstream and \
+         shows up as black or missing pixels far from its cause.",
+        ValueType::VECTORS,
+        WxslFunction::new(
             "package::math::safe_normalize",
-            &format!("safe_normalize_{}", ty.wxsl_type()),
-            vec![Socket::new("v", ty).with_default(unit)],
-            out(ty),
-        )
-    })
-    .collect()
+            "safe_normalize",
+            vec![generic_splat("v", 0.0)],
+            generic_socket("out"),
+        ),
+    )]
 }
 
 /// The `color/` functions: transfer functions, tonemaps, colour spaces.
@@ -1196,6 +1360,7 @@ pub fn distort_nodes() -> Vec<NodeDefinition> {
 mod tests {
     use super::*;
     use crate::shaders;
+    use wxsl_core::graph::{Graph, Node};
     use wxsl_core::node::NodeBody;
 
     #[test]
@@ -1206,43 +1371,201 @@ mod tests {
     }
 
     #[test]
-    fn every_arithmetic_family_is_one_generic_node_covering_every_float_type() {
-        // One registry entry per family (not one per family *and* type,
-        // which is the duplication generic sockets exist to remove), and
-        // every socket sharing a `T` that allows every float type.
+    fn every_operator_family_is_exactly_one_node_covering_every_type_it_allows() {
+        // One registry entry per family — not one per family *and* type,
+        // which is the duplication generic sockets exist to remove — and
+        // every socket's type governed by a parameter rather than fixed.
         let registry = registry();
-        for family in BINARY.iter().chain(UNARY) {
-            let id = format!("math.{}", family.stem);
+        for (id, params, allowed) in BINARY
+            .iter()
+            .map(|family| {
+                let params: &[&str] = match family.rule {
+                    None => &["T"],
+                    Some(_) => &["A", "B"],
+                };
+                let allowed = if family.matrices {
+                    ValueType::operands()
+                } else {
+                    ValueType::FLOATS.to_vec()
+                };
+                (format!("math.{}", family.stem), params, allowed)
+            })
+            .chain(UNARY.iter().map(|family| {
+                (
+                    format!("math.{}", family.stem),
+                    &["T"][..],
+                    ValueType::FLOATS.to_vec(),
+                )
+            }))
+        {
             let def = registry
                 .get(&id)
                 .unwrap_or_else(|| panic!("missing `{id}`"));
-            assert!(
-                !registry.contains(&format!("{id}.f32")),
-                "`{id}.f32` should not exist alongside the generic `{id}`"
-            );
-
-            let param = def
-                .generic("T")
-                .unwrap_or_else(|| panic!("`{id}` declares no generic parameter `T`"));
+            for suffix in ValueType::FLOATS {
+                assert!(
+                    !registry.contains(&format!("{id}.{}", suffix.suffix())),
+                    "`{id}.{suffix}` should not exist alongside the generic `{id}`"
+                );
+            }
             assert_eq!(
-                param.allowed,
-                ValueType::FLOATS,
-                "`{id}`'s `T` should allow exactly the float types"
+                def.generics
+                    .iter()
+                    .map(|param| param.name.as_str())
+                    .collect::<Vec<_>>(),
+                params,
+                "`{id}` declares the wrong type parameters"
             );
-            for socket in def.inputs.iter().chain(&def.outputs) {
+            for param in &def.generics {
                 assert_eq!(
-                    socket.generic.as_ref().map(|name| name.as_str()),
-                    Some("T"),
-                    "`{id}`'s socket `{}` should carry `T`, not a fixed type",
+                    param.allowed, allowed,
+                    "`{id}`'s `{}` allows the wrong types",
+                    param.name
+                );
+            }
+            for socket in def.inputs.iter().chain(&def.outputs) {
+                assert!(
+                    socket.referenced_params().next().is_some(),
+                    "`{id}`'s socket `{}` has a fixed type, not a parameter",
                     socket.name
                 );
                 assert!(
                     socket.default.is_none(),
-                    "`{id}`'s socket `{}` is generic and must have no default",
+                    "`{id}`'s socket `{}` is generic and must have no fixed default",
                     socket.name
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_operators_whose_operands_may_differ_declare_two_parameters() {
+        // `+`, `-`, `*`, `/` and `%` all spread a scalar over a vector, so
+        // their two operands resolve independently and the result is
+        // derived from both. `pow`/`min`/`max` are builtins with a single
+        // `(T, T) -> T` overload, so they share one parameter.
+        let registry = registry();
+        let rule_of = |id: &str| {
+            registry
+                .get(id)
+                .unwrap_or_else(|| panic!("missing `{id}`"))
+                .output("out")
+                .expect("has an `out` output")
+                .combine
+                .as_ref()
+                .map(|combined| {
+                    (
+                        combined.rule,
+                        combined.a.to_string(),
+                        combined.b.to_string(),
+                    )
+                })
+        };
+        for id in ["math.add", "math.subtract", "math.divide", "math.modulo"] {
+            assert_eq!(
+                rule_of(id),
+                Some((TypeRule::Componentwise, "A".into(), "B".into())),
+                "`{id}`'s output should combine `A` and `B` componentwise"
+            );
+        }
+        assert_eq!(
+            rule_of("math.multiply"),
+            Some((TypeRule::Product, "A".into(), "B".into())),
+            "`*` also does linear algebra, which `Componentwise` does not cover"
+        );
+        for id in ["math.power", "math.minimum", "math.maximum"] {
+            assert_eq!(rule_of(id), None, "`{id}` shares one parameter");
+        }
+
+        // Matrices are operands of `+`, `-` and `*` and of nothing else.
+        for id in ["math.add", "math.subtract", "math.multiply"] {
+            let def = registry.get(id).unwrap();
+            assert!(def
+                .generics
+                .iter()
+                .all(|param| param.allowed.contains(&ValueType::Mat3)));
+        }
+        for id in ["math.divide", "math.modulo", "math.power", "math.negate"] {
+            let def = registry.get(id).unwrap();
+            assert!(
+                def.generics
+                    .iter()
+                    .all(|param| !param.allowed.contains(&ValueType::Mat3)),
+                "`{id}` takes no matrix in WGSL"
+            );
+        }
+    }
+
+    #[test]
+    fn no_definition_id_carries_a_type_suffix_a_parameter_could_replace() {
+        // Two exceptions. `convert.combine`/`convert.split` have a socket
+        // *count* that is part of the type, so one node cannot serve every
+        // width. `const.bool` names a type that is not in any parameter's
+        // allowed set — `bool` is not a float, and a splat default has
+        // nothing to spread there. Everything else that was once a per-type
+        // family is one node now.
+        let allowed_per_type = ["convert.combine.", "convert.split.", "const.bool"];
+        for def in all_nodes() {
+            let suffixed = ValueType::ALL
+                .iter()
+                .any(|ty| def.id.ends_with(&format!(".{}", ty.suffix())));
+            assert!(
+                !suffixed || allowed_per_type.iter().any(|stem| def.id.starts_with(stem)),
+                "`{}` still names a type in its id",
+                def.id
+            );
+        }
+    }
+
+    #[test]
+    fn a_splat_default_on_a_generic_socket_follows_the_resolved_type() {
+        // `clamp`'s `high` is 1 at every width: one scalar on the
+        // definition, spread over whatever the instance resolved to.
+        let registry = registry();
+        let high = registry
+            .get("math.clamp")
+            .expect("registered")
+            .input("high")
+            .expect("has a `high` input");
+        assert_eq!(high.default, None, "no fixed default on a generic socket");
+        assert_eq!(high.splat_default, Some(1.0));
+        assert_eq!(high.default_for(ValueType::F32), Some(Value::F32(1.0)));
+        assert_eq!(
+            high.default_for(ValueType::Vec3),
+            Some(Value::Vec3([1.0; 3]))
+        );
+        assert!(!high.is_required(), "a splat default feeds the socket");
+    }
+
+    #[test]
+    fn every_definition_is_valid_at_its_default_types() {
+        // `NodeDefinition::default_generics` is what a node placed on a
+        // canvas starts at, so those types have to actually work together:
+        // `vector.transform` starting at `mat3x3f` with a `vec2f` would be
+        // a node that reports `IncompatibleGenerics` before anyone touched
+        // it. This is the constraint on the *order* of every
+        // `GenericParam::allowed` in this file.
+        let registry = registry();
+        let mut graph = Graph::new("defaults");
+        for def in registry.iter() {
+            if def.is_surface_output() {
+                continue;
+            }
+            let node = graph.add_resolved(&registry, Node::new(def.id.clone()));
+            for socket in def.inputs.iter().chain(&def.outputs) {
+                assert!(
+                    graph.effective_type(node, socket).is_some(),
+                    "`{}`'s socket `{}` has no type at the default {:?}",
+                    def.id,
+                    socket.name,
+                    def.default_generics()
+                );
+            }
+        }
+        // Every one of them is complete on its own: no unresolved
+        // parameter, no unfed input, nothing to report.
+        graph
+            .validate(&registry)
+            .expect("a freshly placed node of every kind is valid");
     }
 
     #[test]
@@ -1259,8 +1582,11 @@ mod tests {
                     func.module
                 );
                 let source = shaders::module(func.module.as_str()).unwrap();
+                // `fn name(` for an ordinary function, `fn name<` for a
+                // template (`fn safe_normalize<T: vec2f | …>`).
                 assert!(
-                    source.contains(&format!("fn {}(", func.name)),
+                    source.contains(&format!("fn {}(", func.name))
+                        || source.contains(&format!("fn {}<", func.name)),
                     "`{}` declares `{}` but `{}` has no such function",
                     def.id,
                     func.signature(),
@@ -1300,11 +1626,21 @@ mod tests {
                     rest = &rest[open + 1..];
                     let close = rest.find('}').expect("closed placeholder");
                     let name = &rest[..close];
-                    assert!(
-                        def.input(name).is_some(),
-                        "`{}` references `{{{name}}}`, which is not an input",
-                        def.id
-                    );
+                    // `{$T}` names a generic parameter, not a socket; the
+                    // node builder already checks those are declared.
+                    if let Some(param) = name.strip_prefix('$') {
+                        assert!(
+                            def.generic(param).is_some(),
+                            "`{}` references `{{${param}}}`, which it does not declare",
+                            def.id
+                        );
+                    } else {
+                        assert!(
+                            def.input(name).is_some(),
+                            "`{}` references `{{{name}}}`, which is not an input",
+                            def.id
+                        );
+                    }
                     rest = &rest[close + 1..];
                 }
             }

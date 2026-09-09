@@ -7,6 +7,7 @@
 //! paths. `tests/render_cube.rs` covers the part that needs a device.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use wxsl::core::abi;
 use wxsl::core::codegen;
@@ -65,6 +66,10 @@ fn the_demo_graph_is_valid_and_round_trips_through_the_node_format() {
     assert!(graph
         .nodes()
         .any(|(_, node)| node.position.is_some() && node.label.is_some()));
+    assert!(
+        graph.nodes().any(|(_, node)| node.color.is_some()),
+        "a node's own colour is part of the format too"
+    );
 }
 
 #[test]
@@ -160,70 +165,159 @@ fn unused_nodes_do_not_reach_the_shader() {
     assert!(!wgsl.contains("sdf_sphere"), "{wgsl}");
 }
 
+/// Every combination of type arguments worth compiling `def` at.
+///
+/// The uniform ones — every declared parameter resolved to the same type —
+/// plus, for a two-parameter node, each parameter's own allowed types
+/// against a scalar in the other. That is where the interesting cases live:
+/// `f32 * vec3f`, `mat3x3f * vec3f`, `vec3f + f32`. A full cross product
+/// would mostly enumerate combinations WGSL rejects, which
+/// `wxsl_core::node::TypeRule` is unit-tested on directly.
+///
+/// Combinations a `Socket::combine` rule cannot derive a type from are left
+/// out: those are the ones the graph is *supposed* to reject.
+fn type_assignments(def: &NodeDefinition) -> Vec<BTreeMap<String, ValueType>> {
+    if def.generics.is_empty() {
+        return vec![BTreeMap::new()];
+    }
+    let uniform = |ty: ValueType| -> Option<BTreeMap<String, ValueType>> {
+        def.generics
+            .iter()
+            .all(|param| param.allowed.contains(&ty))
+            .then(|| {
+                def.generics
+                    .iter()
+                    .map(|param| (param.name.to_string(), ty))
+                    .collect()
+            })
+    };
+
+    let mut combinations: Vec<BTreeMap<String, ValueType>> = ValueType::ALL
+        .iter()
+        .filter_map(|ty| uniform(*ty))
+        .collect();
+    if let [first, second] = def.generics.as_slice() {
+        for (varying, fixed) in [(first, second), (second, first)] {
+            let scalar = if fixed.allowed.contains(&ValueType::F32) {
+                ValueType::F32
+            } else {
+                fixed.allowed[0]
+            };
+            for &ty in &varying.allowed {
+                combinations.push(
+                    [
+                        (varying.name.to_string(), ty),
+                        (fixed.name.to_string(), scalar),
+                    ]
+                    .into_iter()
+                    .collect(),
+                );
+            }
+        }
+    }
+    combinations.retain(|assignment| {
+        def.inputs
+            .iter()
+            .chain(&def.outputs)
+            .all(|socket| match &socket.combine {
+                Some(combined) => {
+                    let a = assignment[combined.a.as_str()];
+                    let b = assignment[combined.b.as_str()];
+                    combined.rule.apply(a, b).is_some()
+                }
+                None => true,
+            })
+    });
+    combinations.dedup();
+    combinations
+}
+
 /// Wire `(node, socket)` into the surface output, inserting whatever
 /// conversion the type needs, and return the graph.
 ///
 /// This is what makes the coverage test below possible: a node's output only
 /// reaches the compiler if something downstream consumes it.
 ///
-/// `ty` is also what a *generic* node (`def.generics` non-empty, see
-/// `wxsl_core::node::GenericParam`) resolves every one of its declared type
-/// parameters to — sound for every node currently generic, since each
-/// declares exactly one parameter shared by all of its sockets, but a
-/// simplification worth a look if that ever changes.
+/// `assignment` resolves every type parameter the definition declares (see
+/// `wxsl_core::node::GenericParam`), one entry per parameter, so a node
+/// whose parameters resolve independently — `math.multiply`'s `A` and `B`,
+/// `vector.transform`'s `M` and `V` — is covered at combinations of them
+/// and not only at "everything the same".
 fn graph_using(
     registry: &NodeRegistry,
     def: &NodeDefinition,
     socket: &str,
-    ty: ValueType,
+    assignment: &BTreeMap<String, ValueType>,
 ) -> Option<Graph> {
     let mut graph = Graph::new(format!("coverage: {}.{socket}", def.id));
     let node = graph.add(Node::new(def.id.clone()));
-    for param in &def.generics {
-        graph
-            .set_generic(registry, node, param.name.as_str(), ty)
-            .ok()?;
+    for (param, &ty) in assignment {
+        graph.set_generic(registry, node, param, ty).ok()?;
     }
-    // A generic input has no default (see `Socket::generic`) — resolving the
-    // type does not feed it. Every generic input here shares the one
-    // parameter just resolved, so the same splat covers all of them.
+    // A generic input has no *fixed* default (see `Socket::generic`), only
+    // possibly a scalar to spread over the type just resolved; anything
+    // still unfed gets a pinned value of whatever it turned out to be.
     for input in &def.inputs {
-        if input.generic.is_some() {
-            let value = ty.splat(1.0)?;
+        let ty = graph.effective_type(node, input)?;
+        if input.default_for(ty).is_none() {
+            let value = ty.splat(1.0).unwrap_or_else(|| ty.zero());
             graph.set_param(node, input.name.as_str(), value);
         }
     }
-    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    let output = def.output(socket).expect("an output of this node");
+    let produced = graph.effective_type(node, output)?;
+    let surface = graph.add_node(abi::SURFACE_OUTPUT_ID);
 
-    // Adapt the output type to a surface field, since sockets are matched by
-    // exact type and the surface only takes f32 and vec3f.
-    let (source, source_socket, field) = match ty {
+    // Adapt whatever it produces to a surface field, since sockets are
+    // matched by exact type and the surface only takes f32 and vec3f.
+    let (source, source_socket, field) = match produced {
         ValueType::F32 => (node, socket.to_string(), "roughness"),
         ValueType::Vec3 => (node, socket.to_string(), "base_color"),
         ValueType::Vec2 | ValueType::Vec4 => {
-            let split = graph.add_node(format!("convert.split.{}", ty.suffix()));
+            let split = graph.add_node(format!("convert.split.{}", produced.suffix()));
             graph.wire(registry, (node, socket), (split, "v")).ok()?;
             (split, "x".to_string(), "roughness")
         }
         ValueType::Bool => {
-            let select = graph.add_node("logic.select.f32");
+            let select = graph.add_node("logic.select");
+            graph
+                .set_generic(registry, select, "T", ValueType::F32)
+                .ok()?;
             graph
                 .wire(registry, (node, socket), (select, "condition"))
                 .ok()?;
             (select, "out".to_string(), "roughness")
         }
-        ValueType::Mat3 => {
-            let transform = graph.add_node("vector.transform.mat3");
+        // A matrix reaches the surface through the one node that consumes
+        // one: multiplied by a vector of its own size.
+        ValueType::Mat3 | ValueType::Mat4 => {
+            let vector = if produced == ValueType::Mat3 {
+                ValueType::Vec3
+            } else {
+                ValueType::Vec4
+            };
+            let transform = graph.add_node("vector.transform");
+            graph.set_generic(registry, transform, "M", produced).ok()?;
+            graph.set_generic(registry, transform, "V", vector).ok()?;
+            graph.set_param(transform, "v", vector.splat(1.0)?);
             graph
                 .wire(registry, (node, socket), (transform, "m"))
                 .ok()?;
-            (transform, "out".to_string(), "base_color")
+            if vector == ValueType::Vec3 {
+                (transform, "out".to_string(), "base_color")
+            } else {
+                let split = graph.add_node("convert.split.vec4f");
+                graph
+                    .wire(registry, (transform, "out"), (split, "v"))
+                    .ok()?;
+                (split, "x".to_string(), "roughness")
+            }
         }
         // No node in the library produces these yet.
-        ValueType::I32 | ValueType::U32 | ValueType::Mat4 => return None,
+        ValueType::I32 | ValueType::U32 => return None,
     };
     graph
-        .wire(registry, (source, source_socket.as_str()), (output, field))
+        .wire(registry, (source, source_socket.as_str()), (surface, field))
         .ok()?;
     Some(graph)
 }
@@ -242,27 +336,24 @@ fn every_node_in_the_library_compiles_on_both_paths() {
             continue;
         }
         // A generic node's socket `ty` is only a placeholder (see
-        // `wxsl_core::node::Socket::generic`) — every concrete type its
-        // parameter allows needs its own graph, or genericizing a family
-        // would lose the per-type coverage this test exists to give.
-        // A non-generic node still tests exactly the one type it declares.
-        let types_to_try: Vec<ValueType> = match def.generics.first() {
-            Some(param) => param.allowed.clone(),
-            None => vec![],
-        };
-        for socket in &def.outputs {
-            let candidates: &[ValueType] = if types_to_try.is_empty() {
-                std::slice::from_ref(&socket.ty)
-            } else {
-                &types_to_try
-            };
-            for &ty in candidates {
-                let label = if types_to_try.is_empty() {
+        // `wxsl_core::node::Socket::generic`) — every type its parameters
+        // allow needs its own graph, or genericizing a family would lose
+        // the per-type coverage this test exists to give. A non-generic
+        // node gets exactly one graph, at the types it declares.
+        for assignment in type_assignments(def) {
+            for socket in &def.outputs {
+                let types = assignment
+                    .iter()
+                    .map(|(param, ty)| format!("{param}={ty}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let label = if types.is_empty() {
                     format!("{}.{}", def.id, socket.name)
                 } else {
-                    format!("{}.{} (T={ty})", def.id, socket.name)
+                    format!("{}.{} ({types})", def.id, socket.name)
                 };
-                let Some(graph) = graph_using(&registry, def, socket.name.as_str(), ty) else {
+                let Some(graph) = graph_using(&registry, def, socket.name.as_str(), &assignment)
+                else {
                     skipped.push(label);
                     continue;
                 };
@@ -276,8 +367,8 @@ fn every_node_in_the_library_compiles_on_both_paths() {
                 for path in RenderPath::ALL {
                     match compile(&material, *path) {
                         Ok(wgsl) => {
-                            // A node that compiled but got stripped would make
-                            // this test vacuous.
+                            // A node that compiled but got stripped would
+                            // make this test vacuous.
                             if let NodeBody::Call(func) = &def.body {
                                 assert!(
                                     wgsl.contains(func.name.as_str()),
@@ -304,7 +395,7 @@ fn every_node_in_the_library_compiles_on_both_paths() {
         failures.join("\n\n")
     );
     // Guard against the test silently covering nothing.
-    assert!(checked > 200, "only {checked} compilations ran");
+    assert!(checked > 400, "only {checked} compilations ran");
     assert!(
         skipped.iter().all(|s| s.starts_with("input.")),
         "unexpected skips: {skipped:?}"
@@ -362,7 +453,7 @@ fn an_invalid_graph_is_rejected_before_the_shader_compiler_sees_it() {
     // dangling edge can only arrive from a hand-edited file. Validation
     // still catches it, and names the node that is missing.
     let mut graph = demo_graph();
-    graph.remove_node(NodeId(3));
+    graph.remove_node(&registry, NodeId(3));
     Material::from_graph(&graph, &registry).expect("removing a node leaves the graph valid");
 
     let dangling: Graph = serde_json::from_str(

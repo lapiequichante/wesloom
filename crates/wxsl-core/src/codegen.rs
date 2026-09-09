@@ -254,7 +254,14 @@ impl Emitter<'_> {
             CodegenError::Invalid(GraphErrors(vec![GraphError::UnknownNode(node)]))
         })?;
 
-        let value: Option<Value> = instance.params.get(socket_name).copied().or(socket.default);
+        // A generic socket's default is a scalar to spread over whatever
+        // this instance resolved to (`Socket::splat_default`), so the type
+        // has to be looked up before the default can be read.
+        let value: Option<Value> = instance.params.get(socket_name).copied().or_else(|| {
+            self.graph
+                .effective_type(node, socket)
+                .and_then(|ty| socket.default_for(ty))
+        });
         match value {
             Some(value) => {
                 let literal =
@@ -322,15 +329,21 @@ impl Emitter<'_> {
                     })?;
                     args.push(expr);
                 }
-                let call = format!("{}({})", func.name, args.join(", "));
+                // A generic function node calls a WXSL *template*
+                // (`fn safe_normalize<T: vec2f | vec3f | vec4f>`), and the
+                // graph always knows the type exactly, so the type
+                // arguments are written explicitly — which is the case
+                // ADR 0012 says never has to guess. Declaration order is
+                // the argument order.
+                let type_args = self.type_arguments(node, &def)?;
+                let call = format!("{}{type_args}({})", func.name, args.join(", "));
                 let name = binding_name(node, "call");
                 match &func.ret {
                     FunctionReturn::Value(socket) => {
-                        let _ = writeln!(
-                            self.body,
-                            "    let {name}: {} = {call};",
-                            socket.ty.wxsl_type()
-                        );
+                        // Generic here too: the return socket's `ty` is only
+                        // a placeholder when it carries a parameter.
+                        let ty = self.graph.effective_type(node, socket).unwrap_or(socket.ty);
+                        let _ = writeln!(self.body, "    let {name}: {} = {call};", ty.wxsl_type());
                         self.bindings
                             .insert(SocketRef::new(node, socket.name.as_str()), name);
                     }
@@ -385,6 +398,28 @@ impl Emitter<'_> {
         Ok(assignments)
     }
 
+    /// The `<vec3f, f32>` a call to a generic function node needs, or the
+    /// empty string for a definition that declares no type parameters.
+    fn type_arguments(&self, node: NodeId, def: &NodeDefinition) -> Result<String, CodegenError> {
+        if def.generics.is_empty() {
+            return Ok(String::new());
+        }
+        let mut args = Vec::with_capacity(def.generics.len());
+        for param in &def.generics {
+            let ty = self
+                .graph
+                .generic_type(node, param.name.as_str())
+                .ok_or_else(|| {
+                    CodegenError::Invalid(GraphErrors(vec![GraphError::UnresolvedGeneric {
+                        node,
+                        param: param.name.as_str().to_string(),
+                    }]))
+                })?;
+            args.push(ty.wxsl_type());
+        }
+        Ok(format!("<{}>", args.join(", ")))
+    }
+
     /// Substitute `{socket}` placeholders in an expression template.
     fn expand_template(
         &self,
@@ -408,6 +443,21 @@ impl Emitter<'_> {
             })?;
             let name = &rest[..close];
             rest = &rest[close + 1..];
+            // `{$T}` is this node instance's resolved type for generic
+            // parameter `T`, spelled as WGSL — what lets a template that
+            // has to *name* its type (`vec3f(value)`, a `select` fallback
+            // of the right width) stay one template across every type the
+            // parameter allows, instead of one per type.
+            if let Some(param) = name.strip_prefix('$') {
+                let ty = self.graph.generic_type(node, param).ok_or_else(|| {
+                    CodegenError::BadTemplate {
+                        def: def.id.clone(),
+                        placeholder: name.to_string(),
+                    }
+                })?;
+                out.push_str(ty.wxsl_type());
+                continue;
+            }
             let expr = self
                 .input_expr(node, name)?
                 .ok_or_else(|| CodegenError::BadTemplate {
@@ -617,7 +667,7 @@ mod tests {
     use super::*;
     use crate::graph::Node;
     use crate::macros::{MacroDef, MacroValue};
-    use crate::node::{Socket, ValueType, WxslFunction};
+    use crate::node::{GenericParam, Socket, ValueType, WxslFunction};
 
     fn registry() -> NodeRegistry {
         let mut registry = NodeRegistry::new();
@@ -721,6 +771,72 @@ mod tests {
         );
         assert!(shader.source.contains("surface.roughness = n3_out;"));
         assert!(!shader.source.contains("ctx.uv"), "dead nodes are dropped");
+    }
+
+    #[test]
+    fn a_type_placeholder_emits_the_resolved_type_name() {
+        // `{$T}` is how a template that has to *name* its type stays one
+        // template: `convert.splat`'s constructor, or a `select` fallback of
+        // the right width.
+        let mut registry = registry();
+        registry.register(
+            NodeDefinition::builder("test.splat", "Splat")
+                .generic_param(GenericParam::new("T", vec![ValueType::Vec3]))
+                .input(Socket::new("value", ValueType::F32).with_splat_default(0.5))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .expr("{$T}({value})"),
+        );
+        let mut graph = Graph::new("splat");
+        let splat = graph.add_node("test.splat");
+        let out = graph.add_node(abi::SURFACE_OUTPUT_ID);
+        graph
+            .wire(&registry, (splat, "out"), (out, "base_color"))
+            .expect("T resolves to vec3f");
+
+        let shader = generate_default(&graph, &registry);
+        assert!(
+            shader.source.contains("let n1_out: vec3f = vec3f(0.5);"),
+            "{}",
+            shader.source
+        );
+    }
+
+    #[test]
+    fn a_generic_function_node_writes_its_type_arguments() {
+        // A generic `NodeBody::Call` node calls a WXSL *template*, and the
+        // graph always knows the type exactly, so the type argument is
+        // written rather than left to inference (ADR 0012).
+        let mut registry = registry();
+        registry.register(
+            NodeDefinition::builder("test.generic_call", "Generic call")
+                .generic_param(GenericParam::new(
+                    "T",
+                    vec![ValueType::Vec3, ValueType::Vec4],
+                ))
+                .call(WxslFunction::new(
+                    "package::test::identity",
+                    "identity",
+                    vec![Socket::new("v", ValueType::F32)
+                        .generic("T")
+                        .with_splat_default(1.0)],
+                    Socket::new("out", ValueType::F32).generic("T"),
+                )),
+        );
+        let mut graph = Graph::new("call");
+        let call = graph.add_node("test.generic_call");
+        let out = graph.add_node(abi::SURFACE_OUTPUT_ID);
+        graph
+            .wire(&registry, (call, "out"), (out, "base_color"))
+            .expect("T resolves to vec3f");
+
+        let shader = generate_default(&graph, &registry);
+        assert!(
+            shader
+                .source
+                .contains("let n1_call: vec3f = identity<vec3f>(vec3f(1.0, 1.0, 1.0));"),
+            "{}",
+            shader.source
+        );
     }
 
     #[test]

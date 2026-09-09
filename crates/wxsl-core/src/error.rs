@@ -9,7 +9,7 @@ use core::fmt;
 
 use crate::graph::{NodeId, SocketRef};
 use crate::macros::MacroValue;
-use crate::node::ValueType;
+use crate::node::{TypeRule, ValueType};
 
 /// A single problem found while validating a [`crate::graph::Graph`].
 #[derive(Clone, Debug, PartialEq)]
@@ -135,6 +135,26 @@ pub enum GraphError {
         /// The types the parameter actually allows.
         allowed: Vec<ValueType>,
     },
+    /// A socket's type is derived from two generic parameters by a
+    /// [`crate::node::TypeRule`] (see [`crate::node::Socket::combine`]), and both
+    /// are resolved but do not combine — e.g. `vec2f` and `vec3f`, neither a
+    /// scalar nor matching the other. Codegen has no type to emit for the
+    /// socket; the graph-level analogue of [`GraphError::TypeMismatch`], for
+    /// a type that is derived from two operands rather than read off one
+    /// edge.
+    IncompatibleGenerics {
+        /// The node.
+        node: NodeId,
+        /// The socket whose type could not be derived.
+        socket: String,
+        /// The rule that failed to combine the two, whose
+        /// [`crate::node::TypeRule::requirement`] explains what it wanted.
+        rule: TypeRule,
+        /// The first parameter's name and resolved type.
+        a: (String, ValueType),
+        /// The second parameter's name and resolved type.
+        b: (String, ValueType),
+    },
 }
 
 /// Whether a socket lookup was for an input or an output.
@@ -252,6 +272,22 @@ impl fmt::Display for GraphError {
                 }
                 Ok(())
             }
+            GraphError::IncompatibleGenerics {
+                node,
+                socket,
+                rule,
+                a,
+                b,
+            } => write!(
+                f,
+                "node {node}'s socket `{socket}` cannot combine `{}` ({}) with `{}` ({}) \
+                 as a {rule}: {}",
+                a.0,
+                a.1,
+                b.0,
+                b.1,
+                rule.requirement()
+            ),
         }
     }
 }

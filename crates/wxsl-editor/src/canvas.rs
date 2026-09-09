@@ -469,7 +469,7 @@ impl Canvas {
                 // Right-clicking a link cuts it, which is the fastest
                 // unlink gesture there is.
                 if let Some(input) = self.hovered_link.clone() {
-                    if graph.disconnect(&input).is_some() {
+                    if graph.disconnect(registry, &input).is_some() {
                         response.changed = true;
                         response.message = Some(format!("disconnected {input}"));
                     }
@@ -488,7 +488,7 @@ impl Canvas {
                 || ui.input.key_pressed_plain(Key::Backspace);
             if delete && !self.selection.is_empty() {
                 for node in core::mem::take(&mut self.selection) {
-                    graph.remove_node(node);
+                    graph.remove_node(registry, node);
                 }
                 response.changed = true;
                 response.message = Some("deleted the selection".to_string());
@@ -594,15 +594,13 @@ impl Canvas {
         );
         ui.draw()
             .round_rect(layout.rect, radius, theme.palette.node);
-        ui.draw().round_rect(
-            layout.header,
-            radius,
-            theme.category_color(&definition.category),
-        );
+        // One colour for every kind of node unless this node says
+        // otherwise — see `Theme::node_color`.
+        let header_color = theme.node_color(node);
+        ui.draw().round_rect(layout.header, radius, header_color);
         // Square the header's bottom corners against the body.
         let (_, header_bottom) = layout.header.split_bottom(radius);
-        ui.draw()
-            .rect(header_bottom, theme.category_color(&definition.category));
+        ui.draw().rect(header_bottom, header_color);
         ui.draw().round_rect_border(
             layout.rect,
             radius,
@@ -626,8 +624,21 @@ impl Canvas {
             .label
             .clone()
             .unwrap_or_else(|| definition.label.clone());
-        let title_rect = layout.header.shrink(theme.metrics.padding * 0.5 * zoom);
+        // The node's id, top-right. Every diagnostic names a node by it
+        // ("node #7 references unknown definition ..."), so being able to
+        // read it straight off the canvas is what makes those messages
+        // actionable — and it is the one label a renamed node cannot hide.
+        let id_text = layout.id.to_string();
+        let inner = layout.header.shrink(theme.metrics.padding * 0.5 * zoom);
+        let id_width = ui.measure_ui(&id_text).x + theme.metrics.padding * 0.5 * zoom;
+        let (id_rect, title_rect) = inner.split_right(id_width);
         ui.truncated_label(title_rect, &title, theme.palette.text, Align::Left);
+        ui.truncated_label(
+            id_rect,
+            &id_text,
+            theme.palette.text.with_alpha(0.55),
+            Align::Right,
+        );
 
         let inset = theme.metrics.padding * zoom;
         for port in &layout.outputs {
@@ -647,12 +658,14 @@ impl Canvas {
                 continue;
             }
             // An unconnected input shows what it will use: the value the
-            // node pins, or the socket's default.
-            let value = node
-                .params
-                .get(&port.socket)
-                .copied()
-                .or_else(|| definition.input(&port.socket).and_then(|s| s.default));
+            // node pins, or the socket's default — which on a generic
+            // socket is a scalar spread over whatever this instance
+            // resolved to, so it needs the resolved type to be a value at
+            // all (see `wxsl_core::node::Socket::default_for`).
+            let value = node.params.get(&port.socket).copied().or_else(|| {
+                let socket = definition.input(&port.socket)?;
+                socket.default_for(graph.effective_type(layout.id, socket)?)
+            });
             if let Some(value) = value {
                 let text = crate::widgets::value_summary(&value);
                 ui.small_label(row, &text, theme.palette.text_dim, Align::Right);
@@ -744,7 +757,7 @@ impl Canvas {
                         // Re-plugging an input replaces whatever was there,
                         // which is what dropping a link on a busy input
                         // obviously means.
-                        let previous = graph.disconnect(&input);
+                        let previous = graph.disconnect(registry, &input);
                         match graph.connect(registry, output.clone(), input.clone()) {
                             Ok(()) => {
                                 changed = true;
@@ -773,7 +786,7 @@ impl Canvas {
                     // up by its far end, so a link can be moved rather than
                     // deleted and redrawn.
                     PortKind::Input if port.connected => {
-                        if let Some(edge) = graph.disconnect(&socket) {
+                        if let Some(edge) = graph.disconnect(registry, &socket) {
                             changed = true;
                             self.interaction = Interaction::DraggingLink {
                                 from: edge.from,
@@ -918,13 +931,8 @@ pub fn layout_graph(
             let definition = registry.get(&node.def)?;
             let position = Vec2::from_array(node.position.unwrap_or_default());
             let connected = |socket: &str| graph.edge_into(&SocketRef::new(id, socket)).is_some();
-            let display_ty = |socket: &Socket| {
-                socket
-                    .generic
-                    .as_ref()
-                    .and_then(|param| graph.generic_type(id, param.as_str()))
-                    .unwrap_or(socket.ty)
-            };
+            let display_ty =
+                |socket: &Socket| graph.effective_type(id, socket).unwrap_or(socket.ty);
             let queries = SocketQueries {
                 connected: &connected,
                 display_ty: &display_ty,
@@ -1019,8 +1027,19 @@ pub fn auto_layout(graph: &mut Graph, registry: &NodeRegistry) {
 }
 
 /// Place a new node so that its top-left corner is where the user pointed.
-pub fn place_new_node(graph: &mut Graph, definition: &str, at: Vec2) -> NodeId {
-    graph.add(Node::new(definition).with_position(at.to_array()))
+///
+/// [`Graph::add_resolved`] rather than `Graph::add`: a node dropped on the
+/// canvas should be complete — its generic parameters at their default
+/// types, its inputs holding a value of that type — rather than arrive
+/// reporting an unresolved parameter and showing sockets with nothing to
+/// edit. Connecting anything retypes it from there.
+pub fn place_new_node(
+    graph: &mut Graph,
+    registry: &NodeRegistry,
+    definition: &str,
+    at: Vec2,
+) -> NodeId {
+    graph.add_resolved(registry, Node::new(definition).with_position(at.to_array()))
 }
 
 #[cfg(test)]

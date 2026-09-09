@@ -63,26 +63,34 @@
 //! | [`palette`] | searching the node library |
 //! | [`preview`] | the offscreen material preview, and the compiled WXSL and WGSL |
 //! | [`ui`] | the immediate-mode layer: identity, interaction, widgets |
-//! | [`widgets`] | editors for the values a socket can carry |
+//! | [`widgets`] | editors for the values a socket can carry, and the colour picker |
 //! | [`theme`] | colours and metrics |
 //!
 //! # `wxsl-core` still knows nothing about how it looks
 //!
-//! Which ADR 0004 required and this crate keeps: a node definition carries no
-//! colour, no icon and no widget kind. A socket's port colour comes from its
-//! [`ValueType`](wxsl_core::node::ValueType), a node's title colour from its
-//! category string, and which widget an input gets from its type — all of it
-//! derived from the interface a node already describes. Node *positions* are
-//! the one exception, and they were always part of the node format
+//! Which ADR 0004 required and this crate keeps: a node *definition* carries
+//! no colour, no icon and no widget kind. A socket's port colour comes from
+//! its [`ValueType`](wxsl_core::node::ValueType), and which widget an input
+//! gets comes from its type — derived from the interface a node already
+//! describes.
+//!
+//! What a node *instance* carries is a different question, and three answers
+//! live in the node format because none of them can be derived from
+//! anything: its position
 //! ([`Node::position`](wxsl_core::graph::Node::position)), because a layout
-//! that does not survive a save is not a layout.
+//! that does not survive a save is not a layout, and its name and colour
+//! ([`Node::label`](wxsl_core::graph::Node::label),
+//! [`Node::color`](wxsl_core::graph::Node::color)), because what a part of a
+//! graph is *for* is something only its author knows
+//! ([ADR 0019](../../../docs/adr/0019-node-colour-and-name-are-instance-metadata.md)).
+//! Every node is the same colour until one says otherwise.
 //!
 //! # What the editor does not do
 //!
 //! Worth knowing before reaching for it: there is no undo history, no
 //! clipboard (that needs a platform dependency this crate does not have), no
-//! multi-graph tabs, and no box selection. Matrix parameters are shown but
-//! not editable. None of these are hard; they are simply not there yet.
+//! multi-graph tabs, and no box selection. None of these are hard; they are
+//! simply not there yet.
 
 #![warn(missing_docs)]
 

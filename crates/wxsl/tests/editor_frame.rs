@@ -230,15 +230,22 @@ fn editing_the_graph_recompiles_the_material() {
     let nodes_before = editor.graph().node_count();
 
     // Add a node the way the palette does, and check the recompile lands.
-    // `math.add` is generic (one node kind serving every float type instead
-    // of a separate `math.add.f32`/`.vec3f`/…), so it needs its type picked
-    // explicitly since nothing is connected to infer it from.
+    // `math.add` is generic (one node kind serving every type instead of a
+    // separate `math.add.f32`/`.vec3f`/…), so it needs its type picked
+    // explicitly since nothing is connected to infer it from — and its two
+    // operands resolve independently, so picking `A` seeds `B` to match
+    // rather than leaving the node half-typed.
     let registry = editor.registry().clone();
     let added = editor.graph_mut().add_node("math.add");
     editor
         .graph_mut()
-        .set_generic(&registry, added, "T", ValueType::Vec3)
-        .expect("vec3f is one of T's allowed types");
+        .set_generic(&registry, added, "A", ValueType::Vec3)
+        .expect("vec3f is one of A's allowed types");
+    assert_eq!(
+        editor.graph().generic_type(added, "B"),
+        Some(ValueType::Vec3),
+        "picking one operand's type should carry to the other"
+    );
     assert_eq!(editor.graph().node_count(), nodes_before + 1);
     frame(&gpu, &mut editor, &target, 0.032);
 
@@ -253,7 +260,7 @@ fn editing_the_graph_recompiles_the_material() {
     assert!(editor.is_modified(), "the document changed");
 
     // Removing it again leaves the graph as it was.
-    editor.graph_mut().remove_node(added);
+    editor.graph_mut().remove_node(&registry, added);
     frame(&gpu, &mut editor, &target, 0.048);
     assert_eq!(editor.graph().node_count(), nodes_before);
     assert!(editor.preview().status().is_ok());

@@ -11,10 +11,14 @@ import package::math::smootherstep::smootherstep;
 fn value_noise3(p: vec3f) -> f32 {
     let cell = floor(p);
     let local = p - cell;
+    // `smootherstep` is a template; the type argument is written out
+    // because none of these arguments makes it evident (an unsuffixed
+    // literal and a swizzle are exactly the cases ADR 0012 declines to
+    // guess at).
     let fade = vec3f(
-        smootherstep(0.0, 1.0, local.x),
-        smootherstep(0.0, 1.0, local.y),
-        smootherstep(0.0, 1.0, local.z),
+        smootherstep<f32>(0.0, 1.0, local.x),
+        smootherstep<f32>(0.0, 1.0, local.y),
+        smootherstep<f32>(0.0, 1.0, local.z),
     );
 
     let c000 = hash13(cell + vec3f(0.0, 0.0, 0.0));

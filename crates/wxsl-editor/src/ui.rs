@@ -237,6 +237,7 @@ pub struct UiState {
     editing: Option<TextEdit>,
     scroll: HashMap<Id, Vec2>,
     drag_origin: HashMap<Id, f32>,
+    color_picker: Option<Id>,
 }
 
 impl UiState {
@@ -265,6 +266,7 @@ impl UiState {
             editing: None,
             scroll: HashMap::new(),
             drag_origin: HashMap::new(),
+            color_picker: None,
         }
     }
 
@@ -293,6 +295,23 @@ impl UiState {
     /// Whether a text field is being edited.
     pub fn is_editing(&self) -> bool {
         self.editing.is_some()
+    }
+
+    /// Whether the colour swatch `id` has its picker showing.
+    ///
+    /// One at a time: a picker is several rows tall, and two open at once in
+    /// a side panel is more scrolling than either is worth.
+    pub fn color_picker_open(&self, id: Id) -> bool {
+        self.color_picker == Some(id)
+    }
+
+    /// Show `id`'s colour picker, or hide it if it is already showing.
+    pub fn toggle_color_picker(&mut self, id: Id) {
+        self.color_picker = if self.color_picker == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
     }
 
     /// Hit-test and update interaction state for a widget.
@@ -429,6 +448,16 @@ impl<'a> Ui<'a> {
     /// [`UiState::interact`], so it can be exercised without a `wgpu::Device`.
     pub fn interact(&mut self, id: Id, rect: Rect) -> Response {
         self.state.interact(self.input, id, rect)
+    }
+
+    /// Whether the colour swatch `id` has its picker showing.
+    pub fn color_picker_open(&self, id: Id) -> bool {
+        self.state.color_picker_open(id)
+    }
+
+    /// Show `id`'s colour picker, or hide it if it is already showing.
+    pub fn toggle_color_picker(&mut self, id: Id) {
+        self.state.toggle_color_picker(id);
     }
 
     // -- text ---------------------------------------------------------------

@@ -6,8 +6,8 @@
 //! never heard of appears in it with no editor change (ADR 0004).
 //!
 //! Matching is a scored substring search rather than a fuzzy matcher: with
-//! ids like `math.add.vec3f` the useful query is a prefix or a fragment
-//! ("add", "vec3", "pbr"), and a scored search puts an exact label first,
+//! ids like `lighting.pbr_direct` the useful query is a prefix or a fragment
+//! ("add", "noise", "pbr"), and a scored search puts an exact label first,
 //! which is the behaviour a user who knows the name expects.
 
 use wxsl_core::node::NodeRegistry;

@@ -9,7 +9,9 @@
 //!  ├───────────┬──────────────────────────────┬──────────────────┤
 //!  │ palette   │ node canvas                  │ preview          │
 //!  │ (search,  │ (pan, zoom, link, unlink,    │ selected node    │
-//!  │  category)│  move, delete)               │ macro variables  │
+//!  │  category)│  move, delete)               │ (name, colour,   │
+//!  │           │                              │  types, values)  │
+//!  │           │                              │ macro variables  │
 //!  ├───────────┴──────────────────────────────┴──────────────────┤
 //!  │ WXSL │ WGSL │ problems                                      │
 //!  ├─────────────────────────────────────────────────────────────┤
@@ -27,7 +29,7 @@ use glam::Vec2;
 use wxsl_core::abi;
 use wxsl_core::graph::{Graph, NodeId};
 use wxsl_core::macros::MacroDef;
-use wxsl_core::node::NodeRegistry;
+use wxsl_core::node::{NodeRegistry, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, UiEvent};
 use wxsl_render::ui::text::{GlyphCache, TextOptions};
@@ -512,7 +514,7 @@ impl Editor {
                 &self.canvas.view,
                 self.picker.target,
             );
-            let id = canvas::place_new_node(&mut self.graph, &definition, at);
+            let id = canvas::place_new_node(&mut self.graph, &self.registry, &definition, at);
             self.canvas.selection = vec![id];
             self.picker.close();
             self.ui.clear_focus();
@@ -522,6 +524,9 @@ impl Editor {
         }
         if requests.changed_graph {
             self.dirty = true;
+            self.modified = true;
+        }
+        if requests.changed_metadata {
             self.modified = true;
         }
         if let Some(path) = requests.path {
@@ -582,6 +587,10 @@ struct Requests {
     /// that follows the pointer.
     dragging_definition: Option<String>,
     changed_graph: bool,
+    /// Something worth saving changed that the shader does not depend on —
+    /// a node's name or its colour. Marks the document modified without
+    /// paying for a recompile.
+    changed_metadata: bool,
     toggle_spin: bool,
     toggle_theme: bool,
     /// Turn the preview by this many pixels of drag.
@@ -860,6 +869,15 @@ fn palette_panel(
 /// library has seven inputs and the macro list grows with the graph — and a
 /// panel that silently runs out of room is a panel whose bottom half nobody
 /// knows exists.
+///
+/// The scroll area needs its content height *before* anything is drawn, so
+/// every row's height is computed twice: once to reserve it and once as it
+/// is drawn. Two of them are not a fixed row — a type picker wraps onto as
+/// many rows as its labels need, and a value editor grows for a matrix's
+/// grid or an open colour picker — so both passes go through the same
+/// helpers ([`picker_grid`], [`widgets::value_editor_height`]) and the same
+/// widget ids ([`param_widget_id`], [`node_color_id`]). Reserving one height
+/// and drawing another is how a panel ends up with rows that overlap.
 fn inspector_panel(
     ui: &mut Ui<'_>,
     rect: Rect,
@@ -943,11 +961,38 @@ fn inspector_panel(
         }
         _ => 0.0,
     };
+    // The widest type name a picker can offer, so the grid below wraps at a
+    // width that actually fits its labels rather than a guessed column count.
+    let button_width = ui.measure_ui(ValueType::Mat3.wxsl_type()).x + metrics.padding * 2.0;
     match &selected_definition {
         Some(definition) => {
-            content += row * 3.0 + doc_height + metrics.row_gap;
-            content += row * definition.generics.len() as f32;
-            content += (small_row + row) * definition.inputs.len() as f32;
+            // name, definition, category, then the colour row.
+            content += row * 4.0 + doc_height + metrics.row_gap;
+            if let Some(id) = selected {
+                if ui.color_picker_open(node_color_id(id)) {
+                    content += metrics.row_gap + widgets::color_picker_height(&theme, width, false);
+                }
+            }
+            for param in &definition.generics {
+                let (_, rows) =
+                    picker_grid(param.allowed.len(), width, metrics.row_gap, button_width);
+                content += small_row + row * rows as f32;
+            }
+            for socket in &definition.inputs {
+                // How tall a value's editor is depends on what the socket
+                // resolved to — a matrix is a grid of fields — and on
+                // whether its colour picker is open.
+                let editor = match selected.and_then(|id| graph.effective_type(id, socket)) {
+                    Some(ty) => widgets::value_editor_height(
+                        ui,
+                        param_widget_id(selected.expect("resolved implies selected"), socket),
+                        ty,
+                        width,
+                    ),
+                    None => metrics.row_height,
+                };
+                content += small_row + editor + metrics.row_gap;
+            }
         }
         None => content += row,
     }
@@ -957,6 +1002,9 @@ fn inspector_panel(
 
     let area = ui.scroll_area(Id::new("inspector.scroll"), body, Vec2::new(width, content));
     let mut cursor = area.origin().y;
+    // The row the type-picker grid is currently filling; a new one is taken
+    // whenever a row is full.
+    let mut picker_row = Rect::NOTHING;
     let mut next = |height: f32| {
         let rect = Rect::from_min_size(Vec2::new(body.min.x, cursor), Vec2::new(width, height));
         cursor += height + metrics.row_gap;
@@ -966,12 +1014,34 @@ fn inspector_panel(
     // -- the selected node ---------------------------------------------
     match (selected, selected_definition) {
         (Some(id), Some(definition)) => {
-            ui.label(
-                next(metrics.row_height),
-                &definition.label,
-                theme.palette.text,
-                Align::Left,
-            );
+            // The node's own name, editable: one generic node kind stands
+            // in for what used to be four, so "Add" on its own says less
+            // than it did, and what a node is *for* ("noise scale",
+            // "metal patches") is the label a reader of the graph wants.
+            // Clearing it back to the definition's own label drops the
+            // override.
+            let name_row = next(metrics.row_height);
+            let (name_label, name_field) = name_row.split_left(width * 0.3);
+            ui.small_label(name_label, "name", theme.palette.text_dim, Align::Left);
+            let mut name = graph
+                .node(id)
+                .and_then(|node| node.label.clone())
+                .unwrap_or_else(|| definition.label.clone());
+            if ui
+                .text_field(
+                    Id::new("inspector.name").with(u64::from(id.0)),
+                    name_field,
+                    &mut name,
+                )
+                .changed
+            {
+                if let Some(node) = graph.node_mut(id) {
+                    let trimmed = name.trim();
+                    node.label = (!trimmed.is_empty() && trimmed != definition.label)
+                        .then(|| trimmed.to_string());
+                }
+                requests.changed_metadata = true;
+            }
             widgets::field_row(ui, next(metrics.row_height), "definition", &definition.id);
             widgets::field_row(
                 ui,
@@ -989,6 +1059,63 @@ fn inspector_panel(
                     .text(&layout, doc_rect.min, theme.palette.text_dim);
             }
 
+            // The node's own colour. A property of this node rather than of
+            // its kind (see `wxsl_core::graph::Node::color`), so it can mark
+            // what a part of the graph is *for* — the default is the same
+            // for every node precisely so that a colour means something when
+            // an author sets one.
+            let color_row = next(metrics.row_height);
+            let (color_label, color_rest) = color_row.split_left(width * 0.3);
+            ui.small_label(color_label, "colour", theme.palette.text_dim, Align::Left);
+            let picker_id = node_color_id(id);
+            let current = graph.node(id).and_then(|node| node.color);
+            let reset_width = ui.measure_ui("default").x + metrics.padding * 2.0;
+            let (reset_rect, swatch_rect) = color_rest.split_right(reset_width);
+            let swatch_rect = Rect::from_min_max(
+                swatch_rect.min,
+                swatch_rect.max - Vec2::new(metrics.row_gap, 0.0),
+            );
+
+            let shown = theme.node_color(graph.node(id).expect("selected node exists"));
+            ui.draw().round_rect(swatch_rect, metrics.radius, shown);
+            let swatch = ui.interact(picker_id.with(1), swatch_rect);
+            if swatch.clicked {
+                ui.toggle_color_picker(picker_id);
+            }
+            ui.draw().round_rect_border(
+                swatch_rect,
+                metrics.radius,
+                metrics.outline_width * if swatch.hovered { 2.0 } else { 1.0 },
+                if swatch.hovered {
+                    theme.palette.selection
+                } else {
+                    theme.palette.outline
+                },
+            );
+            if ui
+                .button_colored(picker_id.with(2), reset_rect, "default", None)
+                .clicked
+                && current.is_some()
+            {
+                if let Some(node) = graph.node_mut(id) {
+                    node.color = None;
+                }
+                requests.changed_metadata = true;
+            }
+            if ui.color_picker_open(picker_id) {
+                let rect = next(widgets::color_picker_height(&theme, width, false));
+                // Starting from whatever is on screen, so opening the picker
+                // on a node that never had a colour picks up where the
+                // default left off instead of jumping to black.
+                let mut components = current.unwrap_or([shown.r, shown.g, shown.b]).to_vec();
+                if widgets::color_picker(ui, picker_id.with(3), rect, &mut components) {
+                    if let Some(node) = graph.node_mut(id) {
+                        node.color = Some([components[0], components[1], components[2]]);
+                    }
+                    requests.changed_metadata = true;
+                }
+            }
+
             // A generic node (one node kind serving every type it allows,
             // e.g. `math.add` instead of a separate `math.add.f32`/`.vec3f`/…
             // — see `wxsl_core::node::GenericParam`) needs its type picked
@@ -997,17 +1124,18 @@ fn inspector_panel(
             // for changing it later — which drops whatever wiring no longer
             // fits, exactly as switching from `math.add.f32` to
             // `math.add.vec3f` always would have.
+            //
+            // A node with two parameters (`math.multiply`'s `A` and `B`,
+            // whose operands WGSL lets differ) gets one picker each.
             for param in &definition.generics {
                 let param_name = param.name.as_str();
                 let resolved = graph.generic_type(id, param_name);
-                let row = next(metrics.row_height);
-                let (label_rect, buttons_rect) = row.split_left(metrics.side_panel_width * 0.3);
                 let label = match resolved {
                     Some(ty) => format!("{param_name}: {ty}"),
                     None => format!("{param_name}: ?"),
                 };
-                ui.truncated_label(
-                    label_rect,
+                ui.small_label(
+                    next(metrics.small_text_size * 1.4),
                     &label,
                     if resolved.is_some() {
                         theme.palette.text_dim
@@ -1017,17 +1145,20 @@ fn inspector_panel(
                     Align::Left,
                 );
                 let gap = metrics.row_gap;
-                // `GenericParam::new` requires at least one allowed type, so
-                // `len() - 1` never underflows.
-                let button_width = (buttons_rect.width() - gap * (param.allowed.len() - 1) as f32)
-                    / param.allowed.len() as f32;
+                let (columns, _) = picker_grid(param.allowed.len(), width, gap, button_width);
                 for (index, &candidate) in param.allowed.iter().enumerate() {
+                    let column = index % columns;
+                    if column == 0 {
+                        picker_row = next(metrics.row_height);
+                    }
+                    let cell_width =
+                        (picker_row.width() - gap * (columns - 1) as f32) / columns as f32;
                     let button_rect = Rect::from_min_size(
                         Vec2::new(
-                            buttons_rect.min.x + (button_width + gap) * index as f32,
-                            buttons_rect.min.y,
+                            picker_row.min.x + (cell_width + gap) * column as f32,
+                            picker_row.min.y,
                         ),
-                        Vec2::new(button_width, buttons_rect.height()),
+                        Vec2::new(cell_width, picker_row.height()),
                     );
                     let active = resolved == Some(candidate);
                     let fill = active.then_some(theme.palette.accent);
@@ -1063,18 +1194,17 @@ fn inspector_panel(
                 let name = socket.name.as_str();
                 let reference = wxsl_core::graph::SocketRef::new(id, name);
                 let connected = graph.edge_into(&reference).is_some();
+                // `socket.ty` is only a placeholder on a generic or
+                // combined socket (see `wxsl_core::node::Socket::generic`/
+                // `Socket::combine`); this instance's resolution is what the
+                // label should actually say, and what a splat default has to
+                // be spread over before it is a value at all.
+                let resolved_ty = graph.effective_type(id, socket);
+                let shown_ty = resolved_ty.unwrap_or(socket.ty);
                 let value = graph
                     .node(id)
                     .and_then(|node| node.params.get(name).copied())
-                    .or(socket.default);
-                // `socket.ty` is only a placeholder on a generic socket (see
-                // `wxsl_core::node::Socket::generic`); this instance's
-                // resolution is what the label should actually say.
-                let shown_ty = socket
-                    .generic
-                    .as_ref()
-                    .and_then(|param| graph.generic_type(id, param.as_str()))
-                    .unwrap_or(socket.ty);
+                    .or_else(|| resolved_ty.and_then(|ty| socket.default_for(ty)));
                 ui.small_label(
                     next(metrics.small_text_size * 1.4),
                     &format!(
@@ -1084,7 +1214,11 @@ fn inspector_panel(
                     theme.palette.text_dim,
                     Align::Left,
                 );
-                let editor_rect = next(metrics.row_height);
+                let widget_id = param_widget_id(id, socket);
+                let editor_rect = next(match resolved_ty {
+                    Some(ty) => widgets::value_editor_height(ui, widget_id, ty, width),
+                    None => metrics.row_height,
+                });
                 if connected {
                     ui.draw().round_rect(
                         editor_rect,
@@ -1099,18 +1233,21 @@ fn inspector_panel(
                     );
                     continue;
                 }
-                let Some(mut value) = value else {
+                // A generic socket has no static default, so before this
+                // instance resolved its type there is nothing to edit; once
+                // it has, an editor starting from that type's zero is what
+                // makes the value typeable at all. Nothing is pinned until
+                // the user actually edits it, so validation still reports
+                // the input as unfed in the meantime.
+                let Some(mut value) = value.or_else(|| resolved_ty.map(|ty| ty.zero())) else {
                     ui.small_label(
                         editor_rect,
-                        "no default — connect something",
+                        "pick a type above, or connect something",
                         theme.palette.warning,
                         Align::Left,
                     );
                     continue;
                 };
-                let widget_id = Id::new("inspector.param")
-                    .with(u64::from(id.0))
-                    .with(Id::new(name).0);
                 if widgets::value_editor(ui, widget_id, editor_rect, &mut value) {
                     graph.set_param(id, name, value);
                     requests.changed_graph = true;
@@ -1255,6 +1392,33 @@ fn status_bar(
         message.to_string()
     };
     ui.small_label(inner, &right, color, Align::Right);
+}
+
+/// The widget id an input's value editor takes, so the pass that *reserves*
+/// its height and the pass that draws it agree — an open colour picker makes
+/// the row taller, and the height comes from the same id the editor reads.
+fn param_widget_id(node: NodeId, socket: &wxsl_core::node::Socket) -> Id {
+    Id::new("inspector.param")
+        .with(u64::from(node.0))
+        .with(Id::new(socket.name.as_str()).0)
+}
+
+/// The id of a node's own colour swatch, whose picker is opened the same way
+/// a socket value's is.
+fn node_color_id(node: NodeId) -> Id {
+    Id::new("inspector.node_color").with(u64::from(node.0))
+}
+
+/// How many columns and rows a type-picker's buttons take at `width`.
+///
+/// A generic parameter can allow anything from one type to every operand
+/// type WGSL has, and `mat3x3f` needs several times the width of `f32`, so
+/// the buttons wrap onto as many rows as they need instead of being squeezed
+/// into one unreadable strip.
+fn picker_grid(count: usize, width: f32, gap: f32, button: f32) -> (usize, usize) {
+    let fits = ((width + gap) / (button + gap)).floor().max(1.0) as usize;
+    let columns = fits.min(count.max(1));
+    (columns, count.div_ceil(columns))
 }
 
 #[cfg(test)]

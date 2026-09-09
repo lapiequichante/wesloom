@@ -4,34 +4,15 @@
 // through everything downstream and shows up as black or missing pixels far
 // from the node that caused it.
 //
-// One body per width, because WGSL has no user-function overloading. The
-// `_<type>` suffix is the convention for a function the node registry
-// instantiates per type — `registry.rs` builds these names in one place, and
-// `shaders.rs` asserts each one exists. The guard is a scalar `if` rather
-// than the `select` the range operators use, and legitimately so: `dot(v, v)`
-// is a scalar however wide `v` is, so there is nothing per-component to
-// decide.
+// One template, instantiated per width by the compiler (ADR 0012), rather
+// than one body per width: `dot(v, v)` is a scalar however wide `v` is, so
+// the guard is a scalar `if` that needs no reshaping, and `T(0.0)` builds the
+// zero of whatever `T` turns out to be.
 
-fn safe_normalize_vec2f(v: vec2f) -> vec2f {
+fn safe_normalize<T: vec2f | vec3f | vec4f>(v: T) -> T {
     let length_squared = dot(v, v);
     if length_squared < 1e-12 {
-        return vec2f(0.0);
-    }
-    return v * inverseSqrt(length_squared);
-}
-
-fn safe_normalize_vec3f(v: vec3f) -> vec3f {
-    let length_squared = dot(v, v);
-    if length_squared < 1e-12 {
-        return vec3f(0.0);
-    }
-    return v * inverseSqrt(length_squared);
-}
-
-fn safe_normalize_vec4f(v: vec4f) -> vec4f {
-    let length_squared = dot(v, v);
-    if length_squared < 1e-12 {
-        return vec4f(0.0);
+        return T(0.0);
     }
     return v * inverseSqrt(length_squared);
 }

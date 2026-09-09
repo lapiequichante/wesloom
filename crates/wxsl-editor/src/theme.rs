@@ -12,6 +12,7 @@
 //! [`wxsl_render::ui::Color`]. The UI pass converts nothing, which is what
 //! makes a hex value from a palette land on screen as that colour.
 
+use wxsl_core::graph::Node;
 use wxsl_render::ui::draw::Rect;
 use wxsl_render::ui::Color;
 
@@ -335,23 +336,21 @@ impl Theme {
         }
     }
 
-    /// The colour a node's category is drawn in, for its title strip.
+    /// The colour a node's title strip is drawn in, unless the node itself
+    /// says otherwise ([`wxsl_core::graph::Node::color`]).
     ///
-    /// Also derived from data the core model already has — the category
-    /// string — rather than from a colour stored per definition.
-    pub fn category_color(&self, category: &str) -> Color {
-        match category {
-            "input" => Color::rgb(0.32, 0.55, 0.42),
-            "output" => Color::rgb(0.55, 0.33, 0.38),
-            "math" => Color::rgb(0.30, 0.40, 0.58),
-            "color" => Color::rgb(0.52, 0.38, 0.58),
-            "space" => Color::rgb(0.33, 0.47, 0.55),
-            "lighting" => Color::rgb(0.58, 0.48, 0.30),
-            "generative" => Color::rgb(0.40, 0.52, 0.35),
-            "sdf" => Color::rgb(0.48, 0.40, 0.55),
-            "animation" => Color::rgb(0.55, 0.45, 0.35),
-            "logic" => Color::rgb(0.45, 0.35, 0.50),
-            _ => self.palette.node_header,
+    /// One colour for every kind of node, deliberately. Colouring by
+    /// category sounds informative and is not: the category is already
+    /// written in the inspector and readable off the id, and spending the
+    /// canvas's strongest visual channel on it leaves nothing to say the
+    /// thing a reader actually wants marked — which part of this graph is
+    /// the roughness, which part is the emissive. That is per *node* and
+    /// only the author knows it, so the default is uniform and the colour
+    /// is theirs to set.
+    pub fn node_color(&self, node: &Node) -> Color {
+        match node.color {
+            Some([r, g, b]) => Color::rgb(r, g, b),
+            None => self.palette.node_header,
         }
     }
 
@@ -407,11 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_category_falls_back_rather_than_panicking() {
+    fn a_node_is_the_default_colour_until_it_says_otherwise() {
         let theme = Theme::default();
         assert_eq!(
-            theme.category_color("something new"),
-            theme.palette.node_header
+            theme.node_color(&Node::new("math.add")),
+            theme.palette.node_header,
+            "every kind of node starts the same colour"
+        );
+        assert_eq!(
+            theme.node_color(&Node::new("math.add").with_color([0.2, 0.4, 0.6])),
+            Color::rgb(0.2, 0.4, 0.6)
         );
     }
 
