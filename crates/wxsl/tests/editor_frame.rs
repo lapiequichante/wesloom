@@ -12,6 +12,7 @@
 
 use glam::Vec2;
 use wxsl::core::graph::Graph;
+use wxsl::core::node::ValueType;
 use wxsl::editor::{Editor, EditorConfig};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::ui::input::{Key, MouseButton, UiEvent};
@@ -229,7 +230,15 @@ fn editing_the_graph_recompiles_the_material() {
     let nodes_before = editor.graph().node_count();
 
     // Add a node the way the palette does, and check the recompile lands.
-    let added = editor.graph_mut().add_node("math.add.vec3f");
+    // `math.add` is generic (one node kind serving every float type instead
+    // of a separate `math.add.f32`/`.vec3f`/…), so it needs its type picked
+    // explicitly since nothing is connected to infer it from.
+    let registry = editor.registry().clone();
+    let added = editor.graph_mut().add_node("math.add");
+    editor
+        .graph_mut()
+        .set_generic(&registry, added, "T", ValueType::Vec3)
+        .expect("vec3f is one of T's allowed types");
     assert_eq!(editor.graph().node_count(), nodes_before + 1);
     frame(&gpu, &mut editor, &target, 0.032);
 
@@ -341,5 +350,87 @@ fn switching_render_path_and_mesh_keeps_the_preview_compiling() {
     assert!(
         deferred.contains("pack_gbuffer") || deferred.contains("GBuffer"),
         "the deferred material should write a G-buffer"
+    );
+}
+
+#[test]
+fn dragging_a_palette_row_onto_the_canvas_adds_a_node_there() {
+    // The bug this pins down: clicking (and so dragging) a palette row did
+    // nothing at all, because a premature `active` reset ate every release
+    // before the widget that owned it ever saw it (see
+    // `wxsl_editor::ui::Interaction`). This drives the exact gesture a user
+    // does — press on a row, drag onto the canvas, release — through the
+    // real `Editor`, frame by frame, the way `App::window_event` really
+    // delivers it.
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let nodes_before = editor.graph().node_count();
+
+    // The palette occupies the left strip and the canvas the middle, but
+    // exactly where the first row falls depends on font metrics (the
+    // category-button row wraps based on measured text width) — so this
+    // probes a vertical strip of the palette for a row, rather than
+    // hard-coding one pixel position that would silently test nothing if a
+    // future layout tweak shifted it by a few pixels.
+    let canvas_center = Vec2::new(700.0, 400.0);
+    let mut placed = false;
+    for row in 0..20 {
+        let press_point = Vec2::new(120.0, 90.0 + row as f64 as f32 * 16.0);
+
+        editor.handle_event(UiEvent::PointerMoved(press_point));
+        frame(&gpu, &mut editor, &target, 0.1 + row as f64 * 0.05);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, &mut editor, &target, 0.11 + row as f64 * 0.05);
+
+        // Drag onto the canvas.
+        editor.handle_event(UiEvent::PointerMoved(canvas_center));
+        frame(&gpu, &mut editor, &target, 0.12 + row as f64 * 0.05);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, &mut editor, &target, 0.13 + row as f64 * 0.05);
+
+        if editor.graph().node_count() == nodes_before + 1 {
+            placed = true;
+            break;
+        }
+        // Nothing was under the press point (a gap between rows, or past
+        // the last one): harmless, and the next iteration tries lower.
+        assert_eq!(
+            editor.graph().node_count(),
+            nodes_before,
+            "a node appeared without a row under the press point"
+        );
+    }
+
+    assert!(
+        placed,
+        "no row in the probed strip produced a node; the palette layout \
+         may have moved outside the range this test scans"
+    );
+    let added = editor
+        .selection()
+        .first()
+        .copied()
+        .expect("the newly dropped node is selected");
+    let position = editor
+        .graph()
+        .node(added)
+        .and_then(|node| node.position)
+        .expect("a dropped node is placed, not left without a position");
+    let dropped_at = editor
+        .canvas_view()
+        .to_graph(editor.canvas_rect(), canvas_center);
+    let distance = (Vec2::from(position) - dropped_at).length();
+    assert!(
+        distance < 1.0,
+        "the node landed at {position:?}, expected close to {dropped_at:?}"
     );
 }

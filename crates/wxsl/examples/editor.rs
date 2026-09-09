@@ -68,7 +68,7 @@ OPTIONS:
     --graph <FILE>        Graph to open, in the node format (default: the shipped demo)
     --font <FILE>         Proportional font for the interface
     --mono <FILE>         Monospaced font for the code panels
-    --msdf <cpu|gpu>      Which MSDF backend generates glyphs (default: cpu)
+    --msdf <cpu|gpu>      Which MSDF backend generates glyphs (default: gpu)
     --size <WIDTHxHEIGHT> Window size (default: 1600x900)
     --atlas <PIXELS>      Glyph atlas side length (default: 2048)
     --list-fonts          Print the fonts that would be used, and exit
@@ -256,7 +256,10 @@ impl Default for Options {
             graph: None,
             ui_font: None,
             mono_font: None,
-            msdf: MsdfBackend::Cpu,
+            // Matches `EditorConfig::new`'s own default: the editor always
+            // has a device, and the compute pass is noticeably faster once
+            // a batch of glyphs is more than a handful.
+            msdf: MsdfBackend::Gpu,
             size: (1600, 900),
             atlas: 2048,
             list_fonts: false,

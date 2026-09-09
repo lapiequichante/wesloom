@@ -23,7 +23,8 @@ use std::fmt;
 
 use crate::error::{Direction, GraphError, GraphErrors};
 use crate::macros::{MacroDef, MacroSet, MacroValue};
-use crate::node::{NodeDefinition, NodeRegistry, Value};
+use crate::node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType};
+use crate::wxsl::WxslIdent;
 
 /// Identifier of a node within one graph.
 ///
@@ -91,6 +92,16 @@ pub struct Node {
         serde(default, skip_serializing_if = "BTreeMap::is_empty")
     )]
     pub params: BTreeMap<String, Value>,
+    /// Resolved concrete type for each generic parameter this node's
+    /// definition declares, by parameter name. Empty for a node whose
+    /// definition has no [`crate::node::GenericParam`]s. A declared
+    /// parameter missing here means this instance has not resolved it yet —
+    /// see [`crate::node::GenericParam`] and [`Graph::set_generic`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "BTreeMap::is_empty")
+    )]
+    pub generics: BTreeMap<String, ValueType>,
     /// Optional display name, overriding the definition's label.
     #[cfg_attr(
         feature = "serde",
@@ -112,6 +123,7 @@ impl Node {
         Node {
             def: def.into(),
             params: BTreeMap::new(),
+            generics: BTreeMap::new(),
             label: None,
             position: None,
         }
@@ -262,6 +274,21 @@ impl Graph {
     /// Enforces the graph's invariants: both sockets must exist and have the
     /// same type, the input must be free, and the edge must not close a
     /// cycle. On error nothing is changed.
+    ///
+    /// A generic socket ([`crate::node::Socket::generic`]) is "the same
+    /// type" a little more flexibly: if this node instance has not yet
+    /// resolved that parameter, connecting adopts whichever type the other,
+    /// already-typed side has — this is what lets one node kind (e.g.
+    /// `math.add`, generic over `f32 | vec2f | vec3f | vec4f`) serve every
+    /// concrete type, one per instance, instead of `math.add.f32`,
+    /// `math.add.vec2f`, … as separate registry entries. Once resolved
+    /// (however that happened — an earlier connection, or an explicit
+    /// [`Graph::set_generic`]), a further mismatched connection is rejected
+    /// exactly like a mismatch between two ordinary concretely-typed
+    /// sockets. The resolution also propagates to anything this node was
+    /// already wired to through a socket sharing the same parameter, so a
+    /// chain of generic nodes connected before any of them touched a
+    /// concrete type resolves together, not one hop at a time.
     pub fn connect(
         &mut self,
         registry: &NodeRegistry,
@@ -269,31 +296,57 @@ impl Graph {
         to: SocketRef,
     ) -> Result<(), GraphError> {
         let from_def = self.definition(registry, from.node)?;
-        let produced = from_def
-            .output(&from.socket)
-            .ok_or_else(|| GraphError::UnknownSocket {
-                socket: from.clone(),
-                direction: Direction::Output,
-            })?
-            .ty;
+        let from_socket =
+            from_def
+                .output(&from.socket)
+                .ok_or_else(|| GraphError::UnknownSocket {
+                    socket: from.clone(),
+                    direction: Direction::Output,
+                })?;
+        let from_generic = from_socket.generic.clone();
+        let produced = self.effective_type(from.node, from_socket);
 
         let to_def = self.definition(registry, to.node)?;
-        let expected = to_def
+        let to_socket = to_def
             .input(&to.socket)
             .ok_or_else(|| GraphError::UnknownSocket {
                 socket: to.clone(),
                 direction: Direction::Input,
-            })?
-            .ty;
+            })?;
+        let to_generic = to_socket.generic.clone();
+        let expected = self.effective_type(to.node, to_socket);
 
-        if produced != expected {
-            return Err(GraphError::TypeMismatch {
-                from,
-                to,
-                produced,
-                expected,
-            });
+        /// Which side, if either, a successful connection should resolve.
+        enum Adopt {
+            Neither,
+            Source(WxslIdent),
+            Target(WxslIdent),
         }
+        let (agreed, adopt) = match (produced, expected) {
+            (Some(p), Some(e)) if p == e => (Some(p), Adopt::Neither),
+            (Some(produced), Some(expected)) => {
+                return Err(GraphError::TypeMismatch {
+                    from,
+                    to,
+                    produced,
+                    expected,
+                })
+            }
+            (Some(p), None) => (
+                Some(p),
+                Adopt::Target(to_generic.expect("an unresolved type implies a generic socket")),
+            ),
+            (None, Some(e)) => (
+                Some(e),
+                Adopt::Source(from_generic.expect("an unresolved type implies a generic socket")),
+            ),
+            // Neither side is resolved yet: nothing to check or adopt. The
+            // edge is still valid — a chain of unconstrained generics stays
+            // polymorphic until something anchors it; `Graph::validate`
+            // reports the whole chain as unresolved until it does.
+            (None, None) => (None, Adopt::Neither),
+        };
+
         if self.edge_into(&to).is_some() {
             return Err(GraphError::InputAlreadyConnected { socket: to });
         }
@@ -303,8 +356,228 @@ impl Graph {
             return Err(GraphError::WouldCycle { from, to });
         }
 
-        self.edges.push(Edge { from, to });
+        self.edges.push(Edge {
+            from: from.clone(),
+            to: to.clone(),
+        });
+        match adopt {
+            Adopt::Neither => {}
+            Adopt::Source(param) => self.resolve_generic(
+                registry,
+                from.node,
+                param.as_str(),
+                agreed.expect("adopting resolves from an already-agreed type"),
+            ),
+            Adopt::Target(param) => self.resolve_generic(
+                registry,
+                to.node,
+                param.as_str(),
+                agreed.expect("adopting resolves from an already-agreed type"),
+            ),
+        }
         Ok(())
+    }
+
+    /// A socket's effective type: `socket.ty` when it is not generic, or
+    /// this node instance's resolution of [`Socket::generic`] otherwise
+    /// (`None` if that parameter has not been resolved yet).
+    ///
+    /// `pub(crate)` rather than a free function on [`Socket`] because
+    /// resolution is per graph *node*, not something a bare `Socket` (shared
+    /// across every instance of its [`NodeDefinition`]) can answer alone.
+    /// `codegen` is the other caller within this crate: once
+    /// [`Graph::validate`] has passed, every generic socket codegen touches
+    /// resolves to `Some`.
+    pub(crate) fn effective_type(&self, node: NodeId, socket: &Socket) -> Option<ValueType> {
+        match &socket.generic {
+            None => Some(socket.ty),
+            Some(param) => self.nodes.get(&node)?.generics.get(param.as_str()).copied(),
+        }
+    }
+
+    /// Resolve `node`'s generic parameter `param` to `ty`, then propagate
+    /// that resolution across any edge already touching another socket that
+    /// shares it — on `node` itself (every one of its own sockets sharing
+    /// `param` sees the new value immediately, since resolution is stored
+    /// once per node) and, transitively, on whatever `node` was already
+    /// wired to through such a socket.
+    ///
+    /// Does not re-check those existing edges against the newly resolved
+    /// type: nothing could have connected an incompatible one to a socket
+    /// that was still unresolved in the first place — [`Graph::connect`]
+    /// only reaches this once every edge already touching `param` agrees —
+    /// so there is nothing to reconcile, only more of the graph to inform.
+    fn resolve_generic(
+        &mut self,
+        registry: &NodeRegistry,
+        node: NodeId,
+        param: &str,
+        ty: ValueType,
+    ) {
+        let mut queue = VecDeque::from([(node, param.to_string())]);
+        while let Some((node, param)) = queue.pop_front() {
+            let Some(current) = self.nodes.get(&node) else {
+                continue;
+            };
+            if current.generics.get(&param) == Some(&ty) {
+                continue; // already settled, by this call or an earlier one
+            }
+            let Some(def) = registry.get(&current.def).cloned() else {
+                continue;
+            };
+            self.nodes
+                .get_mut(&node)
+                .expect("looked up above")
+                .generics
+                .insert(param.clone(), ty);
+
+            let shares_param = |socket: &&Socket| {
+                socket
+                    .generic
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == param)
+            };
+            for socket in def.inputs.iter().filter(shares_param) {
+                let reference = SocketRef::new(node, socket.name.as_str());
+                if let Some(edge) = self.edge_into(&reference) {
+                    self.enqueue_generic_neighbor(
+                        registry,
+                        &edge.from,
+                        Direction::Output,
+                        &mut queue,
+                    );
+                }
+            }
+            for socket in def.outputs.iter().filter(shares_param) {
+                for edge in self
+                    .edges_from(node)
+                    .filter(|e| e.from.socket == socket.name.as_str())
+                {
+                    let to = edge.to.clone();
+                    self.enqueue_generic_neighbor(registry, &to, Direction::Input, &mut queue);
+                }
+            }
+        }
+    }
+
+    /// If `socket` (on the side named by `direction`) is itself generic,
+    /// queue its `(node, parameter)` for [`Graph::resolve_generic`] to visit.
+    fn enqueue_generic_neighbor(
+        &self,
+        registry: &NodeRegistry,
+        socket: &SocketRef,
+        direction: Direction,
+        queue: &mut VecDeque<(NodeId, String)>,
+    ) {
+        let Ok(def) = self.definition(registry, socket.node) else {
+            return;
+        };
+        let found = match direction {
+            Direction::Input => def.input(&socket.socket),
+            Direction::Output => def.output(&socket.socket),
+        };
+        if let Some(param) = found.and_then(|s| s.generic.as_ref()) {
+            queue.push_back((socket.node, param.as_str().to_string()));
+        }
+    }
+
+    /// Explicitly resolve `node`'s generic parameter `param` to `ty`.
+    ///
+    /// For a node nothing has connected yet (so [`Graph::connect`] never got
+    /// a chance to adopt a type for it), or to change what an already-wired
+    /// one resolved to. Repinning to a type incompatible with an edge
+    /// already touching a socket that shares `param` **disconnects that
+    /// edge** rather than rejecting the repin outright — changing what a
+    /// node is supposed to invalidate wiring that no longer fits, the same
+    /// way it always would have if `math.add.f32` and `math.add.vec3f` were
+    /// still two different node kinds.
+    ///
+    /// Returns the edges that were disconnected as a result, so a caller
+    /// (the editor) can report it rather than have wiring vanish silently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::UnknownDefinition`]/[`GraphError::UnknownNode`]
+    /// for a bad `node`, or [`GraphError::InvalidGenericType`] if `param`
+    /// does not declare `ty` as one of its allowed types (including if
+    /// `param` is not a generic parameter this node's definition declares
+    /// at all, reported with an empty allowed list).
+    pub fn set_generic(
+        &mut self,
+        registry: &NodeRegistry,
+        node: NodeId,
+        param: &str,
+        ty: ValueType,
+    ) -> Result<Vec<Edge>, GraphError> {
+        let def = self.definition(registry, node)?.clone();
+        let allowed = def
+            .generic(param)
+            .map(|declared| declared.allowed.clone())
+            .unwrap_or_default();
+        if !allowed.contains(&ty) {
+            return Err(GraphError::InvalidGenericType {
+                node,
+                param: param.to_string(),
+                ty,
+                allowed,
+            });
+        }
+
+        let shares_param = |socket: &&Socket| {
+            socket
+                .generic
+                .as_ref()
+                .is_some_and(|name| name.as_str() == param)
+        };
+        // Every input this repin would leave mismatched: an existing edge
+        // whose *other* end's effective type is no longer `ty`. Collected
+        // before mutating anything, since disconnecting is decided against
+        // the state before the repin.
+        let mut mismatched = Vec::new();
+        for socket in def.inputs.iter().filter(shares_param) {
+            let reference = SocketRef::new(node, socket.name.as_str());
+            if let Some(edge) = self.edge_into(&reference) {
+                let other = self
+                    .socket_type(registry, &edge.from, Direction::Output)
+                    .unwrap_or(None);
+                if other != Some(ty) {
+                    mismatched.push(reference);
+                }
+            }
+        }
+        for socket in def.outputs.iter().filter(shares_param) {
+            for edge in self
+                .edges_from(node)
+                .filter(|edge| edge.from.socket == socket.name.as_str())
+            {
+                let other = self
+                    .socket_type(registry, &edge.to, Direction::Input)
+                    .unwrap_or(None);
+                if other != Some(ty) {
+                    mismatched.push(edge.to.clone());
+                }
+            }
+        }
+
+        let disconnected = mismatched
+            .into_iter()
+            .filter_map(|input| self.disconnect(&input))
+            .collect();
+
+        self.nodes
+            .get_mut(&node)
+            .expect("checked to exist by `definition` above")
+            .generics
+            .insert(param.to_string(), ty);
+        Ok(disconnected)
+    }
+
+    /// This node instance's resolved concrete type for generic parameter
+    /// `param`, or `None` if it has not been resolved (or the node has no
+    /// such parameter). For the editor: what to show next to a "pick a
+    /// type" control, and whether to show one at all.
+    pub fn generic_type(&self, node: NodeId, param: &str) -> Option<ValueType> {
+        self.nodes.get(&node)?.generics.get(param).copied()
     }
 
     /// Convenience wrapper over [`Graph::connect`] taking `(node, socket)`
@@ -531,6 +804,20 @@ impl Graph {
                 continue;
             };
             self.check_params(id, node, def, &mut errors);
+            // Every generic parameter this node's definition declares must
+            // be resolved for *some* instance to mean anything concrete —
+            // the graph-level analogue of `MissingInput` for a mandatory
+            // socket. Once `Graph::connect`/`Graph::set_generic` are the
+            // only way in, this only fires for a node nothing has ever
+            // touched, or a hand-edited document that bypassed both.
+            for param in &def.generics {
+                if !node.generics.contains_key(param.name.as_str()) {
+                    errors.push(GraphError::UnresolvedGeneric {
+                        node: id,
+                        param: param.name.as_str().to_string(),
+                    });
+                }
+            }
         }
 
         let mut connected_inputs: BTreeSet<SocketRef> = BTreeSet::new();
@@ -551,7 +838,16 @@ impl Graph {
                     || socket.default.is_some()
                     || socket.optional;
                 if !fed {
-                    errors.push(GraphError::MissingInput { socket: reference });
+                    // A generic socket that is also unresolved was already
+                    // reported, more precisely, by the loop above; restating
+                    // it as `MissingInput` too would only be noise.
+                    let unresolved_generic = socket
+                        .generic
+                        .as_ref()
+                        .is_some_and(|param| !node.generics.contains_key(param.as_str()));
+                    if !unresolved_generic {
+                        errors.push(GraphError::MissingInput { socket: reference });
+                    }
                 }
             }
         }
@@ -583,14 +879,22 @@ impl Graph {
                     node: id,
                     param: name.clone(),
                 }),
-                Some(socket) if socket.ty != value.ty() => {
-                    errors.push(GraphError::ParamTypeMismatch {
-                        socket: SocketRef::new(id, name),
-                        supplied: value.ty(),
-                        expected: socket.ty,
-                    })
+                Some(socket) => {
+                    // A generic socket's declared `ty` is only a
+                    // placeholder; check against this instance's resolution
+                    // instead. If it has none yet, `UnresolvedGeneric`
+                    // already reports the underlying problem — there is no
+                    // sound expected type to compare the param against.
+                    if let Some(expected) = self.effective_type(id, socket) {
+                        if expected != value.ty() {
+                            errors.push(GraphError::ParamTypeMismatch {
+                                socket: SocketRef::new(id, name),
+                                supplied: value.ty(),
+                                expected,
+                            });
+                        }
+                    }
                 }
-                Some(_) => {}
             }
         }
     }
@@ -602,15 +906,19 @@ impl Graph {
         connected_inputs: &mut BTreeSet<SocketRef>,
         errors: &mut Vec<GraphError>,
     ) {
+        // `Ok(None)` (an unresolved generic) is deliberately not unwrapped
+        // into an error here: `Graph::validate`'s own `UnresolvedGeneric`
+        // pass already reports it once per node, and there is nothing sound
+        // to compare an unresolved type against anyway.
         let produced = match self.socket_type(registry, &edge.from, Direction::Output) {
-            Ok(ty) => Some(ty),
+            Ok(ty) => ty,
             Err(error) => {
                 errors.push(error);
                 None
             }
         };
         let expected = match self.socket_type(registry, &edge.to, Direction::Input) {
-            Ok(ty) => Some(ty),
+            Ok(ty) => ty,
             Err(error) => {
                 errors.push(error);
                 None
@@ -633,23 +941,30 @@ impl Graph {
         }
     }
 
+    /// A socket's effective type, or `None` if it is generic and this node
+    /// instance has not resolved that parameter yet.
+    ///
+    /// `None` is not itself an error here: [`Graph::validate`] reports an
+    /// unresolved parameter once per node (see its `UnresolvedGeneric`
+    /// pass) rather than once per socket that happens to reference it, and
+    /// [`Graph::connect`] treats it as "free to adopt whatever the other
+    /// side is" rather than a mismatch.
     fn socket_type(
         &self,
         registry: &NodeRegistry,
         socket: &SocketRef,
         direction: Direction,
-    ) -> Result<crate::node::ValueType, GraphError> {
+    ) -> Result<Option<ValueType>, GraphError> {
         let def = self.definition(registry, socket.node)?;
         let found = match direction {
             Direction::Input => def.input(&socket.socket),
             Direction::Output => def.output(&socket.socket),
         };
-        found
-            .map(|s| s.ty)
-            .ok_or_else(|| GraphError::UnknownSocket {
-                socket: socket.clone(),
-                direction,
-            })
+        let found = found.ok_or_else(|| GraphError::UnknownSocket {
+            socket: socket.clone(),
+            direction,
+        })?;
+        Ok(self.effective_type(socket.node, found))
     }
 
     /// The definition of `id`, or the error explaining why there is none.
@@ -785,6 +1100,23 @@ mod tests {
                 .input(Socket::new("must", ValueType::F32))
                 .output(Socket::new("out", ValueType::F32))
                 .expr("{must}"),
+            NodeDefinition::builder("test.generic_add", "Generic add")
+                .generic_param(crate::node::GenericParam::new(
+                    "T",
+                    vec![ValueType::F32, ValueType::Vec3],
+                ))
+                .input(Socket::new("a", ValueType::F32).generic("T"))
+                .input(Socket::new("b", ValueType::F32).generic("T"))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .expr("{a} + {b}"),
+            NodeDefinition::builder("test.generic_negate", "Generic negate")
+                .generic_param(crate::node::GenericParam::new(
+                    "T",
+                    vec![ValueType::F32, ValueType::Vec3],
+                ))
+                .input(Socket::new("a", ValueType::F32).generic("T"))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .expr("-{a}"),
         ]);
         registry
     }
@@ -800,6 +1132,185 @@ mod tests {
             .expect_err("f32 must not connect to vec3f");
         assert!(matches!(error, GraphError::TypeMismatch { .. }));
         assert!(graph.edges().is_empty(), "a rejected edge is not added");
+    }
+
+    // -- generic sockets ------------------------------------------------
+
+    #[test]
+    fn a_fresh_generic_node_is_invalid_until_something_resolves_it() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        graph.add_node("test.generic_add");
+        let errors = graph.validate(&registry).expect_err("nothing resolved T");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|e| matches!(e, GraphError::UnresolvedGeneric { param, .. } if param == "T")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn connecting_a_concrete_source_resolves_the_generic_target() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let source = graph.add_node("test.vec"); // vec3f out
+        let add = graph.add_node("test.generic_add");
+        graph
+            .wire(&registry, (source, "out"), (add, "a"))
+            .expect("vec3f is one of T's allowed types");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+
+        // `b` is still unconnected, but `T` is now vec3f, so it is a
+        // `MissingInput`, not still an `UnresolvedGeneric`.
+        let errors = graph.validate(&registry).expect_err("b unconnected");
+        assert!(matches!(
+            errors.0.as_slice(),
+            [GraphError::MissingInput { socket }] if socket.socket == "b"
+        ));
+    }
+
+    #[test]
+    fn connecting_a_concrete_target_resolves_the_generic_source() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_node("test.generic_add");
+        let sink = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (add, "out"), (sink, "v"))
+            .expect("vec3f is one of T's allowed types");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::Vec3));
+    }
+
+    #[test]
+    fn a_mismatched_connection_to_an_already_resolved_generic_is_rejected() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let vec_source = graph.add_node("test.vec");
+        let f32_source = graph.add_node("test.const");
+        let add = graph.add_node("test.generic_add");
+        graph
+            .wire(&registry, (vec_source, "out"), (add, "a"))
+            .expect("resolves T to vec3f");
+
+        let error = graph
+            .wire(&registry, (f32_source, "out"), (add, "b"))
+            .expect_err("f32 no longer matches T (vec3f)");
+        assert!(matches!(error, GraphError::TypeMismatch { .. }));
+        // The rejected edge must not have been added, and `a` must still be
+        // the only connection.
+        assert_eq!(graph.edges().len(), 1);
+    }
+
+    #[test]
+    fn two_generic_nodes_wired_together_stay_polymorphic_until_anchored() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let first = graph.add_node("test.generic_negate");
+        let second = graph.add_node("test.generic_negate");
+        graph
+            .wire(&registry, (first, "out"), (second, "a"))
+            .expect("neither side is resolved yet, so nothing to check");
+        assert_eq!(graph.generic_type(first, "T"), None);
+        assert_eq!(graph.generic_type(second, "T"), None);
+
+        // Anchoring the far end of the chain resolves both nodes, not just
+        // the one a concrete edge touches directly.
+        let source = graph.add_node("test.vec");
+        graph
+            .wire(&registry, (source, "out"), (first, "a"))
+            .expect("vec3f is allowed");
+        assert_eq!(graph.generic_type(first, "T"), Some(ValueType::Vec3));
+        assert_eq!(
+            graph.generic_type(second, "T"),
+            Some(ValueType::Vec3),
+            "resolution should have propagated across the existing edge"
+        );
+    }
+
+    #[test]
+    fn set_generic_rejects_a_type_the_parameter_does_not_allow() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_node("test.generic_add");
+        let error = graph
+            .set_generic(&registry, add, "T", ValueType::Vec4)
+            .expect_err("vec4f is not in T's allowed set");
+        assert!(matches!(
+            error,
+            GraphError::InvalidGenericType {
+                ty: ValueType::Vec4,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn set_generic_resolves_a_node_nothing_has_connected_yet() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_node("test.generic_add");
+        let disconnected = graph
+            .set_generic(&registry, add, "T", ValueType::F32)
+            .expect("f32 is allowed");
+        assert!(disconnected.is_empty(), "nothing was connected to disturb");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::F32));
+    }
+
+    #[test]
+    fn repinning_disconnects_edges_that_no_longer_fit() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let vec_source = graph.add_node("test.vec");
+        let add = graph.add_node("test.generic_add");
+        graph
+            .wire(&registry, (vec_source, "out"), (add, "a"))
+            .expect("resolves T to vec3f");
+        assert_eq!(graph.edges().len(), 1);
+
+        let disconnected = graph
+            .set_generic(&registry, add, "T", ValueType::F32)
+            .expect("f32 is allowed");
+        assert_eq!(disconnected.len(), 1, "the now-mismatched edge came back");
+        assert_eq!(disconnected[0].from.node, vec_source);
+        assert!(graph.edges().is_empty(), "and is gone from the graph");
+        assert_eq!(graph.generic_type(add, "T"), Some(ValueType::F32));
+    }
+
+    #[test]
+    fn a_resolved_generic_socket_checks_its_param_against_the_resolved_type() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_node("test.generic_add");
+        graph
+            .set_generic(&registry, add, "T", ValueType::Vec3)
+            .expect("vec3f is allowed");
+        // `a`'s param is an f32, but T resolved to vec3f.
+        graph.set_param(add, "a", Value::F32(1.0));
+        graph.set_param(add, "b", Value::Vec3([0.0; 3]));
+        let errors = graph.validate(&registry).expect_err("a is the wrong type");
+        assert!(matches!(
+            errors.0.as_slice(),
+            [GraphError::ParamTypeMismatch {
+                supplied: ValueType::F32,
+                expected: ValueType::Vec3,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_fully_resolved_and_fed_generic_node_validates_and_compiles() {
+        let registry = registry();
+        let mut graph = Graph::new("g");
+        let add = graph.add_node("test.generic_add");
+        graph.set_param(add, "a", Value::Vec3([1.0, 2.0, 3.0]));
+        graph.set_param(add, "b", Value::Vec3([4.0, 5.0, 6.0]));
+        graph
+            .set_generic(&registry, add, "T", ValueType::Vec3)
+            .expect("vec3f is allowed");
+        graph.validate(&registry).expect("fully resolved and fed");
     }
 
     #[test]

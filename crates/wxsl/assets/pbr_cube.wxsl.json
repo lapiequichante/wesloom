@@ -11,7 +11,15 @@
     "",
     "Node ids are stable and edges refer to them, so nodes can be added and",
     "removed without renumbering anything. `params` are the values on inputs",
-    "no edge feeds; an input with neither keeps its definition's default."
+    "no edge feeds; an input with neither keeps its definition's default.",
+    "`generics` pins the concrete type a generic node (one whose sockets",
+    "adapt to whatever they carry, e.g. `math.multiply` instead of a",
+    "separate `math.multiply.f32`/`.vec3f`/... per type) has resolved to,",
+    "keyed by the parameter's name (`T` here). `wxsl_core::graph::Graph::",
+    "connect` resolves this automatically as a graph is *built* — but a",
+    "file like this one is loaded as a whole, edges and all, never through",
+    "`connect`, so every generic node spells its resolution out explicitly",
+    "instead of leaving it to be inferred from its edges."
   ],
 
   "macros": {
@@ -30,7 +38,8 @@
     },
     {
       "id": 2,
-      "def": "math.multiply.vec3f",
+      "def": "math.multiply",
+      "generics": { "T": "vec3" },
       "label": "noise scale",
       "params": { "b": { "vec3": [3.0, 3.0, 3.0] } },
       "position": [260.0, 0.0]
@@ -76,7 +85,8 @@
     },
     {
       "id": 8,
-      "def": "math.multiply.f32",
+      "def": "math.multiply",
+      "generics": { "T": "f32" },
       "label": "metallic",
       "params": { "b": { "f32": 0.9 } },
       "position": [1040.0, 0.0]
@@ -107,7 +117,8 @@
     },
     {
       "id": 13,
-      "def": "math.multiply.vec3f",
+      "def": "math.multiply",
+      "generics": { "T": "vec3" },
       "label": "emissive",
       "position": [780.0, 442.0]
     },

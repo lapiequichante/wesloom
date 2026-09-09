@@ -111,6 +111,30 @@ pub enum GraphError {
         /// The value the declaration defaults to.
         declared: MacroValue,
     },
+    /// A socket is generic over a type parameter that this node instance has
+    /// not resolved: no edge reaching it (directly or transitively, through
+    /// other unresolved generic sockets) settles on a concrete type, and
+    /// nothing pinned it with [`crate::graph::Graph::set_generic`]. Codegen
+    /// has no concrete WGSL type to emit for it — the generic equivalent of
+    /// [`GraphError::MissingInput`].
+    UnresolvedGeneric {
+        /// The node whose parameter is unresolved.
+        node: NodeId,
+        /// The parameter's name.
+        param: String,
+    },
+    /// [`crate::graph::Graph::set_generic`] was asked to resolve a parameter
+    /// to a type its declaration does not allow.
+    InvalidGenericType {
+        /// The node.
+        node: NodeId,
+        /// The parameter's name.
+        param: String,
+        /// The type that was requested.
+        ty: ValueType,
+        /// The types the parameter actually allows.
+        allowed: Vec<ValueType>,
+    },
 }
 
 /// Whether a socket lookup was for an input or an output.
@@ -205,6 +229,29 @@ impl fmt::Display for GraphError {
                 declared.kind(),
                 supplied.kind(),
             ),
+            GraphError::UnresolvedGeneric { node, param } => write!(
+                f,
+                "node {node} has not resolved its generic parameter `{param}`; connect \
+                 something to a socket that uses it, or pick a type explicitly"
+            ),
+            GraphError::InvalidGenericType {
+                node,
+                param,
+                ty,
+                allowed,
+            } => {
+                write!(
+                    f,
+                    "node {node}'s generic parameter `{param}` cannot be {ty}; it allows "
+                )?;
+                for (index, candidate) in allowed.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{candidate}")?;
+                }
+                Ok(())
+            }
         }
     }
 }

@@ -123,6 +123,100 @@ impl TextEdit {
     }
 }
 
+/// Which widget is hot or active, and the modal restriction, if any.
+///
+/// Deliberately its own type, holding nothing that depends on `wgpu`: this is
+/// what [`UiState::interact`] delegates to, and what a test drives directly
+/// with a bare [`InputState`] and no device. That separation is what caught
+/// the "clicks do nothing" bug — a stale-`active` reset that ran before a
+/// widget's own release could be observed (see [`Ui::end_frame`]) is easy to
+/// get backwards, and near-impossible to notice by inspection; it is not
+/// hard to notice at all once the click/release sequence itself can be
+/// driven in a unit test.
+#[derive(Debug, Default)]
+struct Interaction {
+    hot: Option<Id>,
+    active: Option<Id>,
+    /// While set, only widgets inside this rectangle can be interacted with:
+    /// a menu or a popover is open over the rest of the interface.
+    modal: Option<Rect>,
+    /// Set when a widget claims the pointer, so the canvas underneath knows
+    /// not to also act on the same click.
+    pointer_claimed: bool,
+}
+
+impl Interaction {
+    /// Start a new frame: clear whatever only applies to the last one.
+    ///
+    /// `active` is deliberately not cleared here — see [`Self::interact`]
+    /// and [`Self::release_stale_active`].
+    fn begin_frame(&mut self) {
+        self.hot = None;
+        self.pointer_claimed = false;
+    }
+
+    /// Hit-test and update interaction state for a widget.
+    ///
+    /// The primitive every widget is built from. A widget becomes *active*
+    /// on press and stays active until release, wherever the pointer goes,
+    /// which is what makes dragging work and what makes a click cancel when
+    /// the pointer leaves before release. `clip` is the clip rectangle in
+    /// force when this widget is drawn: a widget scrolled out of its region
+    /// is still *somewhere* in screen coordinates, and without this a row
+    /// scrolled off the top of a list would keep catching clicks that landed
+    /// on whatever is drawn above it.
+    fn interact(&mut self, input: &InputState, clip: Rect, id: Id, rect: Rect) -> Response {
+        let mut response = Response::none(id, rect);
+        let allowed = self
+            .modal
+            .is_none_or(|modal| modal.intersect(rect) == rect || modal.contains(rect.center()));
+        let pointer = input.pointer();
+        let over = allowed
+            && pointer.is_some_and(|point| rect.contains(point) && clip.contains(point))
+            && (self.active.is_none() || self.active == Some(id));
+
+        if over {
+            self.hot = Some(id);
+            response.hovered = true;
+            if input.pressed(MouseButton::Left) {
+                self.active = Some(id);
+                response.pressed = true;
+                self.pointer_claimed = true;
+            }
+            if input.pressed(MouseButton::Right) {
+                self.pointer_claimed = true;
+            }
+            if input.released(MouseButton::Right) {
+                response.secondary_clicked = true;
+            }
+            if input.double_clicked() {
+                response.double_clicked = true;
+            }
+        }
+        if self.active == Some(id) {
+            response.dragging = input.is_down(MouseButton::Left);
+            response.drag_delta = input.pointer_delta();
+            self.pointer_claimed = true;
+            if input.released(MouseButton::Left) {
+                response.drag_released = true;
+                response.clicked = over;
+                self.active = None;
+            }
+        }
+        response
+    }
+
+    /// Clear `active` if the button that grabbed it is no longer held.
+    ///
+    /// A safety net, not the normal path — see [`Ui::end_frame`] for why it
+    /// exists and why it must run after the frame's widgets are built.
+    fn release_stale_active(&mut self, input: &InputState) {
+        if !input.is_down(MouseButton::Left) && !input.is_down(MouseButton::Middle) {
+            self.active = None;
+        }
+    }
+}
+
 /// Everything the interface remembers between frames.
 pub struct UiState {
     /// The geometry built this frame.
@@ -137,18 +231,11 @@ pub struct UiState {
     pub ui_font: FontId,
     /// The monospaced font, for the code panels.
     pub mono_font: FontId,
-    hot: Option<Id>,
-    active: Option<Id>,
+    interaction: Interaction,
     focus: Option<Id>,
     editing: Option<TextEdit>,
     scroll: HashMap<Id, Vec2>,
     drag_origin: HashMap<Id, f32>,
-    /// While set, only widgets inside this rectangle can be interacted with:
-    /// a menu or a popover is open over the rest of the interface.
-    modal: Option<Rect>,
-    /// Set when a widget claims the pointer, so the canvas underneath knows
-    /// not to also act on the same click.
-    pointer_claimed: bool,
 }
 
 impl UiState {
@@ -172,14 +259,11 @@ impl UiState {
             theme,
             ui_font,
             mono_font,
-            hot: None,
-            active: None,
+            interaction: Interaction::default(),
             focus: None,
             editing: None,
             scroll: HashMap::new(),
             drag_origin: HashMap::new(),
-            modal: None,
-            pointer_claimed: false,
         }
     }
 
@@ -209,6 +293,27 @@ impl UiState {
     pub fn is_editing(&self) -> bool {
         self.editing.is_some()
     }
+
+    /// Hit-test and update interaction state for a widget.
+    ///
+    /// The primitive every widget is built from. A widget becomes *active* on
+    /// press and stays active until release, wherever the pointer goes, which
+    /// is what makes dragging work and what makes a click cancel when the
+    /// pointer leaves before release. The rules themselves live on
+    /// [`Interaction`], which holds no `wgpu` state and so is what a test
+    /// drives directly.
+    pub fn interact(&mut self, input: &InputState, id: Id, rect: Rect) -> Response {
+        let clip = self.draw.clip();
+        self.interaction.interact(input, clip, id, rect)
+    }
+
+    /// Clear `active` if the button that grabbed it is no longer held.
+    ///
+    /// See [`Ui::end_frame`] for why this must run after the frame's widgets
+    /// are built, not before.
+    pub fn release_stale_active(&mut self, input: &InputState) {
+        self.interaction.release_stale_active(input);
+    }
 }
 
 /// One frame's handle on the interface.
@@ -227,17 +332,23 @@ pub struct Ui<'a> {
 
 impl<'a> Ui<'a> {
     /// Begin a frame.
+    ///
+    /// Does **not** clear a stale `active` widget here. The release that
+    /// ends a click has already reached `InputState` before this call
+    /// (`is_down` reflects it immediately, see `InputState::handle`), so
+    /// clearing pre-emptively based on "is the button still down" would
+    /// wipe `active` *before* the widget that owns it gets to see its own
+    /// release in [`Ui::interact`] — which is exactly what stopped every
+    /// click, drag-release and checkbox toggle from registering. That
+    /// cleanup instead happens in [`Ui::end_frame`], after every widget has
+    /// had its turn.
     pub fn new(
         state: &'a mut UiState,
         input: &'a InputState,
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
     ) -> Self {
-        state.hot = None;
-        state.pointer_claimed = false;
-        if !input.is_down(MouseButton::Left) && !input.is_down(MouseButton::Middle) {
-            state.active = None;
-        }
+        state.interaction.begin_frame();
         Ui {
             state,
             input,
@@ -245,6 +356,24 @@ impl<'a> Ui<'a> {
             queue,
             error: None,
         }
+    }
+
+    /// Finish the frame: clear `active` if the button that grabbed it is no
+    /// longer held.
+    ///
+    /// This is a safety net, not the normal path — the normal path is
+    /// [`Ui::interact`] itself clearing `active` when the widget holding it
+    /// sees its own release. This exists for the abnormal case: the active
+    /// widget disappeared mid-drag (a node deleted by a shortcut, a list row
+    /// scrolled away, a panel that closed), so nothing will call `interact`
+    /// with that id again this frame or any later one. Left uncleared,
+    /// `active` would stay set forever, and `interact`'s `over` test
+    /// (`active.is_none() || active == Some(id)`) would then block *every*
+    /// other widget from ever becoming hovered again.
+    ///
+    /// Call once, after every widget for the frame has been built.
+    pub fn end_frame(&mut self) {
+        self.state.release_stale_active(self.input);
     }
 
     /// The error the frame hit, if any.
@@ -267,27 +396,27 @@ impl<'a> Ui<'a> {
     /// The node canvas asks before acting on a click, so that a button
     /// floating over it wins.
     pub fn pointer_claimed(&self) -> bool {
-        self.state.pointer_claimed
+        self.state.interaction.pointer_claimed
     }
 
     /// Claim the pointer for this frame.
     pub fn claim_pointer(&mut self) {
-        self.state.pointer_claimed = true;
+        self.state.interaction.pointer_claimed = true;
     }
 
     /// Restrict interaction to `rect` until [`Ui::close_modal`].
     pub fn open_modal(&mut self, rect: Rect) {
-        self.state.modal = Some(rect);
+        self.state.interaction.modal = Some(rect);
     }
 
     /// Lift a [`Ui::open_modal`] restriction.
     pub fn close_modal(&mut self) {
-        self.state.modal = None;
+        self.state.interaction.modal = None;
     }
 
     /// Whether interaction is currently restricted to a region.
     pub fn modal(&self) -> Option<Rect> {
-        self.state.modal
+        self.state.interaction.modal
     }
 
     /// Hit-test and update interaction state for a widget.
@@ -295,52 +424,10 @@ impl<'a> Ui<'a> {
     /// The primitive every widget is built from. A widget becomes *active* on
     /// press and stays active until release, wherever the pointer goes, which
     /// is what makes dragging work and what makes a click cancel when the
-    /// pointer leaves before release.
+    /// pointer leaves before release. The logic itself lives on
+    /// [`UiState::interact`], so it can be exercised without a `wgpu::Device`.
     pub fn interact(&mut self, id: Id, rect: Rect) -> Response {
-        let mut response = Response::none(id, rect);
-        let allowed = self
-            .state
-            .modal
-            .is_none_or(|modal| modal.intersect(rect) == rect || modal.contains(rect.center()));
-        let pointer = self.input.pointer();
-        // The clip rectangle counts: a widget scrolled out of its region is
-        // still *somewhere* in screen coordinates, and without this a row
-        // scrolled off the top of a list would keep catching clicks that
-        // landed on whatever is drawn above it.
-        let clip = self.state.draw.clip();
-        let over = allowed
-            && pointer.is_some_and(|point| rect.contains(point) && clip.contains(point))
-            && (self.state.active.is_none() || self.state.active == Some(id));
-
-        if over {
-            self.state.hot = Some(id);
-            response.hovered = true;
-            if self.input.pressed(MouseButton::Left) {
-                self.state.active = Some(id);
-                response.pressed = true;
-                self.state.pointer_claimed = true;
-            }
-            if self.input.pressed(MouseButton::Right) {
-                self.state.pointer_claimed = true;
-            }
-            if self.input.released(MouseButton::Right) {
-                response.secondary_clicked = true;
-            }
-            if self.input.double_clicked() {
-                response.double_clicked = true;
-            }
-        }
-        if self.state.active == Some(id) {
-            response.dragging = self.input.is_down(MouseButton::Left);
-            response.drag_delta = self.input.pointer_delta();
-            self.state.pointer_claimed = true;
-            if self.input.released(MouseButton::Left) {
-                response.drag_released = true;
-                response.clicked = over;
-                self.state.active = None;
-            }
-        }
-        response
+        self.state.interact(self.input, id, rect)
     }
 
     // -- text ---------------------------------------------------------------
@@ -1073,6 +1160,98 @@ mod tests {
         assert_ne!(list.with(0), list.with(1));
         assert_ne!(list.with(0), list);
         assert_eq!(list.with(7), list.with(7));
+    }
+
+    /// Drive one press-then-release click the way `Editor::frame` really
+    /// does: `InputState::set_time` (not `begin_frame`, which — per its own
+    /// docs — would drop the events queued since the previous frame), the
+    /// widget's `interact`, then `end_frame` on both the input and the
+    /// interaction state, in that order, once per rendered frame.
+    #[test]
+    fn a_full_press_release_cycle_reports_a_click() {
+        use wxsl_render::ui::input::{InputState, MouseButton as InputMouseButton, UiEvent};
+
+        let mut input = InputState::new();
+        let mut interaction = Interaction::default();
+        let id = Id::new("button");
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let point = Vec2::new(20.0, 10.0);
+
+        // Frame 1: press.
+        input.set_time(0.0);
+        input.handle(UiEvent::PointerMoved(point));
+        input.handle(UiEvent::PointerButton {
+            button: InputMouseButton::Left,
+            pressed: true,
+        });
+        let response = interaction.interact(&input, Rect::EVERYTHING, id, rect);
+        assert!(response.pressed);
+        assert!(!response.clicked, "not released yet");
+        interaction.release_stale_active(&input);
+        assert_eq!(
+            interaction.active,
+            Some(id),
+            "the safety net must not clear an active widget whose button \
+             is still held"
+        );
+        input.end_frame();
+
+        // Frame 2: release. This is the exact sequence that regressed: by
+        // the time this frame's `interact` runs, `InputState::is_down` is
+        // already `false` (the release event lands on `input` before
+        // `interact` is ever called), which is what a premature
+        // `release_stale_active` — called *before* building the frame's
+        // widgets instead of after — used to see and act on, wiping `active`
+        // before this call could report the click at all.
+        input.set_time(0.016);
+        input.handle(UiEvent::PointerButton {
+            button: InputMouseButton::Left,
+            pressed: false,
+        });
+        let response = interaction.interact(&input, Rect::EVERYTHING, id, rect);
+        assert!(response.clicked, "the release was never seen");
+        assert!(response.drag_released);
+        assert!(interaction.active.is_none());
+    }
+
+    #[test]
+    fn a_drag_started_inside_a_row_is_reported_even_once_the_pointer_leaves_it() {
+        // What a palette row relies on to support drag-and-drop onto the
+        // canvas: `dragging` must stay true, and `drag_delta` must keep
+        // accumulating, once the pointer has moved outside the widget's own
+        // rectangle — only `clicked` (and `hovered`) require containment.
+        use wxsl_render::ui::input::{InputState, MouseButton as InputMouseButton, UiEvent};
+
+        let mut input = InputState::new();
+        let mut interaction = Interaction::default();
+        let id = Id::new("row");
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+
+        input.set_time(0.0);
+        input.handle(UiEvent::PointerMoved(Vec2::new(20.0, 10.0)));
+        input.handle(UiEvent::PointerButton {
+            button: InputMouseButton::Left,
+            pressed: true,
+        });
+        let response = interaction.interact(&input, Rect::EVERYTHING, id, rect);
+        assert!(response.pressed);
+        input.end_frame();
+
+        input.set_time(0.016);
+        input.handle(UiEvent::PointerMoved(Vec2::new(500.0, 500.0)));
+        let response = interaction.interact(&input, Rect::EVERYTHING, id, rect);
+        assert!(response.dragging, "still dragging outside the row");
+        assert!(!response.hovered, "but no longer hovered");
+        input.end_frame();
+
+        input.set_time(0.032);
+        input.handle(UiEvent::PointerButton {
+            button: InputMouseButton::Left,
+            pressed: false,
+        });
+        let response = interaction.interact(&input, Rect::EVERYTHING, id, rect);
+        assert!(response.drag_released);
+        assert!(!response.clicked, "released well outside the row");
     }
 
     #[test]

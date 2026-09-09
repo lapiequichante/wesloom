@@ -25,7 +25,9 @@
 
 use wxsl_core::abi;
 use wxsl_core::macros::{MacroDef, MacroValue};
-use wxsl_core::node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType, WxslFunction};
+use wxsl_core::node::{
+    GenericParam, NodeDefinition, NodeRegistry, Socket, Value, ValueType, WxslFunction,
+};
 
 /// Every node definition in the library, including the ABI's input and
 /// output nodes.
@@ -123,7 +125,9 @@ fn function_node(
 
 /// A per-type operator family: one node per float value type.
 struct Family {
-    /// Id stem, e.g. `add` in `math.add.vec3f`.
+    /// Id stem: `math.{stem}` is the one generic node this family becomes,
+    /// e.g. `math.add` (was `math.add.f32`, `math.add.vec2f`, … as four
+    /// separate registry entries before generic sockets existed).
     stem: &'static str,
     /// Editor label.
     label: &'static str,
@@ -131,9 +135,6 @@ struct Family {
     doc: &'static str,
     /// Expression template over the family's socket names.
     expr: &'static str,
-    /// Default for the operand sockets: 0 for additive operators, 1 for
-    /// multiplicative ones, so an unconnected input is a no-op.
-    identity: f32,
 }
 
 const BINARY: &[Family] = &[
@@ -142,21 +143,18 @@ const BINARY: &[Family] = &[
         label: "Add",
         doc: "Component-wise sum.",
         expr: "{a} + {b}",
-        identity: 0.0,
     },
     Family {
         stem: "subtract",
         label: "Subtract",
         doc: "Component-wise difference.",
         expr: "{a} - {b}",
-        identity: 0.0,
     },
     Family {
         stem: "multiply",
         label: "Multiply",
         doc: "Component-wise product.",
         expr: "{a} * {b}",
-        identity: 1.0,
     },
     Family {
         stem: "divide",
@@ -164,7 +162,6 @@ const BINARY: &[Family] = &[
         doc: "Component-wise quotient. Division by zero yields an infinity, \
               which will spread; guard the divisor if it can reach zero.",
         expr: "{a} / {b}",
-        identity: 1.0,
     },
     Family {
         stem: "modulo",
@@ -172,7 +169,6 @@ const BINARY: &[Family] = &[
         doc: "Component-wise floating-point remainder, keeping the sign of \
               the dividend. For a periodic wrap use `math.wrap` instead.",
         expr: "{a} % {b}",
-        identity: 1.0,
     },
     Family {
         stem: "power",
@@ -180,21 +176,18 @@ const BINARY: &[Family] = &[
         doc: "`a` raised to `b`, component-wise. Undefined for a negative \
               base with a fractional exponent.",
         expr: "pow({a}, {b})",
-        identity: 1.0,
     },
     Family {
         stem: "minimum",
         label: "Minimum",
         doc: "Component-wise smaller of the two.",
         expr: "min({a}, {b})",
-        identity: 0.0,
     },
     Family {
         stem: "maximum",
         label: "Maximum",
         doc: "Component-wise larger of the two.",
         expr: "max({a}, {b})",
-        identity: 0.0,
     },
 ];
 
@@ -204,185 +197,192 @@ const UNARY: &[Family] = &[
         label: "Negate",
         doc: "Flip the sign, component-wise.",
         expr: "-{a}",
-        identity: 0.0,
     },
     Family {
         stem: "absolute",
         label: "Absolute",
         doc: "Drop the sign, component-wise.",
         expr: "abs({a})",
-        identity: 0.0,
     },
     Family {
         stem: "sign",
         label: "Sign",
         doc: "-1, 0 or 1 per component.",
         expr: "sign({a})",
-        identity: 0.0,
     },
     Family {
         stem: "floor",
         label: "Floor",
         doc: "Round down, component-wise.",
         expr: "floor({a})",
-        identity: 0.0,
     },
     Family {
         stem: "ceil",
         label: "Ceil",
         doc: "Round up, component-wise.",
         expr: "ceil({a})",
-        identity: 0.0,
     },
     Family {
         stem: "round",
         label: "Round",
         doc: "Round to nearest, halves to even.",
         expr: "round({a})",
-        identity: 0.0,
     },
     Family {
         stem: "truncate",
         label: "Truncate",
         doc: "Drop the fractional part, towards zero.",
         expr: "trunc({a})",
-        identity: 0.0,
     },
     Family {
         stem: "fraction",
         label: "Fraction",
         doc: "The fractional part, always in [0, 1).",
         expr: "fract({a})",
-        identity: 0.0,
     },
     Family {
         stem: "saturate",
         label: "Saturate",
         doc: "Clamp to [0, 1], component-wise.",
         expr: "saturate({a})",
-        identity: 0.0,
     },
     Family {
         stem: "square_root",
         label: "Square root",
         doc: "Component-wise square root; negative inputs give NaN.",
         expr: "sqrt({a})",
-        identity: 1.0,
     },
     Family {
         stem: "inverse_square_root",
         label: "Inverse square root",
         doc: "1/sqrt, component-wise, as a single instruction.",
         expr: "inverseSqrt({a})",
-        identity: 1.0,
     },
     Family {
         stem: "exponential",
         label: "Exponential",
         doc: "e raised to the input, component-wise.",
         expr: "exp({a})",
-        identity: 0.0,
     },
     Family {
         stem: "exponential_2",
         label: "Exponential (base 2)",
         doc: "2 raised to the input, component-wise.",
         expr: "exp2({a})",
-        identity: 0.0,
     },
     Family {
         stem: "logarithm",
         label: "Logarithm",
         doc: "Natural log, component-wise.",
         expr: "log({a})",
-        identity: 1.0,
     },
     Family {
         stem: "logarithm_2",
         label: "Logarithm (base 2)",
         doc: "Base-2 log, component-wise.",
         expr: "log2({a})",
-        identity: 1.0,
     },
     Family {
         stem: "sine",
         label: "Sine",
         doc: "Sine of an angle in radians.",
         expr: "sin({a})",
-        identity: 0.0,
     },
     Family {
         stem: "cosine",
         label: "Cosine",
         doc: "Cosine of an angle in radians.",
         expr: "cos({a})",
-        identity: 0.0,
     },
     Family {
         stem: "tangent",
         label: "Tangent",
         doc: "Tangent of an angle in radians.",
         expr: "tan({a})",
-        identity: 0.0,
     },
     Family {
         stem: "arcsine",
         label: "Arcsine",
         doc: "Inverse sine, in radians. Input outside [-1, 1] gives NaN.",
         expr: "asin({a})",
-        identity: 0.0,
     },
     Family {
         stem: "arccosine",
         label: "Arccosine",
         doc: "Inverse cosine, in radians. Input outside [-1, 1] gives NaN.",
         expr: "acos({a})",
-        identity: 0.0,
     },
     Family {
         stem: "arctangent",
         label: "Arctangent",
         doc: "Inverse tangent, in radians.",
         expr: "atan({a})",
-        identity: 0.0,
     },
 ];
 
-/// Arithmetic, one node per float value type.
+/// The generic parameter every genericized arithmetic node declares: one
+/// type, shared by every socket that carries it, resolved per graph node
+/// from whatever is actually connected (or picked explicitly with
+/// [`wxsl_core::graph::Graph::set_generic`]).
 ///
-/// Generated rather than listed so `f32` and `vec4f` cannot drift apart, and
-/// so adding a value type adds its whole arithmetic set at once.
+/// A free function rather than a `const` because [`GenericParam`] owns a
+/// `Vec` (a `ValueType` array turned into one), so it cannot be a `const`
+/// itself.
+fn float_generic() -> GenericParam {
+    GenericParam::new("T", ValueType::FLOATS.to_vec())
+}
+
+/// A generic operand or output socket, carrying [`float_generic`]'s `T`.
+///
+/// The placeholder `F32` is never read: codegen always asks the graph for
+/// this node instance's *resolved* type instead (see
+/// [`wxsl_core::node::Socket::generic`]). Generic sockets have no default —
+/// a fixed [`Value`] would be the wrong type for every resolution but one —
+/// so connect both operands (or pick a type explicitly and then type them
+/// in) before the node validates.
+fn generic_socket(name: &str) -> Socket {
+    Socket::new(name, ValueType::F32).generic("T")
+}
+
+/// Arithmetic that works unchanged for every float type — `{a} + {b}` does
+/// not care whether `a` and `b` are `f32` or `vec4f` — as one generic node
+/// per family (`math.add`, `math.negate`, …) instead of one concretely-typed
+/// node per family *and* type (`math.add.f32`, `math.add.vec2f`, …, sixteen
+/// registry entries between the two tables below, before generic sockets
+/// existed). See [`crate::registry::float_generic`] and
+/// [ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md).
 pub fn math_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();
-    for ty in ValueType::FLOATS {
-        for family in BINARY {
-            defs.push(
-                NodeDefinition::builder(
-                    format!("math.{}.{}", family.stem, ty.suffix()),
-                    family.label,
-                )
+    for family in BINARY {
+        defs.push(
+            NodeDefinition::builder(format!("math.{}", family.stem), family.label)
                 .category("math")
                 .doc(family.doc)
-                .input(splat("a", *ty, family.identity))
-                .input(splat("b", *ty, family.identity))
-                .output(out(*ty))
+                .generic_param(float_generic())
+                .input(generic_socket("a"))
+                .input(generic_socket("b"))
+                .output(generic_socket("out"))
                 .expr(family.expr),
-            );
-        }
-        for family in UNARY {
-            defs.push(
-                NodeDefinition::builder(
-                    format!("math.{}.{}", family.stem, ty.suffix()),
-                    family.label,
-                )
+        );
+    }
+    for family in UNARY {
+        defs.push(
+            NodeDefinition::builder(format!("math.{}", family.stem), family.label)
                 .category("math")
                 .doc(family.doc)
-                .input(splat("a", *ty, family.identity))
-                .output(out(*ty))
+                .generic_param(float_generic())
+                .input(generic_socket("a"))
+                .output(generic_socket("out"))
                 .expr(family.expr),
-            );
-        }
+        );
+    }
 
+    // Everything below is unchanged: operators whose sockets are not
+    // interchangeable operands (so a shared `T` would not mean the same
+    // thing on every socket, e.g. `mix`'s scalar `t` next to its vector `a`
+    // and `b`), generated per float type exactly as before this file's
+    // arithmetic families were genericized.
+    for ty in ValueType::FLOATS {
         // Operators whose sockets are not interchangeable operands, so they
         // are spelled out rather than generated from the table above.
         defs.push(
@@ -1206,12 +1206,41 @@ mod tests {
     }
 
     #[test]
-    fn every_arithmetic_family_covers_every_float_type() {
+    fn every_arithmetic_family_is_one_generic_node_covering_every_float_type() {
+        // One registry entry per family (not one per family *and* type,
+        // which is the duplication generic sockets exist to remove), and
+        // every socket sharing a `T` that allows every float type.
         let registry = registry();
-        for ty in ValueType::FLOATS {
-            for family in BINARY.iter().chain(UNARY) {
-                let id = format!("math.{}.{}", family.stem, ty.suffix());
-                assert!(registry.contains(&id), "missing `{id}`");
+        for family in BINARY.iter().chain(UNARY) {
+            let id = format!("math.{}", family.stem);
+            let def = registry
+                .get(&id)
+                .unwrap_or_else(|| panic!("missing `{id}`"));
+            assert!(
+                !registry.contains(&format!("{id}.f32")),
+                "`{id}.f32` should not exist alongside the generic `{id}`"
+            );
+
+            let param = def
+                .generic("T")
+                .unwrap_or_else(|| panic!("`{id}` declares no generic parameter `T`"));
+            assert_eq!(
+                param.allowed,
+                ValueType::FLOATS,
+                "`{id}`'s `T` should allow exactly the float types"
+            );
+            for socket in def.inputs.iter().chain(&def.outputs) {
+                assert_eq!(
+                    socket.generic.as_ref().map(|name| name.as_str()),
+                    Some("T"),
+                    "`{id}`'s socket `{}` should carry `T`, not a fixed type",
+                    socket.name
+                );
+                assert!(
+                    socket.default.is_none(),
+                    "`{id}`'s socket `{}` is generic and must have no default",
+                    socket.name
+                );
             }
         }
     }

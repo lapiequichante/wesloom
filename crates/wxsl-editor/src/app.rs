@@ -66,6 +66,15 @@ pub struct EditorConfig {
 impl EditorConfig {
     /// A configuration with the usual defaults, needing the four things that
     /// have no sensible default.
+    ///
+    /// `msdf_backend` defaults to [`MsdfBackend::Gpu`] here — not
+    /// [`MsdfBackend::default()`], which stays [`MsdfBackend::Cpu`] for a
+    /// general `wxsl-render` consumer that may have no compute-capable
+    /// device to hand. The editor always has a device by the time it opens a
+    /// glyph cache, and generating hundreds of glyphs a batch is exactly the
+    /// case the compute pass exists for — noticeably faster than the CPU
+    /// path in the one place in this workspace that fills a real atlas at
+    /// interactive speed.
     pub fn new(
         library: ShaderLibrary,
         registry: NodeRegistry,
@@ -79,7 +88,7 @@ impl EditorConfig {
             graph,
             ui_font,
             mono_font,
-            msdf_backend: MsdfBackend::default(),
+            msdf_backend: MsdfBackend::Gpu,
             atlas_size: 2048,
             scale: 1.0,
         }
@@ -131,6 +140,9 @@ pub struct Editor {
     last_frame: f64,
     backend: MsdfBackend,
     library: ShaderLibrary,
+    /// Where the node canvas landed on the last drawn frame. `Rect::NOTHING`
+    /// until the first frame runs.
+    last_canvas_rect: Rect,
 }
 
 impl Editor {
@@ -181,6 +193,7 @@ impl Editor {
             last_frame: 0.0,
             backend: msdf_backend,
             library,
+            last_canvas_rect: Rect::NOTHING,
         })
     }
 
@@ -223,6 +236,21 @@ impl Editor {
     /// rectangle, and only a frame knows that.
     pub fn fit_next_frame(&mut self) {
         self.first_frame = true;
+    }
+
+    /// Where the node canvas was on the last drawn frame, in physical
+    /// pixels.
+    ///
+    /// [`Rect::NOTHING`] before the first frame. For an application that
+    /// wants to convert a screen position of its own — a drag-and-drop from
+    /// outside the window, say — into graph space via [`Editor::canvas_view`].
+    pub fn canvas_rect(&self) -> Rect {
+        self.last_canvas_rect
+    }
+
+    /// The node canvas's current pan and zoom.
+    pub fn canvas_view(&self) -> &crate::canvas::View {
+        &self.canvas.view
     }
 
     /// The preview, for its compiled source and its status.
@@ -338,6 +366,7 @@ impl Editor {
         let (code, middle) = rest.split_bottom(metrics.bottom_panel_height);
         let (palette, middle) = middle.split_left(metrics.side_panel_width);
         let (inspector, canvas_rect) = middle.split_right(metrics.side_panel_width);
+        self.last_canvas_rect = canvas_rect;
 
         // -- panels ------------------------------------------------------
         let mut requests = Requests::default();
@@ -386,6 +415,41 @@ impl Editor {
             self.modified,
         );
 
+        // -- drag ghost ---------------------------------------------------
+        // Drawn last (and so on top, and unclipped by any panel's own
+        // scroll region) so a node dragged from the palette visibly follows
+        // the pointer over the canvas, tinted to show whether letting go
+        // here would actually place it.
+        if let Some(label) = requests.dragging_definition.clone() {
+            let point = ui.input.pointer_or_zero();
+            let over_canvas = canvas_rect.contains(point);
+            let size = ui.measure_ui(&label) + Vec2::splat(metrics.padding);
+            let ghost = Rect::from_min_size(point + Vec2::splat(14.0), size);
+            let fill = if over_canvas {
+                theme.palette.accent
+            } else {
+                theme.palette.control_active
+            };
+            ui.draw()
+                .round_rect(ghost, metrics.radius, fill.with_alpha(0.92));
+            ui.draw().round_rect_border(
+                ghost,
+                metrics.radius,
+                metrics.outline_width,
+                theme.palette.outline,
+            );
+            ui.label(
+                ghost.shrink(metrics.padding * 0.5),
+                &label,
+                if over_canvas {
+                    theme.palette.text_on_accent
+                } else {
+                    theme.palette.text
+                },
+                Align::Center,
+            );
+        }
+
         // -- shortcuts ---------------------------------------------------
         if !ui.state.is_editing() {
             if ui.input.key_pressed_plain(Key::Char('f')) {
@@ -412,6 +476,9 @@ impl Editor {
             }
         }
         let error = ui.error().map(|error| error.to_string());
+        // Every widget has had its turn; safe to release a stale `active`
+        // now without racing the click it was supposed to report.
+        ui.end_frame();
 
         // -- apply -------------------------------------------------------
         self.tab = tab;
@@ -434,10 +501,12 @@ impl Editor {
             self.message = "pick a node to add".to_string();
         }
         if let Some(definition) = requests.add_definition {
-            let at = self
-                .picker
-                .target
-                .unwrap_or_else(|| self.canvas.view.to_graph(canvas_rect, canvas_rect.center()));
+            let at = resolve_add_position(
+                requests.drop_screen_point,
+                canvas_rect,
+                &self.canvas.view,
+                self.picker.target,
+            );
             let id = canvas::place_new_node(&mut self.graph, &definition, at);
             self.canvas.selection = vec![id];
             self.picker.close();
@@ -470,6 +539,9 @@ impl Editor {
             self.canvas
                 .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
         }
+        if let Some(message) = requests.message {
+            self.message = message;
+        }
         if let Some(error) = error {
             self.message = error;
         }
@@ -492,11 +564,49 @@ struct Requests {
     /// that is — a widget outside the canvas does not know.
     add_at_center: bool,
     add_definition: Option<String>,
+    /// Where `add_definition` was let go, in screen pixels — a palette row
+    /// is a drag source, and this is where the drag ended up. `None` when
+    /// the node was requested some other way (Enter in the search box, the
+    /// toolbar button), in which case the existing `picker.target`/canvas
+    /// centre fallback applies.
+    drop_screen_point: Option<Vec2>,
+    /// A palette row is being dragged this frame; its label, for the ghost
+    /// that follows the pointer.
+    dragging_definition: Option<String>,
     changed_graph: bool,
     toggle_spin: bool,
     /// Turn the preview by this many pixels of drag.
     spin_drag: Option<f32>,
     fit: bool,
+    /// Show this in the status bar instead of building a message at the
+    /// apply site — for a widget (the inspector's generic-type picker) whose
+    /// outcome depends on what it did, not just that it ran.
+    message: Option<String>,
+}
+
+/// Where to add a node requested by `requests.add_definition`.
+///
+/// A palette row dropped on the canvas wins over anything else: it is the
+/// most specific placement a user just gave, by dragging it there. Failing
+/// that (a plain click on a row, which is a drag released with zero delta
+/// and so still inside the palette; or a drag let go somewhere that is
+/// neither the palette nor the canvas), fall back to wherever the palette
+/// was opened for — a right-click on the canvas, or the `A` shortcut both
+/// set `picker_target` — and only then to the canvas centre.
+///
+/// A free function over plain data (no `Editor`, no `Ui`) so the placement
+/// rule is exercised directly, with no device and no frame to build.
+fn resolve_add_position(
+    drop_screen_point: Option<Vec2>,
+    canvas_rect: Rect,
+    view: &canvas::View,
+    picker_target: Option<Vec2>,
+) -> Vec2 {
+    drop_screen_point
+        .filter(|point| canvas_rect.contains(*point))
+        .map(|point| view.to_graph(canvas_rect, point))
+        .or(picker_target)
+        .unwrap_or_else(|| view.to_graph(canvas_rect, canvas_rect.center()))
 }
 
 /// The toolbar: what the graph is, and how it is being shown.
@@ -689,19 +799,29 @@ fn palette_panel(
         );
         let response = ui.interact(Id::new("palette.row").with(index as u64), row);
         let highlighted = show_highlight && index == picker.highlighted;
-        if response.hovered || highlighted {
+        if response.hovered || highlighted || response.dragging {
             ui.draw().round_rect(
                 row,
                 metrics.radius,
-                if highlighted {
+                if highlighted || response.dragging {
                     theme.palette.accent.with_alpha(0.30)
                 } else {
                     theme.palette.control
                 },
             );
         }
-        if response.clicked {
+        // A row is a drag source: releasing anywhere adds the node, and
+        // where it lands decides where. Releasing on the canvas places it
+        // there (see the ghost this reports below, and where it is applied
+        // in `Editor::build`); releasing anywhere else — including a plain
+        // click with no drag at all, which is `drag_released` with a zero
+        // delta — falls back to the palette's usual target/centre placement.
+        if response.dragging {
+            requests.dragging_definition = Some(found.label.clone());
+        }
+        if response.drag_released {
             requests.add_definition = Some(found.id.clone());
+            requests.drop_screen_point = Some(ui.input.pointer_or_zero());
         }
         let (label_rect, id_rect) = row.shrink(3.0).split_top(row.height() * 0.55);
         ui.truncated_label(label_rect, &found.label, theme.palette.text, Align::Left);
@@ -802,6 +922,7 @@ fn inspector_panel(
     match &selected_definition {
         Some(definition) => {
             content += row * 3.0 + doc_height + metrics.row_gap;
+            content += row * definition.generics.len() as f32;
             content += (small_row + row) * definition.inputs.len() as f32;
         }
         None => content += row,
@@ -844,6 +965,74 @@ fn inspector_panel(
                     .text(&layout, doc_rect.min, theme.palette.text_dim);
             }
 
+            // A generic node (one node kind serving every type it allows,
+            // e.g. `math.add` instead of a separate `math.add.f32`/`.vec3f`/…
+            // — see `wxsl_core::node::GenericParam`) needs its type picked
+            // before its sockets mean anything. Connecting a wire already
+            // resolves it automatically; this is for doing so by hand, and
+            // for changing it later — which drops whatever wiring no longer
+            // fits, exactly as switching from `math.add.f32` to
+            // `math.add.vec3f` always would have.
+            for param in &definition.generics {
+                let param_name = param.name.as_str();
+                let resolved = graph.generic_type(id, param_name);
+                let row = next(metrics.row_height);
+                let (label_rect, buttons_rect) = row.split_left(metrics.side_panel_width * 0.3);
+                let label = match resolved {
+                    Some(ty) => format!("{param_name}: {ty}"),
+                    None => format!("{param_name}: ?"),
+                };
+                ui.truncated_label(
+                    label_rect,
+                    &label,
+                    if resolved.is_some() {
+                        theme.palette.text_dim
+                    } else {
+                        theme.palette.warning
+                    },
+                    Align::Left,
+                );
+                let gap = metrics.row_gap;
+                // `GenericParam::new` requires at least one allowed type, so
+                // `len() - 1` never underflows.
+                let button_width = (buttons_rect.width() - gap * (param.allowed.len() - 1) as f32)
+                    / param.allowed.len() as f32;
+                for (index, &candidate) in param.allowed.iter().enumerate() {
+                    let button_rect = Rect::from_min_size(
+                        Vec2::new(
+                            buttons_rect.min.x + (button_width + gap) * index as f32,
+                            buttons_rect.min.y,
+                        ),
+                        Vec2::new(button_width, buttons_rect.height()),
+                    );
+                    let active = resolved == Some(candidate);
+                    let fill = active.then_some(theme.palette.accent);
+                    let button_id = Id::new("inspector.generic")
+                        .with(u64::from(id.0))
+                        .with(Id::new(param_name).0)
+                        .with(index as u64);
+                    if ui
+                        .button_colored(button_id, button_rect, candidate.wxsl_type(), fill)
+                        .clicked
+                        && !active
+                    {
+                        match graph.set_generic(registry, id, param_name, candidate) {
+                            Ok(disconnected) => {
+                                requests.changed_graph = true;
+                                if !disconnected.is_empty() {
+                                    requests.message = Some(format!(
+                                        "{param_name} is now {candidate}; disconnected {} \
+                                         edge(s) that no longer fit",
+                                        disconnected.len()
+                                    ));
+                                }
+                            }
+                            Err(error) => requests.message = Some(error.to_string()),
+                        }
+                    }
+                }
+            }
+
             // Unconnected inputs are editable; connected ones say what
             // drives them, because a value nobody reads is a lie.
             for socket in &definition.inputs {
@@ -854,11 +1043,19 @@ fn inspector_panel(
                     .node(id)
                     .and_then(|node| node.params.get(name).copied())
                     .or(socket.default);
+                // `socket.ty` is only a placeholder on a generic socket (see
+                // `wxsl_core::node::Socket::generic`); this instance's
+                // resolution is what the label should actually say.
+                let shown_ty = socket
+                    .generic
+                    .as_ref()
+                    .and_then(|param| graph.generic_type(id, param.as_str()))
+                    .unwrap_or(socket.ty);
                 ui.small_label(
                     next(metrics.small_text_size * 1.4),
                     &format!(
                         "{name}  {}",
-                        widgets::typed_summary(socket.ty, value.as_ref())
+                        widgets::typed_summary(shown_ty, value.as_ref())
                     ),
                     theme.palette.text_dim,
                     Align::Left,
@@ -1039,6 +1236,56 @@ mod tests {
     }
 
     #[test]
+    fn a_drop_on_the_canvas_places_the_node_at_the_drop_point() {
+        let canvas_rect = Rect::new(300.0, 0.0, 800.0, 600.0);
+        let view = canvas::View::default();
+        let screen_point = Vec2::new(500.0, 200.0);
+
+        let at = resolve_add_position(Some(screen_point), canvas_rect, &view, None);
+        assert_eq!(at, view.to_graph(canvas_rect, screen_point));
+    }
+
+    #[test]
+    fn a_plain_click_still_inside_the_palette_falls_back_to_the_picker_target() {
+        let canvas_rect = Rect::new(300.0, 0.0, 800.0, 600.0);
+        let view = canvas::View::default();
+        // A click that never left the palette row: the release point is
+        // well outside the canvas.
+        let inside_palette = Vec2::new(50.0, 200.0);
+        let picker_target = Vec2::new(11.0, 22.0);
+
+        let at = resolve_add_position(
+            Some(inside_palette),
+            canvas_rect,
+            &view,
+            Some(picker_target),
+        );
+        assert_eq!(at, picker_target);
+    }
+
+    #[test]
+    fn with_no_drop_and_no_target_the_node_lands_at_the_canvas_centre() {
+        let canvas_rect = Rect::new(300.0, 0.0, 800.0, 600.0);
+        let view = canvas::View::default();
+
+        let at = resolve_add_position(None, canvas_rect, &view, None);
+        assert_eq!(at, view.to_graph(canvas_rect, canvas_rect.center()));
+    }
+
+    #[test]
+    fn a_drop_wins_over_a_picker_target_even_when_both_are_set() {
+        // The palette drag is the more specific placement a user just gave,
+        // so it must win even if a right-click earlier also set a target.
+        let canvas_rect = Rect::new(300.0, 0.0, 800.0, 600.0);
+        let view = canvas::View::default();
+        let drop = Vec2::new(600.0, 300.0);
+        let stale_target = Vec2::new(999.0, 999.0);
+
+        let at = resolve_add_position(Some(drop), canvas_rect, &view, Some(stale_target));
+        assert_eq!(at, view.to_graph(canvas_rect, drop));
+    }
+
+    #[test]
     fn a_default_config_needs_only_what_has_no_default() {
         let config = EditorConfig::new(
             ShaderLibrary::new(),
@@ -1049,6 +1296,9 @@ mod tests {
         );
         assert_eq!(config.atlas_size, 2048);
         assert_eq!(config.scale, 1.0);
-        assert_eq!(config.msdf_backend, MsdfBackend::Cpu);
+        // Gpu, not `MsdfBackend::default()` (which stays Cpu for a general
+        // `wxsl-render` consumer): the editor always has a device, and a
+        // batch of glyphs is exactly the case the compute pass is faster at.
+        assert_eq!(config.msdf_backend, MsdfBackend::Gpu);
     }
 }

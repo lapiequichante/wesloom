@@ -299,11 +299,16 @@ impl Emitter<'_> {
                     }
                     let expr = self.expand_template(node, &def, template)?;
                     let name = binding_name(node, socket.name.as_str());
-                    let _ = writeln!(
-                        self.body,
-                        "    let {name}: {} = {expr};",
-                        socket.ty.wxsl_type()
+                    // `socket.ty` is only a placeholder on a generic socket
+                    // (see `Socket::generic`); this instance's resolved type
+                    // is what the emitted WGSL must actually declare.
+                    // `validate()` (run before codegen starts, in
+                    // `generate()`) guarantees every generic parameter this
+                    // node's definition declares is resolved by now.
+                    let ty = self.graph.effective_type(node, socket).expect(
+                        "a validated graph resolves every generic parameter its nodes declare",
                     );
+                    let _ = writeln!(self.body, "    let {name}: {} = {expr};", ty.wxsl_type());
                     self.bindings.insert(target, name);
                 }
             }
@@ -642,6 +647,15 @@ mod tests {
                 .input(Socket::new("a", ValueType::F32).with_splat_default(1.0))
                 .output(Socket::new("out", ValueType::F32))
                 .expr("{a} * WXSL_TEST_SCALE"),
+            NodeDefinition::builder("test.generic_add", "Generic add")
+                .generic_param(crate::node::GenericParam::new(
+                    "T",
+                    vec![ValueType::F32, ValueType::Vec3],
+                ))
+                .input(Socket::new("a", ValueType::F32).generic("T"))
+                .input(Socket::new("b", ValueType::F32).generic("T"))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .expr("{a} + {b}"),
             NodeDefinition::builder("test.split", "Split").call(WxslFunction::new_struct(
                 "package::test",
                 "split_value",
@@ -707,6 +721,53 @@ mod tests {
         );
         assert!(shader.source.contains("surface.roughness = n3_out;"));
         assert!(!shader.source.contains("ctx.uv"), "dead nodes are dropped");
+    }
+
+    #[test]
+    fn a_generic_node_emits_its_resolved_type_not_the_placeholder() {
+        let registry = registry();
+
+        // Resolved to vec3f, via a connection.
+        let mut vec_graph = Graph::new("vec");
+        let color = vec_graph.add_node("input.world_position");
+        let add = vec_graph
+            .add(Node::new("test.generic_add").with_param("b", Value::Vec3([1.0, 2.0, 3.0])));
+        let out = vec_graph.add_node(abi::SURFACE_OUTPUT_ID);
+        vec_graph
+            .wire(&registry, (color, "out"), (add, "a"))
+            .unwrap();
+        vec_graph
+            .wire(&registry, (add, "out"), (out, "base_color"))
+            .unwrap();
+        let shader = generate_default(&vec_graph, &registry);
+        assert!(
+            shader.source.contains(": vec3f = ") && shader.source.contains(" + vec3f("),
+            "expected a vec3f binding and a vec3f literal, got:\n{}",
+            shader.source
+        );
+        assert!(!shader.source.contains(": f32 ="), "{}", shader.source);
+
+        // The *same node definition*, resolved to f32 instead, in a graph
+        // of its own — one registry entry serving two concrete types.
+        let mut scalar_graph = Graph::new("scalar");
+        let add = scalar_graph.add(
+            Node::new("test.generic_add")
+                .with_param("a", Value::F32(1.0))
+                .with_param("b", Value::F32(2.0)),
+        );
+        scalar_graph
+            .set_generic(&registry, add, "T", ValueType::F32)
+            .expect("f32 is allowed");
+        let out = scalar_graph.add_node(abi::SURFACE_OUTPUT_ID);
+        scalar_graph
+            .wire(&registry, (add, "out"), (out, "roughness"))
+            .unwrap();
+        let shader = generate_default(&scalar_graph, &registry);
+        assert!(
+            shader.source.contains(": f32 = 1.0 + 2.0;"),
+            "{}",
+            shader.source
+        );
     }
 
     #[test]

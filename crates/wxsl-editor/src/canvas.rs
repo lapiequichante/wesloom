@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use glam::Vec2;
 use wxsl_core::graph::{Graph, Node, NodeId, SocketRef};
-use wxsl_core::node::{NodeDefinition, NodeRegistry, ValueType};
+use wxsl_core::node::{NodeDefinition, NodeRegistry, Socket, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, MouseButton};
 
@@ -149,15 +149,31 @@ pub enum PortKind {
     Output,
 }
 
+/// The two per-socket questions [`layout_node`] cannot answer from the
+/// definition alone, because they depend on a specific graph instance.
+///
+/// Grouped into one type rather than two more function parameters: `connect`
+/// needs a live [`Graph`] and `display_ty` needs the node's id as well, and
+/// bundling them is what keeps [`layout_node`] a pure function of "this
+/// definition, at this position" instead of also taking the graph directly.
+pub struct SocketQueries<'a> {
+    /// Whether an edge feeds this input.
+    pub connected: &'a dyn Fn(&str) -> bool,
+    /// A socket's *effective* type — `socket.ty` is only a placeholder for a
+    /// generic one (see [`wxsl_core::node::Socket::generic`]), and the
+    /// resolved type is what decides its port colour.
+    pub display_ty: &'a dyn Fn(&Socket) -> ValueType,
+}
+
 /// Lay one node out at `position` in graph space.
 ///
-/// A pure function of the definition and the theme, so the same arithmetic
-/// serves drawing, hit-testing and the tests.
+/// A pure function of the definition, `queries` and the theme, so the same
+/// arithmetic serves drawing, hit-testing and the tests.
 pub fn layout_node(
     id: NodeId,
     position: Vec2,
     definition: &NodeDefinition,
-    connected: &dyn Fn(&str) -> bool,
+    queries: &SocketQueries<'_>,
     view: &View,
     canvas: Rect,
     theme: &Theme,
@@ -181,7 +197,7 @@ pub fn layout_node(
         let row = Rect::from_min_size(Vec2::new(rect.min.x, y), Vec2::new(width, row_height));
         outputs.push(PortLayout {
             socket: socket.name.as_str().to_string(),
-            ty: socket.ty,
+            ty: (queries.display_ty)(socket),
             // On the right edge, on the row's centre line.
             center: Vec2::new(rect.max.x, row.center().y),
             row,
@@ -194,10 +210,10 @@ pub fn layout_node(
         let row = Rect::from_min_size(Vec2::new(rect.min.x, y), Vec2::new(width, row_height));
         inputs.push(PortLayout {
             socket: socket.name.as_str().to_string(),
-            ty: socket.ty,
+            ty: (queries.display_ty)(socket),
             center: Vec2::new(rect.min.x, row.center().y),
             row,
-            connected: connected(socket.name.as_str()),
+            connected: (queries.connected)(socket.name.as_str()),
         });
         y += row_height;
     }
@@ -902,8 +918,19 @@ pub fn layout_graph(
             let definition = registry.get(&node.def)?;
             let position = Vec2::from_array(node.position.unwrap_or_default());
             let connected = |socket: &str| graph.edge_into(&SocketRef::new(id, socket)).is_some();
+            let display_ty = |socket: &Socket| {
+                socket
+                    .generic
+                    .as_ref()
+                    .and_then(|param| graph.generic_type(id, param.as_str()))
+                    .unwrap_or(socket.ty)
+            };
+            let queries = SocketQueries {
+                connected: &connected,
+                display_ty: &display_ty,
+            };
             Some(layout_node(
-                id, position, definition, &connected, view, canvas, theme,
+                id, position, definition, &queries, view, canvas, theme,
             ))
         })
         .collect()
@@ -1068,11 +1095,15 @@ mod tests {
     fn a_node_lays_its_ports_out_on_its_edges() {
         let theme = Theme::default();
         let definition = definition();
+        let queries = SocketQueries {
+            connected: &|_| false,
+            display_ty: &|socket| socket.ty,
+        };
         let layout = layout_node(
             NodeId(1),
             Vec2::new(10.0, 20.0),
             &definition,
-            &|_| false,
+            &queries,
             &View::default(),
             canvas_rect(),
             &theme,
@@ -1093,14 +1124,56 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_ports_colour_follows_its_resolved_type_not_the_placeholder() {
+        // The bug this pins down: `socket.ty` on a generic socket is only a
+        // placeholder (always `f32` for `math.add`), and using it directly
+        // for a port's colour would show every generic node as if it were
+        // still unresolved `f32`, however it was actually resolved.
+        let mut registry = NodeRegistry::new();
+        registry.register(
+            NodeDefinition::builder("math.add", "Add")
+                .generic_param(wxsl_core::node::GenericParam::new(
+                    "T",
+                    vec![ValueType::F32, ValueType::Vec3],
+                ))
+                .input(Socket::new("a", ValueType::F32).generic("T"))
+                .input(Socket::new("b", ValueType::F32).generic("T"))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .expr("{a} + {b}"),
+        );
+        let mut graph = Graph::new("test");
+        let add = graph.add_node("math.add");
+        graph
+            .set_generic(&registry, add, "T", ValueType::Vec3)
+            .expect("vec3f is allowed");
+
+        let layouts = layout_graph(
+            &graph,
+            &registry,
+            &View::default(),
+            canvas_rect(),
+            &Theme::default(),
+        );
+        let layout = &layouts[0];
+        assert_eq!(layout.outputs[0].ty, ValueType::Vec3, "{layout:?}");
+        for port in &layout.inputs {
+            assert_eq!(port.ty, ValueType::Vec3, "{port:?}");
+        }
+    }
+
+    #[test]
     fn a_ports_hit_test_prefers_the_nearest_one() {
         let theme = Theme::default();
         let definition = definition();
+        let queries = SocketQueries {
+            connected: &|_| false,
+            display_ty: &|socket| socket.ty,
+        };
         let layout = layout_node(
             NodeId(1),
             Vec2::ZERO,
             &definition,
-            &|_| false,
+            &queries,
             &View::default(),
             canvas_rect(),
             &theme,

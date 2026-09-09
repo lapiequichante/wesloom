@@ -33,7 +33,9 @@ use crate::variants;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum MsdfBackend {
     /// [`crate::ui::msdf`], on the CPU. Needs no device, and is the
-    /// reference the GPU path is checked against.
+    /// reference the GPU path is checked against — also why it is the
+    /// default: an application that never picks a backend still gets one
+    /// that works before there is even an adapter to ask for.
     #[default]
     Cpu,
     /// `package::wxsl::msdf`, as a compute pass.
@@ -417,6 +419,14 @@ mod tests {
         }
         assert_eq!(MsdfBackend::parse("  GPU "), Some(MsdfBackend::Gpu));
         assert_eq!(MsdfBackend::parse("cuda"), None);
+    }
+
+    #[test]
+    fn the_default_backend_needs_no_device() {
+        // An application that never picks a backend must still get one that
+        // works before there is even an adapter to ask for — the CPU path,
+        // not the one that needs a compiled compute pipeline.
+        assert_eq!(MsdfBackend::default(), MsdfBackend::Cpu);
     }
 
     #[test]

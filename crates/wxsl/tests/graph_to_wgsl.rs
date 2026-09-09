@@ -12,7 +12,7 @@ use wxsl::core::abi;
 use wxsl::core::codegen;
 use wxsl::core::graph::{Graph, Node, NodeId};
 use wxsl::core::macros::{MacroSet, MacroValue};
-use wxsl::core::node::{NodeBody, NodeRegistry, Value, ValueType};
+use wxsl::core::node::{NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 use wxsl::render::RenderPath;
@@ -165,14 +165,34 @@ fn unused_nodes_do_not_reach_the_shader() {
 ///
 /// This is what makes the coverage test below possible: a node's output only
 /// reaches the compiler if something downstream consumes it.
+///
+/// `ty` is also what a *generic* node (`def.generics` non-empty, see
+/// `wxsl_core::node::GenericParam`) resolves every one of its declared type
+/// parameters to — sound for every node currently generic, since each
+/// declares exactly one parameter shared by all of its sockets, but a
+/// simplification worth a look if that ever changes.
 fn graph_using(
     registry: &NodeRegistry,
-    def_id: &str,
+    def: &NodeDefinition,
     socket: &str,
     ty: ValueType,
 ) -> Option<Graph> {
-    let mut graph = Graph::new(format!("coverage: {def_id}.{socket}"));
-    let node = graph.add(Node::new(def_id));
+    let mut graph = Graph::new(format!("coverage: {}.{socket}", def.id));
+    let node = graph.add(Node::new(def.id.clone()));
+    for param in &def.generics {
+        graph
+            .set_generic(registry, node, param.name.as_str(), ty)
+            .ok()?;
+    }
+    // A generic input has no default (see `Socket::generic`) — resolving the
+    // type does not feed it. Every generic input here shares the one
+    // parameter just resolved, so the same splat covers all of them.
+    for input in &def.inputs {
+        if input.generic.is_some() {
+            let value = ty.splat(1.0)?;
+            graph.set_param(node, input.name.as_str(), value);
+        }
+    }
     let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
 
     // Adapt the output type to a surface field, since sockets are matched by
@@ -221,38 +241,56 @@ fn every_node_in_the_library_compiles_on_both_paths() {
         if def.is_surface_output() {
             continue;
         }
+        // A generic node's socket `ty` is only a placeholder (see
+        // `wxsl_core::node::Socket::generic`) — every concrete type its
+        // parameter allows needs its own graph, or genericizing a family
+        // would lose the per-type coverage this test exists to give.
+        // A non-generic node still tests exactly the one type it declares.
+        let types_to_try: Vec<ValueType> = match def.generics.first() {
+            Some(param) => param.allowed.clone(),
+            None => vec![],
+        };
         for socket in &def.outputs {
-            let Some(graph) = graph_using(&registry, &def.id, socket.name.as_str(), socket.ty)
-            else {
-                skipped.push(format!("{}.{}", def.id, socket.name));
-                continue;
+            let candidates: &[ValueType] = if types_to_try.is_empty() {
+                std::slice::from_ref(&socket.ty)
+            } else {
+                &types_to_try
             };
-            let material = match Material::from_graph(&graph, &registry) {
-                Ok(material) => material,
-                Err(error) => {
-                    failures.push(format!("{}.{}: codegen: {error}", def.id, socket.name));
+            for &ty in candidates {
+                let label = if types_to_try.is_empty() {
+                    format!("{}.{}", def.id, socket.name)
+                } else {
+                    format!("{}.{} (T={ty})", def.id, socket.name)
+                };
+                let Some(graph) = graph_using(&registry, def, socket.name.as_str(), ty) else {
+                    skipped.push(label);
                     continue;
-                }
-            };
-            for path in RenderPath::ALL {
-                match compile(&material, *path) {
-                    Ok(wgsl) => {
-                        // A node that compiled but got stripped would make
-                        // this test vacuous.
-                        if let NodeBody::Call(func) = &def.body {
-                            assert!(
-                                wgsl.contains(func.name.as_str()),
-                                "{} compiled without calling {}:\n{wgsl}",
-                                def.id,
-                                func.name
-                            );
-                        }
-                        checked += 1;
+                };
+                let material = match Material::from_graph(&graph, &registry) {
+                    Ok(material) => material,
+                    Err(error) => {
+                        failures.push(format!("{label}: codegen: {error}"));
+                        continue;
                     }
-                    Err(diagnostic) => failures.push(format!(
-                        "{}.{} on the {path} path:\n{diagnostic}",
-                        def.id, socket.name
-                    )),
+                };
+                for path in RenderPath::ALL {
+                    match compile(&material, *path) {
+                        Ok(wgsl) => {
+                            // A node that compiled but got stripped would make
+                            // this test vacuous.
+                            if let NodeBody::Call(func) = &def.body {
+                                assert!(
+                                    wgsl.contains(func.name.as_str()),
+                                    "{label} compiled without calling {}:\n{wgsl}",
+                                    func.name
+                                );
+                            }
+                            checked += 1;
+                        }
+                        Err(diagnostic) => {
+                            failures.push(format!("{label} on the {path} path:\n{diagnostic}"))
+                        }
+                    }
                 }
             }
         }
@@ -280,7 +318,8 @@ fn a_struct_returning_function_is_called_once_for_all_its_outputs() {
     let registry = wxsl::stdlib::registry();
     let mut graph = Graph::new("split");
     let split = graph.add(Node::new("lighting.pbr_direct_split"));
-    let add = graph.add_node("math.add.vec3f");
+    // Generic, resolved to vec3f as soon as the first wire below connects.
+    let add = graph.add_node("math.add");
     let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
     graph
         .wire(&registry, (split, "diffuse"), (add, "a"))

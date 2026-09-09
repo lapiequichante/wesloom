@@ -248,9 +248,20 @@ pub struct Socket {
     /// argument name in the serialized node format.
     pub name: WxslIdent,
     /// The type of value this socket carries.
+    ///
+    /// For a socket with [`Socket::generic`] set, this is only the
+    /// *placeholder* shown before any node instance has resolved that
+    /// parameter (see [`GenericParam`]) — never read by codegen, which reads
+    /// the instance's resolved type instead.
     pub ty: ValueType,
     /// Value used when an input is left unconnected and the node instance
     /// pins no parameter. `None` on a non-optional input makes it mandatory.
+    ///
+    /// Always `None` on a generic socket: a fixed [`Value`] would be the
+    /// wrong type for every resolution but one, so a generic input is
+    /// mandatory instead — connect something, or (via
+    /// [`crate::graph::Graph::set_generic`]) pick the type explicitly, and
+    /// only then does an unconnected default become meaningful.
     pub default: Option<Value>,
     /// Whether the input may be left unfed entirely, with no value at all.
     ///
@@ -261,6 +272,11 @@ pub struct Socket {
     pub optional: bool,
     /// One-line description for the editor.
     pub doc: String,
+    /// The [`GenericParam::name`] this socket's *effective* type is governed
+    /// by, if any. `None` means `ty` is this socket's fixed, final type —
+    /// the common case. See [`GenericParam`] for what a generic socket means
+    /// and how its type is resolved per graph node.
+    pub generic: Option<WxslIdent>,
 }
 
 impl Socket {
@@ -278,6 +294,7 @@ impl Socket {
             default: None,
             optional: false,
             doc: String::new(),
+            generic: None,
         }
     }
 
@@ -286,6 +303,20 @@ impl Socket {
     /// See [`Socket::optional`] for the one body kind this is valid on.
     pub fn optional(mut self) -> Self {
         self.optional = true;
+        self
+    }
+
+    /// Make this socket's effective type governed by generic parameter
+    /// `param` instead of fixed at `ty` — see [`GenericParam`]. The
+    /// declaring [`NodeDefinition`] must declare a matching
+    /// [`GenericParam::name`], which the builder checks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `param` is not a valid WXSL identifier.
+    pub fn generic(mut self, param: &str) -> Self {
+        self.generic =
+            Some(WxslIdent::new(param).expect("generic parameter name must be a valid identifier"));
         self
     }
 
@@ -298,8 +329,17 @@ impl Socket {
     ///
     /// # Panics
     ///
-    /// Panics if `value`'s type is not the socket's type.
+    /// Panics if `value`'s type is not the socket's type, or if the socket
+    /// is generic — a fixed [`Value`] would be the wrong type for every
+    /// resolution but one, so a generic socket has no static default (see
+    /// [`Socket::generic`]).
     pub fn with_default(mut self, value: Value) -> Self {
+        assert!(
+            self.generic.is_none(),
+            "socket `{}` is generic over `{}` and cannot have a fixed default",
+            self.name,
+            self.generic.as_ref().map(WxslIdent::as_str).unwrap_or(""),
+        );
         assert_eq!(
             value.ty(),
             self.ty,
@@ -460,6 +500,56 @@ pub enum NodeBody {
     SurfaceOutput,
 }
 
+/// A named type parameter a [`NodeDefinition`] declares, constrained to a
+/// fixed set of concrete types.
+///
+/// This is what lets one node kind stand in for several: instead of
+/// `math.add.f32`, `math.add.vec2f`, `math.add.vec3f` and `math.add.vec4f` as
+/// four separate registry entries, `math.add` declares one generic parameter
+/// `T: f32 | vec2f | vec3f | vec4f`, and its `a`, `b` and `out` sockets all
+/// reference it via [`Socket::generic`].
+///
+/// A parameter is *declared* here, once, on the definition every node
+/// instance of this kind shares; it is *resolved* — given a concrete
+/// [`crate::node::ValueType`] — separately per instance, in
+/// [`crate::graph::Node::generics`]. Resolution happens automatically the
+/// first time an edge connects a socket sharing this parameter to something
+/// concretely typed (or another already-resolved generic socket), or
+/// explicitly via [`crate::graph::Graph::set_generic`]; a node whose
+/// declared parameter has no resolution yet is reported as
+/// [`crate::error::GraphError::UnresolvedGeneric`] by
+/// [`crate::graph::Graph::validate`] — codegen has no concrete WGSL type to
+/// emit for it, exactly as a mandatory socket with nothing feeding it is
+/// [`crate::error::GraphError::MissingInput`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericParam {
+    /// The parameter's name, e.g. `T`. Referenced by [`Socket::generic`].
+    pub name: WxslIdent,
+    /// The concrete types this parameter may resolve to, in the order a
+    /// "pick a type" control offers them.
+    pub allowed: Vec<ValueType>,
+}
+
+impl GenericParam {
+    /// Declare a parameter named `name`, resolvable to any of `allowed`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` is not a valid WXSL identifier, or `allowed` is
+    /// empty (a parameter with nothing it can resolve to can never be
+    /// satisfied).
+    pub fn new(name: &str, allowed: Vec<ValueType>) -> Self {
+        assert!(
+            !allowed.is_empty(),
+            "generic parameter `{name}` must allow at least one type"
+        );
+        GenericParam {
+            name: WxslIdent::new(name).expect("generic parameter name must be a valid identifier"),
+            allowed,
+        }
+    }
+}
+
 /// The kind of a node: its typed interface plus the WXSL it emits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeDefinition {
@@ -480,6 +570,9 @@ pub struct NodeDefinition {
     /// Macro variables this node reads. Declaring them here is what puts them
     /// in the graph's editable macro set, see [`crate::macros`].
     pub macros: Vec<MacroDef>,
+    /// Type parameters this definition's sockets may reference via
+    /// [`Socket::generic`]. See [`GenericParam`].
+    pub generics: Vec<GenericParam>,
     /// Extra `(module, item)` imports the body needs, beyond those implied by
     /// a [`NodeBody::Call`].
     pub imports: Vec<(ModulePath, WxslIdent)>,
@@ -501,6 +594,7 @@ impl NodeDefinition {
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 macros: Vec::new(),
+                generics: Vec::new(),
                 imports: Vec::new(),
                 body: NodeBody::Expr(Vec::new()),
             },
@@ -540,6 +634,13 @@ impl NodeDefinition {
     /// Look up an output socket by name.
     pub fn output(&self, name: &str) -> Option<&Socket> {
         self.outputs.iter().find(|s| s.name.as_str() == name)
+    }
+
+    /// Look up a declared generic parameter by name.
+    pub fn generic(&self, name: &str) -> Option<&GenericParam> {
+        self.generics
+            .iter()
+            .find(|param| param.name.as_str() == name)
     }
 
     /// Whether this is the graph's terminal surface-output node.
@@ -607,6 +708,23 @@ impl NodeDefinitionBuilder {
     /// Declare a macro variable this node reads.
     pub fn macro_var(mut self, decl: MacroDef) -> Self {
         self.def.macros.push(decl);
+        self
+    }
+
+    /// Declare a generic type parameter, so a [`Socket::generic`] on this
+    /// definition may reference it. See [`GenericParam`].
+    ///
+    /// # Panics
+    ///
+    /// Panics on a duplicate parameter name.
+    pub fn generic_param(mut self, param: GenericParam) -> Self {
+        assert!(
+            self.def.generic(param.name.as_str()).is_none(),
+            "duplicate generic parameter `{}` on `{}`",
+            param.name,
+            self.def.id
+        );
+        self.def.generics.push(param);
         self
     }
 
@@ -686,6 +804,17 @@ impl NodeDefinitionBuilder {
                 self.def.outputs.len(),
                 exprs.len()
             );
+        }
+        for socket in self.def.inputs.iter().chain(&self.def.outputs) {
+            if let Some(param) = &socket.generic {
+                assert!(
+                    self.def.generic(param.as_str()).is_some(),
+                    "socket `{}` of `{}` references generic parameter `{param}`, \
+                     which was never declared with `.generic_param(...)`",
+                    socket.name,
+                    self.def.id
+                );
+            }
         }
         self.def
     }
