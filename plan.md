@@ -19,15 +19,19 @@ superseding its row, not by quietly diverging inside a milestone.
 | Who owns the pipeline | **The renderer.** A pipeline is swappable at any moment and swapping re-evaluates everything, because the pipeline is what decides how a material is split. Pipelines live in their own files, so `wxsl-stdlib` can ship a standard deferred one. |
 | Swapping a pipeline | **Non-blocking: the previous pipeline keeps presenting.** Everything declarative — stage set, target descriptors, pass order — is re-derived at once because it is only data. Missing variants compile in the background behind a `compiling 3/7` indicator, and the swap lands in one frame when they are ready. No freeze, no black frame, no half-drawn scene. |
 | Mesh assets | **glTF, behind a `gltf` feature.** Geometry only at first: positions, normals, tangents, uv, indices — no materials, no skins. A scene of primitives cannot demonstrate shadows or depth peeling convincingly, and a bespoke format's converter would have to parse glTF anyway. |
-| Instance transforms | **A storage buffer indexed by `@builtin(instance_index)`.** One binding, one upload, no per-draw rebind — and the only shape that composes with M1's indirect draws, since a GPU culling pass emits instance *indices*. Amends ADR 0010's per-object dynamic offset. |
+| Instance transforms | **A storage buffer indexed by `@builtin(instance_index)`.** One binding, one upload, no per-draw rebind — and the only shape that composes with M1's indirect draws, since a GPU culling pass emits instance *indices*. Amends ADR 0010's per-object dynamic offset. M4 extends this same buffer with whatever per-instance attributes a material declares. |
 | Where pipeline configuration lives | **Two graph kinds.** A frame-level *pipeline graph* reuses `wxsl-core`'s node/socket/type model and is edited in its own canvas. A *material graph* stays per-surface, and codegen splits it across whatever stages the pipeline asks for. |
 | Portability target | **WebGPU baseline, native fast paths behind a feature.** Every pass must have a path that runs on the WebGPU baseline; a native path may be faster or higher quality, and both are tested. |
 | Culling | **Convention, as a per-pass knob.** The opaque pass culls back faces; an outline pass culls front faces. `cull_mode` is a field of a pass description, never a constant in the code. |
 | How an object picks its queue | **Tags on the material, a tag expression on the pass.** The material declares what it *is* (`opaque`, `transparent`, `outlined`); a geometry pass declares what it *draws*. No introspection of graphs, and a draw may override its tags. |
 | How a node is declared | **The `.wxsl` file is the definition.** *Done — [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md).* Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
+| How a material declares a uniform | **A `param` node, with the layout computed rather than mirrored.** `const` inlines into the shader, so editing one compiles a new variant; `param` is a field of group 1's uniform buffer, so editing one only writes bytes. `wxsl-core` computes the WGSL layout — `vec3f`'s 16-byte alignment makes a hand-written Rust mirror impossible — and emits an offset table `wxsl-render` writes through. |
+| How a material uses the application's slot | **It declares a block and hands out the layout; the application hands back a bind group.** Group 2 stays the application's and holds nothing of ours, but a material may now state what it expects to find there. `wgpu` validates the match, so there is no checking code of ours to keep in sync. |
+| How a material requires a *vertex* attribute | **The base four are ABI and always present; declared extras are separate vertex buffers at locations 4 and up.** Read with one `input.attribute` node carrying the name, so `NodeRegistry` stays global and static. A mesh that lacks a declared attribute fails when the draw list is built, naming both sides. |
+| How a material requires an *instance* attribute | **A field of the instance storage buffer, not an instance-step vertex buffer.** Same declaration in the editor, different backing, and for the reason already settled two rows up: one binding however many attributes, no vertex-slot pressure, and it survives a GPU culling pass that emits instance *indices*. A fragment stage reads them by passing `instance_index` down as one flat varying and re-indexing. |
 | Lighting models | **A registry of WXSL functions, hand-written first.** A model is one function of fixed signature plus a small id; whether that function was written or generated is invisible to the dispatch, so graph-authored models land later against the same registry. |
-| Compute passes | **In the engine from M1, first used in M6.** The repo already runs a compute pass — MSDF generation (ADR 0014) — so the pipeline, bind-group and variant machinery exists and the render graph generalizes it rather than inventing it. |
-| Antialiasing | **Post-process only.** No MSAA anywhere: FXAA/SMAA in M6, TAA once persistent resources exist. One behaviour across forward, deferred and peeling, so the editor's preview always represents the final frame. |
+| Compute passes | **In the engine from M1, first used in M7.** The repo already runs a compute pass — MSDF generation (ADR 0014) — so the pipeline, bind-group and variant machinery exists and the render graph generalizes it rather than inventing it. |
+| Antialiasing | **Post-process only.** No MSAA anywhere: FXAA/SMAA in M7, TAA once persistent resources exist. One behaviour across forward, deferred and peeling, so the editor's preview always represents the final frame. |
 | Shadows | **A texture array, one slice per light or cascade, PCF with a normal-offset bias.** Atlas packing is a later, contained change; normal-offset rather than depth bias because materials will displace and discard. |
 | First pipeline milestone | **The render graph first.** Re-express forward and deferred on a declarative pass engine, adding no visible feature, so everything after it is additive rather than a refactor. M0 precedes it as independent groundwork. |
 
@@ -216,13 +220,13 @@ the swap degrades to blocking — which is exactly what the indicator is for.
 
 ADR 0010 spent all four groups, and every feature below wants somewhere to
 put a texture. Decide the allocation now, in one place, rather than
-discovering the collision in M6:
+discovering the collision in M7:
 
 | Group | Gains |
 |---|---|
-| 0 `frame` | the shadow atlas and its per-light matrices — produced once per frame, read by every lit pass, so it belongs with the lights it comes from, not in a pass group |
-| 1 `material` | the material's own textures and samplers, plus baked lookups (M8) — this is the group that finally gets bound |
-| 2 `user` | untouched. It stays the application's. |
+| 0 `frame` | the shadow atlas and its per-light matrices — produced once per frame, read by every lit pass, so it belongs with the lights it comes from, not in a pass group — and the instance storage buffer, whose *width* a material decides once it can declare per-instance attributes (M4) |
+| 1 `material` | the material's **uniform parameters** — one buffer whose layout is computed from the graph — plus its own textures and samplers, and baked lookups (M9). This is the group that finally gets bound. |
+| 2 `user` | still the application's, and still nothing of ours in it — but a material may now **declare the layout it expects** there and hand it out, so the application binds against the material rather than against a convention. **This supersedes this row's earlier "untouched"**: the slot's ownership is unchanged, what is new is that the material can describe it. |
 | 3 `pass` | pass-local reads: the G-buffer, peel buffers, a screen effect's inputs. Already its job. |
 
 The one that could go either way is the shadow atlas, and putting it in
@@ -278,7 +282,7 @@ re-deriving every node at test time and comparing it with the generated
 table — the agreement test that makes the build script's serializer
 trustworthy, in the same spirit as the two MSDF implementations (ADR 0014).
 
-**Still owed to M10**, and unchanged: the runtime caller. Nothing about the
+**Still owed to M11**, and unchanged: the runtime caller. Nothing about the
 derivation assumes build time, so making a saved buffer appear in the palette
 is calling the same function — which was the entire point of writing it as an
 API rather than as a build script.
@@ -334,7 +338,7 @@ and deferred as pass lists built in Rust (not yet as graphs).
   already runs a compute pass — MSDF glyph generation (`ui::msdf_gpu`,
   `MSDF_MODULE`, ADR 0014) — so compute pipelines, their bind groups and
   their variant compilation are solved problems here. The render graph
-  generalizes what works rather than inventing it. First *used* in M6.
+  generalizes what works rather than inventing it. First *used* in M7.
 * `gpu.rs` grows feature negotiation: ask for the optional features we want,
   record what was granted in a `DeviceCaps` the passes can query.
 
@@ -366,28 +370,167 @@ leave the dynamic offset for a storage buffer).
 stage, a depth prepass in the forward pass list renders identically, and
 swapping pipeline mid-session never drops a frame or shows an incomplete one.
 
-### M3 — Textures, samplers, and the material bind group
+### M3 — What a material declares: uniforms, textures, samplers
 
-The prerequisite for M4 through M8. No pipeline work.
+The prerequisite for M5 through M9, and the first half of a larger idea: a
+material graph does not only *compute*, it **declares what it needs from
+outside itself**. Three kinds of resource land here. The fourth — what it
+needs from the geometry — is M4, and it is the same idea again.
 
-* `ValueType::{Texture2d, Sampler, ...}` — naming to settle: these are not
-  values in the same sense as a `vec3f`, and may want a separate socket kind
-  rather than a widened `ValueType`.
-* Bind group 1 built from what a graph declares; `Material` grows a
-  parameter and texture table.
-* `sample.texture_2d` and friends in `wxsl-stdlib`.
+No pipeline work in either.
 
-**Done when** the demo cube samples an actual texture through a graph.
+**Uniform parameters, in group 1.** A `param` node looks like `const` in the
+editor and is nothing like it underneath. A `const` is inlined into the
+generated WXSL, so editing one compiles a new variant; a `param` is a field
+of one uniform buffer, so editing one is a buffer write. That difference *is*
+the feature — a slider that does not recompile.
 
-**ADR** — "Textures and samplers as graph resources". Amends ADR 0010's
-material-group row.
+* One node kind, `param.value`, generic over every `ValueType` (ADR 0018's
+  rule: one node per operation, not one per operation and type), carrying a
+  name and a default.
+* `wxsl-core` collects the reachable ones, orders them stably, and computes
+  the **WGSL uniform layout**. That is where the trap is: `vec3f` aligns to
+  16 bytes, so a naive field order either wastes a third of the buffer or,
+  worse, leaves the host and the shader disagreeing about offsets — silently,
+  every frame.
+* So this **breaks ADR 0008's mirroring rule, deliberately**: there is no
+  `#[repr(C)]` struct that can mirror a layout the graph decides. `wxsl-core`
+  emits an offset/size table alongside the struct and `wxsl-render` writes
+  parameters through it by name. First place in the repo where the Rust half
+  of a layout is *computed* rather than written — and the machinery M4's
+  instance attributes and M9's bake passes both reuse.
+* The variant key gains the parameter **layout**, never the parameter
+  **values**. Getting that wrong turns every slider back into a recompile,
+  which is the whole thing this milestone buys.
 
-### M4 — Multiple outputs, partitioning, and shadows
+**Textures and samplers, also group 1.** `ValueType::{Texture2d, Sampler,
+…}` — naming to settle: these are not values in the same sense a `vec3f` is,
+and may want a socket kind of their own rather than a widened `ValueType`.
+Then `sample.texture_2d` and friends in `wxsl-stdlib`, which M0 makes cheap:
+each one is a file and nothing else.
+
+**The application's own block, in group 2.** Different in kind from the two
+above — the material does not *define* this resource, it **requires** one.
+The ABI has always reserved the slot for exactly this: group 2's doc says it
+is the only group a node definition may bind in.
+
+* The graph declares a named block with typed fields; codegen emits the
+  struct and `@group(2) @binding(0) var<uniform> …`.
+* The renderer cannot fill it, because it does not own the data. So: **the
+  material hands out the `BindGroupLayout`, the application hands back a
+  `BindGroup`.** No validation code of ours, and a mismatch is `wgpu`'s own
+  error naming the binding rather than a wrong picture.
+* The cost, accepted: the layout is per-material, so an application with two
+  materials declaring different blocks binds per material rather than once
+  per frame. That is the right price — the alternative is one global layout
+  every material must agree with, which is the coupling group 2 exists to
+  avoid.
+
+**Done when** the demo cube samples a real texture through a graph, dragging
+its roughness slider leaves `cache_stats()` reporting zero new misses, and an
+application-supplied uniform reaches a node without `wxsl-render` knowing
+what is in it.
+
+**ADR** — "A material declares its resources: uniforms, textures, and the
+application's slot". Amends ADR 0010's material-group row, and ADR 0008's
+rule that a layout's two halves are written twice.
+
+### M4 — The interface a material requires of its geometry
+
+The other half of M3's idea, and the reason it is here rather than inside the
+partitioning work: a declared attribute is a **requirement on the geometry**,
+exactly as a group-2 block is a requirement on the application, and it wants
+the same declare-then-validate shape.
+
+Today both ends are fixed. `VertexIn` is hand-written in
+`shaders/wxsl/vertex.wxsl` and mirrored by `mesh::Vertex::ATTRIBUTES` —
+position, normal, tangent, uv, four locations. Per-instance data is a model
+matrix and nothing else. A material that wants a second UV set, a vertex
+colour, a per-vertex wind weight, or a per-instance tint, age, or animation
+offset has nowhere to put any of it.
+
+One declaration in the editor, **two backings**, and which one a declaration
+gets is decided by its frequency rather than by the author:
+
+#### Per-vertex: vertex buffers
+
+* **The base four stay in the ABI and are always present.** Declared
+  attributes are appended at locations 4 and up. Every existing mesh keeps
+  working, `mesh::Vertex` is untouched, and a material declaring nothing
+  extra compiles to exactly today's vertex stage.
+* **One separate vertex buffer per attribute** — not a widened interleaved
+  struct. Three reasons: glTF hands them over per accessor anyway (M1), a
+  mesh can serve a material that wants colours and one that does not without
+  re-uploading its positions, and the base stream stays a `#[repr(C)]`
+  struct with a mirror to check. The cost is vertex-buffer slots: WebGPU
+  guarantees 8, so **four declared vertex attributes is the budget**, written
+  down here rather than discovered when somebody declares a fifth.
+
+#### Per-instance: the storage buffer, widened
+
+* **Not an instance-step vertex buffer.** The obvious route —
+  `VertexStepMode::Instance`, one more buffer — loses to the decision already
+  settled for instance *transforms*, and for the same three reasons: it is
+  one binding however many attributes are declared, it puts no pressure on
+  the eight vertex slots the per-vertex half is already spending, and it
+  survives M1's indirect draws, where a GPU culling pass emits instance
+  *indices* and an instance-step stream would have to be compacted to match.
+* So declared per-instance attributes are **fields appended to the instance
+  storage buffer**, whose base fields (model matrix, normal matrix) stay ABI
+  and always present. Its layout is computed from the graph by the same code
+  M3 wrote for uniform parameters — the second customer, which is what
+  justifies that code being a table rather than a struct.
+* **A fragment stage cannot read `@builtin(instance_index)`** — WGSL offers
+  it in the vertex stage only. The fix is one `@interpolate(flat) u32`
+  varying carrying the index down, and the fragment stage re-indexes the
+  storage buffer itself. One inter-stage location covers *every* declared
+  instance attribute, however many, which is strictly better than passing
+  each value down; and it is the only reason this half touches varyings at
+  all.
+
+#### Both halves
+
+* **Reading one is `input.attribute` with the name as a node parameter**,
+  validated against the graph's declared set — not a generated node kind per
+  attribute. The alternative makes `NodeRegistry` per-graph, and it is global
+  and shared today; one node kind carrying a name keeps it that way. Whether
+  a name is per-vertex or per-instance comes from the declaration, so the
+  node does not have to say, and moving an attribute from one to the other
+  rewires nothing.
+* **The geometry says what it provides**, and a mismatch is caught when the
+  draw list is built: an error naming the material, the attribute and the
+  mesh or instance batch. Never a `wgpu` complaint about vertex buffer 4,
+  never a storage buffer read past its stride, and never a frame that merely
+  looks wrong.
+* **The vertex layout and the instance stride join the variant key, alongside
+  the stage (M2).** A shadow stage that reads none of the declared attributes
+  should bind none of their buffers and pass no index down, which falls out
+  of per-stage reachability — and is the first thing M5's partitioning gets
+  to handle with a general mechanism instead of a special case.
+* **The 16 inter-stage locations get an accountant.** Declared vertex
+  attributes, the flat instance index, and whatever M5's partitioning wants
+  to pass between stages all come out of the same budget. Whoever assigns
+  `VertexOut` locations assigns all of them, and reports the total rather
+  than overrunning it silently.
+
+**Done when** a glTF mesh with a vertex-colour stream drives a material
+through a declared attribute; a thousand instances of one mesh read a
+per-instance tint from one storage buffer, in the fragment stage, with no
+per-instance rebinding; the same material refuses to draw against the plain
+cube with an error naming the missing attribute; and a material that declares
+nothing at all produces byte-identical WGSL to today.
+
+**ADR** — "A material declares the vertex and instance attributes it
+requires". Amends ADR 0008 (`VertexIn` stops being fixed ABI text) and
+ADR 0010 again (the instance buffer's width becomes a material's business).
+
+### M5 — Multiple outputs, partitioning, and shadows
 
 The first milestone that changes what a material *is*, and shadows are its
 first consumer.
 
-* Vertex output node (position offset, later custom interpolants) and an
+* Vertex output node (position offset, and interpolants the *graph*
+  computes — M4 already brought in the ones the geometry supplies) and an
   explicit discard output.
 * `codegen` partitions per stage: reachability from the outputs a stage
   needs, per shader stage, duplicating shared nodes.
@@ -404,12 +547,12 @@ first consumer.
   constant depth bias behaves badly on exactly the two things this milestone
   introduces, displaced vertices and perforated alpha. PCSS is a later
   option, and it wants M1's history resources for its noise.
-* Land the relative-to-eye ABI hook here (see M9) while the vertex stage is
+* Land the relative-to-eye ABI hook here (see M10) while the vertex stage is
   already open.
 * The `Velocity` stage needs the vertex offset evaluated at `t-1`, not just
   the model matrix at `t-1`. So a time-driven input needs a "previous frame"
   variant, or motion vectors come out wrong on exactly the objects that have
-  motion. Settle that shape here rather than in M6, which is only where it
+  motion. Settle that shape here rather than in M7, which is only where it
   gets consumed.
 
 **Done when** a material that discards by alpha casts a matching perforated
@@ -420,7 +563,7 @@ right.
 **ADR** — "A material graph spans shader stages, and compiles per pass
 stage".
 
-### M5 — Lighting models, by ID in the G-buffer
+### M6 — Lighting models, by ID in the G-buffer
 
 * A lighting-model registry: each model is a WXSL function of one fixed
   signature, plus a small integer id. **The registry entry is the seam** —
@@ -445,7 +588,7 @@ contains only that model.
 **ADR** — "Lighting models dispatched by a G-buffer id, with a composable
 G-buffer layout". Amends ADR 0008.
 
-### M6 — The `Screen` domain and postprocess
+### M7 — The `Screen` domain and postprocess
 
 * `GraphDomain`, the screen ABI, registry filtering by domain.
 * A `Screen effect` pass node taking a screen graph.
@@ -454,7 +597,7 @@ G-buffer layout". Amends ADR 0008.
   here from the shading function, motion blur (needs a `Velocity` stage and
   previous-frame matrices in the frame uniforms).
 * Antialiasing is **post-process only**: FXAA or SMAA as a screen graph now,
-  TAA once persistent resources (M1) and the `Velocity` stage (M4) are both
+  TAA once persistent resources (M1) and the `Velocity` stage (M5) are both
   in. No `sample_count` above 1 anywhere, so forward, deferred and peeling
   antialias identically and the editor's preview always represents the final
   frame. TAA pays for itself twice by also stabilising shadow and SSR noise.
@@ -467,7 +610,7 @@ materials glow.
 
 **ADR** — "Screen-domain graphs: postprocess is a material over the frame".
 
-### M7 — Transparency by dual depth peeling
+### M8 — Transparency by dual depth peeling
 
 The hardest pass, and the one the portability answer bites hardest.
 
@@ -492,7 +635,7 @@ both paths, and the two produce the same image within tolerance.
 **ADR** — "Dual depth peeling, and the baseline/native split for blendable
 float targets".
 
-### M8 — Bake passes
+### M9 — Bake passes
 
 Precompute part of a material into a texture and sample it back.
 
@@ -504,11 +647,11 @@ Precompute part of a material into a texture and sample it back.
 **Done when** a material with an expensive noise-driven PBR term bakes it to
 a texture, and toggling the bake changes cost but not image.
 
-### M9 — Relative-to-eye rendering (optional)
+### M10 — Relative-to-eye rendering (optional)
 
-Deliberately last in execution, but its **ABI hook lands in M4**, because
+Deliberately last in execution, but its **ABI hook lands in M5**, because
 retrofitting it once many materials read `world_position` is a migration,
-while doing it during M4's vertex work is a rename.
+while doing it during M5's vertex work is a rename.
 
 * The hook: `SurfaceContext.world_position` becomes camera-relative under a
   macro flag, with `camera.position` becoming the zero vector in that mode.
@@ -520,7 +663,7 @@ while doing it during M4's vertex work is a rename.
 **Done when** a scene at a 10^7-unit offset from the origin renders without
 jitter, and the near-origin image is unchanged.
 
-### M10 — A WXSL code editor in the editor
+### M11 — A WXSL code editor in the editor
 
 Unblocked at any time — it depends on the pipeline work not at all — but its
 payoff depends on M0, so it is written here rather than early.
@@ -554,9 +697,10 @@ different text model than the immediate-mode layer's, that is worth one.
 | Risk | Mitigation |
 |---|---|
 | **Variant explosion**: stages x macros x lighting models x baseline/native. | Compile lazily, key precisely, and let the pipeline graph declare up front which combinations it needs, so they are warmed once instead of stuttering. Track it: `cache_stats()` already exists. |
-| **Stage partitioning subtly wrong**: a node duplicated across stages that rounds differently, or a varying that should have been recomputed. | M4's two acceptance tests are exactly the cases that fail if it is wrong. Extend `graph_to_wgsl` to compile every node in every stage, as it already does for every path. |
+| **Stage partitioning subtly wrong**: a node duplicated across stages that rounds differently, or a varying that should have been recomputed. | M5's two acceptance tests are exactly the cases that fail if it is wrong. Extend `graph_to_wgsl` to compile every node in every stage, as it already does for every path. |
+| **A computed layout disagreeing with what the host writes.** Two of them now: M3's uniform parameters and M4's widened instance buffer. | They are the only layouts in the repo with no `#[repr(C)]` mirror to be checked against, so they get by test what the mirrors get by construction: read every parameter and every instance field back out of the buffer through a trivial graph, at every `ValueType`, including the `f32`-then-`vec3f` ordering that alignment breaks. One layout computer, one test, two customers. |
 | **Bind groups**: four, all spoken for. | The allocation table above, decided now. `SceneBindings` is one struct in one file if group 0 needs to grow. |
-| **Two implementations of every pass** (baseline and native). | Only where the baseline genuinely cannot express the technique — so far exactly one place, M7's float blending. Any second implementation owes a test asserting the two agree, as `msdf` already does for its CPU and compute generators. |
+| **Two implementations of every pass** (baseline and native). | Only where the baseline genuinely cannot express the technique — so far exactly one place, M8's float blending. Any second implementation owes a test asserting the two agree, as `msdf` already does for its CPU and compute generators. |
 | **The pipeline graph becoming a second, worse editor.** | It reuses `wxsl-core`'s model, `wxsl-editor`'s canvas and the same registry. If a pipeline node needs a mechanism material nodes lack, that is a signal to generalize the mechanism, not to fork the editor. |
 | **`MAX_LIGHTS = 4` and one draw per frame** meeting a pipeline with shadows and peeling. | M1 replaces the draw list. The light count is a separate, smaller job (clustered or tiled lighting) that the render graph makes additive: a compute pass and a bind group, not a redesign. |
 
@@ -579,6 +723,22 @@ surprise or a defect:
   asynchronous pipeline creation, so background compilation is a worker
   thread. Where there is no thread there is no background. The progress
   indicator is what keeps that honest rather than mysterious.
-* **Two implementations, in exactly one place.** M7's float blending. Every
+* **Four declared vertex attributes, not more.** WebGPU guarantees 8
+  vertex-buffer slots and the base stream takes one, so a material may
+  require four extra per-vertex attributes. Interleaving them into a second,
+  material-specific stream is the escape hatch, and it costs the
+  per-attribute upload independence that made separate buffers the choice.
+  Per-*instance* attributes are not subject to this at all, which is half the
+  reason they are storage-buffer fields.
+* **One inter-stage location, whenever a fragment stage reads an instance
+  attribute.** The flat `instance_index` varying. Cheap, fixed regardless of
+  how many attributes are declared, and unavoidable: WGSL does not offer the
+  builtin outside the vertex stage.
+* **Group 2 is bound per material, not per frame.** The price of letting a
+  material declare the layout it expects there instead of every material
+  agreeing on one. An application that wants a single binding for everything
+  can still have it — by declaring the same block in every material, which is
+  then its choice rather than the engine's rule.
+* **Two implementations, in exactly one place.** M8's float blending. Every
   other pass has one path. If a second one ever appears elsewhere, it owes a
   test asserting the two agree — the rule `msdf` already lives by.
