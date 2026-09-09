@@ -18,7 +18,7 @@ is signal, don't delete it.
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0002](0002-cargo-workspace-crate-boundaries.md) | Cargo workspace layout and crate boundaries | Accepted |
 | [0003](0003-wesl-as-the-shading-language.md) | WESL as the shading language, `wesl`/`wesl-cli` as the compiler | Superseded by [0011](0011-own-the-shading-language.md) |
-| [0004](0004-node-editor-is-an-optional-additive-ui-layer.md) | Visual node editor is an optional, additive UI layer | Accepted |
+| [0004](0004-node-editor-is-an-optional-additive-ui-layer.md) | Visual node editor is an optional, additive UI layer | Accepted, amended by [0013](0013-the-editor-draws-itself-with-wxsl-render.md) |
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
@@ -27,6 +27,8 @@ is signal, don't delete it.
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted |
 | [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
 | [0012](0012-monomorphize-templates-on-the-flat-module.md) | Monomorphize templates on the flat module, with shallow inference | Accepted |
+| [0013](0013-the-editor-draws-itself-with-wxsl-render.md) | The editor draws itself with `wxsl-render` | Accepted |
+| [0014](0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md) | MSDF text, generated in-tree, from fonts the application supplies | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

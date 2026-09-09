@@ -1,6 +1,6 @@
 [package]
 name = "wxsl-editor"
-description = "Optional visual node editor for wxsl graphs. Pulls in a GUI toolkit; never a dependency of wxsl-core or wxsl-render."
+description = "Visual node editor for wxsl graphs. Draws itself with wxsl-render; never a dependency of wxsl-core or wxsl-render."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -11,4 +11,9 @@ license.workspace = true
 
 [dependencies]
 wxsl-core = { workspace = true }
-# egui = "..."  # added once the editor UI work starts; see docs/adr/0004.
+# The editor draws itself with the renderer's UI layer rather than with a
+# third-party GUI toolkit, and renders the material preview with its
+# pipelines. See docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md.
+wxsl-render = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }

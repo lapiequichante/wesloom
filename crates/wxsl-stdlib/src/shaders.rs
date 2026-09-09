@@ -33,6 +33,13 @@ modules! {
     "package::wxsl::shading" => "wxsl/shading.wxsl",
     "package::wxsl::deferred" => "wxsl/deferred.wxsl",
     "package::wxsl::lighting_pass" => "wxsl/lighting_pass.wxsl",
+    // The 2D UI pass the editor draws itself with (ADR 0013). Part of the
+    // ABI because `wxsl_core::abi` names its entry points, bindings and
+    // vertex layout, and because `wxsl-render` ships no shaders (ADR 0009).
+    "package::wxsl::ui" => "wxsl/ui.wxsl",
+    // Glyph distance-field generation as a compute pass (ADR 0014), the GPU
+    // half of `wxsl_render::ui::msdf`.
+    "package::wxsl::msdf" => "wxsl/msdf.wxsl",
 
     // Granular functions, one per file, grouped by category.
     "package::animation::ease_in_out_cubic" => "animation/ease_in_out_cubic.wxsl",
@@ -204,6 +211,53 @@ mod tests {
             assert!(
                 source.contains(&declaration),
                 "bindings.wxsl is missing `{declaration}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ui_pass_declares_the_bindings_the_abi_numbers() {
+        let source = module(abi::UI_MODULE).expect("ui module");
+        for (binding, declaration) in [
+            (abi::BINDING_UI_VIEWPORT, "var<uniform> ui_viewport"),
+            (abi::BINDING_UI_TEXTURE, "var ui_texture"),
+            (abi::BINDING_UI_SAMPLER, "var ui_sampler"),
+        ] {
+            let expected = format!(
+                "@group({}) @binding({binding}) {declaration}",
+                abi::GROUP_PASS
+            );
+            assert!(
+                source.contains(&expected),
+                "ui.wxsl is missing `{expected}`"
+            );
+        }
+        for entry in [abi::UI_VERTEX_ENTRY, abi::UI_FRAGMENT_ENTRY] {
+            assert!(
+                source.contains(&format!("fn {entry}(")),
+                "ui.wxsl is missing the `{entry}` entry point"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ui_shader_agrees_with_the_abi_on_kinds_and_attributes() {
+        // Three views of one layout (ADR 0013): this file, the ABI tables,
+        // and `wxsl_render::ui::draw::UiVertex`. Two of them can be checked
+        // against each other here; the third is checked in `wxsl-render`.
+        let source = module(abi::UI_MODULE).expect("ui module");
+        for kind in abi::UI_KINDS {
+            let declaration = format!("const {}: u32 = {}u;", kind.name, kind.value);
+            assert!(
+                source.contains(&declaration),
+                "ui.wxsl is missing `{declaration}`"
+            );
+        }
+        for (location, attribute) in abi::UI_ATTRIBUTES.iter().enumerate() {
+            let declaration = format!("@location({location}) {}: {}", attribute.name, attribute.ty);
+            assert!(
+                source.contains(&declaration),
+                "ui.wxsl is missing `{declaration}`"
             );
         }
     }

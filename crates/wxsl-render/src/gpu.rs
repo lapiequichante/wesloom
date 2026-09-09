@@ -99,7 +99,15 @@ impl OffscreenTarget {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: Self::FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // Also `TEXTURE_BINDING`, so the result can be *shown* as well
+            // as read back: the editor's material preview renders into one of
+            // these and then draws it as a textured quad in the UI pass
+            // (ADR 0013). The flag costs nothing on any backend this runs on,
+            // and a second texture kind for "offscreen, but sampleable" would
+            // be two types that differ by one bit.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

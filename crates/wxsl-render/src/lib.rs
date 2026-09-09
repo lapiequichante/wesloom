@@ -43,13 +43,14 @@ pub mod path;
 pub mod pipeline;
 pub mod renderer;
 pub mod scene;
+pub mod ui;
 pub mod variants;
 
 pub use error::RenderError;
 pub use gpu::{GpuContext, OffscreenTarget};
 pub use library::ShaderLibrary;
 pub use material::Material;
-pub use mesh::{Mesh, Vertex};
+pub use mesh::{Mesh, MeshKind, Vertex};
 pub use path::RenderPath;
 pub use pipeline::{Pipeline, TargetConfig};
 pub use renderer::{RenderRequest, Renderer};

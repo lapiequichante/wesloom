@@ -35,6 +35,12 @@ name = "pbr_cube"
 # nothing to run, so cargo skips it instead of failing to build.
 required-features = ["render", "stdlib"]
 
+[[example]]
+name = "editor"
+# The editor example needs the editor (and so the renderer) and the node
+# library; without them there is nothing to edit.
+required-features = ["editor", "stdlib"]
+
 [[test]]
 name = "graph_to_wgsl"
 required-features = ["render", "stdlib"]
@@ -42,3 +48,9 @@ required-features = ["render", "stdlib"]
 [[test]]
 name = "render_cube"
 required-features = ["render", "stdlib"]
+
+[[test]]
+name = "editor_frame"
+# Drives the editor for a few frames on a real device; skips when there is no
+# adapter, like render_cube.rs.
+required-features = ["editor", "stdlib"]

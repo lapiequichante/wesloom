@@ -342,3 +342,63 @@ fn an_invalid_graph_is_rejected_before_the_shader_compiler_sees_it() {
     let error = Material::from_graph(&dangling, &registry).expect_err("dangling edge");
     assert!(error.to_string().contains("no such node"), "{error}");
 }
+
+/// The UI pass compiles like anything else in the library.
+///
+/// The editor draws itself through this module (ADR 0013), so a break here
+/// is a break in the editor's chrome, not in a material — and it is worth
+/// catching without a GPU, since CI has none.
+#[test]
+fn the_ui_pass_compiles_to_wgsl() {
+    let library = wxsl::stdlib_library();
+    let extra: [(&str, Cow<'_, str>); 0] = [];
+    let wgsl = variants::compile(&library, &extra, abi::UI_MODULE, &MacroSet::new())
+        .expect("the UI pass compiles");
+    assert!(
+        wgsl.contains(&format!("fn {}", abi::UI_VERTEX_ENTRY)),
+        "{wgsl}"
+    );
+    assert!(
+        wgsl.contains(&format!("fn {}", abi::UI_FRAGMENT_ENTRY)),
+        "{wgsl}"
+    );
+    // Integer vertex outputs have to stay flat-interpolated through the
+    // compiler, or `wgpu` rejects the module.
+    assert!(wgsl.contains("interpolate(flat)"), "{wgsl}");
+    // The UI pass has no material graph and no camera: it must not pull the
+    // frame group's uniforms in behind our back.
+    assert!(!wgsl.contains("var<uniform> camera"), "{wgsl}");
+}
+
+/// The MSDF compute pass compiles, and declares what the ABI says it does.
+///
+/// The GPU half of the text stack (ADR 0014) is a compute shader, which is a
+/// pipeline shape nothing else in the workspace uses — worth compiling in the
+/// GPU-less suite so a break is a test failure rather than a blank editor.
+#[test]
+fn the_msdf_compute_pass_compiles_to_wgsl() {
+    let library = wxsl::stdlib_library();
+    let extra: [(&str, Cow<'_, str>); 0] = [];
+    let wgsl = variants::compile(&library, &extra, abi::MSDF_MODULE, &MacroSet::new())
+        .expect("the MSDF pass compiles");
+    assert!(wgsl.contains(&format!("fn {}", abi::MSDF_ENTRY)), "{wgsl}");
+    let [x, y] = abi::MSDF_WORKGROUP;
+    assert!(
+        wgsl.contains(&format!("@workgroup_size({x}, {y}, 1)")),
+        "{wgsl}"
+    );
+    // The edge kinds are shared with `wxsl_render::ui::msdf_gpu`'s
+    // `#[repr(C)]` buffers; a silent renumbering would shade every glyph as
+    // the wrong curve.
+    for (name, value) in [
+        ("MSDF_LINE", abi::MSDF_EDGE_LINE),
+        ("MSDF_QUAD", abi::MSDF_EDGE_QUAD),
+        ("MSDF_CUBIC", abi::MSDF_EDGE_CUBIC),
+    ] {
+        let source = wxsl::stdlib::shaders::module(abi::MSDF_MODULE).expect("msdf module");
+        assert!(
+            source.contains(&format!("const {name}: u32 = {value}u;")),
+            "msdf.wxsl disagrees with abi::MSDF_EDGE_* on {name}"
+        );
+    }
+}

@@ -1,0 +1,379 @@
+// MSDF generation as a compute pass: the same field `wxsl_render::ui::msdf`
+// builds on the CPU, built on the GPU instead.
+//
+// Why both exist: generating a glyph's field is embarrassingly parallel and
+// entirely independent per pixel, which is a compute shader's best case — but
+// it is also the one part of the text stack that must work before there is
+// anything on screen to debug it with, and a CPU implementation can be tested
+// against a brute-force distance field on a machine with no adapter. So the
+// CPU path is the reference and this is the fast path, selected by
+// `wxsl_render::ui::MsdfBackend` (ADR 0014).
+//
+// **The two implementations must agree.** The functions below are a
+// transliteration of `ui/msdf.rs`, down to the Newton-Raphson step count and
+// the finite-difference second derivative, and a test in `crates/wxsl`
+// compares their output glyph for glyph. Change one, change the other.
+//
+// The maths, briefly: for each pixel and each of the three channels, find the
+// nearest edge that writes that channel, then take the signed distance to its
+// infinite tangent extension (the "pseudo-distance"). The median of the three
+// is the distance, and colouring the edges so that a corner's two edges share
+// exactly one channel is what keeps corners sharp. See `ui/msdf.rs` for the
+// full explanation.
+
+// Edge kinds, matching `ui::msdf::Segment`'s variants.
+const MSDF_LINE: u32 = 1u;
+const MSDF_QUAD: u32 = 2u;
+const MSDF_CUBIC: u32 = 3u;
+
+// `f32::EPSILON`, spelled out: the guard the CPU implementation uses for
+// "is this direction vector long enough to mean anything".
+const MSDF_EPSILON: f32 = 1.1920929e-7;
+
+// Further away than any real edge, matching `SignedDistance::FAR`.
+const MSDF_FAR: f32 = -1e30;
+
+// No edge writes this channel.
+const MSDF_NO_EDGE: u32 = 0xffffffffu;
+
+// The alignment of an empty slot: worse than any real edge's, matching
+// `SignedDistance::FAR`.
+const MSDF_FAR_ALIGNMENT: f32 = 1e30;
+
+// One coloured edge. Unused control points repeat the endpoint, so the
+// struct is one stride whatever the degree; `wxsl_render::ui::msdf_gpu`
+// declares the matching `#[repr(C)]` type and the two are edited together.
+struct MsdfEdge {
+    p0: vec2f,
+    p1: vec2f,
+    p2: vec2f,
+    p3: vec2f,
+    kind: u32,
+    // Channel mask: bit 0 red, bit 1 green, bit 2 blue.
+    color: u32,
+}
+
+// One glyph to generate: where its outline sits in its bitmap, how big the
+// bitmap is, which edges are its own, and where its pixels go in the shared
+// output buffer.
+struct MsdfJob {
+    translate: vec2f,
+    scale: f32,
+    range: f32,
+    size: vec2u,
+    edge_begin: u32,
+    edge_end: u32,
+    pixel_offset: u32,
+    _pad0: u32,
+}
+
+// The pass group (`abi::GROUP_PASS`), as for the UI pass: a compute pipeline
+// has its own layout, and these are resources this pipeline shape needs
+// rather than anything per-frame or per-material. See ADR 0010.
+@group(3) @binding(0) var<storage, read> msdf_edges: array<MsdfEdge>;
+@group(3) @binding(1) var<storage, read> msdf_jobs: array<MsdfJob>;
+@group(3) @binding(2) var<storage, read_write> msdf_pixels: array<u32>;
+
+// The 2D cross product, i.e. `glam`'s `perp_dot`. Positive when `b` is to the
+// left of `a`, which after orientation normalization means inside the glyph.
+fn msdf_cross(a: vec2f, b: vec2f) -> f32 {
+    return a.x * b.y - a.y * b.x;
+}
+
+fn msdf_end(edge: MsdfEdge) -> vec2f {
+    if edge.kind == MSDF_LINE {
+        return edge.p1;
+    }
+    if edge.kind == MSDF_QUAD {
+        return edge.p2;
+    }
+    return edge.p3;
+}
+
+fn msdf_point(edge: MsdfEdge, t: f32) -> vec2f {
+    let u = 1.0 - t;
+    if edge.kind == MSDF_LINE {
+        return mix(edge.p0, edge.p1, vec2f(t));
+    }
+    if edge.kind == MSDF_QUAD {
+        return edge.p0 * (u * u) + edge.p1 * (2.0 * u * t) + edge.p2 * (t * t);
+    }
+    return edge.p0 * (u * u * u)
+        + edge.p1 * (3.0 * u * u * t)
+        + edge.p2 * (3.0 * u * t * t)
+        + edge.p3 * (t * t * t);
+}
+
+fn msdf_direction(edge: MsdfEdge, t: f32) -> vec2f {
+    var derivative: vec2f;
+    if edge.kind == MSDF_LINE {
+        derivative = edge.p1 - edge.p0;
+    } else if edge.kind == MSDF_QUAD {
+        derivative = mix(edge.p1 - edge.p0, edge.p2 - edge.p1, vec2f(t)) * 2.0;
+    } else {
+        let first = mix(edge.p1 - edge.p0, edge.p2 - edge.p1, vec2f(t));
+        let second = mix(edge.p2 - edge.p1, edge.p3 - edge.p2, vec2f(t));
+        derivative = mix(first, second, vec2f(t)) * 3.0;
+    }
+    // A control point sitting on an endpoint makes the true derivative vanish
+    // there; fall back to the chord, as the CPU implementation does.
+    if dot(derivative, derivative) > MSDF_EPSILON {
+        return derivative;
+    }
+    return msdf_end(edge) - edge.p0;
+}
+
+fn msdf_normalize_or(value: vec2f, fallback: vec2f) -> vec2f {
+    let magnitude = length(value);
+    if magnitude > 0.0 {
+        return value / magnitude;
+    }
+    return fallback;
+}
+
+fn msdf_tangent(edge: MsdfEdge, t: f32) -> vec2f {
+    return msdf_normalize_or(msdf_direction(edge, t), vec2f(1.0, 0.0));
+}
+
+// A distance, how head-on the edge was met, and the parameter it was found
+// at. The parameter can leave 0..1: it is then the projection onto the
+// endpoint's tangent, which is what the pseudo-distance needs.
+//
+// `alignment` is 0 for a sample that projects onto the edge's interior and
+// approaches 1 for one straight off an end; smaller wins a tie. See
+// `ui::msdf::SignedDistance` for why that direction matters.
+struct MsdfDistance {
+    distance: f32,
+    alignment: f32,
+    t: f32,
+}
+
+fn msdf_signed_distance(edge: MsdfEdge, p: vec2f) -> MsdfDistance {
+    var out: MsdfDistance;
+    if edge.kind == MSDF_LINE {
+        let along = edge.p1 - edge.p0;
+        let to_p = p - edge.p0;
+        let length_squared = dot(along, along);
+        if length_squared <= MSDF_EPSILON {
+            out.distance = length(to_p);
+            out.alignment = 0.0;
+            out.t = 0.0;
+            return out;
+        }
+        let t = dot(to_p, along) / length_squared;
+        var to_nearer_end = to_p;
+        if t > 0.5 {
+            to_nearer_end = p - edge.p1;
+        }
+        let endpoint_distance = length(to_nearer_end);
+        if t > 0.0 && t < 1.0 {
+            let orthogonal = msdf_cross(normalize(along), to_p);
+            if abs(orthogonal) <= endpoint_distance {
+                out.distance = orthogonal;
+                out.alignment = 0.0;
+                out.t = t;
+                return out;
+            }
+        }
+        var sign_of = -1.0;
+        if msdf_cross(along, to_p) >= 0.0 {
+            sign_of = 1.0;
+        }
+        out.distance = sign_of * endpoint_distance;
+        out.alignment = abs(dot(
+            normalize(along),
+            msdf_normalize_or(to_nearer_end, vec2f(0.0)),
+        ));
+        out.t = t;
+        return out;
+    }
+
+    // Curves: a coarse scan for the basin, then Newton-Raphson on
+    // `(B(t) - p) . B'(t) = 0`, exactly as on the CPU.
+    var best_t = 0.0;
+    var best_squared = 1e30;
+    for (var step = 0u; step <= 24u; step = step + 1u) {
+        let t = f32(step) / 24.0;
+        let offset = msdf_point(edge, t) - p;
+        let squared = dot(offset, offset);
+        if squared < best_squared {
+            best_squared = squared;
+            best_t = t;
+        }
+    }
+    var t = best_t;
+    for (var iteration = 0u; iteration < 8u; iteration = iteration + 1u) {
+        let offset = msdf_point(edge, t) - p;
+        let derivative = msdf_direction(edge, t);
+        let numerator = dot(offset, derivative);
+        let epsilon = 1e-3;
+        let curvature =
+            (msdf_direction(edge, t + epsilon) - msdf_direction(edge, t - epsilon)) / (2.0 * epsilon);
+        let denominator = dot(derivative, derivative) + dot(offset, curvature);
+        if abs(denominator) <= MSDF_EPSILON {
+            break;
+        }
+        let next = clamp(t - numerator / denominator, 0.0, 1.0);
+        if abs(next - t) <= 1e-6 {
+            t = next;
+            break;
+        }
+        t = next;
+    }
+
+    let clamped = clamp(t, 0.0, 1.0);
+    let point = msdf_point(edge, clamped);
+    let tangent = msdf_tangent(edge, clamped);
+    let to_p = p - point;
+    let distance = length(to_p);
+    var sign_of = -1.0;
+    if msdf_cross(tangent, to_p) >= 0.0 {
+        sign_of = 1.0;
+    }
+    out.distance = sign_of * distance;
+    out.alignment = 0.0;
+    out.t = clamped;
+    if clamped <= 0.0 {
+        out.alignment = abs(dot(tangent, msdf_normalize_or(to_p, vec2f(0.0))));
+        let projection = dot(to_p, tangent);
+        if projection < 0.0 {
+            out.t = min(projection, -MSDF_EPSILON);
+        } else {
+            out.t = 0.0;
+        }
+    } else if clamped >= 1.0 {
+        out.alignment = abs(dot(tangent, msdf_normalize_or(to_p, vec2f(0.0))));
+        let projection = dot(to_p, tangent);
+        if projection > 0.0 {
+            out.t = 1.0 + projection;
+        } else {
+            out.t = 1.0;
+        }
+    }
+    return out;
+}
+
+// Substitute the distance to an endpoint's infinite tangent line for points
+// that project outside the edge, removing the crease a finite edge's distance
+// would leave in the channel.
+fn msdf_pseudo_distance(edge: MsdfEdge, p: vec2f, found: f32, t: f32) -> f32 {
+    if t < 0.0 {
+        let tangent = msdf_tangent(edge, 0.0);
+        let to_p = p - edge.p0;
+        if dot(to_p, tangent) < 0.0 {
+            let pseudo = msdf_cross(tangent, to_p);
+            if abs(pseudo) <= abs(found) {
+                return pseudo;
+            }
+        }
+    } else if t > 1.0 {
+        let tangent = msdf_tangent(edge, 1.0);
+        let to_p = p - msdf_end(edge);
+        if dot(to_p, tangent) > 0.0 {
+            let pseudo = msdf_cross(tangent, to_p);
+            if abs(pseudo) <= abs(found) {
+                return pseudo;
+            }
+        }
+    }
+    return found;
+}
+
+// The median of three channel distances: what the UI shader reconstructs.
+fn msdf_median(channels: vec3f) -> f32 {
+    return max(min(channels.r, channels.g), min(max(channels.r, channels.g), channels.b));
+}
+
+// Repair a pixel whose median disagrees with the true distance about which
+// side of the outline it is on. See `ui::msdf::correct_error` for why a sign
+// disagreement is the whole test.
+fn msdf_correct_error(channels: vec3f, truth: f32) -> vec3f {
+    let reconstructed = msdf_median(channels);
+    if sign(reconstructed) != sign(truth) && abs(reconstructed) > 1e-4 {
+        return vec3f(truth);
+    }
+    return channels;
+}
+
+// Whether one candidate edge is nearer than the best so far, tie-broken
+// towards the edge met more perpendicularly — which is the one that can be
+// trusted about the side of the outline the sample is on.
+fn msdf_is_nearer(distance: f32, alignment: f32, best: f32, best_alignment: f32) -> bool {
+    let mine = abs(distance);
+    let theirs = abs(best);
+    return mine < theirs || (mine == theirs && alignment < best_alignment);
+}
+
+// One invocation per pixel, one workgroup layer per glyph. Jobs in a batch
+// are dispatched over the largest bitmap in the batch, so an invocation past
+// its own glyph's edge simply returns; glyphs in one font are close enough in
+// size that the waste is smaller than a second dispatch would cost.
+@compute @workgroup_size(8, 8, 1)
+fn msdf_main(@builtin(global_invocation_id) id: vec3u) {
+    let job = msdf_jobs[id.z];
+    if id.x >= job.size.x || id.y >= job.size.y {
+        return;
+    }
+
+    // Row 0 is the top of the bitmap and the outline's y axis points up, so
+    // the row index is flipped here and nowhere else.
+    let bitmap = vec2f(f32(id.x) + 0.5, f32(job.size.y - id.y - 1u) + 0.5);
+    let point = bitmap / job.scale - job.translate;
+    let shape_range = job.range / max(job.scale, 1e-6);
+
+    var best_distance = array<f32, 3>(MSDF_FAR, MSDF_FAR, MSDF_FAR);
+    // The worst possible tie-break, so any real edge beats an empty slot.
+    var best_alignment = array<f32, 3>(MSDF_FAR_ALIGNMENT, MSDF_FAR_ALIGNMENT, MSDF_FAR_ALIGNMENT);
+    var best_t = array<f32, 3>(0.0, 0.0, 0.0);
+    var best_edge = array<u32, 3>(MSDF_NO_EDGE, MSDF_NO_EDGE, MSDF_NO_EDGE);
+    // The nearest edge of any colour: the true distance, for the error
+    // correction below.
+    var truth = MSDF_FAR;
+    var truth_alignment = MSDF_FAR_ALIGNMENT;
+
+    for (var index = job.edge_begin; index < job.edge_end; index = index + 1u) {
+        let edge = msdf_edges[index];
+        let found = msdf_signed_distance(edge, point);
+        if msdf_is_nearer(found.distance, found.alignment, truth, truth_alignment) {
+            truth = found.distance;
+            truth_alignment = found.alignment;
+        }
+        for (var channel = 0u; channel < 3u; channel = channel + 1u) {
+            if (edge.color & (1u << channel)) == 0u {
+                continue;
+            }
+            if msdf_is_nearer(
+                found.distance,
+                found.alignment,
+                best_distance[channel],
+                best_alignment[channel],
+            ) {
+                best_distance[channel] = found.distance;
+                best_alignment[channel] = found.alignment;
+                best_t[channel] = found.t;
+                best_edge[channel] = index;
+            }
+        }
+    }
+
+    var channels = vec3f(-shape_range);
+    for (var channel = 0u; channel < 3u; channel = channel + 1u) {
+        // A channel no edge writes keeps the default: as far outside as the
+        // field can say.
+        if best_edge[channel] != MSDF_NO_EDGE {
+            let edge = msdf_edges[best_edge[channel]];
+            channels[channel] =
+                msdf_pseudo_distance(edge, point, best_distance[channel], best_t[channel]);
+        }
+    }
+    let corrected = msdf_correct_error(channels, truth);
+    let encoded = clamp(corrected / shape_range + vec3f(0.5), vec3f(0.0), vec3f(1.0));
+
+    let red = u32(round(encoded.r * 255.0));
+    let green = u32(round(encoded.g * 255.0));
+    let blue = u32(round(encoded.b * 255.0));
+    // Packed RGBA8, alpha opaque, so the result can be copied straight into
+    // an `Rgba8Unorm` atlas without a second pass over it.
+    msdf_pixels[job.pixel_offset + id.y * job.size.x + id.x] =
+        red | (green << 8u) | (blue << 16u) | (255u << 24u);
+}

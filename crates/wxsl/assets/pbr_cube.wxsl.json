@@ -33,14 +33,14 @@
       "def": "math.multiply.vec3f",
       "label": "noise scale",
       "params": { "b": { "vec3": [3.0, 3.0, 3.0] } },
-      "position": [220.0, 0.0]
+      "position": [260.0, 0.0]
     },
     {
       "id": 3,
       "def": "generative.fbm3",
       "label": "surface detail",
       "params": { "lacunarity": { "f32": 2.1 }, "gain": { "f32": 0.55 } },
-      "position": [440.0, 0.0]
+      "position": [520.0, 0.0]
     },
     {
       "id": 4,
@@ -52,76 +52,76 @@
         "out_min": { "f32": 0.07 },
         "out_max": { "f32": 0.55 }
       },
-      "position": [680.0, -120.0]
+      "position": [780.0, 0.0]
     },
     {
       "id": 5,
       "def": "const.vec3f",
       "label": "albedo (sRGB)",
       "params": { "value": { "vec3": [0.95, 0.36, 0.18] } },
-      "position": [440.0, -260.0]
+      "position": [0.0, 74.0]
     },
     {
       "id": 6,
       "def": "color.srgb_to_linear",
       "label": "to linear light",
-      "position": [680.0, -260.0]
+      "position": [260.0, 118.0]
     },
     {
       "id": 7,
       "def": "math.step.f32",
       "label": "metal patches",
       "params": { "edge": { "f32": 0.62 } },
-      "position": [680.0, 20.0]
+      "position": [780.0, 184.0]
     },
     {
       "id": 8,
       "def": "math.multiply.f32",
       "label": "metallic",
       "params": { "b": { "f32": 0.9 } },
-      "position": [900.0, 20.0]
+      "position": [1040.0, 0.0]
     },
     {
       "id": 9,
       "def": "input.time",
-      "position": [0.0, 240.0]
+      "position": [0.0, 170.0]
     },
     {
       "id": 10,
       "def": "animation.pulse",
       "label": "slow breath",
       "params": { "frequency": { "f32": 0.22 }, "phase": { "f32": 0.0 } },
-      "position": [220.0, 240.0]
+      "position": [260.0, 214.0]
     },
     {
       "id": 11,
       "def": "convert.splat.vec3f",
-      "position": [440.0, 240.0]
+      "position": [520.0, 140.0]
     },
     {
       "id": 12,
       "def": "const.vec3f",
       "label": "ember colour",
       "params": { "value": { "vec3": [0.07, 0.018, 0.005] } },
-      "position": [440.0, 360.0]
+      "position": [0.0, 244.0]
     },
     {
       "id": 13,
       "def": "math.multiply.vec3f",
       "label": "emissive",
-      "position": [680.0, 300.0]
+      "position": [780.0, 442.0]
     },
     {
       "id": 14,
       "def": "math.smootherstep.f32",
       "label": "crevice occlusion",
       "params": { "edge0": { "f32": 0.05 }, "edge1": { "f32": 0.75 } },
-      "position": [680.0, 150.0]
+      "position": [780.0, 302.0]
     },
     {
       "id": 15,
       "def": "output.surface",
-      "position": [1140.0, 0.0]
+      "position": [1300.0, 0.0]
     }
   ],
 

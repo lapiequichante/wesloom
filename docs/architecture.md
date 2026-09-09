@@ -22,13 +22,14 @@ graph LR
     core["wxsl-core<br/>(graph model + WXSL codegen)<br/>no wgpu, no GUI"]
     lang["wxsl-lang<br/>(WXSL compiler:<br/>parser + WGSL backend)"]
     render["wxsl-render<br/>(wgpu pipelines,<br/>forward/deferred switching)"]
-    editor["wxsl-editor<br/>(visual node editor,<br/>GUI toolkit)"]
+    editor["wxsl-editor<br/>(visual node editor,<br/>draws itself with wxsl-render)"]
     stdlib["wxsl-stdlib<br/>(original base nodes)<br/>MIT/Apache-2.0"]
     facade["wxsl<br/>(facade crate, feature-gated re-exports)"]
 
     render --> core
     render --> lang
     editor --> core
+    editor --> render
     stdlib --> core
     facade -. "render feature (default)" .-> render
     facade -. "editor feature" .-> editor
@@ -60,8 +61,20 @@ module path), `registry` (every function and operator as a node definition).
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `pipeline` (the `Pipeline` trait, forward and deferred),
 `renderer` (the front end that hides the path switch), `scene` (camera,
-lights, uniform layouts), `mesh` (vertex format, cube), `gpu` (device setup,
-offscreen rendering and readback), `error`.
+lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
+`gpu` (device setup, offscreen rendering and readback), `error`, and `ui` —
+the 2D layer with nothing to do with materials (ADR 0013): `draw` (the
+instanced primitive and the draw list), `atlas` (the shared glyph and image
+texture), `msdf` (distance fields from outlines, on the CPU), `msdf_gpu` (the
+same as a compute pass, and the backend switch), `font` (outlines and metrics
+from bytes the application supplies), `text` (the glyph cache and shaping),
+`input` (windowing-agnostic events), `renderer` (the UI pass).
+
+**`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `canvas`
+(the pan/zoom node canvas: layout, links, hit-testing, dragging), `palette`
+(searching the node library), `preview` (the offscreen material preview and
+the compiled WXSL and WGSL), `ui` (the immediate-mode layer: identity,
+interaction, widgets), `widgets` (editors per socket type), `theme`.
 
 **`wxsl`** — feature-gated re-exports, plus `stdlib_library()`, the one
 line that hands the node library's WXSL to the renderer.
@@ -132,7 +145,7 @@ higher-numbered groups when a lower one is rebound.
 | 0 | `frame` | per frame | Camera, scene lighting, object transforms |
 | 1 | `material` | per material | A graph's parameters, textures, samplers |
 | 2 | `user` | whenever | Nothing wxsl binds — the application's slot |
-| 3 | `pass` | per pass | The G-buffer, and future shadow/IBL resources |
+| 3 | `pass` | per pass | The G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
 
 Object transforms share the frame group despite changing per draw: a
 dynamic offset addresses them for free, where a group of their own would
@@ -172,6 +185,32 @@ set is part of the variant cache key, because the bindings also reach
 With both facade features on that is `wxsl::stdlib_library()`. This is
 also the seam for substituting an ABI module or adding hand-written WXSL. See
 [ADR 0009](adr/0009-the-application-supplies-the-shader-library.md).
+
+## The editor draws itself with the renderer
+
+There is no GUI toolkit in this workspace. The editor's chrome is a WXSL
+module (`package::wxsl::ui`) compiled by `wxsl-lang` and submitted through
+`variants::compile` like any material, and its preview is the real
+`Renderer` on the real pipelines — so every frame of editing exercises the
+stack the editor exists to author for. [ADR
+0013](adr/0013-the-editor-draws-itself-with-wxsl-render.md) records why, and
+what it cost (`wxsl-editor` now depends on `wxsl-render`, amending ADR
+0004).
+
+Two things follow that are worth knowing before touching either half:
+
+* **Everything on screen is one instance.** A rounded box, a capsule, an
+  image and a glyph are the same primitive with a different `kind`; the
+  quad's corners come from the vertex index, so there is no vertex or index
+  buffer in the UI path at all. The layout is host-shared three ways —
+  `abi::UI_ATTRIBUTES`, `wxsl_render::ui::draw::UiInstance`, and
+  `shaders/wxsl/ui.wxsl` — and they are edited together.
+* **Text is MSDF, generated in-tree, twice.** `ui::msdf` is the reference
+  implementation on the CPU and `shaders/wxsl/msdf.wxsl` is the same
+  algorithm as a compute pass; `MsdfBackend` picks one at runtime and a test
+  asserts they agree. The renderer embeds no font: the application supplies
+  the bytes, exactly as it supplies the shader library. [ADR
+  0014](adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md).
 
 ## Why WXSL and not raw WGSL
 
@@ -260,15 +299,16 @@ function.
 
 ## Current status
 
-Implemented and tested end to end, except the editor:
+Implemented and tested end to end:
 
 | Area | State |
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
 | `wxsl-stdlib`: shader ABI, 215 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, cube mesh, scene uniforms, offscreen rendering | done |
-| `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo | done |
-| `wxsl-editor` | **scaffolding** — module stubs only, no UI (ADR 0004) |
+| `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
+| `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing | done |
+| `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `editor` demo | done |
 
 The demo is the thing to run first:
 
@@ -276,6 +316,13 @@ The demo is the thing to run first:
 cargo run -p wxsl --example pbr_cube              # windowed; F/D switch path
 cargo run -p wxsl --example pbr_cube -- --headless  # both paths to PNG
 cargo run -p wxsl --example pbr_cube -- --dump-wgsl # what the graph became
+```
+
+And the editor, which is the same graph with somewhere to edit it:
+
+```sh
+cargo run -p wxsl --features editor --example editor
+cargo run -p wxsl --features editor --example editor -- --screenshot out.png
 ```
 
 Test coverage worth knowing about, since it is what keeps the two halves of
@@ -287,6 +334,12 @@ the shader ABI honest:
 - `crates/wxsl/tests/render_cube.rs` renders the cube through both paths
   on a real device and asserts the images match. Skips when no adapter is
   available.
+- `crates/wxsl/tests/editor_frame.rs` drives the editor for several frames
+  on a real device: that it draws an interface at all, that editing
+  recompiles, that a path switch produces different WGSL, that a frame of
+  every input event leaves it drawing — and that both MSDF backends produce
+  the same interface, which is what keeps the CPU generator and the compute
+  shader honest. Also skips with no adapter.
 
 ## See also
 

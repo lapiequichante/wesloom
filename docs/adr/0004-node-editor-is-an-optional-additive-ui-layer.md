@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Accepted; amended by [0013](0013-the-editor-draws-itself-with-wxsl-render.md)
 
 ## Context
 
@@ -59,3 +59,11 @@ the build entirely.
 - CI must verify `cargo check -p wxsl-core` and
   `cargo check --workspace --no-default-features` both succeed with no GUI
   crate in the dependency tree (see `AGENTS.md`).
+- **Amendment (ADR 0013).** The last bullet of the Decision above — that the
+  editor delegates drawing and stays wgpu-free — did not survive contact with
+  the work: `wxsl-editor` now depends on `wxsl-render` and draws itself
+  with it, rather than describing its UI to a third-party GUI toolkit. What
+  this ADR decided that *does* still hold is everything about `wxsl-core`:
+  the core graph model carries no display metadata, the editor keeps its own
+  side-table (and derives widgets from socket *types*), and a graph is fully
+  usable with the whole editor crate absent from the build.

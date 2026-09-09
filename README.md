@@ -4,12 +4,12 @@ Shader node graphs on `wgpu`, with its own shading language, an optional
 visual node editor, and an original from-scratch library of base shader
 nodes.
 
-> **Status: working, except the visual editor.** Graphs are authored (in
-> code or in the node format) and rendered through a forward or deferred
-> `wgpu` pipeline; `wxsl-editor` is still stubs, and `wxsl-lang` — the WXSL
-> compiler replacing the WXSL dependency
-> ([ADR 0011](docs/adr/0011-own-the-shading-language.md)) — is under
-> construction. See [Current status](docs/architecture.md#current-status).
+> **Status: working, editor included.** Graphs are authored in code, in the
+> node format, or in the visual editor, and rendered through a forward or
+> deferred `wgpu` pipeline. The editor draws itself with this project's own
+> renderer — no GUI toolkit
+> ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)).
+> See [Current status](docs/architecture.md#current-status).
 
 ## What this is
 
@@ -28,8 +28,48 @@ nodes.
   [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
   for why it isn't a port.
 - An optional visual node editor, strictly opt-in via a Cargo feature, so a
-  headless/runtime consumer never compiles a GUI toolkit just to use the
-  graph model or renderer.
+  headless/runtime consumer never compiles it just to use the graph model or
+  renderer. It has no GUI-toolkit dependency at all: it draws itself with
+  `wxsl-render`, through a WXSL shader compiled by this project's own
+  compiler, with MSDF text generated in-tree on the CPU or in a compute pass
+  ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md),
+  [ADR 0014](docs/adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md)).
+
+## The editor
+
+```sh
+cargo run -p wxsl --features editor --example editor              # the shipped demo graph
+cargo run -p wxsl --features editor --example editor -- --graph my.wxsl.json
+cargo run -p wxsl --features editor --example editor -- --msdf gpu
+cargo run -p wxsl --features editor --example editor -- --screenshot out.png
+```
+
+```text
+ ┌─────────────────────────────────────────────────────────────┐
+ │ toolbar: name · path · mesh · MSDF backend · add · fit      │
+ ├───────────┬──────────────────────────────┬──────────────────┤
+ │ palette   │ node canvas                  │ live preview    │
+ │ (search,  │ (pan, zoom, link, unlink,    │ selected node   │
+ │  category)│  move, delete)               │ macro variables │
+ ├───────────┴──────────────────────────────┴──────────────────┤
+ │ WXSL │ WGSL │ problems                                      │
+ ├─────────────────────────────────────────────────────────────┤
+ │ status: nodes · variants · atlas · glyphs · last message    │
+ └─────────────────────────────────────────────────────────────┘
+```
+
+Every node in the graph, with its ports coloured by type; drag between ports
+to link, drag a connected input to move that link, right-click one to cut it.
+The preview is the real renderer on the real pipelines, and the two code
+panels are the WXSL the graph generated and the WGSL that compiled to — which
+is most of what makes a shader graph debuggable.
+
+The editor itself needs no window: it takes input events and records two
+passes into an encoder, so it embeds in an application that already has an
+event loop. `crates/wxsl/examples/editor.rs` is the winit half, and the only
+file in the workspace that knows winit exists. Fonts come from the
+application (the renderer embeds none); the example finds a platform default
+or takes `--font`/`--mono`.
 
 ## The demo
 
@@ -63,7 +103,8 @@ each of which compiles a new shader variant once and then hits the cache.
 |---|---|
 | [`wxsl-core`](crates/wxsl-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, and graph → WXSL codegen. No `wgpu`, no GUI toolkit. |
 | [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: WXSL → WGSL compilation, the shader variant cache, and the forward and deferred pipelines. |
-| [`wxsl-editor`](crates/wxsl-editor) | The visual node editor UI. **Not implemented yet** — module stubs only. |
+| [`wxsl-render`](crates/wxsl-render)'s [`ui`](crates/wxsl-render/src/ui) | The 2D layer the editor is drawn with: a texture atlas, MSDF text from glyph outlines (CPU or compute pass), an instanced draw list, and windowing-agnostic input. Useful without the editor. |
+| [`wxsl-editor`](crates/wxsl-editor) | The visual node editor: pan/zoom canvas, node palette, live material preview, and the generated WXSL and WGSL. Draws itself with `wxsl-render`; no GUI toolkit. |
 | [`wxsl-stdlib`](crates/wxsl-stdlib) | The base node library: original shader functions written from scratch, plus the WXSL side of the shader ABI. |
 | [`wxsl`](crates/wxsl) | The facade crate most consumers depend on; re-exports the above behind Cargo features. |
 

@@ -80,6 +80,45 @@ impl Mesh {
         Mesh::new(device, "cube", &vertices, &indices)
     }
 
+    /// A UV sphere of `radius`, centred on the origin.
+    ///
+    /// Poles included, so the top and bottom rings are degenerate triangles —
+    /// which is the price of a seam-free tangent frame everywhere else, and a
+    /// preview mesh is the one place that trade is obviously right.
+    pub fn sphere(device: &wgpu::Device, radius: f32) -> Self {
+        let (vertices, indices) = sphere_geometry(radius, 48, 32);
+        Mesh::new(device, "sphere", &vertices, &indices)
+    }
+
+    /// A flat `size` x `size` quad in the xz plane, facing up.
+    ///
+    /// Subdivided rather than two triangles: a material that displaces or
+    /// varies across the surface has nothing to vary over on two triangles.
+    pub fn plane(device: &wgpu::Device, size: f32) -> Self {
+        let (vertices, indices) = plane_geometry(size, 32);
+        Mesh::new(device, "plane", &vertices, &indices)
+    }
+
+    /// A torus of `radius` with a tube of `tube_radius`, around the y axis.
+    ///
+    /// The useful third preview shape: it has curvature in two directions and
+    /// a continuous UV wrap, so a normal map or a noise pattern shows up in a
+    /// way neither a cube nor a sphere reveals.
+    pub fn torus(device: &wgpu::Device, radius: f32, tube_radius: f32) -> Self {
+        let (vertices, indices) = torus_geometry(radius, tube_radius, 64, 24);
+        Mesh::new(device, "torus", &vertices, &indices)
+    }
+
+    /// The mesh for `kind`, at a size that fits the demo camera.
+    pub fn from_kind(device: &wgpu::Device, kind: MeshKind) -> Self {
+        match kind {
+            MeshKind::Cube => Mesh::cube(device, 1.6),
+            MeshKind::Sphere => Mesh::sphere(device, 1.0),
+            MeshKind::Plane => Mesh::plane(device, 2.4),
+            MeshKind::Torus => Mesh::torus(device, 0.9, 0.35),
+        }
+    }
+
     /// Number of indices, i.e. `triangles * 3`.
     pub fn index_count(&self) -> u32 {
         self.index_count
@@ -91,6 +130,201 @@ impl Mesh {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
+}
+
+/// Which primitive a caller wants, for a UI that offers a choice.
+///
+/// The editor's preview panel cycles through these; nothing in the renderer
+/// depends on the set, so adding one is this enum plus a geometry function.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MeshKind {
+    /// Six flat faces: shows a flat shading response and the UV seams.
+    #[default]
+    Cube,
+    /// A UV sphere: shows a smooth shading response.
+    Sphere,
+    /// A flat quad: shows a material the way a texture swatch would.
+    Plane,
+    /// A torus: curvature in two directions, and a continuous UV wrap.
+    Torus,
+}
+
+impl MeshKind {
+    /// Every kind, in declaration order.
+    pub const ALL: &'static [MeshKind] = &[
+        MeshKind::Cube,
+        MeshKind::Sphere,
+        MeshKind::Plane,
+        MeshKind::Torus,
+    ];
+
+    /// The kind's name, as used on a command line and in a button.
+    pub fn name(&self) -> &'static str {
+        match self {
+            MeshKind::Cube => "cube",
+            MeshKind::Sphere => "sphere",
+            MeshKind::Plane => "plane",
+            MeshKind::Torus => "torus",
+        }
+    }
+
+    /// Parse a kind from its [`MeshKind::name`].
+    pub fn parse(text: &str) -> Option<Self> {
+        MeshKind::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.name().eq_ignore_ascii_case(text.trim()))
+    }
+
+    /// The next kind, wrapping — for a button that cycles.
+    pub fn next(&self) -> Self {
+        let index = MeshKind::ALL
+            .iter()
+            .position(|kind| kind == self)
+            .unwrap_or(0);
+        MeshKind::ALL[(index + 1) % MeshKind::ALL.len()]
+    }
+}
+
+/// A UV sphere's vertices and indices, on the CPU.
+///
+/// `segments` divisions around the equator, `rings` from pole to pole.
+pub fn sphere_geometry(radius: f32, segments: u16, rings: u16) -> (Vec<Vertex>, Vec<u16>) {
+    let segments = segments.max(3);
+    let rings = rings.max(2);
+    let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
+    for ring in 0..=rings {
+        // v runs from the north pole down, so that v = 0 is the top in the
+        // usual texture convention.
+        let v = f32::from(ring) / f32::from(rings);
+        let polar = v * core::f32::consts::PI;
+        let (sin_polar, cos_polar) = polar.sin_cos();
+        for segment in 0..=segments {
+            let u = f32::from(segment) / f32::from(segments);
+            let azimuth = u * core::f32::consts::TAU;
+            let (sin_azimuth, cos_azimuth) = azimuth.sin_cos();
+            let normal = Vec3::new(sin_polar * cos_azimuth, cos_polar, sin_polar * sin_azimuth);
+            // The direction u increases in: the derivative with respect to
+            // the azimuth, which stays well defined at the poles even though
+            // the surface there does not.
+            let tangent = Vec3::new(-sin_azimuth, 0.0, cos_azimuth);
+            vertices.push(Vertex {
+                position: (normal * radius).to_array(),
+                normal: normal.to_array(),
+                tangent: [tangent.x, tangent.y, tangent.z, 1.0],
+                uv: [u, v],
+            });
+        }
+    }
+
+    let stride = segments + 1;
+    let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
+    for ring in 0..rings {
+        for segment in 0..segments {
+            let top_left = ring * stride + segment;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + stride;
+            let bottom_right = bottom_left + 1;
+            // Counter-clockwise seen from outside, matching the cube. `v`
+            // runs downwards from the north pole, so this is the opposite
+            // winding to the plane's, whose rows run away from the camera.
+            indices.extend_from_slice(&[
+                top_left,
+                bottom_right,
+                bottom_left,
+                top_left,
+                top_right,
+                bottom_right,
+            ]);
+        }
+    }
+    (vertices, indices)
+}
+
+/// A subdivided quad's vertices and indices, on the CPU.
+///
+/// In the xz plane, facing +y, centred on the origin.
+pub fn plane_geometry(size: f32, subdivisions: u16) -> (Vec<Vertex>, Vec<u16>) {
+    let steps = subdivisions.max(1);
+    let half = size * 0.5;
+    let mut vertices = Vec::with_capacity(((steps + 1) * (steps + 1)) as usize);
+    for row in 0..=steps {
+        let v = f32::from(row) / f32::from(steps);
+        for column in 0..=steps {
+            let u = f32::from(column) / f32::from(steps);
+            vertices.push(Vertex {
+                position: [u * size - half, 0.0, v * size - half],
+                normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+                uv: [u, v],
+            });
+        }
+    }
+
+    let stride = steps + 1;
+    let mut indices = Vec::with_capacity((steps * steps * 6) as usize);
+    for row in 0..steps {
+        for column in 0..steps {
+            let near_left = row * stride + column;
+            let near_right = near_left + 1;
+            let far_left = near_left + stride;
+            let far_right = far_left + 1;
+            // Counter-clockwise seen from +y, i.e. from above.
+            indices.extend_from_slice(&[
+                near_left, far_left, far_right, near_left, far_right, near_right,
+            ]);
+        }
+    }
+    (vertices, indices)
+}
+
+/// A torus's vertices and indices, on the CPU.
+///
+/// `segments` divisions around the main ring, `rings` around the tube.
+pub fn torus_geometry(
+    radius: f32,
+    tube_radius: f32,
+    segments: u16,
+    rings: u16,
+) -> (Vec<Vertex>, Vec<u16>) {
+    let segments = segments.max(3);
+    let rings = rings.max(3);
+    let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
+    for segment in 0..=segments {
+        let u = f32::from(segment) / f32::from(segments);
+        let major = u * core::f32::consts::TAU;
+        let (sin_major, cos_major) = major.sin_cos();
+        let center = Vec3::new(cos_major * radius, 0.0, sin_major * radius);
+        // Around the main ring: also the direction u increases in.
+        let tangent = Vec3::new(-sin_major, 0.0, cos_major);
+        for ring in 0..=rings {
+            let v = f32::from(ring) / f32::from(rings);
+            let minor = v * core::f32::consts::TAU;
+            let (sin_minor, cos_minor) = minor.sin_cos();
+            let normal = Vec3::new(cos_major * cos_minor, sin_minor, sin_major * cos_minor);
+            vertices.push(Vertex {
+                position: (center + normal * tube_radius).to_array(),
+                normal: normal.to_array(),
+                tangent: [tangent.x, tangent.y, tangent.z, 1.0],
+                uv: [u, v],
+            });
+        }
+    }
+
+    let stride = rings + 1;
+    let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
+    for segment in 0..segments {
+        for ring in 0..rings {
+            let here = segment * stride + ring;
+            let next_ring = here + 1;
+            let next_segment = here + stride;
+            let diagonal = next_segment + 1;
+            // Counter-clockwise seen from outside the tube: around the
+            // tube first, then around the ring.
+            indices.extend_from_slice(&[here, next_ring, diagonal, here, diagonal, next_segment]);
+        }
+    }
+    (vertices, indices)
 }
 
 /// The cube's vertices and indices, on the CPU.
@@ -170,6 +404,135 @@ mod tests {
                 "triangle {triangle:?} faces inwards"
             );
         }
+    }
+
+    /// One primitive's geometry, for the invariants they all share.
+    type Geometry = (MeshKind, Vec<Vertex>, Vec<u16>);
+
+    /// Every primitive's geometry.
+    fn all_geometry() -> Vec<Geometry> {
+        [
+            (MeshKind::Cube, cube_geometry(2.0)),
+            (MeshKind::Sphere, sphere_geometry(1.0, 16, 8)),
+            (MeshKind::Plane, plane_geometry(2.0, 4)),
+            (MeshKind::Torus, torus_geometry(1.0, 0.3, 16, 8)),
+        ]
+        .into_iter()
+        .map(|(kind, (vertices, indices))| (kind, vertices, indices))
+        .collect()
+    }
+
+    #[test]
+    fn every_primitive_has_a_usable_shading_basis() {
+        // The vertex stage builds a tangent frame from these and normal
+        // mapping falls apart if they are not orthonormal — which is the kind
+        // of thing that looks like a shader bug for an hour.
+        for (kind, vertices, indices) in all_geometry() {
+            assert!(!vertices.is_empty(), "{kind:?} has no vertices");
+            assert_eq!(indices.len() % 3, 0, "{kind:?} has a partial triangle");
+            for index in &indices {
+                assert!(
+                    (*index as usize) < vertices.len(),
+                    "{kind:?} indexes vertex {index} of {}",
+                    vertices.len()
+                );
+            }
+            for vertex in &vertices {
+                let normal = Vec3::from_array(vertex.normal);
+                let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
+                assert!(
+                    (normal.length() - 1.0).abs() < 1e-4,
+                    "{kind:?} has a non-unit normal {normal:?}"
+                );
+                assert!(
+                    (tangent.length() - 1.0).abs() < 1e-4,
+                    "{kind:?} has a non-unit tangent {tangent:?}"
+                );
+                assert!(
+                    normal.dot(tangent).abs() < 1e-3,
+                    "{kind:?} has a tangent {tangent:?} not perpendicular to {normal:?}"
+                );
+                assert!(vertex.uv.iter().all(|c| (0.0..=1.0).contains(c)));
+            }
+        }
+    }
+
+    #[test]
+    fn every_primitive_winds_counter_clockwise_seen_from_outside() {
+        for (kind, vertices, indices) in all_geometry() {
+            for triangle in indices.chunks(3) {
+                let [a, b, c] = [
+                    Vec3::from_array(vertices[triangle[0] as usize].position),
+                    Vec3::from_array(vertices[triangle[1] as usize].position),
+                    Vec3::from_array(vertices[triangle[2] as usize].position),
+                ];
+                let winding = (b - a).cross(c - a);
+                if winding.length() < 1e-6 {
+                    // A sphere's poles are degenerate by construction, and a
+                    // zero-area triangle has no facing to check.
+                    continue;
+                }
+                let normal = Vec3::from_array(vertices[triangle[0] as usize].normal);
+                assert!(
+                    winding.dot(normal) > 0.0,
+                    "{kind:?} triangle {triangle:?} faces inwards"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_sphere_puts_every_vertex_on_its_radius() {
+        let (vertices, _) = sphere_geometry(2.5, 12, 6);
+        for vertex in &vertices {
+            let distance = Vec3::from_array(vertex.position).length();
+            assert!(
+                (distance - 2.5).abs() < 1e-4,
+                "{distance} is off the radius"
+            );
+        }
+    }
+
+    #[test]
+    fn a_torus_stays_within_its_tube_of_the_main_ring() {
+        let (vertices, _) = torus_geometry(1.0, 0.25, 12, 8);
+        for vertex in &vertices {
+            let position = Vec3::from_array(vertex.position);
+            // Distance from the main ring, which every point is exactly the
+            // tube radius from.
+            let radial = Vec3::new(position.x, 0.0, position.z).length() - 1.0;
+            let distance = (radial * radial + position.y * position.y).sqrt();
+            assert!((distance - 0.25).abs() < 1e-4, "{distance} is off the tube");
+        }
+    }
+
+    #[test]
+    fn degenerate_subdivision_counts_are_clamped_rather_than_empty() {
+        // A UI offering a subdivision slider can ask for nonsense; a mesh
+        // with no triangles is a validation error later, not here.
+        for (vertices, indices) in [
+            sphere_geometry(1.0, 0, 0),
+            plane_geometry(1.0, 0),
+            torus_geometry(1.0, 0.2, 0, 0),
+        ] {
+            assert!(!vertices.is_empty());
+            assert!(indices.len() >= 3);
+        }
+    }
+
+    #[test]
+    fn mesh_kind_names_round_trip_and_cycle() {
+        for kind in MeshKind::ALL {
+            assert_eq!(MeshKind::parse(kind.name()), Some(*kind));
+        }
+        assert_eq!(MeshKind::parse(" Sphere "), Some(MeshKind::Sphere));
+        assert_eq!(MeshKind::parse("teapot"), None);
+        // Cycling visits every kind and comes back.
+        let mut kind = MeshKind::default();
+        for _ in MeshKind::ALL {
+            kind = kind.next();
+        }
+        assert_eq!(kind, MeshKind::default());
     }
 
     #[test]

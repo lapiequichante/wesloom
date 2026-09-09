@@ -44,6 +44,22 @@ pub enum RenderError {
     /// The deferred path was asked to record a frame with no lighting-pass
     /// shader. [`crate::renderer::Renderer`] compiles one for you.
     NoLightingShader,
+    /// The UI atlas has no room left for an entry of that size.
+    ///
+    /// Not silently dropped: a missing glyph is a hole in the interface, and
+    /// the caller is the only one who can decide between repacking, growing
+    /// the atlas and living with it. See [`crate::ui::Atlas::clear`].
+    AtlasFull {
+        /// Width of the entry that did not fit.
+        width: u32,
+        /// Height of the entry that did not fit.
+        height: u32,
+    },
+    /// A font's bytes could not be parsed.
+    InvalidFont {
+        /// What the parser objected to.
+        reason: String,
+    },
     /// No `wgpu` adapter matched the requested options.
     NoAdapter,
     /// `wgpu` refused to create a device.
@@ -71,6 +87,13 @@ impl fmt::Display for RenderError {
             }
             RenderError::NoLightingShader => {
                 f.write_str("the deferred path needs a lighting-pass shader in `FrameInput`")
+            }
+            RenderError::AtlasFull { width, height } => write!(
+                f,
+                "the UI atlas has no room for a {width}x{height} entry; clear it, or                  build it larger (see `Atlas::new`)"
+            ),
+            RenderError::InvalidFont { reason } => {
+                write!(f, "cannot read the font: {reason}")
             }
             RenderError::NoAdapter => f.write_str("no suitable wgpu adapter"),
             RenderError::NoDevice(error) => write!(f, "wgpu refused a device: {error}"),

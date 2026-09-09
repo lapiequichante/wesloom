@@ -1,0 +1,188 @@
+// The 2D UI pass: how the node editor draws itself.
+//
+// The editor's chrome is not a special case bolted onto the renderer — it is
+// a WXSL module compiled through `wxsl-lang` and cached by the variant
+// cache like any material (ADR 0013). Which is also why it lives here rather
+// than as a string inside `wxsl-render`: that crate ships no shaders, the
+// application hands them in (ADR 0009).
+//
+// Everything on screen is **one instance**: the quad's four corners come from
+// `@builtin(vertex_index)`, so a glyph costs one instance record rather than
+// four vertices and six indices, and a frame of node editor is a handful of
+// `draw(0..6, 0..n)` calls. There is no vertex buffer and no index buffer.
+//
+// Three primitive kinds cover a node editor, and `wxsl_core::abi`'s
+// `UI_KINDS` is the table this file is written against:
+//
+//   * a signed-distance rounded box, which with the right half extent and
+//     radius is also a circle, a capsule (so a link is a chain of them), a
+//     hairline, and — with a border thickness — a stroked outline;
+//   * a textured quad, for the material preview and for atlas images;
+//   * a glyph run, shaded from a multi-channel signed distance field so that
+//     text stays sharp under any canvas zoom (ADR 0014).
+//
+// The instance layout is host-shared three ways: `abi::UI_ATTRIBUTES`,
+// `wxsl_render::ui::draw::UiInstance`, and `UiInstanceIn` below. Edit them
+// together.
+
+// Must match `abi::UI_KIND_*`; a test in this crate checks that it does.
+const UI_KIND_SHAPE: u32 = 0u;
+const UI_KIND_TEXTURE: u32 = 1u;
+const UI_KIND_TEXT: u32 = 2u;
+
+// How far outside its half extent a primitive's quad is grown, so that the
+// distance field's antialiasing ramp has a pixel to live in. Glyphs get none:
+// their quad is exactly the atlas entry, and the field's own padding covers
+// the ramp.
+const UI_BLEED: f32 = 1.0;
+
+struct UiViewport {
+    // Size of the render target in physical pixels. The vertex stage works
+    // in pixels and converts here, so the CPU side never builds a matrix.
+    size: vec2f,
+    _pad0: vec2f,
+}
+
+// The UI pass binds nothing but the pass group (`abi::GROUP_PASS`): it has no
+// camera, no lights and no material graph, and a viewport plus a texture is
+// exactly what that slot is for. Binding the viewport into group 0 would give
+// that group two incompatible layouts depending on which pass is recording.
+// See ADR 0010.
+@group(3) @binding(0) var<uniform> ui_viewport: UiViewport;
+@group(3) @binding(1) var ui_texture: texture_2d<f32>;
+@group(3) @binding(2) var ui_sampler: sampler;
+
+struct UiInstanceIn {
+    @location(0) center: vec2f,
+    @location(1) half_extent: vec2f,
+    @location(2) axis: vec2f,
+    @location(3) shape: vec2f,
+    @location(4) uv_min: vec2f,
+    @location(5) uv_max: vec2f,
+    @location(6) color: vec4f,
+    @location(7) kind: u32,
+}
+
+struct UiVertexOut {
+    @builtin(position) clip_position: vec4f,
+    @location(0) local: vec2f,
+    @location(1) shape: vec4f,
+    @location(2) uv: vec2f,
+    @location(3) color: vec4f,
+    // Integers cannot be interpolated, and a primitive's kind is constant
+    // over it anyway.
+    @location(4) @interpolate(flat) kind: u32,
+}
+
+// The corner of the quad this vertex is, as 0..1 in x and y.
+//
+// Two triangles from six vertex indices: (0,0) (1,0) (1,1), (0,0) (1,1)
+// (0,1). Cheaper than an index buffer, and it keeps the whole UI pass down to
+// one buffer binding.
+fn ui_corner(index: u32) -> vec2f {
+    let lookup = array<vec2f, 6>(
+        vec2f(0.0, 0.0),
+        vec2f(1.0, 0.0),
+        vec2f(1.0, 1.0),
+        vec2f(0.0, 0.0),
+        vec2f(1.0, 1.0),
+        vec2f(0.0, 1.0),
+    );
+    return lookup[index];
+}
+
+@vertex
+fn ui_vs(@builtin(vertex_index) vertex: u32, instance: UiInstanceIn) -> UiVertexOut {
+    var out: UiVertexOut;
+    let corner = ui_corner(vertex);
+
+    // A glyph's quad is exactly its atlas entry; everything else grows by a
+    // pixel to leave room for the coverage ramp.
+    var bleed = UI_BLEED;
+    if instance.kind == UI_KIND_TEXT {
+        bleed = 0.0;
+    }
+    let grown = instance.half_extent + vec2f(bleed);
+    // -1..1 across the quad, in the primitive's own frame: this is what the
+    // fragment stage evaluates the distance field at.
+    let local = (corner * 2.0 - vec2f(1.0)) * grown;
+
+    // Rotate the local frame onto the screen. For anything axis-aligned the
+    // axis is (1, 0) and this is the identity.
+    let across = vec2f(-instance.axis.y, instance.axis.x);
+    let position = instance.center + instance.axis * local.x + across * local.y;
+
+    // Pixels (y down from the top left) to clip space (y up).
+    let normalized = position / max(ui_viewport.size, vec2f(1.0));
+    out.clip_position = vec4f(
+        normalized.x * 2.0 - 1.0,
+        1.0 - normalized.y * 2.0,
+        0.0,
+        1.0,
+    );
+    out.local = local;
+    out.shape = vec4f(instance.half_extent, instance.shape);
+    out.uv = mix(instance.uv_min, instance.uv_max, corner);
+    out.color = instance.color;
+    out.kind = instance.kind;
+    return out;
+}
+
+// Signed distance from `point` to a rounded box centred on the origin.
+//
+// Negative outside. `radius` is clamped implicitly: an inner extent is never
+// allowed to go negative, so a radius larger than the half extent degrades to
+// a circle instead of turning inside out.
+fn ui_round_box(point: vec2f, half_extent: vec2f, radius: f32) -> f32 {
+    let inner = max(half_extent - vec2f(radius), vec2f(0.0));
+    let offset = abs(point) - inner;
+    return -(length(max(offset, vec2f(0.0))) + min(max(offset.x, offset.y), 0.0) - radius);
+}
+
+// The median of three values, which is how an MSDF's three channels
+// reconstruct one distance: a corner disagrees in one channel, and the median
+// keeps the other two, so the corner stays a corner instead of rounding off.
+fn ui_median(field: vec3f) -> f32 {
+    return max(min(field.r, field.g), min(max(field.r, field.g), field.b));
+}
+
+// How much of this pixel the primitive covers, from its signed distance.
+//
+// `local` is in physical pixels, so one pixel of linear ramp is a constant
+// rather than something needing a derivative: coverage 1 at half a pixel
+// inside the edge, 0 at half a pixel outside.
+fn ui_coverage(local: vec2f, shape: vec4f) -> f32 {
+    var distance = ui_round_box(local, shape.xy, shape.z);
+    let border = shape.w;
+    if border > 0.0 {
+        // Stroke the outline inwards, so a border never bleeds outside the
+        // rectangle a widget was told it owns.
+        distance = border * 0.5 - abs(distance - border * 0.5);
+    }
+    return clamp(distance + 0.5, 0.0, 1.0);
+}
+
+@fragment
+fn ui_fs(in: UiVertexOut) -> @location(0) vec4f {
+    var color = in.color;
+    if in.kind == UI_KIND_TEXT {
+        // `shape.z` carries the field's range in screen pixels for a glyph
+        // run: how many pixels the -0.5..0.5 distance range spans at the size
+        // this run is drawn at. It is what makes one atlas entry serve every
+        // size.
+        let field = textureSample(ui_texture, ui_sampler, in.uv).rgb;
+        let distance = (ui_median(field) - 0.5) * in.shape.z;
+        color.a = color.a * clamp(distance + 0.5, 0.0, 1.0);
+    } else {
+        if in.kind == UI_KIND_TEXTURE {
+            color = color * textureSample(ui_texture, ui_sampler, in.uv);
+        }
+        color.a = color.a * ui_coverage(in.local, in.shape);
+    }
+    // Nothing to blend, and the depth-less UI pass has no reason to run the
+    // rest of the pipeline for it.
+    if color.a <= 0.0 {
+        discard;
+    }
+    return color;
+}

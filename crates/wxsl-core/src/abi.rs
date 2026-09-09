@@ -211,6 +211,188 @@ pub const FEATURE_DEBUG_NORMALS: &str = "wxsl_debug_normals";
 /// ([ADR 0005](../../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)).
 pub const FEATURE_DEFERRED: &str = "wxsl_deferred";
 
+// ---------------------------------------------------------------------------
+// The UI pass
+// ---------------------------------------------------------------------------
+
+/// Module holding the 2D UI pass the editor draws itself with.
+///
+/// The editor's own chrome goes through the WXSL compiler and the variant
+/// cache like any material
+/// ([ADR 0013](../../../docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)),
+/// so the shader is part of the library the application supplies (ADR 0009)
+/// rather than a string hidden inside `wxsl-render`.
+pub const UI_MODULE: &str = "package::wxsl::ui";
+/// Vertex entry point of [`UI_MODULE`].
+pub const UI_VERTEX_ENTRY: &str = "ui_vs";
+/// Fragment entry point of [`UI_MODULE`].
+pub const UI_FRAGMENT_ENTRY: &str = "ui_fs";
+
+/// [`GROUP_PASS`] binding of the UI viewport uniform.
+///
+/// The UI pass binds nothing but the pass group: it has no camera, no lights
+/// and no material, and a viewport plus an atlas is precisely "resources a
+/// pipeline shape needs" (ADR 0010). Reusing [`GROUP_FRAME`] for the
+/// viewport would give group 0 two incompatible meanings depending on which
+/// pass is recording.
+pub const BINDING_UI_VIEWPORT: u32 = 0;
+/// [`GROUP_PASS`] binding of the texture a UI batch samples (the glyph and
+/// image atlas, or an offscreen render such as the material preview).
+pub const BINDING_UI_TEXTURE: u32 = 1;
+/// [`GROUP_PASS`] binding of the sampler used with [`BINDING_UI_TEXTURE`].
+pub const BINDING_UI_SAMPLER: u32 = 2;
+
+/// How many vertices one UI primitive's quad is drawn from.
+///
+/// The corners come from `@builtin(vertex_index)`, not from a vertex buffer:
+/// every UI primitive is one *instance*, so a glyph costs one
+/// [`UI_ATTRIBUTES`] record rather than four vertices and six indices. Two
+/// triangles, six indices' worth of vertices, no index buffer at all.
+pub const UI_QUAD_VERTICES: u32 = 6;
+
+/// One per-instance attribute of a UI primitive, in `@location` order.
+///
+/// Host-shared, like [`VERTEX_IN_STRUCT`]: `wxsl_render::ui`'s
+/// `#[repr(C)]` instance, this table and `shaders/wxsl/ui.wxsl` are three
+/// views of one layout and are edited together.
+///
+/// The step mode is `Instance`, and there is no per-vertex buffer.
+pub struct UiAttribute {
+    /// Field name in the WXSL struct.
+    pub name: &'static str,
+    /// WGSL type of the attribute.
+    pub ty: &'static str,
+    /// What it carries.
+    pub doc: &'static str,
+}
+
+/// The UI instance layout, in `@location` order.
+pub const UI_ATTRIBUTES: &[UiAttribute] = &[
+    UiAttribute {
+        name: "center",
+        ty: "vec2f",
+        doc: "Centre of the primitive in physical pixels, y down from the top left.",
+    },
+    UiAttribute {
+        name: "half_extent",
+        ty: "vec2f",
+        doc: "Half the primitive's size in its own frame. The signed distance is \
+              evaluated against this, so a capsule is an axis-aligned rounded box \
+              however the quad is rotated on screen.",
+    },
+    UiAttribute {
+        name: "axis",
+        ty: "vec2f",
+        doc: "Unit vector the primitive's local x axis points along on screen. \
+              (1, 0) for anything axis-aligned; a line's direction for a capsule.",
+    },
+    UiAttribute {
+        name: "shape",
+        ty: "vec2f",
+        doc: "x = corner radius (glyph runs: the distance field's range in screen \
+              pixels), y = border thickness, 0 for a filled primitive.",
+    },
+    UiAttribute {
+        name: "uv_min",
+        ty: "vec2f",
+        doc: "Texture coordinate of the primitive's top-left corner.",
+    },
+    UiAttribute {
+        name: "uv_max",
+        ty: "vec2f",
+        doc: "Texture coordinate of the primitive's bottom-right corner.",
+    },
+    UiAttribute {
+        name: "color",
+        ty: "vec4f",
+        doc: "Straight (non-premultiplied) RGBA tint, in the target's colour space \
+              — the UI pass converts nothing.",
+    },
+    UiAttribute {
+        name: "kind",
+        ty: "u32",
+        doc: "Which of `UI_KINDS` this primitive is. Flat-interpolated.",
+    },
+];
+
+/// One primitive kind the UI fragment stage knows how to shade.
+pub struct UiKind {
+    /// The `kind` attribute's value.
+    pub value: u32,
+    /// Name of the WXSL constant, and of the Rust enum variant.
+    pub name: &'static str,
+    /// How the fragment stage shades it.
+    pub doc: &'static str,
+}
+
+/// Every UI primitive kind, by `kind` value.
+///
+/// Three kinds cover a node editor: a signed-distance box (which, with the
+/// right half extent and radius, is also a circle, a capsule, a hairline and
+/// a border ring), a textured quad, and a glyph run.
+pub const UI_KINDS: &[UiKind] = &[
+    UiKind {
+        value: UI_KIND_SHAPE,
+        name: "UI_KIND_SHAPE",
+        doc: "Rounded box from the signed distance to `shape`, filled or stroked.",
+    },
+    UiKind {
+        value: UI_KIND_TEXTURE,
+        name: "UI_KIND_TEXTURE",
+        doc: "The batch's texture, tinted by `color` and masked by the same \
+              rounded-box distance, so an image can have rounded corners.",
+    },
+    UiKind {
+        value: UI_KIND_TEXT,
+        name: "UI_KIND_TEXT",
+        doc: "A multi-channel signed distance field glyph: the median of the \
+              texture's RGB, scaled by `shape.z` screen pixels of range.",
+    },
+];
+
+// ---------------------------------------------------------------------------
+// The MSDF generation pass
+// ---------------------------------------------------------------------------
+
+/// Module holding the compute pass that generates glyph distance fields.
+///
+/// The renderer can build a glyph's field on the CPU or on the GPU
+/// ([ADR 0014](../../../docs/adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md));
+/// this is the GPU half, and it is a WXSL module in the library for the same
+/// reason the UI pass is (ADR 0009). The two implementations must agree, and
+/// a test compares them glyph for glyph.
+pub const MSDF_MODULE: &str = "package::wxsl::msdf";
+/// Compute entry point of [`MSDF_MODULE`].
+pub const MSDF_ENTRY: &str = "msdf_main";
+/// The `@workgroup_size` of [`MSDF_ENTRY`], as `[x, y]`: one invocation per
+/// pixel, with the glyph index in `z`.
+pub const MSDF_WORKGROUP: [u32; 2] = [8, 8];
+
+/// [`GROUP_PASS`] binding of the coloured edges of every glyph in a batch.
+///
+/// Numbered from zero in the pass group like the UI pass's bindings, and
+/// distinct from them: a compute pipeline has its own layout, so the two
+/// never collide (ADR 0010).
+pub const BINDING_MSDF_EDGES: u32 = 0;
+/// [`GROUP_PASS`] binding of the per-glyph jobs.
+pub const BINDING_MSDF_JOBS: u32 = 1;
+/// [`GROUP_PASS`] binding of the packed RGBA8 output pixels.
+pub const BINDING_MSDF_PIXELS: u32 = 2;
+
+/// Edge kind in [`MSDF_MODULE`]'s edge buffer: a straight line.
+pub const MSDF_EDGE_LINE: u32 = 1;
+/// Edge kind: a quadratic Bézier (TrueType outlines).
+pub const MSDF_EDGE_QUAD: u32 = 2;
+/// Edge kind: a cubic Bézier (CFF/OpenType outlines).
+pub const MSDF_EDGE_CUBIC: u32 = 3;
+
+/// [`UI_KINDS`] value: a signed-distance rounded box.
+pub const UI_KIND_SHAPE: u32 = 0;
+/// [`UI_KINDS`] value: a textured quad.
+pub const UI_KIND_TEXTURE: u32 = 1;
+/// [`UI_KINDS`] value: an MSDF glyph.
+pub const UI_KIND_TEXT: u32 = 2;
+
 /// Name of the generated material function.
 pub const MATERIAL_FN: &str = "wxsl_material";
 /// Name of the generated vertex entry point.
@@ -402,6 +584,45 @@ mod tests {
             assert_eq!(socket.ty, field.ty);
             assert!(socket.optional);
         }
+    }
+
+    #[test]
+    fn the_ui_instance_layout_is_dense_and_ordered() {
+        // The table's index is the `@location`, which is what lets the
+        // shader's declaration line up with the host's `#[repr(C)]` struct.
+        assert!(!UI_ATTRIBUTES.is_empty());
+        assert_eq!(UI_ATTRIBUTES.last().expect("attributes").name, "kind");
+        assert_eq!(UI_QUAD_VERTICES, 6, "two triangles");
+    }
+
+    #[test]
+    fn the_ui_kind_table_agrees_with_its_constants() {
+        // The table is what `ui.wxsl` is generated against by hand and what
+        // the Rust enum mirrors; the constants are what code reads. A
+        // mismatch would be a UI whose primitives shade as the wrong kind.
+        for (index, kind) in UI_KINDS.iter().enumerate() {
+            assert_eq!(
+                kind.value as usize, index,
+                "`{}` is out of order",
+                kind.name
+            );
+        }
+        assert_eq!(UI_KINDS[UI_KIND_SHAPE as usize].name, "UI_KIND_SHAPE");
+        assert_eq!(UI_KINDS[UI_KIND_TEXTURE as usize].name, "UI_KIND_TEXTURE");
+        assert_eq!(UI_KINDS[UI_KIND_TEXT as usize].name, "UI_KIND_TEXT");
+    }
+
+    #[test]
+    fn the_ui_pass_binds_only_the_pass_group() {
+        // Not the frame group: the UI pass has no camera and no lights, and
+        // group 0 must not mean two different layouts in two passes.
+        let bindings = [BINDING_UI_VIEWPORT, BINDING_UI_TEXTURE, BINDING_UI_SAMPLER];
+        let mut sorted = bindings;
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1, 2], "the UI bindings are dense from zero");
+        assert!(BIND_GROUPS
+            .iter()
+            .any(|slot| slot.index == GROUP_PASS && !slot.application_owned));
     }
 
     #[test]

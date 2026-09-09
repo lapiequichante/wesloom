@@ -17,12 +17,13 @@ see [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
 for why this is written from scratch rather than ported from an existing
 library.
 
-**Status: implemented, except the editor.** The graph model, WXSL codegen,
-node library, and the forward/deferred `wgpu` renderer all work and are
-tested end to end; `crates/wxsl/examples/pbr_cube.rs` is the demo to run
-first. `wxsl-editor` is still module stubs with no UI. Each module's doc
-comment says what it holds and which ADR governs it; that's the source of
-truth for "what goes here," not this file.
+**Status: implemented, editor included.** The graph model, WXSL codegen, node
+library, the forward/deferred `wgpu` renderer, its 2D UI layer and the visual
+node editor all work and are tested end to end.
+`crates/wxsl/examples/pbr_cube.rs` is the demo to run first and
+`crates/wxsl/examples/editor.rs` the second. Each module's doc comment says
+what it holds and which ADR governs it; that's the source of truth for "what
+goes here," not this file.
 
 ## Map of the workspace
 
@@ -33,13 +34,15 @@ version:
 |---|---|---|---|
 | `wxsl-core` | nothing in-workspace | no | no |
 | `wxsl-render` | `wxsl-core` | no | yes |
-| `wxsl-editor` | `wxsl-core` | yes | no (delegates drawing to `wxsl-render` at the app level) |
+| `wxsl-editor` | `wxsl-core`, `wxsl-render` | no toolkit — it draws itself | yes (ADR 0013) |
 | `wxsl-stdlib` | `wxsl-core` | no | no |
-| `wxsl` (facade) | all of the above, behind features | via `editor` feature | via `render` feature |
+| `wxsl` (facade) | all of the above, behind features | never | via `render`/`editor` features |
 
-The dependency arrows only ever point *into* `wxsl-core`. Never make
-`wxsl-core` or `wxsl-render` depend on `wxsl-editor` or
-`wxsl-stdlib` — that's the whole point of the split (ADR 0002).
+The dependency arrows point *into* `wxsl-core`, plus one more:
+`wxsl-editor → wxsl-render`, because the editor draws itself with the
+renderer rather than with a GUI toolkit (ADR 0013). Never make `wxsl-core`
+or `wxsl-render` depend on `wxsl-editor` or `wxsl-stdlib` — that's the
+whole point of the split (ADR 0002).
 
 ## Before you start a nontrivial change
 
@@ -113,9 +116,19 @@ facade crate's feature set, not about the workspace.
 - `cargo test -p wxsl --test render_cube` — renders on a real device and
   compares the two paths' images. Skips (prints a note, passes) when no
   adapter is available, so don't read a pass as proof it ran.
+- `cargo test -p wxsl --features editor --test editor_frame` — drives the
+  editor for several frames on a real device: that it draws, that editing
+  recompiles, that a path switch changes the WGSL, that a frame of every
+  input event leaves it drawing, and that the two MSDF backends agree. Skips
+  with no adapter, like `render_cube`.
 - `cargo run -p wxsl --example pbr_cube -- --headless` — the fastest way
   to see whether a change to the ABI or the pipelines still produces a
   picture. Writes a PNG per path and reports how far apart they are.
+- `cargo run -p wxsl --features editor --example editor -- --screenshot out.png`
+  — the same for the editor: one frame, no window, reviewable as a PNG. Then
+  `cargo run -p wxsl-render --example glyph_field -- <FONT> c` when the
+  problem is a glyph rather than a panel; it prints the distance field as
+  text, and it is how the tie-break bug in `ui::msdf` was found.
 
 ## Conventions
 
@@ -132,6 +145,15 @@ facade crate's feature set, not about the workspace.
   `wxsl_core::abi`'s tables and `crates/wxsl-stdlib/shaders/wxsl/`.
   Same for the uniform layouts: `wxsl_render::scene`'s `#[repr(C)]`
   structs mirror `shaders/wxsl/bindings.wxsl`. See ADR 0008.
+- The UI pass has *three* halves: `abi::UI_ATTRIBUTES`/`UI_KINDS`,
+  `wxsl_render::ui::draw::UiInstance`, and `shaders/wxsl/ui.wxsl`. The MSDF
+  generator has two implementations that must agree — `ui::msdf` on the CPU
+  and `shaders/wxsl/msdf.wxsl` as a compute pass — and a test in
+  `crates/wxsl/tests/editor_frame.rs` compares them. See ADR 0013 and 0014.
+- Anything in the editor that can be tested without a device is factored so
+  that it is: distance fields, atlas packing, line breaking, caret and
+  hit-testing, draw-list batching, canvas geometry and input accumulation are
+  all pure functions over data. Keep it that way — CI has no GPU.
 - Anything a node needs that cannot be a socket value — a loop bound, a code
   switch — is a macro variable (`wxsl_core::macros`), declared on the node
   definition. Don't reach for string substitution or a second graph.
