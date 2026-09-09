@@ -1,15 +1,18 @@
-// Take a tangent-space normal (as stored in a normal map, already decoded to
-// -1..1) into world space, with an adjustable strength.
+// Apply normal map
 //
-// `strength` scales the tangential components only, so 0 gives the geometric
-// normal back and values above 1 exaggerate the detail without denormalizing
-// the result.
+// Take a tangent-space normal into world space, with a strength control.
+// Wire the result into the output node's `normal`.
+//
+// The tangent-space normal is the one stored in a normal map, already
+// decoded to -1..1. `strength` scales the tangential components only, so 0
+// gives the geometric normal back and values above 1 exaggerate the detail
+// without denormalizing the result.
 fn apply_normal_map(
-    tangent_normal: vec3f,
-    normal: vec3f,
-    tangent: vec3f,
-    bitangent: vec3f,
-    strength: f32,
+    tangent_normal: vec3f, // @default 0.0, 0.0, 1.0
+    normal: vec3f,         // @default 0.0, 1.0, 0.0
+    tangent: vec3f,        // @default 1.0, 0.0, 0.0
+    bitangent: vec3f,      // @default 0.0, 0.0, 1.0
+    strength: f32,         // @default 1.0
 ) -> vec3f {
     let scaled = vec3f(tangent_normal.xy * strength, max(tangent_normal.z, 1e-4));
     let basis = mat3x3f(normalize(tangent), normalize(bitangent), normalize(normal));

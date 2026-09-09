@@ -1,8 +1,13 @@
-// Lambertian diffuse albedo, energy-normalized and metal-aware.
+// Lambert diffuse
+//
+// Energy-normalized diffuse albedo, faded out for metals.
 //
 // Metals have no diffuse lobe, so the base colour is faded out as `metallic`
 // rises rather than being handled by a branch.
-fn diffuse_lambert(base_color: vec3f, metallic: f32) -> vec3f {
+fn diffuse_lambert(
+    base_color: vec3f, // @default 0.8
+    metallic: f32,     // @default 0.0
+) -> vec3f {
     let inverse_pi = 0.31830989;
     return base_color * (1.0 - saturate(metallic)) * inverse_pi;
 }

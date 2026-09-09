@@ -1,5 +1,8 @@
-// One light's contribution to a physically-based surface, kept split into
-// its diffuse and specular halves.
+// PBR direct light (split)
+//
+// As `lighting.pbr_direct`, but keeping the diffuse and specular halves
+// separate. The function is evaluated once however many of its outputs are
+// used.
 //
 // This is the "complex" end of the library: a real function with a body, a
 // struct return, and four smaller functions imported rather than inlined.
@@ -23,13 +26,13 @@ struct PbrDirect {
 }
 
 fn pbr_direct_split(
-    normal: vec3f,
-    view_direction: vec3f,
-    light_direction: vec3f,
-    radiance: vec3f,
-    base_color: vec3f,
-    metallic: f32,
-    roughness: f32,
+    normal: vec3f,          // Unit shading normal, world space. @default 0.0, 1.0, 0.0
+    view_direction: vec3f,  // Unit vector towards the eye. @default 0.0, 0.0, 1.0
+    light_direction: vec3f, // Unit vector towards the light. @default 0.0, 1.0, 0.0
+    radiance: vec3f,        // The light's radiance, already attenuated for distance. @default 1.0
+    base_color: vec3f,      // @default 0.8
+    metallic: f32,          // @default 0.0
+    roughness: f32,         // @default 0.5
 ) -> PbrDirect {
     var out: PbrDirect;
     out.diffuse = vec3f(0.0, 0.0, 0.0);

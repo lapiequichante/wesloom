@@ -2867,6 +2867,7 @@ version = "0.0.0"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
+ "wxsl-core",
 ]
 
 [[package]]
@@ -2886,6 +2887,7 @@ name = "wxsl-stdlib"
 version = "0.0.0"
 dependencies = [
  "wxsl-core",
+ "wxsl-lang",
 ]
 
 [[package]]

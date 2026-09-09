@@ -31,7 +31,9 @@ graph LR
     editor --> core
     editor --> render
     editor --> lang
+    lang --> core
     stdlib --> core
+    stdlib -. "build only" .-> lang
     facade -. "render feature (default)" .-> render
     facade -. "editor feature" .-> editor
     facade -. "stdlib feature (default)" .-> stdlib
@@ -46,6 +48,15 @@ exists and which edges must never appear, and
 `editor --> lang` exists (the code panels' syntax highlighting reuses the
 compiler's own lexer).
 
+Two of those edges are about node definitions being read out of shader
+sources ([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
+`lang --> core` is there because the derivation answers in the graph model's
+terms — it hands back a `NodeDefinition`. `stdlib -. build only .-> lang` is
+dashed for a reason worth knowing: the compiler is a **build**-dependency of
+the node library, so the library derives its nodes at build time and the
+shipped crate carries no compiler. `cargo tree -p wxsl-stdlib -e normal`
+shows `wxsl-core` and nothing else.
+
 ## Module map
 
 What lives where, now that the crates have contents. Each module's own doc
@@ -59,7 +70,8 @@ shader ABI's names and field tables), `wesl` (identifier/float/hash helpers),
 `error`.
 
 **`wxsl-stdlib`** — `shaders` (the embedded `.wxsl` sources, keyed by
-module path), `registry` (every function and operator as a node definition).
+module path), `registry` (the operators as node definitions, plus the
+function nodes `build.rs` derived from the sources).
 
 **`wxsl-render`** — `path` (`RenderPath`), `library` (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
@@ -278,6 +290,14 @@ uninstantiated template or a surviving `@if` reaches it, the error names the
 construct and the pass that should have removed it — instead of `wgpu`
 rejecting syntax it has never heard of.
 
+One module sits off that pipeline: `node`, which parses a single file and
+answers with the `NodeDefinition` it describes rather than with WGSL
+([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
+It is the only place in the compiler that reads comments, because the node
+metadata a signature cannot carry — a label, a socket default — is stated in
+them rather than in attributes the compiler would have to thread through
+every pass and then ignore.
+
 ## The base node library
 
 `wxsl-stdlib` mirrors the category layout common to granular shader
@@ -295,10 +315,17 @@ and its sockets carry it, resolved per graph node from whatever is connected,
 and the operators whose two operands WGSL lets differ (`f32 * vec3f`,
 `mat3x3f * vec3f`) declare two parameters and derive the result from both
 ([ADR 0018](adr/0018-one-generic-node-per-operation.md)). Everything with a body — PBR
-shading, noise, tonemapping, colour spaces — is a real WXSL function
-described by a `WeslFunction` giving its module, name, parameters and return
-shape, so the WXSL source stays the single definition of the behaviour and
-hand-written WXSL can call the same function a graph does. An earlier plan to rewrite
+shading, noise, tonemapping, colour spaces — is a real WXSL function, and
+**the file is the node**: its signature gives the sockets, its type
+parameter's bound list gives the allowed set, its `@macro const`s give the
+macro declarations, and its comments give the label, the documentation and
+the socket defaults
+([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
+`wxsl-stdlib/build.rs` runs `wxsl_lang::node_from_source` over every file
+under a category directory and writes the results out as the table
+`registry.rs` includes, so a function and its node cannot disagree — there
+is nowhere for them to disagree — and hand-written WXSL can call the same
+function a graph does. An earlier plan to rewrite
 [LYGIA](https://lygia.xyz) into WXSL was scrapped once its non-permissive
 license ([ADR 0006](adr/0006-lygia-port-licensing-and-isolation.md)) turned
 out to be a real adoption cost even fully isolated behind an opt-in

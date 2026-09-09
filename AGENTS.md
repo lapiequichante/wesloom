@@ -35,7 +35,7 @@ version:
 | `wxsl-core` | nothing in-workspace | no | no |
 | `wxsl-render` | `wxsl-core` | no | yes |
 | `wxsl-editor` | `wxsl-core`, `wxsl-render`, `wxsl-lang` | no toolkit — it draws itself | yes (ADR 0013) |
-| `wxsl-stdlib` | `wxsl-core` | no | no |
+| `wxsl-stdlib` | `wxsl-core` (plus `wxsl-lang` at build time only) | no | no |
 | `wxsl` (facade) | all of the above, behind features | never | via `render`/`editor` features |
 
 The dependency arrows point *into* `wxsl-core`, plus two more:
@@ -45,6 +45,12 @@ renderer rather than with a GUI toolkit (ADR 0013), and
 reuses the compiler's own lexer rather than a second one (ADR 0016). Never
 make `wxsl-core` or `wxsl-render` depend on `wxsl-editor` or `wxsl-stdlib`
 — that's the whole point of the split (ADR 0002).
+
+`wxsl-stdlib → wxsl-lang` is a **build**-dependency and must stay one: the
+node library derives its function nodes from the `.wxsl` files at build time
+(ADR 0020), so `cargo tree -p wxsl-stdlib -e normal` shows only
+`wxsl-core`. Promoting it to a normal dependency would put a shader compiler
+into every build of the node library.
 
 ## Before you start a nontrivial change
 
@@ -114,7 +120,9 @@ facade crate's feature set, not about the workspace.
 - `cargo test -p wxsl --test graph_to_wgsl` — the real WXSL compiler
   over the real shader sources: **every node in the library** compiled on
   both render paths, the demo graph, macro switching, node-format round trip.
-  This is the test that catches a node descriptor disagreeing with its WXSL.
+  A node whose WXSL does not compile fails here. (A node *descriptor*
+  disagreeing with its WXSL is no longer a thing that can happen — the
+  descriptor is derived from the WXSL, ADR 0020.)
 - `cargo test -p wxsl --test render_cube` — renders on a real device and
   compares the two paths' images. Skips (prints a note, passes) when no
   adapter is available, so don't read a pass as proof it ran.
@@ -141,8 +149,11 @@ facade crate's feature set, not about the workspace.
   stop — that boundary is the reason the crate exists.
 - New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
   (see that directory's `README.md` for the category layout, the originality
-  rule, and the three authoring rules that keep a function reachable from a
-  graph).
+  rule, and the authoring rules that keep a function reachable from a
+  graph). **The file is the node** (ADR 0020): there is no descriptor to
+  write in Rust. One `fn` per file; a label line then a documentation
+  paragraph in the leading comment block; one parameter per line, each with
+  its own trailing `// … @default <value>`.
 - The shader ABI has two halves that must be edited together:
   `wxsl_core::abi`'s tables and `crates/wxsl-stdlib/shaders/wxsl/`.
   Same for the uniform layouts: `wxsl_render::scene`'s `#[repr(C)]`

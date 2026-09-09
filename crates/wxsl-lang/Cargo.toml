@@ -11,6 +11,10 @@ license.workspace = true
 
 [dependencies]
 lalrpop-util = { workspace = true }
+# The graph model, for the one thing this crate answers in its terms: a node
+# definition derived from a `.wxsl` file (ADR 0020). No wgpu, no GUI comes
+# with it — the arrow points into `wxsl-core` like every other one.
+wxsl-core = { workspace = true }
 
 [build-dependencies]
 lalrpop = { workspace = true }

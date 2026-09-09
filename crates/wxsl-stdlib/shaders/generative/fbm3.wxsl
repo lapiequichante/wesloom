@@ -1,5 +1,9 @@
-// Fractal Brownian motion over `value_noise3`: octaves of noise at rising
-// frequency and falling amplitude, normalized back to 0..1.
+// Fractal noise (3D)
+//
+// Octaves of value noise summed at rising frequency and falling amplitude,
+// normalized to 0..1. The octave count is the macro variable
+// `WXSL_FBM_OCTAVES`, and `wxsl_fbm_ridged` switches the octaves to ridges —
+// both change which code is compiled, not what a socket carries.
 //
 // This function is where macro variables earn their keep. The octave count
 // is a loop bound, so it *must* be a compile-time constant — it cannot be a
@@ -14,10 +18,14 @@
 
 import package::generative::value_noise3::value_noise3;
 
-@macro const WXSL_FBM_OCTAVES: i32 = 5;
-@macro const wxsl_fbm_ridged: bool = false;
+@macro const WXSL_FBM_OCTAVES: i32 = 5; // How many octaves of noise to sum. A loop bound, so it is a compile-time constant.
+@macro const wxsl_fbm_ridged: bool = false; // Fold each octave into a ridge, for a creased look.
 
-fn fbm3(p: vec3f, lacunarity: f32, gain: f32) -> f32 {
+fn fbm3(
+    p: vec3f,        // @default 0.0
+    lacunarity: f32, // Frequency multiplier per octave. @default 2.0
+    gain: f32,       // Amplitude multiplier per octave. @default 0.5
+) -> f32 {
     var position = p;
     var amplitude = 1.0;
     var total = 0.0;

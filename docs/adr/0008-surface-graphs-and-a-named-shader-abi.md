@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md)
 
 ## Context
 
@@ -109,7 +109,11 @@ module cannot see declarations in the root module that imports it, so
 - A stdlib function that reads a macro variable must have that macro declared
   on its node definition, or the generated macro module will not declare it
   and the import will fail. `shaders/README.md` states this as an authoring
-  rule.
+  rule. **Amended by [ADR 0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md):**
+  the declaration is now made once, in the file's own `@macro const`, and the
+  node's copy is derived from it. More generally, this ADR's "a node
+  definition describes a function's interface" is unchanged, but the
+  description is no longer written by hand — it is read out of the function.
 - Adding a render path (ADR 0005 anticipates a visibility-buffer path) means
   a new arm in the generated entry points and a new flag name here, not a new
   compiler.

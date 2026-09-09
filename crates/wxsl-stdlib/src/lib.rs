@@ -30,6 +30,15 @@
 //! Both are needed, and they are two halves of one thing: the registry lets a
 //! graph be built and type-checked, and the sources let the result compile.
 //!
+//! They are not, however, two things to *write*. Every function node in the
+//! registry is derived from the `.wxsl` file that defines it
+//! ([ADR 0020](../../../docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)):
+//! `build.rs` runs `wxsl_lang::node_from_source` over each file under a
+//! category directory, so a signature, a socket default and a macro
+//! declaration are each stated once, in the shader. Adding a function to this
+//! library is adding a file. Only the operators — inline expressions with no
+//! file to derive from — are written in Rust.
+//!
 //! ```
 //! let registry = wxsl_stdlib::registry();
 //! let pbr = registry.get("lighting.pbr_direct").expect("PBR node");

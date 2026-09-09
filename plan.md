@@ -6,6 +6,8 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
+**Landed so far:** M0.
+
 ## How to read this
 
 Everything below follows from this table. These are settled: revisit one by
@@ -22,7 +24,7 @@ superseding its row, not by quietly diverging inside a milestone.
 | Portability target | **WebGPU baseline, native fast paths behind a feature.** Every pass must have a path that runs on the WebGPU baseline; a native path may be faster or higher quality, and both are tested. |
 | Culling | **Convention, as a per-pass knob.** The opaque pass culls back faces; an outline pass culls front faces. `cull_mode` is a field of a pass description, never a constant in the code. |
 | How an object picks its queue | **Tags on the material, a tag expression on the pass.** The material declares what it *is* (`opaque`, `transparent`, `outlined`); a geometry pass declares what it *draws*. No introspection of graphs, and a draw may override its tags. |
-| How a node is declared | **The `.wxsl` file is the definition.** Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
+| How a node is declared | **The `.wxsl` file is the definition.** *Done — [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md).* Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
 | Lighting models | **A registry of WXSL functions, hand-written first.** A model is one function of fixed signature plus a small id; whether that function was written or generated is invisible to the dispatch, so graph-authored models land later against the same registry. |
 | Compute passes | **In the engine from M1, first used in M6.** The repo already runs a compute pass — MSDF generation (ADR 0014) — so the pipeline, bind-group and variant machinery exists and the render graph generalizes it rather than inventing it. |
 | Antialiasing | **Post-process only.** No MSAA anywhere: FXAA/SMAA in M6, TAA once persistent resources exist. One behaviour across forward, deferred and peeling, so the editor's preview always represents the final frame. |
@@ -233,68 +235,53 @@ struct in one file.
 Each milestone ends with a runnable demo and green tests, and names the ADR
 it owes. Nothing here is a refactor with no observable end state.
 
-### M0 — A `.wxsl` file *is* a node definition
+### M0 — A `.wxsl` file *is* a node definition — **done**
 
-Independent of everything else, and worth doing first because M3, M5 and M6
-each add a pile of nodes: doing it after them means writing every one twice.
+Landed as [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md),
+which is now where the reasoning lives. What shipped, and the three things a
+later milestone needs to know:
 
-Today `wxsl-stdlib/src/registry.rs` hand-writes a `WxslFunction` descriptor
-— module, name, parameters, return shape — restating what the `.wxsl` file
-next to it already says. The file is the definition; the descriptor should
-be derived from it.
+`wxsl_lang::node_from_source(source, module_path)` is the derivation, and
+`wxsl-stdlib/build.rs` is its first caller: it runs over every file under
+`shaders/<category>/` and writes the results out as the table `registry.rs`
+includes. `wxsl-lang` is a **build**-dependency of `wxsl-stdlib`, so
+`cargo tree -p wxsl-stdlib -e normal` still shows only `wxsl-core`.
+`registry.rs` lost nine `pub fn`s and about 400 lines; the node count is
+unchanged at 100, and the demo's two paths still agree to 0.0001.
 
-The convention it relies on already holds. All 28 function files contain
-exactly one `fn`, which `shaders/README.md` and `docs/architecture.md`
-already state as the authoring rule. And more of a node than the signature
-is already in the source:
+* **The label and doc convention turned out to be narrower than the plan
+  assumed.** "The first line of the leading comment block is the label" was
+  written here as though the shipped files already opened that way. They did
+  not — they opened with a *sentence*, and a label is not a sentence
+  ("Tonemap (Reinhard)", "SDF box", "HSV to RGB" are derivable from neither
+  the path nor the prose). So all 28 files gained a label line, and the rule
+  is now: label line, blank line, **one** documentation paragraph, then
+  whatever the source's own reader needs. Only that one paragraph reaches the
+  editor.
+* **`@default` on every parameter, one parameter per line.** Not in the plan
+  and not optional: a comment after the second parameter on a shared line has
+  nothing to say which of them it belongs to, so the derivation bounds each
+  comment by the next parameter's position and a shared line yields nothing.
+  Every node source is now one-parameter-per-line. Absent `@default` means
+  the input is mandatory, which is why leaving it out is an error worth
+  catching rather than a shrug.
+* **M3 has a new place to edit.** A socket type is now language-visible:
+  when textures and samplers become socket types, `node_from_source`'s type
+  mapping is where `texture_2d<f32>` becomes one — one place, but it has to
+  move with `ValueType`.
 
-| In the file | Becomes |
-|---|---|
-| `fn safe_normalize<T: vec2f \| vec3f \| vec4f>(v: T) -> T` | one type parameter `T` whose bound list *is* `GenericParam::allowed` (ADR 0015/0018), one input `v: T`, one output `T` |
-| `struct PbrDirect { ... }` returned by the fn (`pbr_direct_split.wxsl`) | one output socket per field — already how `FunctionReturn` works |
-| `@macro const WXSL_FBM_OCTAVES: i32 = 5;` (`fbm3.wxsl`) | the node's macro declarations, with their defaults |
-| the path `math/safe_normalize.wxsl` | the id `math.safe_normalize` and its category |
+The deleted test, `every_called_function_lives_in_a_module_this_crate_ships`,
+was replaced by two that check what is still checkable:
+`every_function_node_is_derived_from_a_shader_this_crate_ships` and
+`the_generated_table_is_what_the_derivation_answers_now`, the latter
+re-deriving every node at test time and comparing it with the generated
+table — the agreement test that makes the build script's serializer
+trustworthy, in the same spirit as the two MSDF implementations (ADR 0014).
 
-**What the file cannot say** is carried by its comments. The leading comment
-block is the documentation and its first line is the label — every shipped
-file already opens with exactly that prose, so half the work is done. Socket
-defaults come from a `// @default` annotation on the parameter's own line:
-
-```
-// Fractal Brownian motion
-//
-// Sums octaves of value noise at increasing frequency and decreasing
-// amplitude, which is what makes it look like terrain rather than static.
-fn fbm3(
-    p: vec3f,
-    lacunarity: f32,  // @default 2.0
-    gain: f32,        // @default 0.5
-) -> f32 {
-```
-
-The language does not change, which matters more than it looks: real
-attributes (`@label`, `@default`) would touch the lexer, the LALRPOP grammar
-and the emitter, for metadata the compiler has no use for. A comment
-convention keeps node metadata out of the language it is not part of.
-
-**The derivation is a public `wxsl-lang` API** — `node_from_source(source,
-path) -> NodeDefinition` — with two callers. `wxsl-stdlib`'s `build.rs`
-calls it at build time (`wxsl-lang` as a *build*-dependency, so
-`cargo tree -e normal` stays clean and a `wxsl-core`-only build still has no
-compiler in it) and produces a static table with no runtime cost. The editor
-calls the same function at runtime on files the user wrote, which is what
-M10 needs to make a saved buffer appear in the palette. One implementation,
-two callers — and writing it as an API rather than a build script from the
-start is the whole difference between the two milestones fitting together
-and M10 needing a second parser.
-
-**Done when** `registry.rs` declares no function node by hand, the node
-count is unchanged, and `every_called_function_lives_in_a_module_this_crate_ships`
-can be **deleted** — not because it stops mattering, but because the drift
-it exists to catch stops being expressible.
-
-**ADR** — "A node definition is derived from its WXSL source". Amends ADR
-0008.
+**Still owed to M10**, and unchanged: the runtime caller. Nothing about the
+derivation assumes build time, so making a saved buffer appear in the palette
+is calling the same function — which was the entire point of writing it as an
+API rather than as a build script.
 
 ### M1 — The render graph, with today's two paths on it
 

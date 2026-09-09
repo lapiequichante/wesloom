@@ -141,7 +141,13 @@ pub struct MacroDef {
     /// The value used when neither the graph nor the caller pins one.
     pub default: MacroValue,
     /// One-line description, shown in the editor next to the toggle.
-    pub doc: &'static str,
+    ///
+    /// An owned `String` rather than a `&'static str` because a macro
+    /// declaration can now come from a `.wxsl` file read at runtime
+    /// ([ADR 0020](../../../docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)),
+    /// where the text is the trailing comment on an `@macro const` line and
+    /// nothing about it is static.
+    pub doc: String,
 }
 
 impl MacroDef {
@@ -151,11 +157,11 @@ impl MacroDef {
     ///
     /// Panics if `name` is not a valid WXSL identifier. Node definitions are
     /// authored in Rust, so this is a programming error, not input handling.
-    pub fn new(name: &str, default: MacroValue, doc: &'static str) -> Self {
+    pub fn new(name: &str, default: MacroValue, doc: impl Into<String>) -> Self {
         MacroDef {
             name: WxslIdent::new(name).expect("macro name must be a valid WXSL identifier"),
             default,
-            doc,
+            doc: doc.into(),
         }
     }
 

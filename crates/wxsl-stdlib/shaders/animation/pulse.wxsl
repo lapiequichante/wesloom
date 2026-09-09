@@ -1,4 +1,13 @@
-// A 0..1 sine oscillation: `frequency` cycles per second, `phase` in turns.
-fn pulse(time: f32, frequency: f32, phase: f32) -> f32 {
+// Pulse
+//
+// A 0..1 sine oscillation. Wire the `input.time` node into it.
+//
+// `frequency` is in cycles per second and `phase` in turns, so both compose
+// with `input.time` without a magic constant in the graph.
+fn pulse(
+    time: f32,      // @default 0.0
+    frequency: f32, // Cycles per second. @default 1.0
+    phase: f32,     // Offset in turns. @default 0.0
+) -> f32 {
     return sin((time * frequency + phase) * 6.28318531) * 0.5 + 0.5;
 }

@@ -1,15 +1,17 @@
-// Normalize a vector, returning zero instead of NaN for a zero-length input.
+// Safe normalize
 //
-// `normalize` on a zero vector is a division by zero; the NaN then spreads
-// through everything downstream and shows up as black or missing pixels far
-// from the node that caused it.
+// Normalize, returning zero instead of NaN for a zero-length input. A NaN
+// here spreads through everything downstream and shows up as black or
+// missing pixels far from its cause.
 //
 // One template, instantiated per width by the compiler (ADR 0012), rather
 // than one body per width: `dot(v, v)` is a scalar however wide `v` is, so
 // the guard is a scalar `if` that needs no reshaping, and `T(0.0)` builds the
 // zero of whatever `T` turns out to be.
 
-fn safe_normalize<T: vec2f | vec3f | vec4f>(v: T) -> T {
+fn safe_normalize<T: vec2f | vec3f | vec4f>(
+    v: T, // @default 0.0
+) -> T {
     let length_squared = dot(v, v);
     if length_squared < 1e-12 {
         return T(0.0);

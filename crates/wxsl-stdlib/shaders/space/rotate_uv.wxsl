@@ -1,8 +1,14 @@
-// Rotate `uv` around `pivot` by `turns` (1.0 = a full turn).
+// Rotate UV
+//
+// Rotate a coordinate around a pivot, in turns.
 //
 // Turns rather than radians for the same reason hue is in turns: it composes
 // with time and with fractional values without a magic constant in the graph.
-fn rotate_uv(uv: vec2f, pivot: vec2f, turns: f32) -> vec2f {
+fn rotate_uv(
+    uv: vec2f,    // @default 0.0
+    pivot: vec2f, // @default 0.5
+    turns: f32,   // @default 0.0
+) -> vec2f {
     let angle = turns * 6.28318531;
     let c = cos(angle);
     let s = sin(angle);

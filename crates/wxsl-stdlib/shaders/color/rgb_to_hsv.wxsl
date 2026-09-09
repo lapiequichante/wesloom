@@ -1,5 +1,11 @@
-// RGB to HSV. Hue comes back in turns (0..1), matching `hsv_to_rgb`.
-fn rgb_to_hsv(rgb: vec3f) -> vec3f {
+// RGB to HSV
+//
+// RGB to hue (in turns), saturation and value.
+//
+// Hue comes back in turns (0..1), matching `hsv_to_rgb`.
+fn rgb_to_hsv(
+    rgb: vec3f, // @default 1.0, 0.0, 0.0
+) -> vec3f {
     let peak = max(rgb.r, max(rgb.g, rgb.b));
     let valley = min(rgb.r, min(rgb.g, rgb.b));
     let chroma = peak - valley;

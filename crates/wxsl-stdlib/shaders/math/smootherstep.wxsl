@@ -1,4 +1,7 @@
-// Quintic smoothstep: like `smoothstep`, with a continuous second derivative.
+// Smootherstep
+//
+// Quintic ramp between two edges, with a continuous second derivative — no
+// crease where the ramp meets the flat parts.
 //
 // Worth the extra multiply wherever the first derivative's discontinuity
 // shows up as a visible crease — noise interpolation, or a value driving a
@@ -11,7 +14,11 @@
 // component should not decide the others. The discarded branch's division by
 // zero is discarded with it.
 
-fn smootherstep<T: f32 | vec2f | vec3f | vec4f>(edge0: T, edge1: T, x: T) -> T {
+fn smootherstep<T: f32 | vec2f | vec3f | vec4f>(
+    edge0: T, // @default 0.0
+    edge1: T, // @default 1.0
+    x: T,     // @default 0.5
+) -> T {
     let span = edge1 - edge0;
     let t = saturate((x - edge0) / span);
     let ramp = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);

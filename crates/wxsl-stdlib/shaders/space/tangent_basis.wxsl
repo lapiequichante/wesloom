@@ -1,11 +1,15 @@
-// An arbitrary but stable orthonormal basis around `normal`, as the columns
-// (tangent, bitangent, normal) of a mat3x3f.
+// Tangent basis
+//
+// An arbitrary but stable orthonormal frame around a normal, as the columns
+// (tangent, bitangent, normal).
 //
 // For geometry with real UVs the interpolated tangent frame is the right
 // thing to use. This is for the cases where there is none: the deferred
 // lighting pass, which reads a normal out of the G-buffer with no tangent
 // alongside it, and procedural nodes that just need *some* frame.
-fn tangent_basis(normal: vec3f) -> mat3x3f {
+fn tangent_basis(
+    normal: vec3f, // @default 0.0, 1.0, 0.0
+) -> mat3x3f {
     let n = normalize(normal);
     // Pick the reference axis least aligned with the normal, so the cross
     // product below never degenerates.

@@ -25,6 +25,13 @@ One function per file, named after the function, so a module path reads
 return or one tightly-coupled variant, both live in that file (see
 `lighting/pbr_direct_split.wxsl`).
 
+That rule is now load-bearing rather than tidy: **the file is the node**
+([ADR 0020](../../../docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
+`wxsl_lang::node_from_source` reads a file and answers with the node
+definition, and `build.rs` runs it over everything under a category
+directory, so there is no Rust to write for a new function. See "The shape of
+a node source" below for what the derivation reads.
+
 `filter/` and `sample/` are empty: both are mostly about sampling textures,
 which the node model does not carry yet. They stay as directories so the
 category layout is not a surprise later.
@@ -83,11 +90,10 @@ function was written with a specific external reference in mind for the
 good practice; it is not a substitute for the implementation being your
 own.
 
-**A new function needs a node definition.** `src/registry.rs` describes each
-function's module, name, parameters and return shape; that descriptor is what
-lets a graph type-check a call to it. A function with no descriptor is
-unreachable from a graph, and `src/shaders.rs`'s test will fail if the file
-is not listed in `MODULES` at all.
+**A new function needs no node definition — it *is* one.** Write the file,
+add it to `MODULES` in `src/shaders.rs` (a test fails if you forget), and it
+appears in the palette. What the derivation reads is below; anything it
+cannot read is a diagnostic naming the line, at build time.
 
 **Polymorphism over value types is one generic node, not a family.**
 A node definition declares a `GenericParam` and its sockets carry it, so one
@@ -128,16 +134,76 @@ tool, not a copy per type.
 per component, which is usually the semantics you want anyway: one
 degenerate component should collapse only itself.
 
-**A function that reads a macro variable must declare it in its own file,
-and on its node.** In the file: `@macro const WXSL_FBM_OCTAVES: i32 = 5;`,
-which is both the declaration and the default, so the module compiles on its
-own. On the node in `registry.rs` (see `generative.fbm3`): that is what puts
-the macro in a graph's effective set, so the graph and a single node instance
-can override it. A macro used in an `@if` but never declared is an error
-naming the file and the line — not a silent `false`.
+**A function that reads a macro variable declares it in its own file.**
+`@macro const WXSL_FBM_OCTAVES: i32 = 5;` is both the declaration and the
+default, so the module compiles on its own, and the derivation carries it
+onto the node — which is what puts the macro in a graph's effective set, so
+the graph and a single node instance can override it. Its trailing comment is
+the description the editor shows next to the control. A macro used in an
+`@if` but never declared is an error naming the file and the line — not a
+silent `false`.
 
 **Guard the degenerate cases.** A zero-length vector, a zero-width range, a
 zero-radius falloff: these arrive from a graph far more often than from
 hand-written code, because a socket's default is frequently zero. Returning a
 sensible value beats emitting a NaN that shows up as black pixels three nodes
 downstream.
+
+## The shape of a node source
+
+Everything a node needs is in the file. `math/smootherstep.wxsl`, in full
+except for the body:
+
+```wxsl
+// Smootherstep
+//
+// Quintic ramp between two edges, with a continuous second derivative — no
+// crease where the ramp meets the flat parts.
+//
+// Worth the extra multiply wherever the first derivative's discontinuity
+// shows up as a visible crease — noise interpolation, or a value driving a
+// normal.
+
+fn smootherstep<T: f32 | vec2f | vec3f | vec4f>(
+    edge0: T, // @default 0.0
+    edge1: T, // @default 1.0
+    x: T,     // @default 0.5
+) -> T {
+```
+
+| What | Where it comes from |
+|---|---|
+| the id `math.smootherstep` and its category | the file's place in the tree |
+| the label `Smootherstep` | the **first line** of the leading comment block |
+| the documentation | the **paragraph after it**, and only that paragraph |
+| a type parameter's allowed set | its bound list, verbatim |
+| input sockets | the parameters, in order |
+| output sockets | the return type — one named `out`, or one per field of a struct declared in the same file |
+| socket docs and defaults | each parameter's own trailing comment |
+| macro declarations | `@macro const`, with its trailing comment as the doc |
+
+Four things to get right:
+
+* **A label line, then a blank comment line, then one paragraph.** Anything
+  after that paragraph is for whoever is reading the source — how the body
+  works, which paper the technique is from, why a constant is what it is —
+  and never reaches the editor. Put implementation notes there, not in the
+  first paragraph.
+* **One parameter per line, each with its own `@default`.** A comment after
+  the second parameter on a shared line has nothing to say which parameter it
+  belongs to, so the derivation ignores it and the socket comes out
+  mandatory. Write the doc first and the annotation last:
+  `lacunarity: f32, // Frequency multiplier per octave. @default 2.0`.
+* **`@default` takes one number or the type's components.** One number
+  spreads (`@default 0.5` on a `vec3f` is `vec3f(0.5)`, on a `mat3x3f` its
+  diagonal), which is the only form a socket carrying a type parameter can
+  have — its type is not known until an instance resolves it. Several are
+  components in order: `@default 0.0, 1.0, 0.0`. No annotation at all means
+  the input is mandatory, which is right for a socket with no sensible
+  fallback and wrong for most.
+* **A misspelled annotation is an error, not a shrug.** `@defualt` fails the
+  build naming the line, because a silently-ignored default leaves a socket
+  mandatory for no visible reason.
+
+The ABI files under `wxsl/` are exempt from all of this: they have entry
+points and several functions each, and none of them is a node.

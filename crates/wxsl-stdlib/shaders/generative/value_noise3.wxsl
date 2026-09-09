@@ -1,14 +1,18 @@
-// Value noise in three dimensions: a hashed value per lattice corner,
-// trilinearly interpolated with a quintic fade.
+// Value noise (3D)
 //
-// Returns 0..1, is continuous everywhere, and its first two derivatives are
-// continuous across cell boundaries (that is what the quintic fade buys over
-// a linear one — a linear fade leaves visible creases on the lattice planes).
+// Smooth 0..1 noise over a lattice, quintically interpolated.
+//
+// A hashed value per lattice corner, trilinearly interpolated with a quintic
+// fade. Continuous everywhere, and its first two derivatives are continuous
+// across cell boundaries — that is what the quintic fade buys over a linear
+// one, which leaves visible creases on the lattice planes.
 
 import package::generative::hash13::hash13;
 import package::math::smootherstep::smootherstep;
 
-fn value_noise3(p: vec3f) -> f32 {
+fn value_noise3(
+    p: vec3f, // @default 0.0
+) -> f32 {
     let cell = floor(p);
     let local = p - cell;
     // `smootherstep` is a template; the type argument is written out

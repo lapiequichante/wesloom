@@ -22,7 +22,7 @@ is signal, don't delete it.
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
-| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted |
+| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md) |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted |
 | [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
@@ -34,6 +34,7 @@ is signal, don't delete it.
 | [0017](0017-broadcast-generics-and-disconnect-cleanup.md) | Broadcast generic parameters, and forgetting a resolution on disconnect | Accepted, amended by [0018](0018-one-generic-node-per-operation.md) |
 | [0018](0018-one-generic-node-per-operation.md) | One generic node per operation, with WGSL's own operand rules | Accepted |
 | [0019](0019-node-colour-and-name-are-instance-metadata.md) | A node's colour and name belong to the node, not to its kind | Accepted |
+| [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md) | A node definition is derived from its WXSL source | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is
