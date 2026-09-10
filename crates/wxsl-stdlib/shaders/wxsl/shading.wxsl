@@ -1,4 +1,5 @@
-// The lighting model, shared by both render paths.
+// The lighting model, shared by the forward-lit stage and the deferred
+// lighting pass.
 //
 // This is the single function that turns a `Surface` into a colour. The
 // forward path calls it straight from its fragment entry; the deferred

@@ -48,7 +48,7 @@ explains the split.
 |---|---|
 | `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `environment` module. |
 | `surface.wxsl` | `SurfaceContext` and `Surface`, the graph's input and output. |
-| `vertex.wxsl` | The vertex stage, shared by both paths, and the context builder. |
+| `vertex.wxsl` | The vertex stage, shared by every material stage, and the context builder. |
 | `shading.wxsl` | `shade_surface`: the lighting model. Called by *both* paths. |
 | `deferred.wxsl` | The G-buffer struct, and packing/unpacking it. |
 | `lighting_pass.wxsl` | The deferred lighting pass, compiled as its own root module. |
@@ -71,7 +71,7 @@ contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by
 | 3 | `pass` | `lighting_pass.wxsl` | G-buffer, and future shadow/IBL resources |
 
 Nothing in this crate may bind `@group(2)`, and only pass plumbing may bind
-`@group(3)`: a library function must compile in either render path, and group
+`@group(3)`: a library function must compile for every material stage, and group
 3 is occupied in deferred. A test in `src/shaders.rs` enforces both.
 
 ## Authoring rules

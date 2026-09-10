@@ -46,6 +46,11 @@ pub enum RenderError {
     NoLightingShader,
     /// A pass list could not be ordered, validated or allocated.
     Graph(crate::graph::GraphError),
+    /// A background pipeline swap will never finish: the thread compiling
+    /// it is gone. Only reachable if that thread panicked, and reported
+    /// rather than left as an indicator counting to a total it can no
+    /// longer reach.
+    SwapAbandoned,
     /// A pass wants a resource the graph does not own and nobody supplied a
     /// view for. Every imported resource — the frame's target above all —
     /// has to be handed to [`crate::graph::RenderGraph::record`].
@@ -109,6 +114,9 @@ impl fmt::Display for RenderError {
                 f.write_str("the deferred path needs a compiled lighting-pass shader")
             }
             RenderError::Graph(error) => write!(f, "cannot run the pass list: {error}"),
+            RenderError::SwapAbandoned => {
+                f.write_str("the pipeline swap was abandoned: its compiler thread is gone")
+            }
             RenderError::MissingImport { resource } => write!(
                 f,
                 "no view was supplied for the imported resource `{resource}`"

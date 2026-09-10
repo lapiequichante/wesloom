@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
+Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md)
 
 ## Context
 
@@ -88,3 +88,18 @@ pipeline is a list of passes, and the two shipped ones are built by
 
 `Renderer::set_path` and the variant cache behave exactly as described
 above, and the demo's two paths still agree to 0.0001.
+
+## Amendment (ADR 0022)
+
+The *idea* here — one graph, several pipeline shapes, the differences
+expressed as conditional translation rather than as a second graph — is
+what generalizes, and it survives unchanged. The *implementation* did not:
+`RenderPath` was a two-valued enum selecting one of two `@if`-gated
+fragment entry points, and there was no room in that shape for a third.
+
+[ADR 0022](0022-material-stages-replace-the-render-path-enum.md) replaces
+it with `abi::MATERIAL_STAGES`, a table. A graph compiles once per *stage*,
+each stage emitting its own module with its own entry point;
+`abi::FEATURE_DEFERRED` is gone because there is nothing left to gate.
+What is left of `RenderPath` is `StockPipeline`, which names one of the two
+pass lists this crate ships and has nothing to do with shader variants.

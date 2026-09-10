@@ -160,8 +160,8 @@ fn the_editor_draws_an_interface() {
         "the WXSL panel has no material function"
     );
     assert!(
-        editor.preview().wgsl().contains("fn fs_main"),
-        "the WGSL panel has no fragment entry"
+        editor.preview().wgsl().contains("fn fs_forward_lit"),
+        "the WGSL panel is not showing the forward pipeline's shading stage"
     );
 
     let second = frame(&gpu, &mut editor, &target, 0.016);
@@ -323,16 +323,20 @@ fn the_editor_survives_a_frame_of_every_input_event() {
 }
 
 #[test]
-fn switching_render_path_and_mesh_keeps_the_preview_compiling() {
+fn switching_pipeline_and_mesh_keeps_the_preview_compiling() {
     let Some(gpu) = gpu() else { return };
     let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
         return;
     };
     frame(&gpu, &mut editor, &target, 0.0);
     let forward = editor.preview().wgsl().to_string();
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Forward
+    );
 
-    // `D` switches to the deferred path, `M` cycles the mesh: the same graph,
-    // compiled for the other pipeline shape (ADR 0005).
+    // `D` requests the deferred pipeline, `M` cycles the mesh: the same
+    // graph, compiled for the other pipeline's stages (ADR 0005, ADR 0022).
     for (index, key) in [Key::Char('d'), Key::Char('m'), Key::Char('m')]
         .into_iter()
         .enumerate()
@@ -344,6 +348,27 @@ fn switching_render_path_and_mesh_keeps_the_preview_compiling() {
         });
         frame(&gpu, &mut editor, &target, 0.2 + index as f64 * 0.016);
     }
+
+    // The swap is requested rather than applied, so the editor keeps
+    // drawing the forward pipeline until the G-buffer stage is compiled.
+    // Every one of those frames is a complete frame.
+    let mut waited = 0;
+    while editor.preview().swap_progress().is_some() {
+        let during = frame(&gpu, &mut editor, &target, 0.3 + waited as f64 * 0.016);
+        assert!(
+            painted_pixels(&during) > 10_000,
+            "a frame during the pipeline swap drew nothing"
+        );
+        waited += 1;
+        assert!(waited < 1_000, "the pipeline swap never landed");
+    }
+    // One more frame, for the code panel to pick up the stage that landed.
+    frame(&gpu, &mut editor, &target, 0.4);
+
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Deferred
+    );
     assert!(
         editor.preview().status().is_ok(),
         "{:?}",
@@ -352,7 +377,7 @@ fn switching_render_path_and_mesh_keeps_the_preview_compiling() {
     let deferred = editor.preview().wgsl().to_string();
     assert_ne!(
         forward, deferred,
-        "the deferred path should compile to different WGSL"
+        "the deferred pipeline should show a different stage's WGSL"
     );
     assert!(
         deferred.contains("pack_gbuffer") || deferred.contains("GBuffer"),

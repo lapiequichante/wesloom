@@ -47,11 +47,12 @@ pub const TRANSFORM_VERTEX_FN: &str = "transform_vertex";
 /// Builds a [`CONTEXT_STRUCT`] from a [`VERTEX_OUT_STRUCT`].
 pub const SURFACE_CONTEXT_FN: &str = "surface_context";
 
-/// Forward path: shades a surface to a final `vec4f` colour.
+/// Shades a surface to a final `vec4f` colour
+/// ([`MaterialStage::FORWARD_LIT`]).
 pub const SHADE_SURFACE_FN: &str = "shade_surface";
-/// Deferred path: the G-buffer fragment output struct.
+/// The G-buffer fragment output struct ([`MaterialStage::GBUFFER`]).
 pub const GBUFFER_STRUCT: &str = "GBuffer";
-/// Deferred path: packs a surface into the G-buffer.
+/// Packs a surface into the G-buffer ([`MaterialStage::GBUFFER`]).
 pub const PACK_GBUFFER_FN: &str = "pack_gbuffer";
 
 /// Deferred path: the standalone module holding the lighting pass, compiled
@@ -188,8 +189,9 @@ pub const GBUFFER_TARGETS: &[GBufferTarget] = &[
 ///
 /// These are not declared by any node — they switch behaviour inside the
 /// hand-written ABI modules — so a renderer seeds them as defaults under
-/// whatever the graph pins. [`FEATURE_DEFERRED`] is deliberately absent: the
-/// render path is chosen by the pipeline, not by a macro the user edits.
+/// whatever the graph pins. Which *stage* a material is compiled for is not
+/// among them and never was: a stage is chosen by the pass, and it is not a
+/// flag at all any more (ADR 0022) but a separate generated module.
 pub fn abi_macros() -> Vec<MacroDef> {
     vec![
         MacroDef::new(
@@ -209,13 +211,6 @@ pub fn abi_macros() -> Vec<MacroDef> {
 pub const FEATURE_TONEMAP: &str = "wxsl_tonemap";
 /// Feature flag: output normals instead of shading (see [`abi_macros`]).
 pub const FEATURE_DEBUG_NORMALS: &str = "wxsl_debug_normals";
-
-/// The WXSL conditional-translation feature that selects the deferred path.
-///
-/// Bound by `wxsl-render` from the pipeline's `RenderPath`, never stored on
-/// a graph — a material is written once and compiled per path
-/// ([ADR 0005](../../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)).
-pub const FEATURE_DEFERRED: &str = "wxsl_deferred";
 
 // ---------------------------------------------------------------------------
 // The UI pass
@@ -403,8 +398,176 @@ pub const UI_KIND_TEXT: u32 = 2;
 pub const MATERIAL_FN: &str = "wxsl_material";
 /// Name of the generated vertex entry point.
 pub const VERTEX_ENTRY: &str = "vs_main";
-/// Name of the generated fragment entry point (both paths).
-pub const FRAGMENT_ENTRY: &str = "fs_main";
+
+// ---------------------------------------------------------------------------
+// Material stages
+// ---------------------------------------------------------------------------
+
+/// What a material stage's fragment entry returns.
+///
+/// This is the whole of what makes one stage different from another at M2:
+/// the same surface graph, wrapped in a different entry point writing a
+/// different set of targets. M5 adds the other half — *which part* of the
+/// graph a stage needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StageOutput {
+    /// One `vec4f` final colour at `@location(0)`.
+    Color,
+    /// A [`GBUFFER_STRUCT`], one target per [`GBUFFER_TARGETS`] entry.
+    GBuffer,
+    /// Nothing: the stage has no fragment entry point at all, and a
+    /// pipeline built for it has no fragment state. Depth is written by
+    /// the depth test, which needs no shader.
+    Nothing,
+}
+
+impl StageOutput {
+    /// How many colour attachments a pass running this stage must have.
+    pub fn color_targets(self) -> usize {
+        match self {
+            StageOutput::Color => 1,
+            StageOutput::GBuffer => GBUFFER_TARGETS.len(),
+            StageOutput::Nothing => 0,
+        }
+    }
+}
+
+/// One entry of [`MATERIAL_STAGES`].
+pub struct MaterialStageDesc {
+    /// Identifier, as used in labels, on a command line and in the editor.
+    pub name: &'static str,
+    /// Fragment entry point emitted for this stage, or `None` when the
+    /// stage has none.
+    pub fragment_entry: Option<&'static str>,
+    /// What that entry returns.
+    pub output: StageOutput,
+    /// What the stage is for.
+    pub doc: &'static str,
+}
+
+/// Every stage a surface graph can be compiled for, in declaration order.
+///
+/// A table, like [`GBUFFER_TARGETS`], and for the same reason: adding a
+/// stage is a row here plus the constant that names it, not a new arm in
+/// every match in the workspace. This replaces the two-valued render-path
+/// enum, which had room for exactly two entry points and no more
+/// ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
+///
+/// The stages the plan still owes — `Shadow`, `PeelFront`/`PeelBack`,
+/// `Velocity` — are rows that do not exist yet. Each needs something else
+/// first (a depth bias, the peel test, a previous-frame transform), which
+/// is why they are not stubbed out here.
+pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
+    MaterialStageDesc {
+        name: "forward_lit",
+        fragment_entry: Some("fs_forward_lit"),
+        output: StageOutput::Color,
+        doc: "Shade the surface where it is evaluated, and write the final colour.",
+    },
+    MaterialStageDesc {
+        name: "gbuffer",
+        fragment_entry: Some("fs_gbuffer"),
+        output: StageOutput::GBuffer,
+        doc: "Write the surface into the G-buffer for a later lighting pass to shade.",
+    },
+    MaterialStageDesc {
+        name: "depth_only",
+        fragment_entry: None,
+        output: StageOutput::Nothing,
+        doc: "Write depth and nothing else: a depth prepass, and the shape a shadow \
+              pass will take once it has a bias and an alpha subgraph to discard with.",
+    },
+];
+
+/// Which stage a material is compiled for.
+///
+/// An index into [`MATERIAL_STAGES`] rather than an enum, so that the table
+/// stays the single declaration. `Copy` and `Hash`, because it is part of
+/// the variant cache key and of every pass description.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MaterialStage(u8);
+
+impl MaterialStage {
+    /// Shade in the material's own fragment pass.
+    pub const FORWARD_LIT: MaterialStage = MaterialStage(0);
+    /// Write the surface into the G-buffer.
+    pub const GBUFFER: MaterialStage = MaterialStage(1);
+    /// Write depth and nothing else.
+    pub const DEPTH_ONLY: MaterialStage = MaterialStage(2);
+
+    /// Every stage, in table order.
+    pub const ALL: &'static [MaterialStage] = &[
+        MaterialStage::FORWARD_LIT,
+        MaterialStage::GBUFFER,
+        MaterialStage::DEPTH_ONLY,
+    ];
+
+    /// The stage at `index` in [`MATERIAL_STAGES`], if there is one.
+    pub fn from_index(index: usize) -> Option<Self> {
+        (index < MATERIAL_STAGES.len()).then_some(MaterialStage(index as u8))
+    }
+
+    /// This stage's index in [`MATERIAL_STAGES`].
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// This stage's table row.
+    pub fn desc(self) -> &'static MaterialStageDesc {
+        &MATERIAL_STAGES[self.index()]
+    }
+
+    /// The stage's name.
+    pub fn name(self) -> &'static str {
+        self.desc().name
+    }
+
+    /// Parse a stage from its [`MaterialStage::name`].
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        MaterialStage::ALL
+            .iter()
+            .copied()
+            .find(|stage| stage.name().eq_ignore_ascii_case(text))
+    }
+
+    /// The fragment entry point emitted for this stage, or `None` when it
+    /// has none.
+    pub fn fragment_entry(self) -> Option<&'static str> {
+        self.desc().fragment_entry
+    }
+
+    /// What the fragment entry returns.
+    pub fn output(self) -> StageOutput {
+        self.desc().output
+    }
+
+    /// How many colour attachments a pass running this stage must have.
+    pub fn color_targets(self) -> usize {
+        self.output().color_targets()
+    }
+}
+
+impl Default for MaterialStage {
+    fn default() -> Self {
+        MaterialStage::FORWARD_LIT
+    }
+}
+
+impl core::fmt::Debug for MaterialStage {
+    /// The name, not the index: `MaterialStage(1)` in a panic message is a
+    /// lookup the reader should not have to do.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "MaterialStage({})", self.name())
+    }
+}
+
+impl core::fmt::Display for MaterialStage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // `pad` so `{:>12}` in a progress line actually aligns.
+        f.pad(self.name())
+    }
+}
 
 /// One field of [`CONTEXT_STRUCT`], and the node that reads it.
 pub struct ContextField {
@@ -629,6 +792,57 @@ mod tests {
         assert!(BIND_GROUPS
             .iter()
             .any(|slot| slot.index == GROUP_PASS && !slot.application_owned));
+    }
+
+    #[test]
+    fn every_stage_constant_points_at_its_own_row() {
+        // The constants are indices into the table, so a row inserted in
+        // the middle without moving them would silently rename a stage.
+        assert_eq!(MaterialStage::ALL.len(), MATERIAL_STAGES.len());
+        for (index, stage) in MaterialStage::ALL.iter().enumerate() {
+            assert_eq!(stage.index(), index);
+            assert_eq!(MaterialStage::from_index(index), Some(*stage));
+        }
+        assert_eq!(MaterialStage::FORWARD_LIT.name(), "forward_lit");
+        assert_eq!(MaterialStage::GBUFFER.name(), "gbuffer");
+        assert_eq!(MaterialStage::DEPTH_ONLY.name(), "depth_only");
+        assert_eq!(MaterialStage::from_index(MATERIAL_STAGES.len()), None);
+    }
+
+    #[test]
+    fn stage_names_round_trip_and_are_unique() {
+        for stage in MaterialStage::ALL {
+            assert_eq!(MaterialStage::parse(stage.name()), Some(*stage));
+        }
+        assert_eq!(
+            MaterialStage::parse("  GBuffer "),
+            Some(MaterialStage::GBUFFER)
+        );
+        assert_eq!(MaterialStage::parse("shadow"), None);
+        let mut names: Vec<&str> = MATERIAL_STAGES.iter().map(|stage| stage.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), MATERIAL_STAGES.len());
+    }
+
+    #[test]
+    fn a_stages_target_count_follows_from_what_it_returns() {
+        // This is what the render graph validates a pass against, so a
+        // stage that returns three targets and a pass that attaches one is
+        // a named error rather than an entry-point signature complaint.
+        assert_eq!(MaterialStage::FORWARD_LIT.color_targets(), 1);
+        assert_eq!(
+            MaterialStage::GBUFFER.color_targets(),
+            GBUFFER_TARGETS.len()
+        );
+        assert_eq!(MaterialStage::DEPTH_ONLY.color_targets(), 0);
+        // And a stage with no fragment entry must write nothing.
+        for stage in MaterialStage::ALL {
+            if stage.fragment_entry().is_none() {
+                assert_eq!(stage.output(), StageOutput::Nothing);
+                assert_eq!(stage.color_targets(), 0);
+            }
+        }
     }
 
     #[test]

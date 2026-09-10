@@ -2,21 +2,31 @@
 //!
 //! It owns the shader library, the variant cache, the frame bindings, the
 //! `wgpu` pipeline cache and the resource pool, and exposes one
-//! [`Renderer::render`] that works whichever pipeline is active. Switching
-//! with [`Renderer::set_path`] invalidates nothing: the variant cache keeps
-//! both paths' shaders, so flipping back and forth compiles each variant
-//! once ([ADR 0005](../../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)).
+//! [`Renderer::render`] that works whichever pipeline is active.
 //!
-//! What changed in M1 is underneath: the two hand-written pipeline structs
-//! are gone, and a frame is a [`RenderGraph`] the engine schedules and
-//! records ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
-//! [`Renderer::set_graph`] is the escape hatch — an application with its own
-//! pass list hands it over and everything below behaves the same.
+//! A pipeline is a [`RenderGraph`] the engine schedules and records
+//! ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)),
+//! and which shader variant each of its passes draws with is that pass's
+//! [`MaterialStage`]
+//! ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
+//!
+//! # Two ways to swap
+//!
+//! * [`Renderer::set_pipeline`] switches immediately. Anything not already
+//!   compiled is compiled during the next frame, which is a hitch.
+//! * [`Renderer::request_pipeline`] switches when it is ready: the missing
+//!   variants compile on a worker thread while the current pipeline keeps
+//!   presenting, and the swap lands in one frame.
+//!   [`Renderer::swap_progress`] is what a `compiling 3/7` indicator reads.
+//!
+//! Either way the variant cache keeps what it compiled, keyed on the
+//! *stage* rather than the pipeline — so the second swap between two
+//! pipelines is free, and the third costs nothing at all.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use wxsl_core::abi;
+use wxsl_core::abi::{self, MaterialStage};
 
 use crate::draw::{DrawItem, DrawList};
 use crate::environment::{Environment, FrameBindings};
@@ -25,9 +35,11 @@ use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedul
 use crate::library::ShaderLibrary;
 use crate::material::Material;
 use crate::pass::{DrawSource, PassKind, ScreenShader};
-use crate::path::RenderPath;
-use crate::pipeline::{self, PipelineCache, TargetConfig};
-use crate::variants::{CacheStats, ShaderVariant, ShaderVariants};
+use crate::pipeline::{PipelineCache, StockPipeline, TargetConfig};
+use crate::swap::{PipelineSwap, Request, SwapProgress};
+use crate::variants::{
+    CacheStats, LightingRequest, MaterialRequest, ShaderVariant, ShaderVariants,
+};
 
 /// What to render, for [`Renderer::render`].
 ///
@@ -54,11 +66,11 @@ pub struct Renderer {
     pool: ResourcePool,
     graph: RenderGraph,
     schedule: Schedule,
-    /// Whether `graph` is one of the stock pass lists, and so should be
-    /// rebuilt when the path or the target changes. A graph an application
-    /// supplied is left alone.
-    stock: bool,
-    path: RenderPath,
+    /// Which stock pipeline is running, or `None` for one an application
+    /// supplied. A stock one is rebuilt when the target changes; someone
+    /// else's is left alone.
+    stock: Option<StockPipeline>,
+    swap: Option<PipelineSwap>,
     target: TargetConfig,
 }
 
@@ -75,8 +87,8 @@ impl Renderer {
         target: TargetConfig,
     ) -> Result<Self, RenderError> {
         library.check_abi()?;
-        let path = RenderPath::default();
-        let graph = pipeline::graph_for(path, target);
+        let stock = StockPipeline::default();
+        let graph = stock.graph(target);
         let schedule = graph.schedule()?;
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
@@ -88,29 +100,31 @@ impl Renderer {
             pool,
             graph,
             schedule,
-            stock: true,
-            path,
+            stock: Some(stock),
+            swap: None,
             target,
         })
     }
 
-    /// The active render path.
-    pub fn path(&self) -> RenderPath {
-        self.path
+    /// The stock pipeline in use, or `None` when an application supplied
+    /// its own pass list.
+    pub fn pipeline(&self) -> Option<StockPipeline> {
+        self.stock
     }
 
-    /// Switch render path, rebuilding the stock pass list for it.
+    /// Switch pipeline now.
     ///
-    /// Does nothing if an application supplied its own graph: what a pass
-    /// draws with is then that graph's business.
-    pub fn set_path(&mut self, path: RenderPath) {
-        if self.path == path {
+    /// Whatever the new pass list needs and the cache does not have is
+    /// compiled during the next [`Renderer::render`], which is a hitch on
+    /// the first swap. [`Renderer::request_pipeline`] is the version that
+    /// does not stutter.
+    pub fn set_pipeline(&mut self, pipeline: StockPipeline) {
+        if self.stock == Some(pipeline) {
             return;
         }
-        self.path = path;
-        if self.stock {
-            self.rebuild();
-        }
+        self.stock = Some(pipeline);
+        self.swap = None;
+        self.rebuild();
     }
 
     /// The pass list being run.
@@ -118,29 +132,169 @@ impl Renderer {
         &self.graph
     }
 
-    /// Run `graph` instead of the stock pass list for the current path.
+    /// Run `graph` instead of a stock pass list, now.
     ///
     /// Validated immediately: a pass list that cannot be ordered is an
     /// error here rather than a `wgpu` complaint mid-frame.
     pub fn set_graph(&mut self, graph: RenderGraph) -> Result<(), RenderError> {
         self.schedule = graph.schedule()?;
         self.graph = graph;
-        self.stock = false;
+        self.stock = None;
+        self.swap = None;
         Ok(())
     }
 
-    /// Go back to the stock pass list for the current path.
-    pub fn use_stock_graph(&mut self) {
-        self.stock = true;
-        self.rebuild();
-    }
-
     fn rebuild(&mut self) {
-        self.graph = pipeline::graph_for(self.path, self.target);
+        let Some(stock) = self.stock else { return };
+        self.graph = stock.graph(self.target);
         self.schedule = self
             .graph
             .schedule()
             .expect("the stock pass lists schedule at every size; a test checks it");
+    }
+
+    /// Switch to `pipeline` once its shaders are ready, without stuttering.
+    ///
+    /// Compiles whatever `materials` will need and the cache does not have
+    /// on a worker thread; the current pipeline keeps presenting until
+    /// every one has arrived, at which point the swap lands in a single
+    /// frame. Poll it with [`Renderer::render`] (which does it for you) or
+    /// [`Renderer::poll_swap`], and watch it with
+    /// [`Renderer::swap_progress`].
+    ///
+    /// Requesting a swap replaces any swap already in flight, which is
+    /// what a user clicking twice means.
+    pub fn request_pipeline(
+        &mut self,
+        pipeline: StockPipeline,
+        materials: &[&Material],
+    ) -> Result<(), RenderError> {
+        let graph = pipeline.graph(self.target);
+        self.request_graph_inner(graph, Some(pipeline), materials)
+    }
+
+    /// The same, for a pass list an application built itself.
+    pub fn request_graph(
+        &mut self,
+        graph: RenderGraph,
+        materials: &[&Material],
+    ) -> Result<(), RenderError> {
+        self.request_graph_inner(graph, None, materials)
+    }
+
+    fn request_graph_inner(
+        &mut self,
+        graph: RenderGraph,
+        pipeline: Option<StockPipeline>,
+        materials: &[&Material],
+    ) -> Result<(), RenderError> {
+        let schedule = graph.schedule()?;
+        let requests = self.missing_variants(&graph, materials);
+        // Nothing to wait for: adopting it now is not a stutter, it is the
+        // whole swap. This is the second swap between two pipelines, the
+        // one the stage-keyed cache makes free.
+        if requests.is_empty() {
+            self.graph = graph;
+            self.schedule = schedule;
+            self.stock = pipeline;
+            self.swap = None;
+            return Ok(());
+        }
+        self.swap = Some(PipelineSwap::start(
+            graph,
+            schedule,
+            pipeline,
+            &self.library,
+            requests,
+        ));
+        Ok(())
+    }
+
+    /// Everything `graph` will ask for that is not compiled yet.
+    fn missing_variants(&self, graph: &RenderGraph, materials: &[&Material]) -> Vec<Request> {
+        let mut requests: Vec<Request> = Vec::new();
+        let mut seen = Vec::new();
+        let push = |request: Request, seen: &mut Vec<_>, out: &mut Vec<Request>| {
+            let key = request.key();
+            // Two passes wanting the same stage of the same material is
+            // ordinary — a shadow pass and a depth prepass will be exactly
+            // that — and compiling it twice would be a waste and a
+            // progress count that never reaches its total.
+            if self.variants.contains(&key) || seen.contains(&key) {
+                return;
+            }
+            seen.push(key);
+            out.push(request);
+        };
+        for pass in graph.passes() {
+            match &pass.kind {
+                PassKind::Geometry { stage, .. } => {
+                    for material in materials {
+                        push(
+                            Request::Material(MaterialRequest::new(material, *stage)),
+                            &mut seen,
+                            &mut requests,
+                        );
+                    }
+                }
+                PassKind::Screen {
+                    shader: ScreenShader::DeferredLighting,
+                } => {
+                    for material in materials {
+                        push(
+                            Request::Lighting(LightingRequest::new(material.macros())),
+                            &mut seen,
+                            &mut requests,
+                        );
+                    }
+                }
+                PassKind::Compute { .. } => {}
+            }
+        }
+        requests
+    }
+
+    /// How far a requested swap has got, or `None` when none is in flight.
+    pub fn swap_progress(&self) -> Option<SwapProgress> {
+        self.swap.as_ref().map(PipelineSwap::progress)
+    }
+
+    /// Collect whatever the background compile has finished, and land the
+    /// swap if it is all there.
+    ///
+    /// [`Renderer::render`] calls this, so an application that renders
+    /// every frame need not. Call it directly to advance a swap while
+    /// nothing is being drawn.
+    pub fn poll_swap(&mut self, device: &wgpu::Device) -> Result<(), RenderError> {
+        let Some(swap) = self.swap.as_mut() else {
+            return Ok(());
+        };
+        for compiled in swap.drain() {
+            match compiled.wgsl {
+                Ok(wgsl) => {
+                    self.variants
+                        .insert(device, compiled.key, compiled.label, wgsl);
+                }
+                Err(error) => {
+                    // The new pipeline cannot be built. Keep presenting
+                    // the old one and hand the error up, rather than
+                    // swapping to something that will fail every frame.
+                    self.swap = None;
+                    return Err(error);
+                }
+            }
+        }
+        if swap.is_stalled() {
+            self.swap = None;
+            return Err(RenderError::SwapAbandoned);
+        }
+        if swap.is_complete() {
+            let swap = self.swap.take().expect("checked just above");
+            self.graph = swap.graph;
+            self.schedule = swap.schedule;
+            self.stock = swap.pipeline;
+        }
+        Ok(())
     }
 
     /// The current target size and format.
@@ -155,9 +309,7 @@ impl Renderer {
             height: height.max(1),
             ..self.target
         };
-        if self.stock {
-            self.rebuild();
-        }
+        self.rebuild();
         self.pool.configure(device, &self.schedule, self.target);
     }
 
@@ -166,7 +318,7 @@ impl Renderer {
         &self.library
     }
 
-    /// Variant cache hit/miss counts — how often a path or macro switch
+    /// Variant cache hit/miss counts — how often a pipeline or macro switch
     /// actually cost a compile.
     pub fn cache_stats(&self) -> CacheStats {
         self.variants.stats()
@@ -183,11 +335,41 @@ impl Renderer {
         self.pipelines.len()
     }
 
+    /// Every stage the active pass list draws with, in pass order.
+    pub fn stages(&self) -> Vec<MaterialStage> {
+        let mut stages = Vec::new();
+        for pass in self.graph.passes() {
+            if let PassKind::Geometry { stage, .. } = &pass.kind {
+                if !stages.contains(stage) {
+                    stages.push(*stage);
+                }
+            }
+        }
+        stages
+    }
+
+    /// The stage whose module best answers "what did my graph become on
+    /// this pipeline" — the one that writes colour, if any.
+    ///
+    /// A forward pass list has two geometry passes and only the second is
+    /// interesting to read; a code panel showing the depth-only module
+    /// would be technically accurate and useless.
+    pub fn display_stage(&self) -> MaterialStage {
+        let stages = self.stages();
+        stages
+            .iter()
+            .copied()
+            .find(|stage| stage.color_targets() > 0)
+            .or_else(|| stages.first().copied())
+            .unwrap_or_default()
+    }
+
     /// Compile `material` for every stage the active pass list needs,
     /// without rendering.
     ///
-    /// Worth calling ahead of a path switch if a mid-frame compile hitch
-    /// matters; [`Renderer::render`] does it lazily otherwise.
+    /// Worth calling ahead of a pipeline switch if a mid-frame compile
+    /// hitch matters; [`Renderer::render`] does it lazily otherwise, and
+    /// [`Renderer::request_pipeline`] does it in the background.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -195,9 +377,9 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         for pass in self.graph.passes() {
             match &pass.kind {
-                PassKind::Geometry { path, .. } => {
+                PassKind::Geometry { stage, .. } => {
                     self.variants
-                        .material(device, &self.library, &material.shader, *path)?;
+                        .material(device, &self.library, material, *stage)?;
                 }
                 PassKind::Screen {
                     shader: ScreenShader::DeferredLighting,
@@ -211,7 +393,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// The WGSL the active path compiles `material` to.
+    /// The WGSL `material` compiles to on this pipeline's display stage.
     ///
     /// This is the answer to "what did my graph actually become", which is
     /// most of shader-graph debugging.
@@ -220,24 +402,36 @@ impl Renderer {
         device: &wgpu::Device,
         material: &Material,
     ) -> Result<String, RenderError> {
+        self.material_wgsl_for(device, material, self.display_stage())
+    }
+
+    /// The WGSL `material` compiles to for one particular stage.
+    pub fn material_wgsl_for(
+        &mut self,
+        device: &wgpu::Device,
+        material: &Material,
+        stage: MaterialStage,
+    ) -> Result<String, RenderError> {
         let variant = self
             .variants
-            .material(device, &self.library, &material.shader, self.path)?;
+            .material(device, &self.library, material, stage)?;
         Ok(variant.wgsl.clone())
     }
 
     /// Render one frame.
     ///
-    /// Compiles whatever variants the pass list needs, uploads the frame
-    /// bindings and every instance transform in one go, then lets the graph
-    /// order and record the passes. Which pipeline ran is invisible from
-    /// here — that is the point.
+    /// Advances any pipeline swap in flight, compiles whatever variants the
+    /// pass list needs, uploads the frame bindings and every instance
+    /// transform in one go, then lets the graph order and record the
+    /// passes. Which pipeline ran is invisible from here — that is the
+    /// point.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         request: &RenderRequest<'_>,
     ) -> Result<(), RenderError> {
+        self.poll_swap(device)?;
         let plan = self.compile_frame(device, request.draws)?;
 
         self.bindings.update(
@@ -299,7 +493,7 @@ impl Renderer {
         let mut plan = FramePlan::default();
         for (index, pass) in self.graph.passes().iter().enumerate() {
             match &pass.kind {
-                PassKind::Geometry { source, path } => {
+                PassKind::Geometry { source, stage } => {
                     let selected: Vec<u32> = match source {
                         DrawSource::Scene(selector) => {
                             draws.select(selector).map(|(index, _)| index).collect()
@@ -309,12 +503,9 @@ impl Renderer {
                     let mut variants = Vec::with_capacity(selected.len());
                     for instance in selected {
                         let item = &draws.items()[instance as usize];
-                        let variant = self.variants.material(
-                            device,
-                            &self.library,
-                            &item.material.shader,
-                            *path,
-                        )?;
+                        let variant =
+                            self.variants
+                                .material(device, &self.library, item.material, *stage)?;
                         variants.push((instance, variant));
                     }
                     plan.geometry.insert(index, variants);
@@ -365,7 +556,7 @@ fn record_pass(
 ) -> Result<(), RenderError> {
     let index = pass.index;
     match (&pass.desc.kind, encoder) {
-        (PassKind::Geometry { source, .. }, PassEncoder::Render(render)) => {
+        (PassKind::Geometry { source, stage }, PassEncoder::Render(render)) => {
             let Some(entries) = plan.geometry.get(&index) else {
                 return Ok(());
             };
@@ -380,6 +571,7 @@ fn record_pass(
                     bindings.layout(),
                     pass.pass_layout.as_ref(),
                     variant,
+                    *stage,
                     pass.desc.state,
                     &pass.color_formats,
                     &pass.pass_bindings,

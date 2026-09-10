@@ -15,7 +15,7 @@ use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
 use wxsl::render::{
-    Camera, DrawItem, Environment, Light, RenderPath, RenderRequest, Renderer, TargetConfig,
+    Camera, DrawItem, Environment, Light, RenderRequest, Renderer, StockPipeline, TargetConfig,
 };
 
 const SIZE: u32 = 128;
@@ -52,7 +52,11 @@ fn gpu() -> Option<GpuContext> {
 }
 
 /// Render the demo cube at `SIZE` square and return the RGBA8 pixels.
-fn render(gpu: &GpuContext, macros: &MacroSet, paths: &[RenderPath]) -> (Vec<Vec<u8>>, Renderer) {
+fn render(
+    gpu: &GpuContext,
+    macros: &MacroSet,
+    pipelines: &[StockPipeline],
+) -> (Vec<Vec<u8>>, Renderer) {
     let registry = wxsl::stdlib::registry();
     let material =
         Material::from_graph_with_macros(&demo_graph(), &registry, macros).expect("compiles");
@@ -70,8 +74,8 @@ fn render(gpu: &GpuContext, macros: &MacroSet, paths: &[RenderPath]) -> (Vec<Vec
     );
 
     let mut images = Vec::new();
-    for path in paths {
-        renderer.set_path(*path);
+    for pipeline in pipelines {
+        renderer.set_pipeline(*pipeline);
         renderer
             .render(
                 &gpu.device,
@@ -82,7 +86,7 @@ fn render(gpu: &GpuContext, macros: &MacroSet, paths: &[RenderPath]) -> (Vec<Vec
                     draws: &draws,
                 },
             )
-            .unwrap_or_else(|error| panic!("cannot render on the {path} path: {error}"));
+            .unwrap_or_else(|error| panic!("cannot render the {pipeline} pipeline: {error}"));
         gpu.wait();
         images.push(target.read_rgba8(&gpu.device, &gpu.queue));
     }
@@ -113,7 +117,7 @@ fn mean_difference(a: &[u8], b: &[u8]) -> f32 {
 #[test]
 fn the_cube_is_lit_and_the_background_is_not() {
     let Some(gpu) = gpu() else { return };
-    let (images, _) = render(&gpu, &MacroSet::new(), &[RenderPath::Forward]);
+    let (images, _) = render(&gpu, &MacroSet::new(), &[StockPipeline::Forward]);
     let image = &images[0];
 
     // The cube covers the middle of the frame and nothing covers the corner.
@@ -139,9 +143,9 @@ fn the_cube_is_lit_and_the_background_is_not() {
 }
 
 #[test]
-fn both_paths_produce_the_same_image() {
+fn both_pipelines_produce_the_same_image() {
     let Some(gpu) = gpu() else { return };
-    let (images, renderer) = render(&gpu, &MacroSet::new(), RenderPath::ALL);
+    let (images, renderer) = render(&gpu, &MacroSet::new(), StockPipeline::ALL);
 
     // The two paths run the same material graph through the same shading
     // function, so they agree up to the G-buffer's 8-bit base colour and
@@ -159,29 +163,31 @@ fn both_paths_produce_the_same_image() {
         covered(&images[1])
     );
 
-    // One material variant per path, plus the lighting pass.
-    assert_eq!(renderer.variant_count(), 3);
+    // Four variants: `depth_only` and `forward_lit` for the forward pass
+    // list, `gbuffer` for the deferred one, plus the lighting pass.
+    assert_eq!(renderer.variant_count(), 4);
 }
 
 #[test]
-fn switching_path_reuses_cached_shaders() {
+fn switching_pipeline_reuses_cached_shaders() {
     let Some(gpu) = gpu() else { return };
     let (_, renderer) = render(
         &gpu,
         &MacroSet::new(),
         &[
-            RenderPath::Forward,
-            RenderPath::Deferred,
-            RenderPath::Forward,
-            RenderPath::Deferred,
+            StockPipeline::Forward,
+            StockPipeline::Deferred,
+            StockPipeline::Forward,
+            StockPipeline::Deferred,
         ],
     );
     let stats = renderer.cache_stats();
-    // Four frames over two paths: three compiles (two materials plus the
-    // lighting pass), and the rest served from the cache.
-    assert_eq!(stats.misses, 3, "{stats:?}");
-    assert!(stats.hits >= 3, "{stats:?}");
-    assert_eq!(renderer.variant_count(), 3);
+    // Four frames over two pipelines: four compiles (three material stages
+    // plus the lighting pass), and the rest served from the cache. The key
+    // holds the *stage*, so the second visit to a pipeline costs nothing.
+    assert_eq!(stats.misses, 4, "{stats:?}");
+    assert!(stats.hits >= 4, "{stats:?}");
+    assert_eq!(renderer.variant_count(), 4);
 }
 
 #[test]
@@ -189,7 +195,7 @@ fn the_debug_normal_view_round_trips_through_the_gbuffer() {
     let Some(gpu) = gpu() else { return };
     let mut macros = MacroSet::new();
     macros.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(true));
-    let (images, _) = render(&gpu, &macros, RenderPath::ALL);
+    let (images, _) = render(&gpu, &macros, StockPipeline::ALL);
 
     // Encoded normals are the strictest check available on the G-buffer: the
     // deferred path only matches if the normal survived being written to a
@@ -247,13 +253,162 @@ fn a_macro_change_compiles_a_new_variant() {
         images.push(target.read_rgba8(&gpu.device, &gpu.queue));
     }
 
-    // Two octave counts are two shaders, and they must not look the same:
-    // more octaves means finer detail in the roughness field.
-    assert_eq!(renderer.variant_count(), 2);
+    // Two octave counts, two stages each: four shaders, and the two
+    // images must not look the same — more octaves means finer detail in
+    // the roughness field.
+    //
+    // Four, not two, because the depth-only module still carries the whole
+    // material function: a macro that only changes colour recompiles the
+    // depth prepass too. That is the waste M5's partitioning removes, and
+    // the number here is what will drop to two when it does.
+    assert_eq!(renderer.variant_count(), 4);
     let difference = mean_difference(&images[0], &images[1]);
     assert!(
         difference > 0.0005,
         "changing the octave count changed nothing visible ({difference:.5})"
+    );
+}
+
+#[test]
+fn a_requested_pipeline_swap_never_shows_a_frame_of_the_new_one_early() {
+    // The non-blocking swap: the missing stages compile on a worker thread
+    // while the *current* pipeline keeps presenting, and the swap lands in
+    // one frame when they are all there (ADR 0022). What must never happen
+    // is a frame that is neither one pipeline nor the other.
+    let Some(gpu) = gpu() else { return };
+    let registry = wxsl::stdlib::registry();
+    let material = Material::from_graph_with_macros(&demo_graph(), &registry, &MacroSet::new())
+        .expect("compiles");
+    let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
+    let mut renderer = Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(SIZE, SIZE, target.format()),
+    )
+    .expect("the stdlib library satisfies the ABI");
+    let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
+    let environment = test_environment();
+    let draws = wxsl::render::single_draw(
+        DrawItem::new(&mesh, &material).with_transform(Mat4::from_rotation_y(0.6)),
+    );
+    let frame = |renderer: &mut Renderer| {
+        renderer
+            .render(
+                &gpu.device,
+                &gpu.queue,
+                &RenderRequest {
+                    view: target.view(),
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )
+            .expect("renders");
+        gpu.wait();
+        target.read_rgba8(&gpu.device, &gpu.queue)
+    };
+
+    let forward = frame(&mut renderer);
+    assert_eq!(renderer.pipeline(), Some(StockPipeline::Forward));
+
+    renderer
+        .request_pipeline(StockPipeline::Deferred, &[&material])
+        .expect("the deferred pass list schedules");
+    let progress = renderer
+        .swap_progress()
+        .expect("the deferred stages are not compiled yet");
+    assert!(progress.total > 0 && !progress.is_complete(), "{progress}");
+
+    // Every frame is a *complete* frame: the old pipeline exactly, until
+    // the frame the swap lands on, which is the new one. What must never
+    // appear is a frame that is neither — a black one, or the old
+    // pipeline missing a pass.
+    let mut frames = 0;
+    while renderer.swap_progress().is_some() {
+        let during = frame(&mut renderer);
+        frames += 1;
+        assert!(frames < 10_000, "the swap never completed");
+        if renderer.pipeline() == Some(StockPipeline::Forward) {
+            assert!(
+                mean_difference(&during, &forward) < 1e-6,
+                "a frame before the swap was not the forward pipeline's"
+            );
+        } else {
+            // It landed on this frame, and this frame is already a whole
+            // deferred one.
+            assert_eq!(renderer.pipeline(), Some(StockPipeline::Deferred));
+            assert!(
+                mean_difference(&during, &forward) < 0.01,
+                "the frame the swap landed on is neither pipeline"
+            );
+            break;
+        }
+    }
+
+    // It landed, and the first frame of the new pipeline compiles nothing:
+    // the worker already did it.
+    assert_eq!(renderer.pipeline(), Some(StockPipeline::Deferred));
+    let before = renderer.cache_stats().misses;
+    let deferred = frame(&mut renderer);
+    assert_eq!(
+        renderer.cache_stats().misses,
+        before,
+        "the swap landed with a stage still to compile, which is the hitch it exists to avoid"
+    );
+    assert!(
+        mean_difference(&deferred, &forward) < 0.01,
+        "the two pipelines disagree after the swap"
+    );
+
+    // And swapping back is free, because the cache is keyed on the stage.
+    let before = renderer.cache_stats().misses;
+    renderer
+        .request_pipeline(StockPipeline::Forward, &[&material])
+        .expect("the forward pass list schedules");
+    assert!(
+        renderer.swap_progress().is_none(),
+        "swapping back should need no compile at all"
+    );
+    assert_eq!(renderer.pipeline(), Some(StockPipeline::Forward));
+    assert_eq!(renderer.cache_stats().misses, before);
+}
+
+#[test]
+fn the_depth_prepass_leaves_the_forward_image_alone() {
+    // The forward pass list is a depth prepass plus a shading pass that
+    // tests `LessEqual` without writing depth. If the two disagree about
+    // depth by even a hair, the surface comes out full of holes — which is
+    // what the coverage comparison below would catch.
+    let Some(gpu) = gpu() else { return };
+    let (images, renderer) = render(&gpu, &MacroSet::new(), &[StockPipeline::Forward]);
+    let image = &images[0];
+
+    let graph = renderer.render_graph();
+    assert_eq!(graph.passes().len(), 2, "prepass plus shading pass");
+    assert_eq!(
+        renderer.stages(),
+        vec![
+            wxsl::core::abi::MaterialStage::DEPTH_ONLY,
+            wxsl::core::abi::MaterialStage::FORWARD_LIT
+        ]
+    );
+    // The stage a code panel should show is the one that writes colour.
+    assert_eq!(
+        renderer.display_stage(),
+        wxsl::core::abi::MaterialStage::FORWARD_LIT
+    );
+
+    // The cube is still there, whole: a prepass that rejected its own
+    // fragments would leave the frame empty.
+    let covered = covered(image);
+    let total = (SIZE * SIZE) as usize;
+    assert!(
+        covered > total / 8 && covered < total * 3 / 4,
+        "the prepass ate the cube: {covered}/{total} covered"
+    );
+    let center = pixel(image, SIZE / 2, SIZE / 2);
+    assert!(
+        center[0] > 40,
+        "the middle of the cube is not shaded: {center:?}"
     );
 }
 

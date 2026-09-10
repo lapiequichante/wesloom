@@ -5,29 +5,35 @@
 //! lets a single node graph back both a forward and a deferred pipeline
 //! without the caller doing anything special to "switch".
 //!
-//! See `docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md`
-//! and `docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md`.
+//! See `docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md`,
+//! `docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md` and
+//! `docs/adr/0022-material-stages-replace-the-render-path-enum.md`.
 //!
 //! # How a graph becomes a frame
 //!
 //! ```text
 //!   Graph ──codegen──> Material ──variants──> ShaderVariant ─┐
-//!   (core)             (one WXSL module,      (WGSL + wgpu   │
-//!                       both paths in it)      module)       │
+//!   (core)             (one module            (WGSL + wgpu   │
+//!                       per stage)             module)       │
 //!                                                            v
 //!   PassDesc… ──schedule──> Schedule ──record──>  pipelines ──> frame
 //!   (a pipeline, as data)   (order + textures)
 //! ```
 //!
-//! [`material::Material`] is path-agnostic: it holds one WXSL module whose
-//! two fragment entry points are gated by conditional translation.
-//! [`variants::ShaderVariants`] compiles that module per
-//! (macro set, [`path::RenderPath`]) and caches the result. A *pipeline* is
-//! no longer a Rust struct but a [`graph::RenderGraph`] — a list of
-//! [`pass::PassDesc`]s — which [`graph::Schedule`] orders and allocates and
-//! [`renderer::Renderer`] runs. Switching pipeline at runtime is
-//! [`renderer::Renderer::set_path`]; supplying your own pass list is
-//! [`renderer::Renderer::set_graph`].
+//! [`material::Material`] is authored once and compiled per *stage*: it
+//! holds one generated WXSL module per [`wxsl_core::abi::MaterialStage`],
+//! each with the entry point that stage calls for — a final colour, a
+//! G-buffer, or no fragment stage at all.
+//! [`variants::ShaderVariants`] compiles those per (macro set, stage) and
+//! caches the result.
+//!
+//! A *pipeline* is not a Rust struct but a [`graph::RenderGraph`] — a list
+//! of [`pass::PassDesc`]s, each naming the stage it draws with — which
+//! [`graph::Schedule`] orders and allocates and [`renderer::Renderer`]
+//! runs. Switching pipeline at runtime is
+//! [`renderer::Renderer::set_pipeline`], or
+//! [`renderer::Renderer::request_pipeline`] to swap without a stutter;
+//! supplying your own pass list is [`renderer::Renderer::set_graph`].
 //!
 //! # What is a scene, and what is not
 //!
@@ -59,9 +65,9 @@ pub mod library;
 pub mod material;
 pub mod mesh;
 pub mod pass;
-pub mod path;
 pub mod pipeline;
 pub mod renderer;
+pub mod swap;
 pub mod ui;
 pub mod variants;
 
@@ -83,7 +89,7 @@ pub use pass::{
     Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, PassState, Read, ResourceDesc,
     ResourceId,
 };
-pub use path::RenderPath;
-pub use pipeline::{PipelineCache, TargetConfig};
+pub use pipeline::{PipelineCache, StockPipeline, TargetConfig};
 pub use renderer::{single_draw, RenderRequest, Renderer};
+pub use swap::SwapProgress;
 pub use variants::{ShaderVariant, ShaderVariants};

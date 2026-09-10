@@ -73,7 +73,7 @@ shader ABI's names and field tables), `wesl` (identifier/float/hash helpers),
 module path), `registry` (the operators as node definitions, plus the
 function nodes `build.rs` derived from the sources).
 
-**`wxsl-render`** — `path` (`RenderPath`), `library` (`ShaderLibrary`),
+**`wxsl-render`** — `pipeline` (`StockPipeline`), `library` (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `pipeline` (the `Pipeline` trait, forward and deferred),
 `renderer` (the front end that hides the path switch), `scene` (camera,
@@ -123,19 +123,27 @@ graph TD
     library["wxsl_render::ShaderLibrary<br/>(the ABI + node functions,<br/>supplied by the application)"] --> compiler
     weslsrc --> compiler["wesl<br/>(WXSL -> WGSL: resolves imports,<br/>evaluates @if/@elif/@else)"]
     macromod --> compiler
-    compiler --> variants["wxsl_render::variants<br/>cache: (source+macros hash, RenderPath)<br/>-> wgpu shader module"]
-    path["RenderPath of the pass<br/>(Forward | Deferred)"] --> variants
+    compiler --> variants["wxsl_render::variants<br/>cache: (source+macros hash, stage)<br/>-> wgpu shader module"]
+    path["MaterialStage of the pass<br/>(forward_lit | gbuffer | depth_only)"] --> variants
     variants --> record
     passes["wxsl_render::pipeline<br/>(forward: 1 pass;<br/>deferred: G-buffer + lighting)"] --> schedule["wxsl_render::graph::Schedule<br/>(order, transient reuse,<br/>history rotation)"]
     schedule --> record["record: attachments, pass<br/>bind groups, draws"]
     record --> gpu["wgpu render passes"]
 ```
 
-The `RenderPath` is a property of the *pass*, never of the *graph* — a
-material graph is written once and works under either path because the
-path-specific differences are expressed as conditional compilation inside
-one WXSL module, not as two separate graphs. See
-[ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md).
+A **material stage** is a property of the *pass*, never of the *graph* — a
+material graph is written once and works under every stage, because a stage
+changes which entry point codegen emits, not what the graph says. The
+stages are a table in `wxsl_core::abi`, so adding one is a row rather than
+an arm in every match. See
+[ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md)
+and [ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
+
+| Stage | Fragment returns | Used by |
+|---|---|---|
+| `forward_lit` | one `vec4f` colour | the forward pipeline's shading pass |
+| `gbuffer` | the `GBuffer` struct | the deferred pipeline's material pass |
+| `depth_only` | nothing — no fragment stage at all | the forward pipeline's depth prepass |
 
 ## How a frame is drawn
 
@@ -143,6 +151,11 @@ A pipeline is not a Rust struct: it is a list of `PassDesc`s over a set of
 `ResourceDesc`s — a `wxsl_render::graph::RenderGraph`. `pipeline.rs` builds
 the two stock ones (`forward_graph`, `deferred_graph`); an application
 building its own hands it to `Renderer::set_graph`.
+
+The two shipped pass lists are `StockPipeline::{Forward, Deferred}`.
+Forward is a depth prepass (`depth_only`) followed by a shading pass
+(`forward_lit`) that tests `LessEqual` without writing depth; deferred is a
+G-buffer pass (`gbuffer`) followed by a fullscreen lighting pass.
 
 `RenderGraph::schedule` is a pure function and is tested without a device.
 It orders the passes by what they read and write (never by declaration
@@ -163,6 +176,20 @@ Two properties of a resource are worth knowing before you need them:
 
 The frame's own target is resource 0, `RenderGraph::TARGET`, and is
 *imported*: the caller supplies a view for it each frame.
+
+## Swapping pipeline
+
+`Renderer::set_pipeline` switches now and compiles whatever is missing
+during the next frame, which is a hitch. `Renderer::request_pipeline`
+switches when it is ready: the missing stages compile on a worker thread
+while the current pipeline keeps presenting, and the swap lands in one
+frame. `Renderer::swap_progress` is what a `compiling 3/7` indicator reads,
+and the editor's `F`/`D` keys are the second kind.
+
+Only the WXSL-to-WGSL half runs on the worker — a pure function over text,
+no device in it. On a single-threaded target there is no worker and the
+swap blocks, which is what the indicator is for. See
+[ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
 
 ## What a frame draws
 
@@ -293,7 +320,7 @@ Two things follow that are worth knowing before touching either half:
 
 WGSL alone has no imports and no conditional compilation, both of which
 this project needs structurally: composing node functions, and branching
-shader output per render path or feature. It also has no generics, which
+shader behaviour on a feature flag. It also has no generics, which
 the node system needs so that one authored function can serve `f32`,
 `vec2f`, `vec3f` and `vec4f`.
 
@@ -411,7 +438,7 @@ The demo is the thing to run first:
 
 ```sh
 cargo run -p wxsl --example pbr_cube              # windowed; F/D switch path
-cargo run -p wxsl --example pbr_cube -- --headless  # both paths to PNG
+cargo run -p wxsl --example pbr_cube -- --headless  # both pipelines to PNG
 cargo run -p wxsl --example pbr_cube -- --dump-wgsl # what the graph became
 ```
 
@@ -426,9 +453,9 @@ Test coverage worth knowing about, since it is what keeps the two halves of
 the shader ABI honest:
 
 - `crates/wxsl/tests/graph_to_wgsl.rs` compiles *every node in the
-  library* to WGSL on both render paths, plus the demo graph, macro
+  library* to WGSL for every material stage, plus the demo graph, macro
   switching, and the node format's round trip. No GPU needed.
-- `crates/wxsl/tests/render_cube.rs` renders the cube through both paths
+- `crates/wxsl/tests/render_cube.rs` renders the cube through both pipelines
   on a real device and asserts the images match. Skips when no adapter is
   available.
 - `crates/wxsl/tests/editor_frame.rs` drives the editor for several frames

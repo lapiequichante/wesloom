@@ -16,9 +16,10 @@
 //! one pass, blended in another and front-face-culled into a shadow map,
 //! without any of those being baked into one hardcoded descriptor.
 
+use core::fmt;
 use std::collections::HashMap;
 
-use wxsl_core::abi::{self, GBufferPrecision};
+use wxsl_core::abi::{self, GBufferPrecision, MaterialStage};
 use wxsl_core::scene::TagExpr;
 
 use crate::graph::{PassBinding, RenderGraph};
@@ -27,8 +28,66 @@ use crate::pass::{
     Attachment, DepthAttachment, DrawSource, PassDesc, PassState, Read, ResourceDesc, ResourceId,
     ScreenShader, DEPTH_FORMAT,
 };
-use crate::path::RenderPath;
 use crate::variants::{ShaderVariant, VariantKey};
+
+/// One of the two pass lists this crate ships.
+///
+/// What is left of `RenderPath` once material stages exist. That enum did
+/// two jobs — "which pass list" and "which shader variant" — and they came
+/// apart the moment a pass list had two geometry passes wanting different
+/// variants. Which pass list is this; which variant is
+/// [`abi::MaterialStage`]
+/// ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum StockPipeline {
+    /// Depth prepass, then shade where the surface is evaluated.
+    #[default]
+    Forward,
+    /// Write the surface to a G-buffer, then light it in a fullscreen pass.
+    Deferred,
+}
+
+impl StockPipeline {
+    /// Both, in declaration order.
+    pub const ALL: &'static [StockPipeline] = &[StockPipeline::Forward, StockPipeline::Deferred];
+
+    /// The name, as used in labels and on the command line.
+    pub fn name(&self) -> &'static str {
+        match self {
+            StockPipeline::Forward => "forward",
+            StockPipeline::Deferred => "deferred",
+        }
+    }
+
+    /// Parse one from its [`StockPipeline::name`].
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        StockPipeline::ALL
+            .iter()
+            .copied()
+            .find(|pipeline| pipeline.name().eq_ignore_ascii_case(text))
+    }
+
+    /// Whether this pipeline shades in a later pass.
+    pub fn is_deferred(&self) -> bool {
+        matches!(self, StockPipeline::Deferred)
+    }
+
+    /// This pipeline's pass list, at `target`.
+    pub fn graph(&self, target: TargetConfig) -> RenderGraph {
+        match self {
+            StockPipeline::Forward => forward_graph(target),
+            StockPipeline::Deferred => deferred_graph(target),
+        }
+    }
+}
+
+impl fmt::Display for StockPipeline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `pad` so `{:>8}` in a progress line actually aligns.
+        f.pad(self.name())
+    }
+}
 
 /// The `wgpu` format for a G-buffer target of the given precision.
 pub fn gbuffer_format(precision: GBufferPrecision) -> wgpu::TextureFormat {
@@ -92,14 +151,32 @@ fn everything() -> DrawSource {
     DrawSource::Scene(TagExpr::Always)
 }
 
-/// The forward pipeline: one pass, the material shades its own surface.
+/// The forward pipeline: a depth prepass, then shade what survived it.
+///
+/// Two passes rather than one, and the second is the reason M2 exists: the
+/// prepass runs the same materials compiled for
+/// [`MaterialStage::DEPTH_ONLY`], which has no fragment entry at all, and
+/// the shading pass then tests `LessEqual` against the depth it left
+/// without writing depth again. Every fragment that reaches the expensive
+/// shader is one that will be visible.
+///
+/// `LessEqual` rather than `Equal`: WGSL makes no promise that two
+/// pipelines running the same vertex code produce bit-identical clip
+/// positions unless the builtin is marked `@invariant`, and `Equal` turns
+/// a one-ulp difference into a hole in the surface. `LessEqual` costs
+/// nothing and tolerates it.
 pub fn forward_graph(target: TargetConfig) -> RenderGraph {
     let mut graph = RenderGraph::new(target.format);
     let depth = graph.resource(ResourceDesc::color("forward depth", DEPTH_FORMAT));
     graph.pass(
-        PassDesc::geometry("forward", everything(), RenderPath::Forward)
-            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+        PassDesc::geometry("depth prepass", everything(), MaterialStage::DEPTH_ONLY)
             .with_depth(DepthAttachment::clear(depth, 1.0)),
+    );
+    graph.pass(
+        PassDesc::geometry("forward", everything(), MaterialStage::FORWARD_LIT)
+            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+            .with_depth(DepthAttachment::load(depth))
+            .with_state(PassState::OPAQUE.with_depth_test(wgpu::CompareFunction::LessEqual, false)),
     );
     graph
 }
@@ -124,7 +201,7 @@ pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
     let depth = graph.resource(ResourceDesc::color("gbuffer depth", DEPTH_FORMAT));
 
     graph.pass(
-        PassDesc::geometry("deferred material", everything(), RenderPath::Deferred)
+        PassDesc::geometry("deferred material", everything(), MaterialStage::GBUFFER)
             // Cleared to zero, which matters for the depth-based background
             // test in the lighting pass: that is what keeps the clear colour
             // visible where nothing was drawn.
@@ -148,14 +225,6 @@ pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
             ),
     );
     graph
-}
-
-/// The stock pass list for `path`.
-pub fn graph_for(path: RenderPath, target: TargetConfig) -> RenderGraph {
-    match path {
-        RenderPath::Forward => forward_graph(target),
-        RenderPath::Deferred => deferred_graph(target),
-    }
 }
 
 /// Identity of one `wgpu` pipeline.
@@ -244,8 +313,12 @@ impl PipelineCache {
         })
     }
 
-    /// The pipeline for drawing `variant`'s geometry in a pass with this
-    /// state and these targets, created on first use.
+    /// The pipeline for drawing `variant`'s geometry for `stage` in a pass
+    /// with this state and these targets, created on first use.
+    ///
+    /// A stage with no fragment entry gets a pipeline with no fragment
+    /// state at all — which is what a depth prepass is, and why it is
+    /// cheap.
     #[allow(clippy::too_many_arguments)]
     pub fn geometry(
         &mut self,
@@ -253,6 +326,7 @@ impl PipelineCache {
         frame: &wgpu::BindGroupLayout,
         pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
+        stage: MaterialStage,
         state: PassState,
         targets: &[Option<wgpu::ColorTargetState>],
         pass_shape: &[PassBinding],
@@ -266,7 +340,7 @@ impl PipelineCache {
             targets,
             pass_shape,
             abi::VERTEX_ENTRY,
-            abi::FRAGMENT_ENTRY,
+            stage.fragment_entry(),
             true,
         )
     }
@@ -294,7 +368,7 @@ impl PipelineCache {
             targets,
             pass_shape,
             abi::LIGHTING_PASS_VERTEX_ENTRY,
-            abi::LIGHTING_PASS_FRAGMENT_ENTRY,
+            Some(abi::LIGHTING_PASS_FRAGMENT_ENTRY),
             false,
         )
     }
@@ -310,7 +384,7 @@ impl PipelineCache {
         targets: &[Option<wgpu::ColorTargetState>],
         pass_shape: &[PassBinding],
         vertex_entry: &str,
-        fragment_entry: &str,
+        fragment_entry: Option<&str>,
         vertex_buffers: bool,
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
@@ -342,9 +416,9 @@ impl PipelineCache {
                     buffers,
                     compilation_options: Default::default(),
                 },
-                fragment: Some(wgpu::FragmentState {
+                fragment: fragment_entry.map(|entry| wgpu::FragmentState {
                     module: &variant.module,
-                    entry_point: Some(fragment_entry),
+                    entry_point: Some(entry),
                     targets,
                     compilation_options: Default::default(),
                 }),
@@ -389,18 +463,42 @@ mod tests {
     }
 
     #[test]
-    fn the_forward_pipeline_is_one_geometry_pass() {
+    fn the_forward_pipeline_is_a_depth_prepass_and_a_shading_pass() {
         let graph = forward_graph(config());
-        assert_eq!(graph.passes().len(), 1);
+        assert_eq!(graph.passes().len(), 2);
+
+        let prepass = &graph.passes()[0];
         assert!(matches!(
-            graph.passes()[0].kind,
+            prepass.kind,
             PassKind::Geometry {
-                path: RenderPath::Forward,
+                stage: MaterialStage::DEPTH_ONLY,
                 ..
             }
         ));
-        assert_eq!(graph.passes()[0].color.len(), 1);
-        graph.schedule().expect("the forward pass list schedules");
+        // No colour at all, and no fragment shader to run: the whole point.
+        assert!(prepass.color.is_empty());
+        assert!(MaterialStage::DEPTH_ONLY.fragment_entry().is_none());
+        assert!(prepass.state.depth_write);
+
+        let shading = &graph.passes()[1];
+        assert!(matches!(
+            shading.kind,
+            PassKind::Geometry {
+                stage: MaterialStage::FORWARD_LIT,
+                ..
+            }
+        ));
+        assert_eq!(shading.color.len(), 1);
+        assert!(!shading.state.depth_write, "the prepass already wrote it");
+        assert_eq!(
+            shading.state.depth_compare,
+            wgpu::CompareFunction::LessEqual
+        );
+
+        // Loading the depth the prepass wrote is what orders the two.
+        let schedule = graph.schedule().expect("the forward pass list schedules");
+        assert_eq!(schedule.order(), &[0, 1]);
+        assert_eq!(schedule.slots().len(), 1, "one depth texture, shared");
     }
 
     #[test]
@@ -408,6 +506,13 @@ mod tests {
         let graph = deferred_graph(config());
         assert_eq!(graph.passes().len(), 2);
         assert_eq!(graph.passes()[0].color.len(), abi::GBUFFER_TARGETS.len());
+        assert!(matches!(
+            graph.passes()[0].kind,
+            PassKind::Geometry {
+                stage: MaterialStage::GBUFFER,
+                ..
+            }
+        ));
         assert!(matches!(
             graph.passes()[1].kind,
             PassKind::Screen {
@@ -426,12 +531,46 @@ mod tests {
 
     #[test]
     fn both_stock_pipelines_schedule_at_any_size() {
-        for path in RenderPath::ALL {
+        for pipeline in StockPipeline::ALL {
             for (width, height) in [(1, 1), (64, 64), (3840, 2160)] {
                 let target = TargetConfig::new(width, height, wgpu::TextureFormat::Rgba8Unorm);
-                graph_for(*path, target)
+                pipeline
+                    .graph(target)
                     .schedule()
-                    .unwrap_or_else(|error| panic!("{path} at {width}x{height}: {error}"));
+                    .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));
+            }
+        }
+    }
+
+    #[test]
+    fn stock_pipeline_names_round_trip() {
+        for pipeline in StockPipeline::ALL {
+            assert_eq!(StockPipeline::parse(pipeline.name()), Some(*pipeline));
+        }
+        assert_eq!(
+            StockPipeline::parse("  Deferred "),
+            Some(StockPipeline::Deferred)
+        );
+        assert_eq!(StockPipeline::parse("visibility"), None);
+    }
+
+    #[test]
+    fn every_stock_pass_list_asks_for_a_stage_that_writes_what_it_attaches() {
+        // The pairing the scheduler checks, checked here over the lists we
+        // ship so a new stage cannot be wired into a pass that cannot hold
+        // its output.
+        for pipeline in StockPipeline::ALL {
+            let graph = pipeline.graph(config());
+            for pass in graph.passes() {
+                if let PassKind::Geometry { stage, .. } = &pass.kind {
+                    assert_eq!(
+                        pass.color.len(),
+                        stage.color_targets(),
+                        "{pipeline}/{} attaches {} targets for {stage}",
+                        pass.label,
+                        pass.color.len()
+                    );
+                }
             }
         }
     }

@@ -36,7 +36,7 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
-use wxsl::core::abi;
+use wxsl::core::abi::{self, MaterialStage};
 use wxsl::core::codegen;
 use wxsl::core::graph::Graph;
 use wxsl::core::macros::{MacroSet, MacroValue};
@@ -45,7 +45,7 @@ use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 use wxsl::render::{
-    Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderPath, RenderRequest, Renderer,
+    Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderRequest, Renderer, StockPipeline,
     TargetConfig,
 };
 
@@ -59,22 +59,26 @@ USAGE:
     cargo run --example pbr_cube -- [OPTIONS]
 
 OPTIONS:
-    --path <forward|deferred>  Render path to start in (default: forward)
+    --pipeline <forward|deferred>
+                               Pipeline to start in (default: forward)
     --graph <FILE>             Node-format graph to load (default: the shipped one)
     --macro <NAME=VALUE>       Override a macro variable; repeatable.
                                VALUE is true/false, an integer, or a decimal.
-    --headless                 Render one frame per path to PNG and exit
+    --headless                 Render one frame per pipeline to PNG and exit
     --out <DIR>                Where --headless writes (default: current directory)
     --size <WIDTHxHEIGHT>      Render size (default: 1280x720, or 800x600 headless)
     --instances <N>            Draw N copies of the cube in a row (default: 1)
     --dump-wxsl                Print the WXSL generated from the graph and exit
-    --dump-wgsl                Print the WGSL the active path compiles to and exit
+    --dump-wgsl                Print the WGSL the active pipeline's shading
+                               stage compiles to and exit
+    --stage <NAME>             Which stage --dump-wxsl and --dump-wgsl print
+                               (forward_lit, gbuffer, depth_only)
     --list-nodes               List the node library and exit
     --list-macros              List the macro variables in effect and exit
     -h, --help                 Print this help
 
 KEYS (windowed):
-    F / D          forward / deferred path
+    F / D          forward / deferred pipeline
     N              toggle the debug-normal view
     T              toggle the tonemap
     R              toggle ridged noise
@@ -112,11 +116,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if options.dump_wxsl {
-        print!("{}", material.wxsl());
+        print!("{}", material.wxsl(dump_stage(&options)));
         return Ok(());
     }
     if options.dump_wgsl {
-        print!("{}", dump_wgsl(&material, options.path)?);
+        print!("{}", dump_wgsl(&material, dump_stage(&options))?);
         return Ok(());
     }
 
@@ -131,7 +135,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 // ---------------------------------------------------------------------------
 
 struct Options {
-    path: RenderPath,
+    pipeline: StockPipeline,
+    stage: Option<MaterialStage>,
     graph: Option<PathBuf>,
     macros: MacroSet,
     headless: bool,
@@ -148,7 +153,8 @@ struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            path: RenderPath::Forward,
+            pipeline: StockPipeline::Forward,
+            stage: None,
             graph: None,
             macros: MacroSet::new(),
             headless: false,
@@ -177,10 +183,17 @@ impl Options {
                 "--dump-wgsl" => options.dump_wgsl = true,
                 "--list-nodes" => options.list_nodes = true,
                 "--list-macros" => options.list_macros = true,
-                "--path" => {
+                "--pipeline" | "--path" => {
                     let text = value()?;
-                    options.path = RenderPath::parse(&text)
-                        .ok_or_else(|| format!("unknown render path `{text}`"))?;
+                    options.pipeline = StockPipeline::parse(&text)
+                        .ok_or_else(|| format!("unknown pipeline `{text}`"))?;
+                }
+                "--stage" => {
+                    let text = value()?;
+                    options.stage = Some(
+                        MaterialStage::parse(&text)
+                            .ok_or_else(|| format!("unknown material stage `{text}`"))?,
+                    );
                 }
                 "--graph" => options.graph = Some(PathBuf::from(value()?)),
                 "--instances" => {
@@ -278,22 +291,30 @@ fn list_macros(graph: &Graph, registry: &NodeRegistry, material: &Material) {
     );
 }
 
-fn dump_wgsl(material: &Material, path: RenderPath) -> Result<String, Box<dyn Error>> {
+fn dump_wgsl(material: &Material, stage: MaterialStage) -> Result<String, Box<dyn Error>> {
     let library = wxsl::stdlib_library();
-    let mut macros = material.macros().clone();
-    path.apply_to(&mut macros);
+    let shader = material.shader(stage);
     // The generated module declares its own macros now, so the material
     // source is the only thing to mount alongside the library (ADR 0011).
     let extra = [(
         codegen::MATERIAL_MODULE,
-        Cow::Borrowed(material.shader.source.as_str()),
+        Cow::Borrowed(shader.source.as_str()),
     )];
     Ok(variants::compile(
         &library,
         &extra,
         codegen::MATERIAL_MODULE,
-        &macros,
+        &shader.macros,
     )?)
+}
+
+/// Which stage `--dump-wxsl` and `--dump-wgsl` print: whatever `--stage`
+/// asked for, else the one the chosen pipeline shades with.
+fn dump_stage(options: &Options) -> MaterialStage {
+    options.stage.unwrap_or(match options.pipeline {
+        StockPipeline::Forward => MaterialStage::FORWARD_LIT,
+        StockPipeline::Deferred => MaterialStage::GBUFFER,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -377,8 +398,8 @@ fn run_headless(
 
     std::fs::create_dir_all(&options.out_dir)?;
     let mut images = Vec::new();
-    for path in RenderPath::ALL {
-        renderer.set_path(*path);
+    for pipeline in StockPipeline::ALL {
+        renderer.set_pipeline(*pipeline);
         renderer.render(
             &gpu.device,
             &gpu.queue,
@@ -391,7 +412,7 @@ fn run_headless(
         gpu.wait();
 
         let pixels = target.read_rgba8(&gpu.device, &gpu.queue);
-        let file = options.out_dir.join(format!("pbr_cube_{path}.png"));
+        let file = options.out_dir.join(format!("pbr_cube_{pipeline}.png"));
         image::save_buffer(
             &file,
             &pixels,
@@ -400,7 +421,7 @@ fn run_headless(
             image::ExtendedColorType::Rgba8,
         )?;
         println!(
-            "{path:>8}: {} covered pixels, mean luminance {:.4} -> {}",
+            "{pipeline:>8}: {} covered pixels, mean luminance {:.4} -> {}",
             covered_pixels(&pixels),
             mean_luminance(&pixels),
             file.display()
@@ -529,7 +550,7 @@ impl App {
             .unwrap_or_default();
         println!(
             "[{}] {}  |  {variants}",
-            self.options.path,
+            self.options.pipeline,
             self.material.macros().signature()
         );
     }
@@ -741,7 +762,7 @@ impl App {
             mesh,
             format,
         };
-        state.renderer.set_path(self.options.path);
+        state.renderer.set_pipeline(self.options.pipeline);
         configure_surface(&mut state, size.width, size.height);
         println!("adapter: {}", state.gpu.adapter.get_info().name);
         Ok(state)
@@ -751,14 +772,20 @@ impl App {
         match code {
             KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
             KeyCode::KeyF | KeyCode::KeyD => {
-                let path = if code == KeyCode::KeyF {
-                    RenderPath::Forward
+                let pipeline = if code == KeyCode::KeyF {
+                    StockPipeline::Forward
                 } else {
-                    RenderPath::Deferred
+                    StockPipeline::Deferred
                 };
-                self.options.path = path;
+                self.options.pipeline = pipeline;
                 if let Some(state) = self.state.as_mut() {
-                    state.renderer.set_path(path);
+                    // Requested, not set: the missing stages compile on a
+                    // worker thread and the swap lands when they are all
+                    // there, so pressing D does not stutter the window.
+                    if let Err(error) = state.renderer.request_pipeline(pipeline, &[&self.material])
+                    {
+                        eprintln!("cannot switch pipeline: {error}");
+                    }
                 }
                 self.report();
             }

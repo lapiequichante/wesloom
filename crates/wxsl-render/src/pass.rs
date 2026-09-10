@@ -25,9 +25,8 @@
 
 use std::sync::Arc;
 
+use wxsl_core::abi::MaterialStage;
 use wxsl_core::scene::TagExpr;
-
-use crate::path::RenderPath;
 
 /// A resource in a [`crate::graph::RenderGraph`], by index.
 ///
@@ -390,6 +389,13 @@ impl PassState {
         self
     }
 
+    /// The same state with a different depth test.
+    pub fn with_depth_test(mut self, compare: wgpu::CompareFunction, write: bool) -> Self {
+        self.depth_compare = compare;
+        self.depth_write = write;
+        self
+    }
+
     /// The `wgpu` depth-stencil state, or `None` when the pass has no depth
     /// attachment.
     pub fn depth_stencil(&self) -> Option<wgpu::DepthStencilState> {
@@ -470,13 +476,14 @@ pub enum Dispatch {
 /// What kind of work a pass does.
 #[derive(Clone, Debug)]
 pub enum PassKind {
-    /// Draw geometry, with each material compiled for `path`.
+    /// Draw geometry, with each material compiled for `stage`.
     Geometry {
         /// Where the draws come from.
         source: DrawSource,
-        /// Which compiled variant of each material to draw with. M2 widens
-        /// this from a two-valued path into a material *stage*.
-        path: RenderPath,
+        /// Which compiled variant of each material to draw with, and
+        /// therefore what the fragment stage writes — or whether there is
+        /// one at all, for a depth-only pass.
+        stage: MaterialStage,
     },
     /// One fullscreen triangle running a screen-space shader.
     Screen {
@@ -547,11 +554,12 @@ pub struct PassDesc {
 }
 
 impl PassDesc {
-    /// A geometry pass drawing `source` with materials compiled for `path`.
-    pub fn geometry(label: impl Into<String>, source: DrawSource, path: RenderPath) -> Self {
+    /// A geometry pass drawing `source` with materials compiled for
+    /// `stage`.
+    pub fn geometry(label: impl Into<String>, source: DrawSource, stage: MaterialStage) -> Self {
         PassDesc {
             label: label.into(),
-            kind: PassKind::Geometry { source, path },
+            kind: PassKind::Geometry { source, stage },
             color: Vec::new(),
             depth: None,
             state: PassState::OPAQUE,
@@ -722,7 +730,7 @@ mod tests {
         let pass = PassDesc::geometry(
             "overlay",
             DrawSource::Scene(TagExpr::Always),
-            RenderPath::Forward,
+            MaterialStage::FORWARD_LIT,
         )
         .with_color(Attachment::load(first))
         .with_depth(DepthAttachment::load(second));
@@ -735,7 +743,7 @@ mod tests {
         let clearing = PassDesc::geometry(
             "first",
             DrawSource::Scene(TagExpr::Always),
-            RenderPath::Forward,
+            MaterialStage::FORWARD_LIT,
         )
         .with_color(Attachment::clear(first, wgpu::Color::BLACK))
         .with_depth(DepthAttachment::clear(second, 1.0));

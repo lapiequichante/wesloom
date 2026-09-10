@@ -29,14 +29,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use wxsl_core::abi;
-
 use crate::error::RenderError;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, Extent, Load, PassDesc, PassKind, Persistence,
     ResourceDesc, ResourceId,
 };
-use crate::path::RenderPath;
 use crate::pipeline::TargetConfig;
 
 /// A pipeline, as a list of passes over a set of resources.
@@ -368,16 +365,13 @@ impl RenderGraph {
 
 /// How many colour targets a pass of this kind must have, or `None` when
 /// the kind does not constrain it.
+///
+/// For a geometry pass this comes straight from the stage table: a stage
+/// that returns a G-buffer needs one attachment per G-buffer target, and a
+/// depth-only stage needs none.
 fn expected_color_targets(kind: &PassKind) -> Option<usize> {
     match kind {
-        PassKind::Geometry {
-            path: RenderPath::Forward,
-            ..
-        } => Some(1),
-        PassKind::Geometry {
-            path: RenderPath::Deferred,
-            ..
-        } => Some(abi::GBUFFER_TARGETS.len()),
+        PassKind::Geometry { stage, .. } => Some(stage.color_targets()),
         PassKind::Screen { .. } => Some(1),
         PassKind::Compute { .. } => Some(0),
     }
@@ -1011,6 +1005,7 @@ fn store_op(store: bool) -> wgpu::StoreOp {
 mod tests {
     use super::*;
     use crate::pass::{Attachment, DrawSource, PassState, Read, ScreenShader, DEPTH_FORMAT};
+    use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::scene::TagExpr;
 
     const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1155,7 +1150,7 @@ mod tests {
     fn a_geometry_pass_must_have_as_many_targets_as_its_stage_writes() {
         let mut graph = RenderGraph::new(COLOR);
         graph.pass(
-            PassDesc::geometry("gbuffer", draw_all(), RenderPath::Deferred)
+            PassDesc::geometry("gbuffer", draw_all(), MaterialStage::GBUFFER)
                 .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
                 .with_state(PassState::FULLSCREEN),
         );
@@ -1174,7 +1169,7 @@ mod tests {
         let mut graph = RenderGraph::new(COLOR);
         let depth = graph.resource(ResourceDesc::color("depth", DEPTH_FORMAT));
         graph.pass(
-            PassDesc::geometry("forward", draw_all(), RenderPath::Forward)
+            PassDesc::geometry("forward", draw_all(), MaterialStage::FORWARD_LIT)
                 .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
                 .with_depth(DepthAttachment::clear(depth, 1.0))
                 .with_state(

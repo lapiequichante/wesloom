@@ -40,16 +40,26 @@ happened.
 expression* over the draw list, so the material says what it is and the
 pass says what it draws.
 
-**Render path** — which broad rendering strategy a pass uses: `Forward`
-(shading happens in the same pass that determines visibility) or `Deferred`
-(visibility/material data is written to a G-buffer first, then shaded in a
-later pass). A property of the pass, not of a graph — see
-[ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md).
+**Material stage** — which entry point a material graph is compiled for,
+and therefore what its fragment stage writes: `forward_lit` (a final
+colour), `gbuffer` (the G-buffer struct) or `depth_only` (nothing at all —
+no fragment stage). A row in `wxsl_core::abi::MATERIAL_STAGES`, named by a
+pass, never by a graph. This replaced the two-valued `RenderPath`, which
+had room for exactly two entry points — see
+[ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
+
+**Pipeline** — a render graph. `StockPipeline::{Forward, Deferred}` are the
+two this crate ships: forward is a depth prepass plus a shading pass,
+deferred is a G-buffer pass plus a fullscreen lighting pass. "Which
+pipeline" and "which stage" are separate questions, which is why they are
+separate types.
 
 **Shader variant** — a specific compiled WGSL output for one
-`(generated source, macro values, RenderPath)` combination, cached by
-`wxsl_render::variants`. Switching render path or flipping a macro
-variable asks for a different variant of the same material.
+`(generated source, macro values, stage)` combination, cached by
+`wxsl_render::variants`. Switching pipeline or flipping a macro variable
+asks for a different variant of the same material. The key holds the
+*stage* rather than the pipeline, which is what makes the second swap
+between two pipelines free.
 
 **Shader ABI** — the fixed WXSL vocabulary a generated material module is
 written against: the `SurfaceContext` it is given, the `Surface` it returns,

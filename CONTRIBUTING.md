@@ -44,7 +44,7 @@ also run the demo — it is the fastest way to see a regression:
 cargo run -p wxsl --example pbr_cube -- --headless
 ```
 
-It renders one frame per render path and reports how far apart they are;
+It renders one frame per pipeline and reports how far apart they are;
 they should be identical to within 8-bit rounding.
 
 ## Commit / PR expectations

@@ -21,8 +21,8 @@ use wxsl_render::gpu::OffscreenTarget;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
 use wxsl_render::{
-    Camera, DrawItem, Environment, Light, Material, Mesh, MeshKind, RenderError, RenderPath,
-    RenderRequest, Renderer, ShaderLibrary, TargetConfig,
+    Camera, DrawItem, Environment, Light, Material, Mesh, MeshKind, RenderError, RenderRequest,
+    Renderer, ShaderLibrary, StockPipeline, SwapProgress, TargetConfig,
 };
 
 use crate::highlight::{self, Run};
@@ -73,6 +73,9 @@ pub struct Preview {
     wxsl_highlight: Vec<Run>,
     wgsl_highlight: Vec<Run>,
     status: PreviewStatus,
+    /// Whether a pipeline swap is in flight, so that the code panel can be
+    /// refreshed the frame it lands rather than a frame late.
+    swapping: bool,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
     angle: f32,
@@ -113,6 +116,7 @@ impl Preview {
             wxsl_highlight: Vec::new(),
             wgsl_highlight: Vec::new(),
             status: PreviewStatus::Empty,
+            swapping: false,
             spinning: true,
             angle: 0.6,
         })
@@ -148,9 +152,22 @@ impl Preview {
         &self.status
     }
 
-    /// The active render path.
-    pub fn path(&self) -> RenderPath {
-        self.renderer.path()
+    /// The pipeline the preview is drawn with.
+    pub fn pipeline(&self) -> StockPipeline {
+        // The preview never installs a pass list of its own, so there is
+        // always a stock one.
+        self.renderer.pipeline().unwrap_or_default()
+    }
+
+    /// How far a requested pipeline swap has got, or `None` when none is
+    /// in flight — what the status bar's `compiling 3/7` reads.
+    pub fn swap_progress(&self) -> Option<SwapProgress> {
+        self.renderer.swap_progress()
+    }
+
+    /// The stage whose module the code panel is showing.
+    pub fn display_stage(&self) -> wxsl_core::abi::MaterialStage {
+        self.renderer.display_stage()
     }
 
     /// Which mesh the preview is drawn on.
@@ -165,11 +182,29 @@ impl Preview {
         (self.renderer.variant_count(), self.renderer.cache_stats())
     }
 
-    /// Switch render path. The graph is unchanged: a material is written once
-    /// and compiled per path (ADR 0005).
-    pub fn set_path(&mut self, device: &wgpu::Device, path: RenderPath) {
-        self.renderer.set_path(path);
-        self.refresh_wgsl(device);
+    /// Switch pipeline when its shaders are ready.
+    ///
+    /// The graph is unchanged: a material is authored once and compiled
+    /// per *stage* (ADR 0005, ADR 0022). The switch is requested rather
+    /// than applied, so the preview keeps drawing the current pipeline
+    /// while the missing stages compile — the editor is exactly the place
+    /// where a frozen frame on a button press is most obvious.
+    pub fn set_pipeline(&mut self, device: &wgpu::Device, pipeline: StockPipeline) {
+        let requested = match self.material.as_ref() {
+            Some(material) => self
+                .renderer
+                .request_pipeline(pipeline, &[material])
+                .is_ok(),
+            // No material to compile anything for: nothing to wait on.
+            None => false,
+        };
+        if !requested {
+            self.renderer.set_pipeline(pipeline);
+        }
+        self.swapping = self.renderer.swap_progress().is_some();
+        if !self.swapping {
+            self.refresh_wgsl(device);
+        }
     }
 
     /// Switch the preview mesh.
@@ -205,7 +240,7 @@ impl Preview {
 
         match Material::from_graph_with_macros(graph, registry, macros) {
             Ok(material) => {
-                self.wxsl = material.wxsl().to_string();
+                self.wxsl = material.wxsl(self.renderer.display_stage()).to_string();
                 self.wxsl_highlight = highlight::highlight(&self.wxsl);
                 self.material = Some(material);
                 self.status = PreviewStatus::Ok;
@@ -255,6 +290,12 @@ impl Preview {
         dt: f32,
         time: f32,
     ) -> Result<(), RenderError> {
+        // A swap that landed since the last frame changed which stage the
+        // code panel should be showing.
+        if self.swapping && self.renderer.swap_progress().is_none() {
+            self.swapping = false;
+            self.refresh_wgsl(device);
+        }
         let Some(material) = self.material.as_ref() else {
             return Ok(());
         };

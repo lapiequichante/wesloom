@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted
+Status: Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md)
 
 Amends [0005](0005-render-pipeline-abstraction-and-shader-switching.md),
 [0008](0008-surface-graphs-and-a-named-shader-abi.md),
@@ -165,8 +165,9 @@ either a lie or a translator nobody asked for.
   The slot allocation is unchanged, exactly as that ADR predicted.
 * **This amends ADR 0005** in one place only: `RenderPath` is still the
   compile axis, but it is now a *field of a pass* rather than a property of
-  the renderer. M2 replaces it with a material stage and this ADR's
-  `PassKind::Geometry { path }` becomes `{ stage }`; nothing else moves.
+  the renderer. **Superseded as predicted by
+  [ADR 0022](0022-material-stages-replace-the-render-path-enum.md)**:
+  `PassKind::Geometry { path }` is now `{ stage }` and nothing else moved.
 * A pass list is validated up front, so several classes of `wgpu` error
   become a named error naming the pass: a colour-attachment count its
   shader cannot write, a depth attachment disagreeing with the pipeline

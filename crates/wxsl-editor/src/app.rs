@@ -34,7 +34,7 @@ use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, UiEvent};
 use wxsl_render::ui::text::{GlyphCache, TextOptions};
 use wxsl_render::ui::{Atlas, Font, InputState, MsdfBackend, MsdfGenerator, UiRenderer, UiTarget};
-use wxsl_render::{MeshKind, RenderError, RenderPath, ShaderLibrary};
+use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
 use crate::palette::NodePicker;
@@ -460,10 +460,10 @@ impl Editor {
         // -- shortcuts ---------------------------------------------------
         if !ui.state.is_editing() {
             if ui.input.key_pressed_plain(Key::Char('f')) {
-                requests.path = Some(RenderPath::Forward);
+                requests.pipeline = Some(StockPipeline::Forward);
             }
             if ui.input.key_pressed_plain(Key::Char('d')) {
-                requests.path = Some(RenderPath::Deferred);
+                requests.pipeline = Some(StockPipeline::Deferred);
             }
             if ui.input.key_pressed_plain(Key::Char('m')) {
                 requests.mesh = Some(self.preview.mesh_kind().next());
@@ -529,9 +529,12 @@ impl Editor {
         if requests.changed_metadata {
             self.modified = true;
         }
-        if let Some(path) = requests.path {
-            self.preview.set_path(device, path);
-            self.message = format!("render path: {path}");
+        if let Some(pipeline) = requests.pipeline {
+            self.preview.set_pipeline(device, pipeline);
+            self.message = match self.preview.swap_progress() {
+                Some(progress) => format!("pipeline: {pipeline} ({progress})"),
+                None => format!("pipeline: {pipeline}"),
+            };
         }
         if let Some(mesh) = requests.mesh {
             self.preview.set_mesh(device, mesh);
@@ -568,7 +571,7 @@ impl Editor {
 /// device or the preview.
 #[derive(Default)]
 struct Requests {
-    path: Option<RenderPath>,
+    pipeline: Option<StockPipeline>,
     mesh: Option<MeshKind>,
     backend: Option<MsdfBackend>,
     /// Open the palette to add a node at this graph-space point.
@@ -688,11 +691,17 @@ fn toolbar_panel(
             .clicked
     };
 
-    for path in RenderPath::ALL {
-        let label = path.name();
-        let on = preview.path() == *path;
-        if button(ui, &mut cursor, &format!("toolbar.path.{label}"), label, on) {
-            requests.path = Some(*path);
+    for pipeline in StockPipeline::ALL {
+        let label = pipeline.name();
+        let on = preview.pipeline() == *pipeline;
+        if button(
+            ui,
+            &mut cursor,
+            &format!("toolbar.pipeline.{label}"),
+            label,
+            on,
+        ) {
+            requests.pipeline = Some(*pipeline);
         }
     }
     let mesh_label = format!("mesh: {}", preview.mesh_kind().name());
@@ -1312,7 +1321,7 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
     };
     let meta = match tab {
         CodeTab::Wxsl => format!("{lines} lines · generated from the graph"),
-        CodeTab::Wgsl => format!("{lines} lines · {} path", preview.path()),
+        CodeTab::Wgsl => format!("{lines} lines · {} stage", preview.display_stage()),
         CodeTab::Problems if problems == 0 => "the graph compiles".to_string(),
         CodeTab::Problems => format!("{problems} to fix"),
     };

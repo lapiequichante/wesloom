@@ -48,9 +48,16 @@ pub struct CodegenOptions {
     pub material_fn: String,
     /// Name of the generated vertex entry point.
     pub vertex_entry: String,
-    /// Name of the generated fragment entry points (both paths share it; the
-    /// two definitions are `@if`-gated, so only one survives compilation).
-    pub fragment_entry: String,
+    /// Which stage to emit entry points for.
+    ///
+    /// One module per stage, rather than one module with every stage's
+    /// entry points `@if`-gated inside it: a stage will soon need only
+    /// *part* of the graph (M5's partitioning), and a module that is
+    /// already per-stage has somewhere to put that. It also means the
+    /// stage is in the source, so the variant cache's source hash
+    /// distinguishes stages before its `stage` field even looks
+    /// ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
+    pub stage: abi::MaterialStage,
     /// Whether to emit entry points at all. Turning this off yields a module
     /// with just the material function, useful for testing codegen and for
     /// importing a graph's material into hand-written WXSL.
@@ -77,7 +84,7 @@ impl Default for CodegenOptions {
         CodegenOptions {
             material_fn: abi::MATERIAL_FN.to_string(),
             vertex_entry: abi::VERTEX_ENTRY.to_string(),
-            fragment_entry: abi::FRAGMENT_ENTRY.to_string(),
+            stage: abi::MaterialStage::default(),
             emit_entry_points: true,
             base_macros: abi::abi_macros()
                 .into_iter()
@@ -216,10 +223,21 @@ impl Emitter<'_> {
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_IN_STRUCT);
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_OUT_STRUCT);
             self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_FN);
-            self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
-            self.request_import(abi::SHADING_MODULE, abi::SHADE_SURFACE_FN);
-            self.request_import(abi::DEFERRED_MODULE, abi::GBUFFER_STRUCT);
-            self.request_import(abi::DEFERRED_MODULE, abi::PACK_GBUFFER_FN);
+            // Only what this stage's entry point actually calls. A
+            // depth-only module imports neither the shading function nor
+            // the G-buffer, and it is the smaller for it.
+            match self.options.stage.output() {
+                abi::StageOutput::Color => {
+                    self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
+                    self.request_import(abi::SHADING_MODULE, abi::SHADE_SURFACE_FN);
+                }
+                abi::StageOutput::GBuffer => {
+                    self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
+                    self.request_import(abi::DEFERRED_MODULE, abi::GBUFFER_STRUCT);
+                    self.request_import(abi::DEFERRED_MODULE, abi::PACK_GBUFFER_FN);
+                }
+                abi::StageOutput::Nothing => {}
+            }
         }
     }
 
@@ -510,15 +528,9 @@ impl Emitter<'_> {
         // uses (ADR 0011), so there is no shared macro module to import
         // from: the generated module is self-contained, and the renderer
         // binds the same values over the top.
-        // The render-path flag is declared here rather than coming from the
-        // macro set, because *this* module is what writes the `@if`s that
-        // read it: the two fragment entry points below. It is not an
-        // editable macro (ADR 0005 — the pipeline picks the path), so it
-        // never appears in a graph's macro set, and the renderer binds it
-        // per variant.
-        if options.emit_entry_points {
-            let _ = writeln!(out, "@macro const {}: bool = false;", abi::FEATURE_DEFERRED);
-        }
+        // There is no render-path flag any more: a stage is chosen by
+        // generating that stage's module, not by an `@if` inside a module
+        // holding all of them (ADR 0022).
         if !macros.is_empty() {
             for (name, value) in macros.iter() {
                 let Some(ident) = WxslIdent::new(name) else {
@@ -567,7 +579,12 @@ impl Emitter<'_> {
     }
 }
 
-/// Emit the vertex entry and the two `@if`-gated fragment entries.
+/// Emit the vertex entry, and the fragment entry this stage calls for.
+///
+/// The vertex stage is the same for every stage — the paths differ in what
+/// the fragment stage does with the surface, never in how geometry is
+/// transformed — so a stage with no fragment entry is a complete,
+/// depth-writing shader on its own.
 fn write_entry_points(out: &mut String, options: &CodegenOptions) {
     let _ = write!(
         out,
@@ -576,32 +593,42 @@ fn write_entry_points(out: &mut String, options: &CodegenOptions) {
 fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
     return {transform}(input);
 }}
-
-@if(!{feature})
-@fragment
-fn {fragment}(vertex: {vertex_out}) -> @location(0) vec4f {{
-    let ctx = {context}(vertex);
-    return {shade}({material}(ctx), ctx);
-}}
-
-@if({feature})
-@fragment
-fn {fragment}(vertex: {vertex_out}) -> {gbuffer} {{
-    let ctx = {context}(vertex);
-    return {pack}({material}(ctx));
-}}
 ",
         vertex = options.vertex_entry,
-        fragment = options.fragment_entry,
-        material = options.material_fn,
         vertex_in = abi::VERTEX_IN_STRUCT,
         vertex_out = abi::VERTEX_OUT_STRUCT,
         transform = abi::TRANSFORM_VERTEX_FN,
-        context = abi::SURFACE_CONTEXT_FN,
-        shade = abi::SHADE_SURFACE_FN,
-        gbuffer = abi::GBUFFER_STRUCT,
-        pack = abi::PACK_GBUFFER_FN,
-        feature = abi::FEATURE_DEFERRED,
+    );
+
+    let stage = options.stage;
+    let Some(fragment) = stage.fragment_entry() else {
+        return;
+    };
+    let body = match stage.output() {
+        abi::StageOutput::Color => format!(
+            "-> @location(0) vec4f {{\n    let ctx = {context}(vertex);\n    \
+             return {shade}({material}(ctx), ctx);\n}}\n",
+            context = abi::SURFACE_CONTEXT_FN,
+            shade = abi::SHADE_SURFACE_FN,
+            material = options.material_fn,
+        ),
+        abi::StageOutput::GBuffer => format!(
+            "-> {gbuffer} {{\n    let ctx = {context}(vertex);\n    \
+             return {pack}({material}(ctx));\n}}\n",
+            gbuffer = abi::GBUFFER_STRUCT,
+            context = abi::SURFACE_CONTEXT_FN,
+            material = options.material_fn,
+            pack = abi::PACK_GBUFFER_FN,
+        ),
+        // Unreachable while every entry-less stage returns nothing, which
+        // a test in `abi` asserts. Written as an empty body rather than a
+        // panic so that adding a stage cannot take the process down.
+        abi::StageOutput::Nothing => "{\n}\n".to_string(),
+    };
+    let _ = write!(
+        out,
+        "\n@fragment\nfn {fragment}(vertex: {vertex_out}) {body}",
+        vertex_out = abi::VERTEX_OUT_STRUCT,
     );
 }
 
@@ -742,10 +769,56 @@ mod tests {
         assert!(shader
             .source
             .contains("surface.base_color = vec3f(0.8, 0.8, 0.8);"));
-        // Both fragment entries are emitted, gated on the render path.
-        assert!(shader.source.contains("@if(!wxsl_deferred)"));
-        assert!(shader.source.contains("@if(wxsl_deferred)"));
-        assert_eq!(shader.source.matches("fn fs_main").count(), 2);
+        // One stage, one fragment entry, no conditional gate.
+        assert!(shader
+            .source
+            .contains("fn fs_forward_lit(vertex: VertexOut)"));
+        assert_eq!(shader.source.matches("@fragment").count(), 1);
+        assert!(!shader.source.contains("@if("));
+    }
+
+    #[test]
+    fn each_stage_emits_its_own_entry_point_and_imports_only_what_it_calls() {
+        let registry = registry();
+        let mut graph = Graph::new("stages");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+
+        let module = |stage: abi::MaterialStage| {
+            let options = CodegenOptions {
+                stage,
+                ..CodegenOptions::default()
+            };
+            generate(&graph, &registry, &options)
+                .expect("compiles")
+                .source
+        };
+
+        let forward = module(abi::MaterialStage::FORWARD_LIT);
+        assert!(forward.contains("fn fs_forward_lit(vertex: VertexOut) -> @location(0) vec4f"));
+        assert!(forward.contains("shade_surface"));
+        assert!(!forward.contains("pack_gbuffer"));
+
+        let gbuffer = module(abi::MaterialStage::GBUFFER);
+        assert!(gbuffer.contains("fn fs_gbuffer(vertex: VertexOut) -> GBuffer"));
+        assert!(gbuffer.contains("pack_gbuffer"));
+        assert!(!gbuffer.contains("shade_surface"));
+
+        // Depth only: a vertex entry and nothing else. It still carries the
+        // material function, because *which part* of a graph a stage needs
+        // is M5's question, not this one — but it imports neither the
+        // shading function nor the G-buffer.
+        let depth = module(abi::MaterialStage::DEPTH_ONLY);
+        assert!(depth.contains("fn vs_main(input: VertexIn) -> VertexOut"));
+        assert!(!depth.contains("@fragment"));
+        assert!(!depth.contains("shade_surface"));
+        assert!(!depth.contains("pack_gbuffer"));
+        assert!(depth.contains("fn wxsl_material"));
+
+        // Three stages, three different modules — which is what lets the
+        // variant cache tell them apart by source hash alone.
+        for pair in [(&forward, &gbuffer), (&forward, &depth), (&gbuffer, &depth)] {
+            assert_ne!(pair.0, pair.1);
+        }
     }
 
     #[test]

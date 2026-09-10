@@ -10,13 +10,13 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use wxsl::core::abi;
+use wxsl::core::abi::MaterialStage;
 use wxsl::core::codegen;
 use wxsl::core::graph::{Graph, Node, NodeId};
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
-use wxsl::render::RenderPath;
 
 /// The demo graph, as shipped.
 fn demo_graph() -> Graph {
@@ -24,27 +24,24 @@ fn demo_graph() -> Graph {
     serde_json::from_str(json).expect("the shipped demo graph parses")
 }
 
-/// Compile a material to WGSL for `path`, or return the diagnostic.
-fn compile(material: &Material, path: RenderPath) -> Result<String, String> {
+/// Compile a material to WGSL for `stage`, or return the diagnostic.
+fn compile(material: &Material, stage: MaterialStage) -> Result<String, String> {
     let library = wxsl::stdlib_library();
-    let mut macros = material.macros().clone();
-    path.apply_to(&mut macros);
+    let shader = material.shader(stage);
     // The generated module declares its own macros, so the material source
     // is the only thing to mount alongside the library (ADR 0011).
     let extra = [(
         codegen::MATERIAL_MODULE,
-        Cow::Borrowed(material.shader.source.as_str()),
+        Cow::Borrowed(shader.source.as_str()),
     )];
-    variants::compile(&library, &extra, codegen::MATERIAL_MODULE, &macros)
+    variants::compile(&library, &extra, codegen::MATERIAL_MODULE, &shader.macros)
         .map_err(|error| error.to_string())
 }
 
 fn compile_lighting_pass(macros: &MacroSet) -> Result<String, String> {
     let library = wxsl::stdlib_library();
-    let mut macros = macros.clone();
-    RenderPath::Deferred.apply_to(&mut macros);
     let extra: [(&str, Cow<'_, str>); 0] = [];
-    variants::compile(&library, &extra, abi::LIGHTING_PASS_MODULE, &macros)
+    variants::compile(&library, &extra, abi::LIGHTING_PASS_MODULE, macros)
         .map_err(|error| error.to_string())
 }
 
@@ -73,38 +70,46 @@ fn the_demo_graph_is_valid_and_round_trips_through_the_node_format() {
 }
 
 #[test]
-fn both_render_paths_compile_from_the_same_graph() {
+fn every_stage_compiles_from_the_same_graph() {
     let registry = wxsl::stdlib::registry();
     let material = Material::from_graph(&demo_graph(), &registry).expect("codegen succeeds");
 
-    let forward = compile(&material, RenderPath::Forward).expect("forward compiles");
-    let deferred = compile(&material, RenderPath::Deferred).expect("deferred compiles");
+    let forward = compile(&material, MaterialStage::FORWARD_LIT).expect("forward_lit compiles");
+    let deferred = compile(&material, MaterialStage::GBUFFER).expect("gbuffer compiles");
+    let depth = compile(&material, MaterialStage::DEPTH_ONLY).expect("depth_only compiles");
 
-    // Same entry point names, different fragment output: that is the whole
-    // point of the conditional-translation approach in ADR 0005.
-    for wgsl in [&forward, &deferred] {
+    // Same vertex entry, one fragment entry each: one graph, several
+    // pipeline shapes (ADR 0005, generalized by ADR 0022).
+    for wgsl in [&forward, &deferred, &depth] {
         assert!(wgsl.contains("fn vs_main"), "{wgsl}");
-        assert!(wgsl.contains("fn fs_main"), "{wgsl}");
         // The graph's nodes reached the shader.
         assert!(wgsl.contains("fbm3"), "{wgsl}");
     }
+    assert!(forward.contains("fn fs_forward_lit"), "{forward}");
+    assert!(deferred.contains("fn fs_gbuffer"), "{deferred}");
+
     // WXSL mangles imported names, so these look for the distinguishing
     // feature rather than an exact identifier: the forward fragment returns
-    // one colour, the deferred one returns the G-buffer struct.
+    // one colour, the G-buffer one returns the struct.
     assert!(
         forward.contains("@location(0) vec4f") && !forward.contains("GBuffer"),
-        "the forward path writes one colour: {forward}"
+        "forward_lit writes one colour: {forward}"
     );
     assert!(
         deferred.contains("GBuffer") && !deferred.contains("-> @location(0) vec4f"),
-        "the deferred path writes a G-buffer: {deferred}"
+        "gbuffer writes a G-buffer: {deferred}"
     );
-    // The forward path must not drag the G-buffer packing in, and the
-    // deferred material pass must not drag the light loop in.
+    // Neither stage drags in the other's half of the ABI.
     assert!(!forward.contains("pack_gbuffer"), "{forward}");
     assert!(!deferred.contains("sample_light"), "{deferred}");
 
-    // The lighting pass is where the deferred path's shading happens.
+    // A depth-only module has no fragment stage at all: nothing to run per
+    // pixel is the entire point of a depth prepass.
+    assert!(!depth.contains("@fragment"), "{depth}");
+    assert!(!depth.contains("pack_gbuffer"), "{depth}");
+    assert!(!depth.contains("sample_light"), "{depth}");
+
+    // The lighting pass is where the deferred pipeline's shading happens.
     let lighting = compile_lighting_pass(material.macros()).expect("lighting pass compiles");
     assert!(lighting.contains("fn lighting_vs"), "{lighting}");
     assert!(lighting.contains("fn lighting_fs"), "{lighting}");
@@ -120,19 +125,22 @@ fn macro_variables_change_the_compiled_shader() {
     let mut graph = demo_graph();
     graph.set_macro("WXSL_FBM_OCTAVES", MacroValue::Int(2));
     let two = Material::from_graph(&graph, &registry).unwrap();
-    let two_wgsl = compile(&two, RenderPath::Forward).unwrap();
+    let two_wgsl = compile(&two, MaterialStage::FORWARD_LIT).unwrap();
     assert!(two_wgsl.contains("i32 = 2;"), "{two_wgsl}");
 
     graph.set_macro("WXSL_FBM_OCTAVES", MacroValue::Int(7));
     let seven = Material::from_graph(&graph, &registry).unwrap();
-    let seven_wgsl = compile(&seven, RenderPath::Forward).unwrap();
+    let seven_wgsl = compile(&seven, MaterialStage::FORWARD_LIT).unwrap();
     assert!(seven_wgsl.contains("i32 = 7;"), "{seven_wgsl}");
-    assert_ne!(two.shader.variant_key(), seven.shader.variant_key());
+    assert_ne!(
+        two.shader(MaterialStage::FORWARD_LIT).variant_key(),
+        seven.shader(MaterialStage::FORWARD_LIT).variant_key()
+    );
 
     // A flag macro: ridged noise adds a fold the smooth variant lacks.
     graph.set_macro("wxsl_fbm_ridged", MacroValue::Flag(true));
     let ridged = Material::from_graph(&graph, &registry).unwrap();
-    let ridged_wgsl = compile(&ridged, RenderPath::Forward).unwrap();
+    let ridged_wgsl = compile(&ridged, MaterialStage::FORWARD_LIT).unwrap();
     assert!(ridged_wgsl.contains("abs("), "{ridged_wgsl}");
     assert_ne!(ridged_wgsl, seven_wgsl);
 
@@ -141,7 +149,7 @@ fn macro_variables_change_the_compiled_shader() {
     let mut overrides = MacroSet::new();
     overrides.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(true));
     let debug = Material::from_graph_with_macros(&graph, &registry, &overrides).unwrap();
-    let debug_forward = compile(&debug, RenderPath::Forward).unwrap();
+    let debug_forward = compile(&debug, MaterialStage::FORWARD_LIT).unwrap();
     assert!(!debug_forward.contains("sample_light"), "{debug_forward}");
     let debug_lighting = compile_lighting_pass(debug.macros()).unwrap();
     assert!(!debug_lighting.contains("sample_light"), "{debug_lighting}");
@@ -150,7 +158,7 @@ fn macro_variables_change_the_compiled_shader() {
     overrides.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(false));
     overrides.set(abi::FEATURE_TONEMAP, MacroValue::Flag(false));
     let raw = Material::from_graph_with_macros(&graph, &registry, &overrides).unwrap();
-    let raw_wgsl = compile(&raw, RenderPath::Forward).unwrap();
+    let raw_wgsl = compile(&raw, MaterialStage::FORWARD_LIT).unwrap();
     assert!(!raw_wgsl.contains("tonemap_filmic"), "{raw_wgsl}");
 }
 
@@ -161,7 +169,7 @@ fn unused_nodes_do_not_reach_the_shader() {
     // A branch left dangling on the editor canvas costs nothing.
     graph.add(Node::new("sdf.sphere"));
     let material = Material::from_graph(&graph, &registry).unwrap();
-    let wgsl = compile(&material, RenderPath::Forward).unwrap();
+    let wgsl = compile(&material, MaterialStage::FORWARD_LIT).unwrap();
     assert!(!wgsl.contains("sdf_sphere"), "{wgsl}");
 }
 
@@ -323,7 +331,7 @@ fn graph_using(
 }
 
 #[test]
-fn every_node_in_the_library_compiles_on_both_paths() {
+fn every_node_in_the_library_compiles_for_every_stage() {
     let registry = wxsl::stdlib::registry();
     let mut checked = 0usize;
     let mut skipped: Vec<String> = Vec::new();
@@ -364,8 +372,8 @@ fn every_node_in_the_library_compiles_on_both_paths() {
                         continue;
                     }
                 };
-                for path in RenderPath::ALL {
-                    match compile(&material, *path) {
+                for stage in MaterialStage::ALL {
+                    match compile(&material, *stage) {
                         Ok(wgsl) => {
                             // A node that compiled but got stripped would
                             // make this test vacuous.
@@ -379,7 +387,7 @@ fn every_node_in_the_library_compiles_on_both_paths() {
                             checked += 1;
                         }
                         Err(diagnostic) => {
-                            failures.push(format!("{label} on the {path} path:\n{diagnostic}"))
+                            failures.push(format!("{label} on the {stage} stage:\n{diagnostic}"))
                         }
                     }
                 }
@@ -426,12 +434,15 @@ fn a_struct_returning_function_is_called_once_for_all_its_outputs() {
     // Checked on the generated WXSL, since that is what codegen decides;
     // the compiler then mangles the name on its way to WGSL.
     assert_eq!(
-        material.wxsl().matches("pbr_direct_split(").count(),
+        material
+            .wxsl(MaterialStage::FORWARD_LIT)
+            .matches("pbr_direct_split(")
+            .count(),
         1,
         "{}",
-        material.wxsl()
+        material.wxsl(MaterialStage::FORWARD_LIT)
     );
-    let wgsl = compile(&material, RenderPath::Forward).unwrap();
+    let wgsl = compile(&material, MaterialStage::FORWARD_LIT).unwrap();
     assert!(wgsl.contains(".diffuse + "), "{wgsl}");
     assert!(wgsl.contains(".specular"), "{wgsl}");
 }

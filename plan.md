@@ -6,7 +6,7 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0, M1.
+**Landed so far:** M0, M1, M2.
 
 ## How to read this
 
@@ -44,19 +44,16 @@ the milestones were aimed at.
 * ~~**Passes are hand-written Rust.**~~ Closed by M1: a pipeline is a list
   of `PassDesc`s, and `wxsl_render::graph` orders, allocates and records
   them.
-* **Render path is a two-valued enum.** `RenderPath::{Forward, Deferred}`
-  binds one flag, `abi::FEATURE_DEFERRED`, which picks one of exactly two
-  `@if`-gated fragment entry points that `codegen::write_entry_points`
-  prints as a format string. There is no room in that shape for a third,
-  fourth or fifth entry point. M1 moved the enum from the renderer onto the
-  pass, which is where M2 replaces it with a stage.
+* ~~**Render path is a two-valued enum.**~~ Closed by M2: stages are a
+  table (`abi::MATERIAL_STAGES`), codegen emits one module per stage, and
+  the flag is gone.
 * ~~**One draw per frame.**~~ Closed by M1: `RenderRequest` takes a
   `DrawList`, and every draw's transform is a row of one storage buffer.
 * **The material bind group is not bound.** The pipeline layout binds group
   0, and group 3 when a pass declares reads; group 1 waits for M3. There are
   no texture or sampler value types, so a graph cannot sample anything at
   all. Shadows, bakes and postprocess all need this before they need
-  anything else.
+  anything else. **This is now the only load-bearing gap left.**
 * ~~**No device feature negotiation.**~~ Closed by M1: `gpu.rs` asks for the
   optional features the later milestones want and records what was granted
   in `DeviceCaps`.
@@ -108,6 +105,8 @@ target is created on first write and may be reused after its last read) and
 needs a material stage that returns three). Everything else is bookkeeping.
 
 ### 2. Material stages replace `RenderPath`
+
+*Done — [ADR 0022](docs/adr/0022-material-stages-replace-the-render-path-enum.md).*
 
 `RenderPath` stops being the compile axis. A surface graph compiles once per
 **stage**, where a stage says which entry points to emit and what the
@@ -326,23 +325,52 @@ all landed as planned.
 PassState)`; it keys on `(variant, PassState, target formats)` because the
 stage does not exist until M2, and `variant` already carries the path.
 
-### M2 — Stages in the ABI and codegen
+### M2 — Stages in the ABI and codegen — **done**
 
-* `abi::MATERIAL_STAGES` table; `RenderPath` retires into it.
-* `codegen` emits entry points per requested stage; the variant key gains
-  the stage; `write_entry_points`'s format string becomes a loop over the
-  table.
-* Add `DepthOnly` as the third stage — cheap, and it proves the mechanism
-  with something the render graph can immediately use as a depth prepass.
-* Pipeline swapping, non-blocking: re-derive the stage set, compile what is
-  missing on a worker thread, and keep presenting the previous pipeline
-  behind a progress indicator until the new one is complete. The variant
-  cache already makes the second swap between two pipelines free, because
-  its key holds the stage rather than the pipeline.
+Landed as [ADR 0022](docs/adr/0022-material-stages-replace-the-render-path-enum.md),
+which is now where the reasoning lives. What shipped, and the four things a
+later milestone needs to know:
 
-**Done when** `graph_to_wgsl` compiles every node in the library for every
-stage, a depth prepass in the forward pass list renders identically, and
-swapping pipeline mid-session never drops a frame or shows an incomplete one.
+`abi::MATERIAL_STAGES` is the table and `MaterialStage` is an index into
+it; `forward_lit`, `gbuffer` and `depth_only` are its rows. Codegen emits
+one module *per stage* rather than one module with every stage's entry
+point `@if`-gated inside it, so `abi::FEATURE_DEFERRED` and
+`abi::FRAGMENT_ENTRY` are both gone. `RenderPath` retired into
+`StockPipeline`, which names one of the two pass lists and has nothing to
+do with variants. The forward pass list is now a depth prepass plus a
+shading pass, and `Renderer::request_pipeline` swaps pipeline on a worker
+thread while the previous one keeps presenting.
+
+* **A stage's module is per stage, not per pipeline, and that is what M5
+  needs.** Gating would have been the faithful extension of ADR 0005, but a
+  stage will soon need a different *body* — the shadow stage is the alpha
+  subgraph and nothing else — and a module that is already per stage has
+  somewhere to put that. It also means the source hash separates stages
+  before the cache key's `stage` field even looks.
+* **The depth-only module still carries the whole material function.** It
+  imports neither the shading function nor the G-buffer, but the graph is
+  in there, so a macro change that only affects colour recompiles the
+  prepass too: `a_macro_change_compiles_a_new_variant` sees four variants
+  where two would do. That number is the measure of what M5's partitioning
+  is worth, and the test says so in a comment.
+* **The prepass tests `LessEqual`, not `Equal`.** WGSL promises nothing
+  about two pipelines running the same vertex code producing bit-identical
+  clip positions unless the position builtin is marked `@invariant`, which
+  this ABI does not emit. `Equal` turns a one-ulp difference into a hole in
+  the surface; `LessEqual` costs nothing measurable.
+* **Only the WXSL-to-WGSL half of a swap is off-thread.** It is a pure
+  function over text with no device in it. Creating the `wgpu` modules
+  happens on the render thread as results arrive, one poll at a time, so
+  that cost is spread over the frames the swap was taking anyway. `wgpu`
+  still has no asynchronous *pipeline* creation, so the first draw with a
+  freshly swapped-in variant can still cost a backend compile — the swap
+  removes the shader hitch, not every hitch.
+
+**Still owed**: the `Shadow`, `PeelFront`/`PeelBack` and `Velocity` rows.
+None is stubbed out, because each needs something that does not exist yet
+— a depth bias, the peel test, a previous-frame transform — and an empty
+row would be a lie about readiness. `depth_only` is the shape `Shadow`
+takes once it has the first two.
 
 ### M3 — What a material declares: uniforms, textures, samplers
 
@@ -604,7 +632,7 @@ The hardest pass, and the one the portability answer bites hardest.
   being a graph at all.
 
 **Done when** four overlapping transparent surfaces composite correctly on
-both paths, and the two produce the same image within tolerance.
+both pipelines, and the two produce the same image within tolerance.
 
 **ADR** — "Dual depth peeling, and the baseline/native split for blendable
 float targets".

@@ -1187,7 +1187,7 @@ impl Graph {
     ///
     /// Names the graph pins that no node declares are kept — hand-written
     /// WXSL in the stdlib has `@if` blocks of its own, and the render path
-    /// flag ([`crate::abi::FEATURE_DEFERRED`]) is bound the same way.
+    /// values are bound the same way.
     pub fn effective_macros(&self, registry: &NodeRegistry) -> Result<MacroSet, GraphErrors> {
         let (declared, mut errors) = self.declared_macros(registry);
         let mut effective = MacroSet::new();

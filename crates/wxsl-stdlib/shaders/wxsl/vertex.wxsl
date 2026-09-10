@@ -1,4 +1,4 @@
-// The vertex stage, shared by both render paths, and the bridge from
+// The vertex stage, shared by every material stage, and the bridge from
 // interpolated vertex output to the material function's input.
 //
 // `VertexIn`'s locations are the vertex buffer layout `wxsl-render`'s
@@ -30,8 +30,9 @@ struct VertexOut {
 
 // Object space to clip space, carrying a world-space shading basis along.
 //
-// Both render paths use this unchanged: the paths differ only in what the
-// fragment stage does with the surface, never in how geometry is transformed.
+// Every material stage uses this unchanged — a depth-only pass is this and
+// nothing else. Stages differ in what the fragment stage does with the
+// surface, never in how geometry is transformed.
 fn transform_vertex(input: VertexIn) -> VertexOut {
     let world = instances[input.instance].model * vec4f(input.position, 1.0);
     let normal_matrix = instance_normal_matrix(input.instance);

@@ -1,15 +1,23 @@
-//! [`Material`]: a graph compiled to WXSL, ready to be asked for a variant.
+//! [`Material`]: a graph compiled to WXSL, once per stage.
 //!
-//! A material is path-agnostic. It holds one WXSL module with both fragment
-//! entry points in it, and the macro values it was generated with; which
-//! entry point survives is decided later, when a pipeline asks
-//! [`crate::variants::ShaderVariants`] for a variant on its own render path.
+//! A material is stage-agnostic in the only sense that matters: it is
+//! *authored* once. What it holds is one generated module per
+//! [`MaterialStage`] — a forward-lit one, a G-buffer one, a depth-only one
+//! — because a stage differs in which entry point it emits and, from M5,
+//! in which part of the graph it needs
+//! ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
 //!
-//! Macro variables can be overridden per material without touching the graph
-//! ([`Material::from_graph_with_macros`]), which is what a "toggle this at
-//! runtime" UI wants: the graph keeps the values it was authored with, and
-//! the override lives with the material instance.
+//! Generating every stage up front is cheap: codegen is string building,
+//! and the expensive half — WXSL to WGSL to a `wgpu` module — stays lazy in
+//! [`crate::variants::ShaderVariants`], which compiles a stage the first
+//! time a pass asks for it and never again.
+//!
+//! Macro variables can be overridden per material without touching the
+//! graph ([`Material::from_graph_with_macros`]), which is what a "toggle
+//! this at runtime" UI wants: the graph keeps the values it was authored
+//! with, and the override lives with the material instance.
 
+use wxsl_core::abi::MaterialStage;
 use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
 use wxsl_core::macros::MacroSet;
@@ -17,13 +25,14 @@ use wxsl_core::node::NodeRegistry;
 
 use crate::error::RenderError;
 
-/// A graph compiled to WXSL.
+/// A graph compiled to WXSL, one module per stage.
 #[derive(Clone, Debug)]
 pub struct Material {
     /// Name, taken from the graph. Used in shader labels.
     pub name: String,
-    /// The generated module and the macro values behind it.
-    pub shader: GeneratedShader,
+    /// One generated module per stage, indexed by
+    /// [`MaterialStage::index`].
+    stages: Vec<GeneratedShader>,
 }
 
 impl Material {
@@ -43,29 +52,41 @@ impl Material {
         registry: &NodeRegistry,
         overrides: &MacroSet,
     ) -> Result<Self, RenderError> {
-        let options = CodegenOptions {
-            override_macros: overrides.clone(),
-            ..CodegenOptions::default()
-        };
+        let mut stages = Vec::with_capacity(MaterialStage::ALL.len());
+        for stage in MaterialStage::ALL {
+            let options = CodegenOptions {
+                stage: *stage,
+                override_macros: overrides.clone(),
+                ..CodegenOptions::default()
+            };
+            stages.push(codegen::generate(graph, registry, &options)?);
+        }
         Ok(Material {
             name: graph.name().to_string(),
-            shader: codegen::generate(graph, registry, &options)?,
+            stages,
         })
     }
 
-    /// The macro values this material was compiled with.
-    pub fn macros(&self) -> &MacroSet {
-        &self.shader.macros
+    /// The generated module for `stage`.
+    pub fn shader(&self, stage: MaterialStage) -> &GeneratedShader {
+        // Indexed, not looked up: `stages` is built from
+        // `MaterialStage::ALL` and a stage is an index into the same table,
+        // so the two cannot drift apart.
+        &self.stages[stage.index()]
     }
 
-    /// The generated WXSL source, for `--dump-wxsl`-style tooling.
+    /// The macro values this material was compiled with.
     ///
-    /// Still handed to the WXSL compiler for now; the generated module uses
-    /// only the subset both languages share, so it survives the migration in
-    /// [ADR 0011](../../../docs/adr/0011-own-the-shading-language.md)
-    /// unchanged.
-    pub fn wxsl(&self) -> &str {
-        &self.shader.source
+    /// The same for every stage — a stage changes the entry point, never
+    /// the knobs.
+    pub fn macros(&self) -> &MacroSet {
+        &self.stages[0].macros
+    }
+
+    /// The generated WXSL source for `stage`, for `--dump-wxsl`-style
+    /// tooling.
+    pub fn wxsl(&self, stage: MaterialStage) -> &str {
+        &self.shader(stage).source
     }
 }
 
@@ -105,6 +126,33 @@ mod tests {
     }
 
     #[test]
+    fn every_stage_gets_its_own_module_with_its_own_identity() {
+        let registry = registry();
+        let mut graph = Graph::new("stages");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+        let material = Material::from_graph(&graph, &registry).unwrap();
+
+        let mut keys: Vec<u64> = MaterialStage::ALL
+            .iter()
+            .map(|stage| material.shader(*stage).variant_key())
+            .collect();
+        let count = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(
+            keys.len(),
+            count,
+            "two stages share a variant key, so one would be served the other's shader"
+        );
+        assert!(material
+            .wxsl(MaterialStage::GBUFFER)
+            .contains("fn fs_gbuffer"));
+        assert!(!material
+            .wxsl(MaterialStage::DEPTH_ONLY)
+            .contains("@fragment"));
+    }
+
+    #[test]
     fn overrides_beat_the_graph_and_change_the_source() {
         let registry = registry();
         let mut graph = Graph::new("overrides");
@@ -138,7 +186,13 @@ mod tests {
             overridden.macros().get(abi::FEATURE_TONEMAP),
             Some(MacroValue::Flag(true))
         );
-        // Different macro values must not collide in the variant cache.
-        assert_ne!(plain.shader.variant_key(), overridden.shader.variant_key());
+        // Different macro values must not collide in the variant cache, on
+        // any stage.
+        for stage in MaterialStage::ALL {
+            assert_ne!(
+                plain.shader(*stage).variant_key(),
+                overridden.shader(*stage).variant_key()
+            );
+        }
     }
 }

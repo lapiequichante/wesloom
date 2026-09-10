@@ -18,10 +18,11 @@ nodes.
   WGSL plus imports, conditional translation, macro constants and templates
   — so graphs, hand-written shaders, and the bundled node library all
   compose through the same import mechanism.
-- A `wgpu` renderer that switches between forward and deferred rendering
-  without the graph author maintaining two versions of a material — the
-  render path is a property of the active pipeline, and path-specific
-  differences are compiled conditionally from one graph.
+- A `wgpu` renderer whose pipeline is *data*: a list of passes over a set of
+  render targets, which the engine orders, allocates and records. Forward
+  and deferred are two such lists, and switching between them recompiles
+  nothing the graph author has to think about — each pass names the
+  material *stage* it draws with, and one graph compiles for all of them.
 - A built-in library of granular base nodes (math, color, lighting, SDFs,
   noise, …), in the spirit of libraries like [LYGIA](https://lygia.xyz) but
   written entirely from scratch — see
@@ -74,7 +75,7 @@ or takes `--font`/`--mono`.
 ## The demo
 
 ```sh
-cargo run -p wxsl --example pbr_cube               # windowed; F/D switch render path
+cargo run -p wxsl --example pbr_cube               # windowed; F/D switch pipeline
 cargo run -p wxsl --example pbr_cube -- --headless # one PNG per path, and their difference
 cargo run -p wxsl --example pbr_cube -- --dump-wgsl --path deferred
 ```
@@ -82,19 +83,20 @@ cargo run -p wxsl --example pbr_cube -- --dump-wgsl --path deferred
 A cube whose PBR material — noise-driven roughness, stepped metallic
 patches, an sRGB albedo converted to linear light, a pulsing emissive — is
 [a node graph in a JSON file](crates/wxsl/assets/pbr_cube.wxsl.json),
-not code. Nothing in that graph mentions forward or deferred: the render path
-is a property of the pipeline, and the two fragment entry points are selected
-by WXSL conditional translation from one generated module. In the window,
-`F` and `D` switch path and `N`/`T`/`R`/`Up`/`Down` change macro variables,
+not code. Nothing in that graph mentions forward or deferred: the pipeline is
+a list of passes the renderer holds, and each pass names the material *stage*
+it draws with — a final colour, a G-buffer, or depth and nothing at all. In
+the window, `F` and `D` switch pipeline (compiled in the background, so the
+frame never stutters) and `N`/`T`/`R`/`Up`/`Down` change macro variables,
 each of which compiles a new shader variant once and then hits the cache.
 
 ```text
-      forward path                          deferred path
-  ┌──────────────────────┐        ┌──────────────────┐   ┌────────────────┐
-  │ material -> shade    │        │ material ->      │   │ G-buffer ->    │
-  │ -> colour            │        │ G-buffer (3 RTs) │──>│ shade -> colour│
-  └──────────────────────┘        └──────────────────┘   └────────────────┘
-        one graph, one WXSL module, two `@if`-gated fragment entry points
+        forward pipeline                      deferred pipeline
+  ┌────────────┐  ┌──────────────┐   ┌──────────────────┐  ┌────────────────┐
+  │ depth_only │─>│ forward_lit  │   │ gbuffer          │─>│ G-buffer ->    │
+  │ (no pixels)│  │ -> colour    │   │ -> 3 targets     │  │ shade -> colour│
+  └────────────┘  └──────────────┘   └──────────────────┘  └────────────────┘
+        one graph, one module per stage, one entry point in each
 ```
 
 ## Workspace layout
@@ -102,7 +104,7 @@ each of which compiles a new shader variant once and then hits the cache.
 | Crate | What it is |
 |---|---|
 | [`wxsl-core`](crates/wxsl-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, and graph → WXSL codegen. No `wgpu`, no GUI toolkit. |
-| [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: WXSL → WGSL compilation, the shader variant cache, and the forward and deferred pipelines. |
+| [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: the render graph that turns a list of passes into a frame, WXSL → WGSL compilation, the shader variant cache, and the forward and deferred pass lists. |
 | [`wxsl-render`](crates/wxsl-render)'s [`ui`](crates/wxsl-render/src/ui) | The 2D layer the editor is drawn with: a texture atlas, MSDF text from glyph outlines (CPU or compute pass), an instanced draw list, and windowing-agnostic input. Useful without the editor. |
 | [`wxsl-editor`](crates/wxsl-editor) | The visual node editor: pan/zoom canvas, node palette, live material preview, and the generated WXSL and WGSL. Draws itself with `wxsl-render`; no GUI toolkit. |
 | [`wxsl-stdlib`](crates/wxsl-stdlib) | The base node library: original shader functions written from scratch, plus the WXSL side of the shader ABI. |

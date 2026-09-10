@@ -119,7 +119,8 @@ facade crate's feature set, not about the workspace.
   validation, codegen, macro precedence. Fast, no GPU, no shader compiler.
 - `cargo test -p wxsl --test graph_to_wgsl` — the real WXSL compiler
   over the real shader sources: **every node in the library** compiled on
-  both render paths, the demo graph, macro switching, node-format round trip.
+  every material stage, the demo graph, macro switching, node-format round
+  trip.
   A node whose WXSL does not compile fails here. (A node *descriptor*
   disagreeing with its WXSL is no longer a thing that can happen — the
   descriptor is derived from the WXSL, ADR 0020.)
@@ -173,6 +174,11 @@ facade crate's feature set, not about the workspace.
 - A pipeline is **data**: a list of `wxsl_render::pass::PassDesc` over a set
   of `ResourceDesc`, run by `wxsl_render::graph` (ADR 0021). Adding a pass
   means building one more `PassDesc`, never writing `begin_render_pass`.
+- A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
+  geometry pass names one. Adding a stage is that row plus the constant
+  naming it, plus whatever `codegen::write_entry_points` has to emit for
+  it — not a new arm in every match. `RenderPath` is gone: which pass list
+  is `StockPipeline`, which variant is `MaterialStage`.
   Anything the scheduler can check — attachment counts, depth formats, a
   resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,
   which is pure and tested with no device; keep it that way.
