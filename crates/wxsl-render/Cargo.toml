@@ -16,3 +16,11 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 ttf-parser = { workspace = true }
+# glTF/GLB geometry import, optional: a renderer that cannot load a mesh is
+# a toy, and a renderer that always pulls in an asset pipeline is a tax.
+gltf = { workspace = true, optional = true }
+
+[features]
+default = []
+# Read geometry from glTF/GLB files (`crate::gltf`).
+gltf = ["dep:gltf"]

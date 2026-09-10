@@ -10,6 +10,7 @@
 //! | `render` | yes | [`wxsl_render`] | you need wgpu pipelines (forward/deferred) driven by a graph |
 //! | `stdlib` | yes | [`wxsl_stdlib`] | you want the built-in library of base nodes (math, color, lighting, SDFs, …) |
 //! | `editor` | no | [`wxsl_editor`] (implies `render`) | you're building a UI that lets users edit graphs visually |
+//! | `gltf` | no | `wxsl-render`'s importer (implies `render`) | you load geometry from `.gltf`/`.glb` files |
 //!
 //! [`wxsl_core`] (the graph model) is always available; it has no wgpu
 //! or GUI dependency regardless of which features are enabled. See
@@ -47,6 +48,9 @@
 //! cube, authored as a node graph, rendered through either path.
 
 pub use wxsl_core as core;
+
+#[cfg(all(feature = "render", feature = "stdlib"))]
+pub mod scene;
 
 #[cfg(feature = "render")]
 pub use wxsl_render as render;

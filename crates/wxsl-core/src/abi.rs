@@ -74,7 +74,7 @@ pub const BIND_GROUPS: &[BindGroup] = &[
     BindGroup {
         index: GROUP_FRAME,
         name: "frame",
-        doc: "Camera, scene lighting and object transforms. Built once per frame.",
+        doc: "Camera, scene lighting and the instance transform buffer. Built once per frame.",
         application_owned: false,
     },
     BindGroup {
@@ -109,8 +109,9 @@ pub struct BindGroup {
     pub application_owned: bool,
 }
 
-/// Per-frame data: camera, scene, and the object transforms
-/// (`package::wxsl::bindings`). Rebound once per frame.
+/// Per-frame data: camera, scene, and the instance transforms
+/// (`package::wxsl::bindings`). Rebound once per frame, and once only —
+/// every draw in the frame indexes the same instance buffer.
 pub const GROUP_FRAME: u32 = 0;
 /// Per-material data: the parameters a graph exposes, plus its textures.
 pub const GROUP_MATERIAL: u32 = 1;
@@ -129,8 +130,13 @@ pub const GROUP_PASS: u32 = 3;
 pub const BINDING_CAMERA: u32 = 0;
 /// [`GROUP_FRAME`] binding of the scene uniform (lights, ambient, time).
 pub const BINDING_SCENE: u32 = 1;
-/// [`GROUP_FRAME`] binding of the per-object transform uniform.
-pub const BINDING_OBJECT: u32 = 2;
+/// [`GROUP_FRAME`] binding of the instance transform storage buffer.
+///
+/// A storage buffer, not a uniform with a dynamic offset: one binding and
+/// one upload serve every draw in the frame, and each vertex finds its own
+/// row with `@builtin(instance_index)`. This supersedes ADR 0010's
+/// per-object dynamic offset (ADR 0021).
+pub const BINDING_INSTANCES: u32 = 2;
 
 /// How much precision a G-buffer target needs.
 ///

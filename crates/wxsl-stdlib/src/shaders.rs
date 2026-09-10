@@ -199,13 +199,15 @@ mod tests {
     #[test]
     fn the_frame_group_declares_the_bindings_the_abi_numbers() {
         let source = module("package::wxsl::bindings").expect("bindings module");
-        for (binding, name) in [
-            (abi::BINDING_CAMERA, "camera"),
-            (abi::BINDING_SCENE, "scene"),
-            (abi::BINDING_OBJECT, "object"),
+        for (binding, declaration) in [
+            (abi::BINDING_CAMERA, "var<uniform> camera"),
+            (abi::BINDING_SCENE, "var<uniform> scene"),
+            // A storage buffer, not a uniform: one binding serves every
+            // draw in the frame, indexed by `@builtin(instance_index)`.
+            (abi::BINDING_INSTANCES, "var<storage, read> instances"),
         ] {
             let declaration = format!(
-                "@group({}) @binding({binding}) var<uniform> {name}",
+                "@group({}) @binding({binding}) {declaration}",
                 abi::GROUP_FRAME
             );
             assert!(

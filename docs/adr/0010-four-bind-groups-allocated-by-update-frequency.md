@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
 
 ## Context
 
@@ -82,7 +82,10 @@ application can check its layout before `wgpu` validation does.
   more modern answer, and it needs no offsets at all. Not the baseline
   because read-only storage in the vertex stage rules out the WebGL fallback;
   it stays available as an opt-in later, since it does not change the slot
-  allocation.
+  allocation. **This is now what ships**
+  ([ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md)): a
+  frame draws a list rather than one object, WebGL was never a target, and
+  the slot allocation is unchanged exactly as predicted here.
 
 ## Consequences
 
@@ -102,3 +105,11 @@ application can check its layout before `wgpu` validation does.
   shipped shaders declare the groups the constants name.
 - Material parameter uniforms have a home reserved before they are written,
   which was the point.
+- **Amended by [ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md):**
+  binding 2 of the frame group is now `instances`, a read-only storage
+  buffer, not `object` at a dynamic offset. The group *allocation* is
+  untouched — this is a change of what sits in slot 0, not of which slot it
+  sits in. The pass group's contents are no longer hand-written per
+  pipeline either: they are built from a pass's declared reads, in order,
+  which is how the deferred lighting pass gets the same G-buffer bindings it
+  always had.

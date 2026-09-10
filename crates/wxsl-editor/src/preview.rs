@@ -21,8 +21,8 @@ use wxsl_render::gpu::OffscreenTarget;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
 use wxsl_render::{
-    Camera, Light, Material, Mesh, MeshKind, RenderError, RenderPath, RenderRequest, Renderer,
-    Scene, ShaderLibrary, TargetConfig,
+    Camera, DrawItem, Environment, Light, Material, Mesh, MeshKind, RenderError, RenderPath,
+    RenderRequest, Renderer, ShaderLibrary, TargetConfig,
 };
 
 use crate::highlight::{self, Run};
@@ -261,16 +261,17 @@ impl Preview {
         if self.spinning {
             self.angle += dt * 0.6;
         }
-        let scene = preview_scene(time);
+        let environment = preview_environment(time);
+        let model = Mat4::from_rotation_y(self.angle) * Mat4::from_rotation_x(self.angle * 0.35);
+        let draws =
+            wxsl_render::single_draw(DrawItem::new(&self.mesh, material).with_transform(model));
         self.renderer.render(
             device,
             queue,
             &RenderRequest {
                 view: self.target.view(),
-                scene: &scene,
-                model: Mat4::from_rotation_y(self.angle) * Mat4::from_rotation_x(self.angle * 0.35),
-                mesh: &self.mesh,
-                material,
+                environment: &environment,
+                draws: &draws,
             },
         )
     }
@@ -287,8 +288,8 @@ impl Preview {
 /// from the left, and a hemisphere ambient so an unlit side is not black.
 /// Fixed, because the preview's job is to show the *material*, and a scene
 /// the user can also change is one more thing to blame when it looks wrong.
-pub fn preview_scene(time: f32) -> Scene {
-    Scene {
+pub fn preview_environment(time: f32) -> Environment {
+    Environment {
         camera: Camera {
             eye: Vec3::new(2.6, 1.9, 3.4),
             target: Vec3::ZERO,
@@ -325,8 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn the_preview_scene_lights_the_material_from_two_sides() {
-        let scene = preview_scene(1.5);
+    fn the_preview_environment_lights_the_material_from_two_sides() {
+        let scene = preview_environment(1.5);
         assert_eq!(scene.time, 1.5);
         assert_eq!(scene.lights.len(), 2);
         // An unlit side still gets the sky, so nothing on screen is pure

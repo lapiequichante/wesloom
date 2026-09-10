@@ -13,14 +13,37 @@ consumes natively. No imports, no conditional compilation.
 
 **Node graph** — the user-facing/data-model representation of a shader as
 connected nodes and sockets (`wxsl_core::graph`). Compiles to a WXSL
-module; distinct from a *render graph*, which this project does not
-currently have a concept of.
+module. Distinct from a *render graph*, and the two are easy to confuse
+because both are called "the graph" in conversation: a node graph is what a
+material *is*, a render graph is how a *frame* is put together.
 
-**Render path** — which broad rendering strategy a `wxsl-render`
-pipeline uses: `Forward` (shading happens in the same pass that determines
-visibility) or `Deferred` (visibility/material data is written to a
-G-buffer first, then shaded in a later pass). A property of the active
-pipeline, not of a graph — see
+**Render graph** — the list of passes and the resources they read and write
+that make up one frame (`wxsl_render::graph::RenderGraph`, built from
+`wxsl_render::pass::PassDesc`). The engine orders the passes by their
+dependencies, allocates and reuses the transient targets, rotates the
+persistent ones, and records them. A *pipeline* is a render graph; forward
+and deferred are two of them. See
+[ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
+
+**Scene** — the document: meshes, materials and instances, as pure
+serializable data (`wxsl_core::scene::Scene`). It says what exists, never
+how it is drawn — the pipeline belongs to the renderer, not to the
+document. Not to be confused with the *environment*.
+
+**Environment** — camera, lights, ambient, exposure and time
+(`wxsl_render::environment::Environment`). The other half of a frame,
+alongside the draws. Called `Scene` until M1, which is why the rename
+happened.
+
+**Tags** — open-ended labels a material or an instance is authored with
+(`opaque`, `transparent`, `outlined`). A geometry pass draws a *tag
+expression* over the draw list, so the material says what it is and the
+pass says what it draws.
+
+**Render path** — which broad rendering strategy a pass uses: `Forward`
+(shading happens in the same pass that determines visibility) or `Deferred`
+(visibility/material data is written to a G-buffer first, then shaded in a
+later pass). A property of the pass, not of a graph — see
 [ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md).
 
 **Shader variant** — a specific compiled WGSL output for one

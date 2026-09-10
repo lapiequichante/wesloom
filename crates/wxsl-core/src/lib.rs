@@ -69,9 +69,11 @@ pub mod error;
 pub mod graph;
 pub mod macros;
 pub mod node;
+pub mod scene;
 pub mod wxsl;
 
 pub use error::{CodegenError, GraphError, GraphErrors};
 pub use graph::{Edge, Graph, Node, NodeId, SocketRef};
 pub use macros::{MacroDef, MacroKind, MacroSet, MacroValue};
 pub use node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType, WxslFunction};
+pub use scene::{Instance, MaterialEntry, MeshEntry, MeshSource, Scene, TagExpr, Tags};

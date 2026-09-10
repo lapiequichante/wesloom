@@ -44,20 +44,23 @@ struct Scene {
     _pad2: f32,
 }
 
-struct Object {
+struct Instance {
     model: mat4x4f,
-    // Inverse-transpose of the model matrix, as a mat4x4f so its uniform
-    // layout needs no per-column padding on the host side. Only the upper
-    // 3x3 is used.
+    // Inverse-transpose of the model matrix, as a mat4x4f so its layout
+    // needs no per-column padding on the host side. Only the upper 3x3 is
+    // used.
     normal_matrix: mat4x4f,
 }
 
-// The frame group (`abi::GROUP_FRAME`): built once per frame. `object` shares
-// it despite changing per draw, addressed by a dynamic offset rather than
-// costing a quarter of the four-slot budget. See ADR 0010.
+// The frame group (`abi::GROUP_FRAME`): built once per frame, and once only.
+// The transforms share it despite changing per draw, as one storage buffer
+// every draw in the frame indexes with `@builtin(instance_index)` — one
+// binding, one upload, and the shape a culling pass can write indices into.
+// See ADR 0010 for the group budget and ADR 0021 for why this is a storage
+// buffer rather than a uniform at a dynamic offset.
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> scene: Scene;
-@group(0) @binding(2) var<uniform> object: Object;
+@group(0) @binding(2) var<storage, read> instances: array<Instance>;
 
 // One light's contribution at a point: unit vector towards the light, and the
 // radiance arriving along it.
@@ -85,11 +88,12 @@ fn sample_light(index: u32, world_position: vec3f) -> LightSample {
     return out;
 }
 
-// The upper 3x3 of the object's normal matrix.
-fn object_normal_matrix() -> mat3x3f {
+// The upper 3x3 of an instance's normal matrix.
+fn instance_normal_matrix(index: u32) -> mat3x3f {
+    let normal_matrix = instances[index].normal_matrix;
     return mat3x3f(
-        object.normal_matrix[0].xyz,
-        object.normal_matrix[1].xyz,
-        object.normal_matrix[2].xyz,
+        normal_matrix[0].xyz,
+        normal_matrix[1].xyz,
+        normal_matrix[2].xyz,
     );
 }

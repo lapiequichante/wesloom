@@ -1,4 +1,11 @@
-//! What is being looked at, and the uniform buffers that carry it.
+//! What is being looked *with* — camera, lights, ambient — and the buffers
+//! that carry the frame group.
+//!
+//! [`Environment`] is deliberately not called a scene: a *scene* is meshes
+//! and instances, it is pure data, and it lives in `wxsl_core::scene`. What
+//! is here is the other half of a frame — where the camera is, what is
+//! lighting it — plus [`FrameBindings`], the `wgpu` side of
+//! `abi::GROUP_FRAME` ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
 //!
 //! The `#[repr(C)]` structs here are the host side of the ABI's
 //! `shaders/wxsl/bindings.wxsl`: same fields, same order, same padding.
@@ -136,9 +143,13 @@ impl Light {
     }
 }
 
-/// The whole scene: camera, lights, ambient environment, exposure, time.
+/// What is lighting the frame and where it is seen from.
+///
+/// Renamed from `Scene` in M1, which is what it always was: a scene is the
+/// *document* — meshes, instances, materials — and that now exists, in
+/// [`wxsl_core::scene`].
 #[derive(Clone, Debug)]
-pub struct Scene {
+pub struct Environment {
     /// The camera.
     pub camera: Camera,
     /// Lights. Only the first [`MAX_LIGHTS`] reach the shader.
@@ -153,9 +164,9 @@ pub struct Scene {
     pub time: f32,
 }
 
-impl Default for Scene {
+impl Default for Environment {
     fn default() -> Self {
-        Scene {
+        Environment {
             camera: Camera::default(),
             lights: Vec::new(),
             ambient_sky: Vec3::new(0.32, 0.40, 0.55),
@@ -166,8 +177,8 @@ impl Default for Scene {
     }
 }
 
-impl Scene {
-    /// The uniform this scene fills in.
+impl Environment {
+    /// The uniform this environment fills in.
     ///
     /// Lights beyond [`MAX_LIGHTS`] are dropped: the alternative is silently
     /// overrunning a host-shared array.
@@ -239,51 +250,70 @@ pub struct SceneUniform {
     _padding2: f32,
 }
 
-/// Host mirror of `Object` in `shaders/wxsl/bindings.wxsl`.
+/// Host mirror of one element of `instances` in
+/// `shaders/wxsl/bindings.wxsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct ObjectUniform {
+pub struct InstanceTransform {
     /// Object-to-world matrix, column-major.
     pub model: [[f32; 4]; 4],
-    /// Inverse transpose of `model`, as a 4x4 so its uniform layout needs no
+    /// Inverse transpose of `model`, as a 4x4 so its layout needs no
     /// per-column padding. Only the upper 3x3 is read.
     pub normal_matrix: [[f32; 4]; 4],
 }
 
-impl ObjectUniform {
-    /// The uniform for an object with the given model matrix.
+impl InstanceTransform {
+    /// The transform for an object with the given model matrix.
     ///
     /// The normal matrix is the inverse transpose, so non-uniform scaling
     /// does not shear the normals off the surface.
     pub fn new(model: Mat4) -> Self {
-        ObjectUniform {
+        InstanceTransform {
             model: model.to_cols_array_2d(),
             normal_matrix: model.inverse().transpose().to_cols_array_2d(),
         }
     }
 }
 
-/// The uniform buffers and bind group for the frame group
-/// ([`abi::GROUP_FRAME`]).
+impl Default for InstanceTransform {
+    fn default() -> Self {
+        InstanceTransform::new(Mat4::IDENTITY)
+    }
+}
+
+/// How many instances the storage buffer starts out able to hold.
 ///
-/// One instance is shared by every pipeline: the bindings are the same for
-/// forward, for the deferred material pass, and for the deferred lighting
-/// pass, so the layout is created once and reused.
+/// It doubles from here rather than being a hard limit: the point of the
+/// storage buffer is that the count is not part of the layout.
+const INITIAL_INSTANCE_CAPACITY: usize = 64;
+
+/// The buffers and bind group for the frame group ([`abi::GROUP_FRAME`]).
 ///
-/// The object transform shares this group even though it changes per draw
-/// ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by-update-frequency.md)).
-/// It is still a whole-buffer binding rather than a dynamic offset, which is
-/// exactly right for the one-object demo and is where a multi-draw scene
-/// would switch `has_dynamic_offset` on without moving the binding.
-pub struct SceneBindings {
+/// One instance is shared by every pass in a frame: the bindings are the
+/// same for forward, for the deferred material pass and for the deferred
+/// lighting pass, so the layout is created once and reused.
+///
+/// # Why the transforms are a storage buffer
+///
+/// ADR 0010 put the object transform in this group as a uniform, to be
+/// addressed by a dynamic offset "when a multi-draw scene comes". It came,
+/// and a dynamic offset lost: one storage buffer is one binding and one
+/// upload for the whole frame, indexed in the shader by
+/// `@builtin(instance_index)`, and it is the shape a culling pass can write
+/// indices into later. The one capability it costs is
+/// `DownlevelFlags::VERTEX_STORAGE`, which the WebGPU baseline satisfies
+/// and WebGL does not — and WebGL is not a target
+/// ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
+pub struct FrameBindings {
     camera: wgpu::Buffer,
     scene: wgpu::Buffer,
-    object: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    capacity: usize,
     layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
 }
 
-impl SceneBindings {
+impl FrameBindings {
     /// Create the buffers, layout and bind group.
     pub fn new(device: &wgpu::Device) -> Self {
         let uniform = |label: &str, size: u64| {
@@ -296,63 +326,87 @@ impl SceneBindings {
         };
         let camera = uniform("wxsl camera", size_of::<CameraUniform>() as u64);
         let scene = uniform("wxsl scene", size_of::<SceneUniform>() as u64);
-        let object = uniform("wxsl object", size_of::<ObjectUniform>() as u64);
+        let capacity = INITIAL_INSTANCE_CAPACITY;
+        let instances = instance_buffer(device, capacity);
 
-        let entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+        let buffer = |binding: u32, storage: bool| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
+                ty: if storage {
+                    wgpu::BufferBindingType::Storage { read_only: true }
+                } else {
+                    wgpu::BufferBindingType::Uniform
+                },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
             count: None,
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("wxsl scene bindings"),
+            label: Some("wxsl frame bindings"),
             entries: &[
-                entry(abi::BINDING_CAMERA),
-                entry(abi::BINDING_SCENE),
-                entry(abi::BINDING_OBJECT),
+                buffer(abi::BINDING_CAMERA, false),
+                buffer(abi::BINDING_SCENE, false),
+                buffer(abi::BINDING_INSTANCES, true),
             ],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wxsl scene bindings"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: abi::BINDING_CAMERA,
-                    resource: camera.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: abi::BINDING_SCENE,
-                    resource: scene.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: abi::BINDING_OBJECT,
-                    resource: object.as_entire_binding(),
-                },
-            ],
-        });
+        let bind_group = frame_bind_group(device, &layout, &camera, &scene, &instances);
 
-        SceneBindings {
+        FrameBindings {
             camera,
             scene,
-            object,
+            instances,
+            capacity,
             layout,
             bind_group,
         }
     }
 
-    /// Upload `scene` and the object's transform.
-    pub fn update(&self, queue: &wgpu::Queue, scene: &Scene, model: glam::Mat4) {
-        queue.write_buffer(&self.camera, 0, bytemuck::bytes_of(&scene.camera.uniform()));
-        queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene.uniform()));
+    /// How many instances fit without reallocating.
+    pub fn instance_capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Upload `environment` and every instance transform of the frame.
+    ///
+    /// Grows the storage buffer (and rebuilds the bind group) when the frame
+    /// has more instances than any before it, which is the only time either
+    /// is touched.
+    pub fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        environment: &Environment,
+        transforms: &[InstanceTransform],
+    ) {
         queue.write_buffer(
-            &self.object,
+            &self.camera,
             0,
-            bytemuck::bytes_of(&ObjectUniform::new(model)),
+            bytemuck::bytes_of(&environment.camera.uniform()),
         );
+        queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&environment.uniform()));
+
+        if transforms.len() > self.capacity {
+            // Double until it fits, so a scene that grows by one object per
+            // frame does not reallocate every frame.
+            let mut capacity = self.capacity.max(1);
+            while capacity < transforms.len() {
+                capacity *= 2;
+            }
+            self.capacity = capacity;
+            self.instances = instance_buffer(device, capacity);
+            self.bind_group = frame_bind_group(
+                device,
+                &self.layout,
+                &self.camera,
+                &self.scene,
+                &self.instances,
+            );
+        }
+        if !transforms.is_empty() {
+            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(transforms));
+        }
     }
 
     /// The bind group layout, for building pipeline layouts.
@@ -360,10 +414,48 @@ impl SceneBindings {
         &self.layout
     }
 
-    /// The bind group to set at index 0.
+    /// The bind group to set at [`abi::GROUP_FRAME`].
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
     }
+}
+
+fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("wxsl instances"),
+        // Never zero: a zero-sized binding is a validation error, and an
+        // empty frame is a perfectly ordinary thing for an editor to draw.
+        size: (capacity.max(1) * size_of::<InstanceTransform>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn frame_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    camera: &wgpu::Buffer,
+    scene: &wgpu::Buffer,
+    instances: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("wxsl frame bindings"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: abi::BINDING_CAMERA,
+                resource: camera.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: abi::BINDING_SCENE,
+                resource: scene.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: abi::BINDING_INSTANCES,
+                resource: instances.as_entire_binding(),
+            },
+        ],
+    })
 }
 
 #[cfg(test)]
@@ -381,11 +473,11 @@ mod tests {
             MAX_LIGHTS * 32 + 16 + 16 + 16,
             "scene uniform layout drifted from bindings.wxsl"
         );
-        assert_eq!(size_of::<ObjectUniform>(), 128);
+        assert_eq!(size_of::<InstanceTransform>(), 128);
         for size in [
             size_of::<CameraUniform>(),
             size_of::<SceneUniform>(),
-            size_of::<ObjectUniform>(),
+            size_of::<InstanceTransform>(),
         ] {
             assert_eq!(size % 16, 0);
         }
@@ -393,7 +485,7 @@ mod tests {
 
     #[test]
     fn extra_lights_are_dropped_rather_than_overrunning_the_array() {
-        let mut scene = Scene::default();
+        let mut scene = Environment::default();
         for index in 0..MAX_LIGHTS + 3 {
             scene
                 .lights

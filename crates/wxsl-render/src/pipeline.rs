@@ -1,39 +1,34 @@
-//! The [`Pipeline`] trait both render paths implement, and the two
-//! implementations.
+//! What a frame is made of: [`TargetConfig`], the two stock pass lists, and
+//! the `wgpu` pipeline cache they draw with.
 //!
-//! The trait exists so an application can hold "the current pipeline" and
-//! swap it without touching the code that says "render this scene"
-//! ([ADR 0005](../../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)).
-//! [`crate::renderer::Renderer`] is that application-facing side; what is
-//! here is the two shapes a frame can take:
+//! Until M1 this module held two hand-written structs, `ForwardPipeline` and
+//! `DeferredPipeline`, each owning its attachments, its depth texture and a
+//! pipeline cache, each writing `begin_render_pass` out by hand. A fourth
+//! pass meant a fourth struct repeating all of it. Now a pipeline is a
+//! [`crate::graph::RenderGraph`] — a list of [`crate::pass::PassDesc`]s —
+//! and the two shipped ones are built here by
+//! [`forward_graph`] and [`deferred_graph`]
+//! ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
 //!
-//! * [`ForwardPipeline`]: one pass. The material's fragment entry shades the
-//!   surface and writes a colour.
-//! * [`DeferredPipeline`]: two passes. The material's fragment entry writes
-//!   the surface into a G-buffer; a fullscreen pass then reads it back,
-//!   reconstructs the world position from depth, and shades. The material
-//!   shader is the *same graph*, compiled with the deferred flag set.
-//!
-//! Both build their `wgpu` pipelines lazily and cache them per shader
-//! variant, so switching path or flipping a macro costs one pipeline
-//! creation, not one per frame.
+//! [`PipelineCache`] is what survives from the old shape, generalized: a
+//! `wgpu` pipeline is keyed on the shader variant *and* the pass state and
+//! target formats it was built for, so the same material draws opaque in
+//! one pass, blended in another and front-face-culled into a shadow map,
+//! without any of those being baked into one hardcoded descriptor.
 
 use std::collections::HashMap;
 
 use wxsl_core::abi::{self, GBufferPrecision};
+use wxsl_core::scene::TagExpr;
 
-use crate::error::RenderError;
-use crate::mesh::{Mesh, Vertex};
+use crate::graph::{PassBinding, RenderGraph};
+use crate::mesh::Vertex;
+use crate::pass::{
+    Attachment, DepthAttachment, DrawSource, PassDesc, PassState, Read, ResourceDesc, ResourceId,
+    ScreenShader, DEPTH_FORMAT,
+};
 use crate::path::RenderPath;
-use crate::scene::SceneBindings;
-use crate::variants::ShaderVariant;
-
-/// Depth format used by both paths.
-///
-/// `Depth32Float` rather than a packed depth-stencil format because the
-/// deferred lighting pass samples depth to reconstruct world position, and
-/// there is no stencil work to do.
-pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+use crate::variants::{ShaderVariant, VariantKey};
 
 /// The `wgpu` format for a G-buffer target of the given precision.
 pub fn gbuffer_format(precision: GBufferPrecision) -> wgpu::TextureFormat {
@@ -88,516 +83,290 @@ impl TargetConfig {
     }
 }
 
-/// One object to draw: geometry plus the material variant to draw it with.
-pub struct Draw<'a> {
-    /// The geometry.
-    pub mesh: &'a Mesh,
-    /// The material variant, compiled for this pipeline's render path.
-    pub material: &'a ShaderVariant,
+/// Everything the geometry passes draw, in one pass list.
+///
+/// Every stock pass draws `*` rather than `opaque`, because until M5 splits
+/// transparency out there is one queue and filtering it would only mean an
+/// untagged scene rendering as nothing.
+fn everything() -> DrawSource {
+    DrawSource::Scene(TagExpr::Always)
 }
 
-/// Everything a pipeline needs to record a frame.
-pub struct FrameInput<'a> {
-    /// Where the final colour goes.
-    pub target: &'a wgpu::TextureView,
-    /// Camera, scene and object uniforms (bind group 0).
-    pub bindings: &'a SceneBindings,
-    /// What to draw.
-    pub draws: &'a [Draw<'a>],
-    /// The deferred lighting pass shader. Only the deferred path uses it.
-    pub lighting: Option<&'a ShaderVariant>,
+/// The forward pipeline: one pass, the material shades its own surface.
+pub fn forward_graph(target: TargetConfig) -> RenderGraph {
+    let mut graph = RenderGraph::new(target.format);
+    let depth = graph.resource(ResourceDesc::color("forward depth", DEPTH_FORMAT));
+    graph.pass(
+        PassDesc::geometry("forward", everything(), RenderPath::Forward)
+            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+            .with_depth(DepthAttachment::clear(depth, 1.0)),
+    );
+    graph
 }
 
-/// A way of turning draws into pixels.
-pub trait Pipeline {
-    /// Which render path this pipeline implements. A material must be
-    /// compiled for this path or its entry points will not match.
-    fn path(&self) -> RenderPath;
+/// The deferred pipeline: write the surface into a G-buffer, then shade it.
+///
+/// The G-buffer's depth is sampled by the lighting pass rather than attached
+/// to it — a depth texture cannot be attached and sampled in the same pass —
+/// which the graph expresses as a read, and therefore as the edge that
+/// orders the two passes.
+pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
+    let mut graph = RenderGraph::new(target.format);
+    let gbuffer: Vec<ResourceId> = abi::GBUFFER_TARGETS
+        .iter()
+        .map(|entry| {
+            graph.resource(ResourceDesc::color(
+                format!("gbuffer {}", entry.field),
+                gbuffer_format(entry.precision),
+            ))
+        })
+        .collect();
+    let depth = graph.resource(ResourceDesc::color("gbuffer depth", DEPTH_FORMAT));
 
-    /// (Re)create size- and format-dependent resources. Cheap and idempotent
-    /// when nothing changed, so it is safe to call every frame.
-    fn configure(&mut self, device: &wgpu::Device, target: TargetConfig);
+    graph.pass(
+        PassDesc::geometry("deferred material", everything(), RenderPath::Deferred)
+            // Cleared to zero, which matters for the depth-based background
+            // test in the lighting pass: that is what keeps the clear colour
+            // visible where nothing was drawn.
+            .with_colors(
+                gbuffer
+                    .iter()
+                    .map(|id| Attachment::clear(*id, wgpu::Color::TRANSPARENT)),
+            )
+            .with_depth(DepthAttachment::clear(depth, 1.0)),
+    );
+    graph.pass(
+        PassDesc::screen("deferred lighting", ScreenShader::DeferredLighting)
+            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+            // Bindings in `abi::GBUFFER_TARGETS` order, with depth last —
+            // the order `lighting_pass.wxsl` declares them in.
+            .with_reads(
+                gbuffer
+                    .iter()
+                    .chain(core::iter::once(&depth))
+                    .map(|id| Read::current(*id)),
+            ),
+    );
+    graph
+}
 
-    /// Record this pipeline's passes into `encoder`.
-    fn record(
+/// The stock pass list for `path`.
+pub fn graph_for(path: RenderPath, target: TargetConfig) -> RenderGraph {
+    match path {
+        RenderPath::Forward => forward_graph(target),
+        RenderPath::Deferred => deferred_graph(target),
+    }
+}
+
+/// Identity of one `wgpu` pipeline.
+///
+/// The variant alone is not enough any more: the same compiled shader is a
+/// different pipeline in a pass that culls front faces, in one that blends,
+/// and in one writing a different set of formats.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PipelineKey {
+    variant: VariantKey,
+    state: PassState,
+    targets: Vec<wgpu::TextureFormat>,
+    /// The shape of the pass group the pipeline was laid out for. Two
+    /// passes may run the same shader over different inputs — a screen
+    /// effect with a G-buffer and one with a single image — and a pipeline
+    /// built for one cannot be used with the other's bind group.
+    pass_group: Vec<PassBinding>,
+}
+
+/// One `wgpu` pipeline per (variant, pass state, target formats).
+///
+/// Shared by every pass in a frame, so a forward pass and a shadow pass
+/// drawing the same material each pay one pipeline creation, once.
+pub struct PipelineCache {
+    render: HashMap<PipelineKey, wgpu::RenderPipeline>,
+    layouts: HashMap<Vec<PassBinding>, wgpu::PipelineLayout>,
+}
+
+impl Default for PipelineCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PipelineCache {
+    /// An empty cache.
+    pub fn new() -> Self {
+        PipelineCache {
+            render: HashMap::new(),
+            layouts: HashMap::new(),
+        }
+    }
+
+    /// How many pipelines are cached.
+    pub fn len(&self) -> usize {
+        self.render.len()
+    }
+
+    /// Whether nothing is cached.
+    pub fn is_empty(&self) -> bool {
+        self.render.is_empty()
+    }
+
+    /// Forget everything, e.g. because the frame group's layout changed.
+    pub fn clear(&mut self) {
+        self.render.clear();
+        self.layouts.clear();
+    }
+
+    /// The pipeline layout for a pass with or without a pass group.
+    ///
+    /// Groups 1 (material) and 2 (user) are genuinely empty here: nothing
+    /// declares parameters until M3, and the user group is the
+    /// application's. `wgpu` takes `Option`s, so the holes are expressible
+    /// rather than needing filler layouts (ADR 0010).
+    fn layout(
         &mut self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        input: &FrameInput<'_>,
-    ) -> Result<(), RenderError>;
-}
-
-/// A depth attachment matching the current target size.
-struct DepthAttachment {
-    view: wgpu::TextureView,
-    size: (u32, u32),
-}
-
-impl DepthAttachment {
-    fn new(device: &wgpu::Device, width: u32, height: u32, usage: wgpu::TextureUsages) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("wxsl depth"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage,
-            view_formats: &[],
-        });
-        DepthAttachment {
-            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-            size: (width, height),
-        }
-    }
-
-    fn attachment(&self) -> wgpu::RenderPassDepthStencilAttachment<'_> {
-        wgpu::RenderPassDepthStencilAttachment {
-            view: &self.view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Store,
-            }),
-            stencil_ops: None,
-        }
-    }
-}
-
-/// Shared state every material pipeline needs: the layout, and one `wgpu`
-/// pipeline per shader variant.
-struct MaterialPipelines {
-    layout: wgpu::PipelineLayout,
-    cache: HashMap<u64, wgpu::RenderPipeline>,
-}
-
-impl MaterialPipelines {
-    fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        MaterialPipelines {
-            layout: device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("wxsl material"),
-                // Only the frame group so far; the material group
-                // (`abi::GROUP_MATERIAL`) joins it when a graph can declare
-                // parameters. ADR 0010.
-                bind_group_layouts: &[Some(bind_group_layout)],
+        frame: &wgpu::BindGroupLayout,
+        pass: Option<&wgpu::BindGroupLayout>,
+        shape: &[PassBinding],
+    ) -> &wgpu::PipelineLayout {
+        // Keyed on the pass group's *shape*: layouts with the same entries
+        // are interchangeable to `wgpu`, and layouts with different ones
+        // must not share a pipeline layout.
+        self.layouts.entry(shape.to_vec()).or_insert_with(|| {
+            let groups: Vec<Option<&wgpu::BindGroupLayout>> = match pass {
+                Some(pass) => vec![Some(frame), None, None, Some(pass)],
+                None => vec![Some(frame)],
+            };
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("wxsl pass"),
+                bind_group_layouts: &groups,
                 immediate_size: 0,
-            }),
-            cache: HashMap::new(),
-        }
+            })
+        })
     }
 
-    /// The pipeline for `variant`, created on first use.
-    fn get(
+    /// The pipeline for drawing `variant`'s geometry in a pass with this
+    /// state and these targets, created on first use.
+    #[allow(clippy::too_many_arguments)]
+    pub fn geometry(
         &mut self,
         device: &wgpu::Device,
+        frame: &wgpu::BindGroupLayout,
+        pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
+        state: PassState,
         targets: &[Option<wgpu::ColorTargetState>],
+        pass_shape: &[PassBinding],
     ) -> &wgpu::RenderPipeline {
-        self.cache.entry(variant.key.identity).or_insert_with(|| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        self.create(
+            device,
+            frame,
+            pass_layout,
+            variant,
+            state,
+            targets,
+            pass_shape,
+            abi::VERTEX_ENTRY,
+            abi::FRAGMENT_ENTRY,
+            true,
+        )
+    }
+
+    /// The pipeline for a fullscreen pass running `variant`.
+    ///
+    /// No vertex buffer: the triangle comes from `@builtin(vertex_index)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn screen(
+        &mut self,
+        device: &wgpu::Device,
+        frame: &wgpu::BindGroupLayout,
+        pass_layout: Option<&wgpu::BindGroupLayout>,
+        variant: &ShaderVariant,
+        state: PassState,
+        targets: &[Option<wgpu::ColorTargetState>],
+        pass_shape: &[PassBinding],
+    ) -> &wgpu::RenderPipeline {
+        self.create(
+            device,
+            frame,
+            pass_layout,
+            variant,
+            state,
+            targets,
+            pass_shape,
+            abi::LIGHTING_PASS_VERTEX_ENTRY,
+            abi::LIGHTING_PASS_FRAGMENT_ENTRY,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create(
+        &mut self,
+        device: &wgpu::Device,
+        frame: &wgpu::BindGroupLayout,
+        pass_layout: Option<&wgpu::BindGroupLayout>,
+        variant: &ShaderVariant,
+        state: PassState,
+        targets: &[Option<wgpu::ColorTargetState>],
+        pass_shape: &[PassBinding],
+        vertex_entry: &str,
+        fragment_entry: &str,
+        vertex_buffers: bool,
+    ) -> &wgpu::RenderPipeline {
+        let key = PipelineKey {
+            variant: variant.key,
+            state,
+            targets: targets
+                .iter()
+                .flatten()
+                .map(|target| target.format)
+                .collect(),
+            pass_group: pass_shape.to_vec(),
+        };
+        if !self.render.contains_key(&key) {
+            // Two statements rather than `entry().or_insert_with()`: the
+            // layout cache is also `&mut self`, and the borrow checker is
+            // right that it cannot be borrowed inside the closure.
+            let layout = self.layout(device, frame, pass_layout, pass_shape).clone();
+            let buffers: &[Option<wgpu::VertexBufferLayout>] = if vertex_buffers {
+                &[Some(Vertex::LAYOUT)]
+            } else {
+                &[]
+            };
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&variant.label),
-                layout: Some(&self.layout),
+                layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &variant.module,
-                    entry_point: Some(abi::VERTEX_ENTRY),
-                    buffers: &[Some(Vertex::LAYOUT)],
+                    entry_point: Some(vertex_entry),
+                    buffers,
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &variant.module,
-                    entry_point: Some(abi::FRAGMENT_ENTRY),
+                    entry_point: Some(fragment_entry),
                     targets,
                     compilation_options: Default::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: state.cull_mode,
                     ..Default::default()
                 },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
+                depth_stencil: state.depth_stencil(),
                 multisample: Default::default(),
                 multiview_mask: None,
                 cache: None,
-            })
-        })
-    }
-
-    /// Forget every cached pipeline, e.g. because the target format changed.
-    fn clear(&mut self) {
-        self.cache.clear();
-    }
-}
-
-fn opaque_target(format: wgpu::TextureFormat) -> Option<wgpu::ColorTargetState> {
-    Some(wgpu::ColorTargetState {
-        format,
-        blend: None,
-        write_mask: wgpu::ColorWrites::ALL,
-    })
-}
-
-/// Shade where the surface is evaluated: one pass, one attachment.
-pub struct ForwardPipeline {
-    pipelines: MaterialPipelines,
-    depth: Option<DepthAttachment>,
-    target: Option<TargetConfig>,
-}
-
-impl ForwardPipeline {
-    /// Create the forward pipeline.
-    pub fn new(device: &wgpu::Device, bindings: &SceneBindings) -> Self {
-        ForwardPipeline {
-            pipelines: MaterialPipelines::new(device, bindings.layout()),
-            depth: None,
-            target: None,
-        }
-    }
-}
-
-impl Pipeline for ForwardPipeline {
-    fn path(&self) -> RenderPath {
-        RenderPath::Forward
-    }
-
-    fn configure(&mut self, device: &wgpu::Device, target: TargetConfig) {
-        if self.target.map(|current| current.format) != Some(target.format) {
-            // A different attachment format makes every cached pipeline
-            // invalid, since the format is baked into it.
-            self.pipelines.clear();
-        }
-        let size = (target.width, target.height);
-        if self.depth.as_ref().map(|depth| depth.size) != Some(size) {
-            self.depth = Some(DepthAttachment::new(
-                device,
-                target.width,
-                target.height,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
-            ));
-        }
-        self.target = Some(target);
-    }
-
-    fn record(
-        &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        input: &FrameInput<'_>,
-    ) -> Result<(), RenderError> {
-        let target = self.target.ok_or(RenderError::NotConfigured)?;
-        let depth = self.depth.as_ref().ok_or(RenderError::NotConfigured)?;
-        let color_targets = [opaque_target(target.format)];
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("wxsl forward"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: input.target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(target.clear_color),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(depth.attachment()),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
-        for draw in input.draws {
-            pass.set_pipeline(self.pipelines.get(device, draw.material, &color_targets));
-            draw.mesh.draw(&mut pass);
-        }
-        Ok(())
-    }
-}
-
-/// The G-buffer textures and the bind group that reads them back.
-struct GBuffer {
-    views: Vec<wgpu::TextureView>,
-    depth: DepthAttachment,
-    bind_group: wgpu::BindGroup,
-    size: (u32, u32),
-}
-
-impl GBuffer {
-    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, width: u32, height: u32) -> Self {
-        let views: Vec<wgpu::TextureView> = abi::GBUFFER_TARGETS
-            .iter()
-            .map(|target| {
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("wxsl gbuffer {}", target.field)),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: gbuffer_format(target.precision),
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                texture.create_view(&wgpu::TextureViewDescriptor::default())
-            })
-            .collect();
-        let depth = DepthAttachment::new(
-            device,
-            width,
-            height,
-            // Also sampled: the lighting pass reconstructs world position
-            // from depth rather than storing it in a fourth attachment.
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        );
-
-        let mut entries: Vec<wgpu::BindGroupEntry> = views
-            .iter()
-            .enumerate()
-            .map(|(index, view)| wgpu::BindGroupEntry {
-                binding: index as u32,
-                resource: wgpu::BindingResource::TextureView(view),
-            })
-            .collect();
-        entries.push(wgpu::BindGroupEntry {
-            binding: views.len() as u32,
-            resource: wgpu::BindingResource::TextureView(&depth.view),
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wxsl gbuffer"),
-            layout,
-            entries: &entries,
-        });
-
-        GBuffer {
-            views,
-            depth,
-            bind_group,
-            size: (width, height),
-        }
-    }
-
-    /// The bind group layout for the G-buffer textures (bind group 1).
-    fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        let mut entries: Vec<wgpu::BindGroupLayoutEntry> = abi::GBUFFER_TARGETS
-            .iter()
-            .enumerate()
-            .map(|(index, _)| wgpu::BindGroupLayoutEntry {
-                binding: index as u32,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            })
-            .collect();
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding: abi::GBUFFER_TARGETS.len() as u32,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Depth,
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        });
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("wxsl gbuffer"),
-            entries: &entries,
-        })
-    }
-}
-
-/// Write the surface to a G-buffer, then light it in a fullscreen pass.
-pub struct DeferredPipeline {
-    material_pipelines: MaterialPipelines,
-    lighting_layout: wgpu::PipelineLayout,
-    lighting_pipelines: HashMap<u64, wgpu::RenderPipeline>,
-    gbuffer_layout: wgpu::BindGroupLayout,
-    gbuffer: Option<GBuffer>,
-    target: Option<TargetConfig>,
-}
-
-impl DeferredPipeline {
-    /// Create the deferred pipeline.
-    pub fn new(device: &wgpu::Device, bindings: &SceneBindings) -> Self {
-        let gbuffer_layout = GBuffer::layout(device);
-        DeferredPipeline {
-            material_pipelines: MaterialPipelines::new(device, bindings.layout()),
-            lighting_layout: device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("wxsl deferred lighting"),
-                // Groups 1 (material) and 2 (user) are genuinely unbound
-                // here: the lighting pass has no material graph, and the
-                // G-buffer sits in `abi::GROUP_PASS`. `wgpu` takes `Option`s,
-                // so the holes are expressible. See ADR 0010.
-                bind_group_layouts: &[Some(bindings.layout()), None, None, Some(&gbuffer_layout)],
-                immediate_size: 0,
-            }),
-            lighting_pipelines: HashMap::new(),
-            gbuffer_layout,
-            gbuffer: None,
-            target: None,
-        }
-    }
-}
-
-/// Build the fullscreen lighting pipeline for one shader variant.
-///
-/// A free function rather than a method so that recording a frame can take
-/// the pipeline cache and the G-buffer as two separate borrows of
-/// [`DeferredPipeline`] instead of borrowing the whole struct mutably.
-fn create_lighting_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    variant: &ShaderVariant,
-    format: wgpu::TextureFormat,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(&variant.label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &variant.module,
-            entry_point: Some(abi::LIGHTING_PASS_VERTEX_ENTRY),
-            // The fullscreen triangle comes from the vertex index; there is
-            // nothing to bind.
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &variant.module,
-            entry_point: Some(abi::LIGHTING_PASS_FRAGMENT_ENTRY),
-            targets: &[opaque_target(format)],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        // No depth attachment: the pass samples depth instead, and a depth
-        // texture cannot be attached and sampled in the same pass.
-        depth_stencil: None,
-        multisample: Default::default(),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-impl Pipeline for DeferredPipeline {
-    fn path(&self) -> RenderPath {
-        RenderPath::Deferred
-    }
-
-    fn configure(&mut self, device: &wgpu::Device, target: TargetConfig) {
-        if self.target.map(|current| current.format) != Some(target.format) {
-            self.lighting_pipelines.clear();
-        }
-        let size = (target.width, target.height);
-        if self.gbuffer.as_ref().map(|gbuffer| gbuffer.size) != Some(size) {
-            self.gbuffer = Some(GBuffer::new(
-                device,
-                &self.gbuffer_layout,
-                target.width,
-                target.height,
-            ));
-        }
-        self.target = Some(target);
-    }
-
-    fn record(
-        &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        input: &FrameInput<'_>,
-    ) -> Result<(), RenderError> {
-        let target = self.target.ok_or(RenderError::NotConfigured)?;
-        let lighting = input.lighting.ok_or(RenderError::NoLightingShader)?;
-        let gbuffer = self.gbuffer.as_ref().ok_or(RenderError::NotConfigured)?;
-        let gbuffer_targets: Vec<Option<wgpu::ColorTargetState>> =
-            gbuffer_formats().into_iter().map(opaque_target).collect();
-
-        {
-            // Pass 1: run the material, write the G-buffer. Clearing to zero
-            // matters for the depth-based background test in the lighting
-            // pass, which is what keeps the clear colour visible.
-            let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = gbuffer
-                .views
-                .iter()
-                .map(|view| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
-                .collect();
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("wxsl deferred material"),
-                color_attachments: &attachments,
-                depth_stencil_attachment: Some(gbuffer.depth.attachment()),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
-            pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
-            for draw in input.draws {
-                pass.set_pipeline(self.material_pipelines.get(
-                    device,
-                    draw.material,
-                    &gbuffer_targets,
-                ));
-                draw.mesh.draw(&mut pass);
-            }
+            self.render.insert(key.clone(), pipeline);
         }
-
-        {
-            // Pass 2: shade every covered pixel from the G-buffer.
-            let layout = &self.lighting_layout;
-            let pipeline = self
-                .lighting_pipelines
-                .entry(lighting.key.identity)
-                .or_insert_with(|| {
-                    create_lighting_pipeline(device, layout, lighting, target.format)
-                });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("wxsl deferred lighting"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: input.target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(target.clear_color),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(abi::GROUP_FRAME, input.bindings.bind_group(), &[]);
-            pass.set_bind_group(abi::GROUP_PASS, &gbuffer.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        Ok(())
+        &self.render[&key]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pass::PassKind;
 
     #[test]
     fn the_gbuffer_formats_come_from_the_abi_table() {
@@ -613,5 +382,57 @@ mod tests {
         // validation error rather than a no-op.
         let config = TargetConfig::new(0, 0, wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!((config.width, config.height), (1, 1));
+    }
+
+    fn config() -> TargetConfig {
+        TargetConfig::new(64, 64, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    #[test]
+    fn the_forward_pipeline_is_one_geometry_pass() {
+        let graph = forward_graph(config());
+        assert_eq!(graph.passes().len(), 1);
+        assert!(matches!(
+            graph.passes()[0].kind,
+            PassKind::Geometry {
+                path: RenderPath::Forward,
+                ..
+            }
+        ));
+        assert_eq!(graph.passes()[0].color.len(), 1);
+        graph.schedule().expect("the forward pass list schedules");
+    }
+
+    #[test]
+    fn the_deferred_pipeline_is_a_geometry_pass_and_a_screen_pass() {
+        let graph = deferred_graph(config());
+        assert_eq!(graph.passes().len(), 2);
+        assert_eq!(graph.passes()[0].color.len(), abi::GBUFFER_TARGETS.len());
+        assert!(matches!(
+            graph.passes()[1].kind,
+            PassKind::Screen {
+                shader: ScreenShader::DeferredLighting
+            }
+        ));
+        // The lighting pass reads every G-buffer target plus depth, and
+        // those reads are what order it after the material pass.
+        assert_eq!(
+            graph.passes()[1].reads.len(),
+            abi::GBUFFER_TARGETS.len() + 1
+        );
+        let schedule = graph.schedule().expect("the deferred pass list schedules");
+        assert_eq!(schedule.order(), &[0, 1]);
+    }
+
+    #[test]
+    fn both_stock_pipelines_schedule_at_any_size() {
+        for path in RenderPath::ALL {
+            for (width, height) in [(1, 1), (64, 64), (3840, 2160)] {
+                let target = TargetConfig::new(width, height, wgpu::TextureFormat::Rgba8Unorm);
+                graph_for(*path, target)
+                    .schedule()
+                    .unwrap_or_else(|error| panic!("{path} at {width}x{height}: {error}"));
+            }
+        }
     }
 }

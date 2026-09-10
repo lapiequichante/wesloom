@@ -124,8 +124,20 @@ facade crate's feature set, not about the workspace.
   disagreeing with its WXSL is no longer a thing that can happen — the
   descriptor is derived from the WXSL, ADR 0020.)
 - `cargo test -p wxsl --test render_cube` — renders on a real device and
-  compares the two paths' images. Skips (prints a note, passes) when no
-  adapter is available, so don't read a pass as proof it ran.
+  compares the two paths' images. Also covers what only a device can show
+  about the render graph: that each instance reads its own row of the
+  transform storage buffer, and that a `Persistent { history: 2 }` resource
+  really does hand a pass the previous frame's pixels. Skips (prints a
+  note, passes) when no adapter is available, so don't read a pass as proof
+  it ran.
+- `cargo test -p wxsl --test scene` — the scene document: that it round
+  trips through its JSON form, that a tag expression selects what a pass
+  draws, and that a two-instance scene renders. Only the last needs a
+  device.
+- `cargo test -p wxsl-render` — the render graph's scheduling, which is a
+  pure function and needs no GPU: pass ordering, transient texture reuse,
+  history rotation, and every pass-list mistake that is reported as a named
+  error rather than a `wgpu` complaint.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
@@ -156,8 +168,19 @@ facade crate's feature set, not about the workspace.
   its own trailing `// … @default <value>`.
 - The shader ABI has two halves that must be edited together:
   `wxsl_core::abi`'s tables and `crates/wxsl-stdlib/shaders/wxsl/`.
-  Same for the uniform layouts: `wxsl_render::scene`'s `#[repr(C)]`
-  structs mirror `shaders/wxsl/bindings.wxsl`. See ADR 0008.
+  Same for the uniform layouts: `wxsl_render::environment`'s `#[repr(C)]`
+  structs mirror `shaders/wxsl/bindings.wxsl`. See ADR 0008 and ADR 0021.
+- A pipeline is **data**: a list of `wxsl_render::pass::PassDesc` over a set
+  of `ResourceDesc`, run by `wxsl_render::graph` (ADR 0021). Adding a pass
+  means building one more `PassDesc`, never writing `begin_render_pass`.
+  Anything the scheduler can check — attachment counts, depth formats, a
+  resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,
+  which is pure and tested with no device; keep it that way.
+- A **scene** (`wxsl_core::scene`) is what exists; an **environment**
+  (`wxsl_render::environment`) is camera and lights; a **draw list**
+  (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a
+  scene, and don't teach `wxsl-core` about `wgpu` to avoid a translation
+  step — that translation is the facade's `wxsl::scene`.
 - The UI pass has *three* halves: `abi::UI_ATTRIBUTES`/`UI_KINDS`,
   `wxsl_render::ui::draw::UiInstance`, and `shaders/wxsl/ui.wxsl`. The MSDF
   generator has two implementations that must agree — `ui::msdf` on the CPU
@@ -178,7 +201,7 @@ facade crate's feature set, not about the workspace.
 - `crates/wxsl/examples/pbr_cube.rs` — the demo, and the shortest
   complete example of the whole pipeline. `--dump-wesl` and `--dump-wgsl`
   show what a graph compiles to, `--list-nodes` and `--list-macros` what is
-  available.
+  available, and `--instances N` draws N copies from one instance buffer.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred

@@ -44,6 +44,26 @@ pub enum RenderError {
     /// The deferred path was asked to record a frame with no lighting-pass
     /// shader. [`crate::renderer::Renderer`] compiles one for you.
     NoLightingShader,
+    /// A pass list could not be ordered, validated or allocated.
+    Graph(crate::graph::GraphError),
+    /// A pass wants a resource the graph does not own and nobody supplied a
+    /// view for. Every imported resource — the frame's target above all —
+    /// has to be handed to [`crate::graph::RenderGraph::record`].
+    MissingImport {
+        /// The resource's label.
+        resource: String,
+    },
+    /// A geometry file could not be read.
+    ///
+    /// Only reachable with the `gltf` feature; the variant exists either
+    /// way so that matching on this enum does not change with the feature
+    /// set.
+    Import {
+        /// The file that was being read.
+        path: String,
+        /// What the importer objected to.
+        reason: String,
+    },
     /// The UI atlas has no room left for an entry of that size.
     ///
     /// Not silently dropped: a missing glyph is a hole in the interface, and
@@ -86,7 +106,15 @@ impl fmt::Display for RenderError {
                 f.write_str("pipeline has no target yet: call `configure` first")
             }
             RenderError::NoLightingShader => {
-                f.write_str("the deferred path needs a lighting-pass shader in `FrameInput`")
+                f.write_str("the deferred path needs a compiled lighting-pass shader")
+            }
+            RenderError::Graph(error) => write!(f, "cannot run the pass list: {error}"),
+            RenderError::MissingImport { resource } => write!(
+                f,
+                "no view was supplied for the imported resource `{resource}`"
+            ),
+            RenderError::Import { path, reason } => {
+                write!(f, "cannot import `{path}`: {reason}")
             }
             RenderError::AtlasFull { width, height } => write!(
                 f,
@@ -105,6 +133,7 @@ impl std::error::Error for RenderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             RenderError::Codegen(error) => Some(error),
+            RenderError::Graph(error) => Some(error),
             RenderError::NoDevice(error) => Some(error),
             _ => None,
         }
@@ -114,5 +143,11 @@ impl std::error::Error for RenderError {
 impl From<CodegenError> for RenderError {
     fn from(value: CodegenError) -> Self {
         RenderError::Codegen(value)
+    }
+}
+
+impl From<crate::graph::GraphError> for RenderError {
+    fn from(value: crate::graph::GraphError) -> Self {
+        RenderError::Graph(value)
     }
 }

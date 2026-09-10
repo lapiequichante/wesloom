@@ -104,6 +104,7 @@ line that hands the node library's WXSL to the renderer.
 | `render` | **on** | `wxsl-render` (wgpu pipelines) | — |
 | `stdlib` | **on** | `wxsl-stdlib` (original base nodes) | — |
 | `editor` | off | `wxsl-editor` (visual node editor) | `render` |
+| `gltf` | off | glTF/GLB geometry import (`wxsl_render::gltf`) | `render` |
 
 A headless runtime that just loads and runs a pre-authored graph can use
 `default-features = false, features = ["render"]` — no GUI toolkit anywhere
@@ -123,16 +124,65 @@ graph TD
     weslsrc --> compiler["wesl<br/>(WXSL -> WGSL: resolves imports,<br/>evaluates @if/@elif/@else)"]
     macromod --> compiler
     compiler --> variants["wxsl_render::variants<br/>cache: (source+macros hash, RenderPath)<br/>-> wgpu shader module"]
-    path["Active RenderPath<br/>(Forward | Deferred)<br/>chosen by the application"] --> variants
-    variants --> pipeline["wxsl_render::pipeline<br/>(forward: 1 pass;<br/>deferred: G-buffer + lighting pass)"]
-    pipeline --> gpu["wgpu render passes"]
+    path["RenderPath of the pass<br/>(Forward | Deferred)"] --> variants
+    variants --> record
+    passes["wxsl_render::pipeline<br/>(forward: 1 pass;<br/>deferred: G-buffer + lighting)"] --> schedule["wxsl_render::graph::Schedule<br/>(order, transient reuse,<br/>history rotation)"]
+    schedule --> record["record: attachments, pass<br/>bind groups, draws"]
+    record --> gpu["wgpu render passes"]
 ```
 
-The `RenderPath` is a property of the *pipeline*, never of the *graph* — a
+The `RenderPath` is a property of the *pass*, never of the *graph* — a
 material graph is written once and works under either path because the
 path-specific differences are expressed as conditional compilation inside
 one WXSL module, not as two separate graphs. See
 [ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md).
+
+## How a frame is drawn
+
+A pipeline is not a Rust struct: it is a list of `PassDesc`s over a set of
+`ResourceDesc`s — a `wxsl_render::graph::RenderGraph`. `pipeline.rs` builds
+the two stock ones (`forward_graph`, `deferred_graph`); an application
+building its own hands it to `Renderer::set_graph`.
+
+`RenderGraph::schedule` is a pure function and is tested without a device.
+It orders the passes by what they read and write (never by declaration
+order), validates them, and decides which physical texture serves each
+resource. `ResourcePool` then owns the textures, and `RenderGraph::record`
+opens each pass, resolves its attachments, builds its pass bind group from
+its declared reads and hands it to the renderer to draw into.
+
+Two properties of a resource are worth knowing before you need them:
+
+* **Persistence.** `Transient` is created at first write and its texture is
+  reusable after its last read; `Persistent { history: n }` is a ring of
+  `n + 1` textures, so a pass can read what a previous frame wrote. Reading
+  history creates no ordering edge — that is what keeps a temporal pass from
+  being a cycle.
+* **Dimension.** 2D, 2D array, cube or 3D, because cascaded shadows,
+  reflection probes and volumetrics each want a different one.
+
+The frame's own target is resource 0, `RenderGraph::TARGET`, and is
+*imported*: the caller supplies a view for it each frame.
+
+## What a frame draws
+
+A **scene** — `wxsl_core::scene::Scene` — is meshes, materials and
+instances, and it is pure serializable data with no `wgpu` in it. It says
+what exists; it says nothing about how it is drawn, because the pipeline
+belongs to the renderer.
+
+The renderer takes a `DrawList`: geometry, a material, a transform and the
+`Tags` the material was authored with. A geometry pass draws a **tag
+expression** over it (`opaque`, `opaque && !outlined`, `*`), so the material
+says what it *is* and the pass says what it *draws*. Translating a scene
+document into a draw list needs the node registry and a device at once, so
+it is the facade's job: `wxsl::scene::SceneResources`.
+
+`wxsl_render::environment::Environment` is the other half of a frame:
+camera, lights, ambient, exposure, time. Every draw's transform goes into
+one storage buffer in the frame group, indexed by
+`@builtin(instance_index)`, so a draw's position in the list is its row.
+See [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
 
 ## What a graph is responsible for
 
@@ -160,19 +210,28 @@ higher-numbered groups when a lower one is rebound.
 
 | # | Slot | Rebound | Holds |
 |---|---|---|---|
-| 0 | `frame` | per frame | Camera, scene lighting, object transforms |
+| 0 | `frame` | per frame | Camera, scene lighting, the instance transform buffer |
 | 1 | `material` | per material | A graph's parameters, textures, samplers |
 | 2 | `user` | whenever | Nothing wxsl binds — the application's slot |
-| 3 | `pass` | per pass | The G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
+| 3 | `pass` | per pass | Whatever a pass declares it reads: the G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
 
-Object transforms share the frame group despite changing per draw: a
-dynamic offset addresses them for free, where a group of their own would
-cost a quarter of the budget. That leaves the application one free slot, not
-two — the honest cost of the deferred path needing somewhere to put the
-G-buffer while a graph still has to compile for either path.
+Instance transforms share the frame group despite changing per draw, as one
+read-only storage buffer: one binding and one upload serve the whole frame,
+where a group of their own would cost a quarter of the budget. (ADR 0010
+chose a per-object uniform at a dynamic offset for this; ADR 0021 took the
+storage buffer it had already named as the later option, once a frame drew
+more than one thing.) That leaves the application one free slot, not two —
+the honest cost of the deferred path needing somewhere to put the G-buffer
+while a graph still has to compile for either path.
 `wxsl_core::abi::BIND_GROUPS` is the single declaration, and a test in
 `wxsl-stdlib` asserts the shipped `.wxsl` binds the groups it names. See
-[ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md).
+[ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md) and
+[ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
+
+The pass group is no longer hand-written per pipeline: it is built from a
+pass's `reads`, in declaration order, at bindings 0..n. The deferred
+lighting pass's G-buffer bindings are what that produces for the deferred
+pass list, and a screen effect's inputs will be what it produces later.
 
 ## Macro variables
 

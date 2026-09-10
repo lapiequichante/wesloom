@@ -44,7 +44,10 @@ use wxsl::core::node::NodeRegistry;
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
-use wxsl::render::{Camera, Light, Mesh, RenderPath, RenderRequest, Renderer, Scene, TargetConfig};
+use wxsl::render::{
+    Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderPath, RenderRequest, Renderer,
+    TargetConfig,
+};
 
 /// The graph used when `--graph` is not given.
 const DEFAULT_GRAPH: &str = include_str!("../assets/pbr_cube.wxsl.json");
@@ -63,6 +66,7 @@ OPTIONS:
     --headless                 Render one frame per path to PNG and exit
     --out <DIR>                Where --headless writes (default: current directory)
     --size <WIDTHxHEIGHT>      Render size (default: 1280x720, or 800x600 headless)
+    --instances <N>            Draw N copies of the cube in a row (default: 1)
     --dump-wxsl                Print the WXSL generated from the graph and exit
     --dump-wgsl                Print the WGSL the active path compiles to and exit
     --list-nodes               List the node library and exit
@@ -133,6 +137,7 @@ struct Options {
     headless: bool,
     out_dir: PathBuf,
     size: Option<(u32, u32)>,
+    instances: u32,
     dump_wxsl: bool,
     dump_wgsl: bool,
     list_nodes: bool,
@@ -149,6 +154,7 @@ impl Default for Options {
             headless: false,
             out_dir: PathBuf::from("."),
             size: None,
+            instances: 1,
             dump_wxsl: false,
             dump_wgsl: false,
             list_nodes: false,
@@ -177,6 +183,13 @@ impl Options {
                         .ok_or_else(|| format!("unknown render path `{text}`"))?;
                 }
                 "--graph" => options.graph = Some(PathBuf::from(value()?)),
+                "--instances" => {
+                    let text = value()?;
+                    options.instances = text
+                        .trim()
+                        .parse()
+                        .map_err(|_| format!("`--instances` wants a number, got `{text}`"))?;
+                }
                 "--out" => options.out_dir = PathBuf::from(value()?),
                 "--size" => {
                     let text = value()?;
@@ -287,8 +300,8 @@ fn dump_wgsl(material: &Material, path: RenderPath) -> Result<String, Box<dyn Er
 // The scene
 // ---------------------------------------------------------------------------
 
-fn demo_scene(aspect: f32, time: f32) -> Scene {
-    Scene {
+fn demo_environment(aspect: f32, time: f32) -> Environment {
+    Environment {
         camera: Camera {
             eye: Vec3::new(2.4, 1.9, 3.2),
             target: Vec3::ZERO,
@@ -313,6 +326,23 @@ fn demo_scene(aspect: f32, time: f32) -> Scene {
 
 fn cube_transform(time: f32) -> Mat4 {
     Mat4::from_rotation_y(time * 0.45) * Mat4::from_rotation_x(time * 0.21)
+}
+
+/// The frame's draws: `count` copies of the cube, spread along x.
+///
+/// One by default, which is what every image in the README is. More than
+/// one is the shortest demonstration that the renderer takes a draw *list*:
+/// every copy is a row of the frame's instance storage buffer, and one
+/// upload serves all of them (ADR 0021).
+fn cube_draws<'a>(mesh: &'a Mesh, material: &'a Material, count: u32, time: f32) -> DrawList<'a> {
+    let spin = cube_transform(time);
+    (0..count.max(1))
+        .map(|index| {
+            let offset = index as f32 - (count.max(1) - 1) as f32 * 0.5;
+            let place = Mat4::from_translation(Vec3::new(offset * 2.4, 0.0, 0.0));
+            DrawItem::new(mesh, material).with_transform(place * spin)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -342,8 +372,8 @@ fn run_headless(
     )?;
     let mesh = Mesh::cube(&gpu.device, 1.6);
     // A fixed time, so two runs produce identical images.
-    let scene = demo_scene(width as f32 / height as f32, 1.0);
-    let model = cube_transform(0.6);
+    let environment = demo_environment(width as f32 / height as f32, 1.0);
+    let draws = cube_draws(&mesh, material, options.instances, 0.6);
 
     std::fs::create_dir_all(&options.out_dir)?;
     let mut images = Vec::new();
@@ -354,10 +384,8 @@ fn run_headless(
             &gpu.queue,
             &RenderRequest {
                 view: target.view(),
-                scene: &scene,
-                model,
-                mesh: &mesh,
-                material,
+                environment: &environment,
+                draws: &draws,
             },
         )?;
         gpu.wait();
@@ -577,17 +605,16 @@ impl App {
         let time = self
             .paused_at
             .unwrap_or_else(|| self.started.elapsed().as_secs_f32());
-        let scene = demo_scene(size.width as f32 / size.height.max(1) as f32, time);
+        let environment = demo_environment(size.width as f32 / size.height.max(1) as f32, time);
+        let draws = cube_draws(&state.mesh, &self.material, self.options.instances, time);
 
         if let Err(error) = state.renderer.render(
             &state.gpu.device,
             &state.gpu.queue,
             &RenderRequest {
                 view: &view,
-                scene: &scene,
-                model: cube_transform(time),
-                mesh: &state.mesh,
-                material: &self.material,
+                environment: &environment,
+                draws: &draws,
             },
         ) {
             eprintln!("cannot render: {error}");

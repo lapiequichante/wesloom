@@ -4,7 +4,7 @@
 // `VertexIn`'s locations are the vertex buffer layout `wxsl-render`'s
 // `mesh` module declares; the two must be edited together.
 
-import package::wxsl::bindings::{camera, object_normal_matrix, object, scene};
+import package::wxsl::bindings::{camera, instance_normal_matrix, instances, scene};
 import package::wxsl::surface::SurfaceContext;
 
 struct VertexIn {
@@ -13,6 +13,10 @@ struct VertexIn {
     // xyz = tangent, w = bitangent sign (handedness).
     @location(2) tangent: vec4f,
     @location(3) uv: vec2f,
+    // Which row of the frame's instance buffer this vertex's transform is
+    // in. Not a vertex attribute: the vertex buffer holds geometry, and the
+    // draw call decides which instance it is being drawn as.
+    @builtin(instance_index) instance: u32,
 }
 
 struct VertexOut {
@@ -29,8 +33,8 @@ struct VertexOut {
 // Both render paths use this unchanged: the paths differ only in what the
 // fragment stage does with the surface, never in how geometry is transformed.
 fn transform_vertex(input: VertexIn) -> VertexOut {
-    let world = object.model * vec4f(input.position, 1.0);
-    let normal_matrix = object_normal_matrix();
+    let world = instances[input.instance].model * vec4f(input.position, 1.0);
+    let normal_matrix = instance_normal_matrix(input.instance);
     let normal = normalize(normal_matrix * input.normal);
     let tangent = normalize(normal_matrix * input.tangent.xyz);
 

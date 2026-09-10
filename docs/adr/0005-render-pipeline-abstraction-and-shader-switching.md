@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
 
 ## Context
 
@@ -73,3 +73,18 @@ pipeline, with these features enabled" is decided consistently.
   extending `RenderPath` and auditing which nodes' conditional branches
   need a new arm — a search for `RenderPath` usages, not a parallel new
   compiler.
+
+## Amendment (ADR 0021)
+
+[ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md) keeps
+this decision's core — one graph, many pipeline shapes, the difference
+expressed as conditional translation — and moves where the choice is
+recorded. A `RenderPath` is no longer a property of the *renderer* that both
+pipeline structs read; it is a field of a `PassDesc`, so one frame can
+contain passes wanting different variants of the same material. The
+`Pipeline` trait, `ForwardPipeline` and `DeferredPipeline` are gone: a
+pipeline is a list of passes, and the two shipped ones are built by
+`pipeline::forward_graph` and `pipeline::deferred_graph`.
+
+`Renderer::set_path` and the variant cache behave exactly as described
+above, and the demo's two paths still agree to 0.0001.

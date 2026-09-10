@@ -8,6 +8,86 @@
 
 use crate::error::RenderError;
 
+/// The optional `wgpu` features this crate asks an adapter for.
+///
+/// All optional, all WebGPU-portable, and none required: whatever the
+/// adapter grants is recorded in [`DeviceCaps`] and every one of them is
+/// something a pass can *ask about* rather than assume. Requesting a
+/// feature an adapter does not have makes `request_device` fail outright,
+/// so the request is always the intersection with what it reports.
+///
+/// * `DEPTH32FLOAT_STENCIL8` — the stencil half of
+///   [`crate::pass::PassState::depth_format`]. Without it a pass wanting a
+///   stencil has to drop to 24-bit depth.
+/// * `INDIRECT_FIRST_INSTANCE` — an indirect draw whose records set
+///   `first_instance`, which is what
+///   [`crate::pass::DrawSource::Indirect`] needs to address the instance
+///   buffer at all.
+/// * `TIMESTAMP_QUERY` — per-pass timings, which is what makes a render
+///   graph's pass list worth reordering.
+/// * `FLOAT32_FILTERABLE` — filtering a 32-bit float target, for the
+///   bakes and lookups of M9.
+pub const WANTED_FEATURES: wgpu::Features = wgpu::Features::DEPTH32FLOAT_STENCIL8
+    .union(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+    .union(wgpu::Features::TIMESTAMP_QUERY)
+    .union(wgpu::Features::FLOAT32_FILTERABLE);
+
+/// What the device we got can actually do.
+///
+/// Before M1 nothing asked: `request_device` took `..Default::default()`,
+/// so no optional feature was ever requested and no code could find out
+/// whether one was available. A render graph has to know — a pass that
+/// wants a stencil buffer or an indirect draw needs an answer, and the
+/// answer must be "no" rather than a validation error
+/// ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
+#[derive(Clone, Debug)]
+pub struct DeviceCaps {
+    /// The features that were granted, out of [`WANTED_FEATURES`].
+    pub features: wgpu::Features,
+    /// The limits the device was created with.
+    pub limits: wgpu::Limits,
+    /// What the adapter's backend can do at all, regardless of features.
+    pub downlevel: wgpu::DownlevelCapabilities,
+}
+
+impl DeviceCaps {
+    /// The capabilities of a device created from `adapter`.
+    pub fn of(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Self {
+        DeviceCaps {
+            features: device.features(),
+            limits: device.limits(),
+            downlevel: adapter.get_downlevel_capabilities(),
+        }
+    }
+
+    /// Whether every feature in `features` was granted.
+    pub fn has(&self, features: wgpu::Features) -> bool {
+        self.features.contains(features)
+    }
+
+    /// Whether a depth format with a stencil aspect is available.
+    pub fn has_stencil_with_float_depth(&self) -> bool {
+        self.has(wgpu::Features::DEPTH32FLOAT_STENCIL8)
+    }
+
+    /// Whether an indirect draw may set `first_instance`.
+    pub fn has_indirect_first_instance(&self) -> bool {
+        self.has(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+    }
+
+    /// Whether the vertex stage can read a storage buffer.
+    ///
+    /// The instance transforms live in one, so this is not optional in
+    /// practice — but it is worth being able to *say* that a backend cannot
+    /// run this renderer instead of failing at the first draw. The WebGPU
+    /// baseline satisfies it; WebGL does not, and is not a target.
+    pub fn has_vertex_storage(&self) -> bool {
+        self.downlevel
+            .flags
+            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+    }
+}
+
 /// A `wgpu` device and queue, with the adapter they came from.
 pub struct GpuContext {
     /// The instance the adapter came from.
@@ -19,6 +99,8 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     /// The queue.
     pub queue: wgpu::Queue,
+    /// What was granted of what was asked for.
+    pub caps: DeviceCaps,
 }
 
 impl GpuContext {
@@ -39,18 +121,25 @@ impl GpuContext {
             })
             .await
             .map_err(|_| RenderError::NoAdapter)?;
+        // The intersection, not the wish list: asking for a feature the
+        // adapter lacks fails the whole request, and every one of these is
+        // something we can do without.
+        let granted = WANTED_FEATURES & adapter.features();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("wxsl"),
+                required_features: granted,
                 ..Default::default()
             })
             .await
             .map_err(RenderError::NoDevice)?;
+        let caps = DeviceCaps::of(&adapter, &device);
         Ok(GpuContext {
             instance,
             adapter,
             device,
             queue,
+            caps,
         })
     }
 

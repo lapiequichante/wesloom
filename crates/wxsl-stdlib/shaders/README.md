@@ -46,7 +46,7 @@ explains the split.
 
 | Module | What it holds |
 |---|---|
-| `bindings.wxsl` | The frame bind group: camera/scene/object uniforms, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `scene` module. |
+| `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `environment` module. |
 | `surface.wxsl` | `SurfaceContext` and `Surface`, the graph's input and output. |
 | `vertex.wxsl` | The vertex stage, shared by both paths, and the context builder. |
 | `shading.wxsl` | `shade_surface`: the lighting model. Called by *both* paths. |
@@ -65,7 +65,7 @@ contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by
 
 | # | Slot | Declared in | Holds |
 |---|---|---|---|
-| 0 | `frame` | `bindings.wxsl` | Camera, scene, object transforms |
+| 0 | `frame` | `bindings.wxsl` | Camera, scene, the instance transform storage buffer |
 | 1 | `material` | *generated* | A graph's parameters and textures |
 | 2 | `user` | — | Nothing here. The application's slot. |
 | 3 | `pass` | `lighting_pass.wxsl` | G-buffer, and future shadow/IBL resources |

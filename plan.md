@@ -6,7 +6,7 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0.
+**Landed so far:** M0, M1.
 
 ## How to read this
 
@@ -37,29 +37,29 @@ superseding its row, not by quietly diverging inside a milestone.
 
 ## Where we are
 
-Honest baseline, because three of the gaps below are load-bearing for what
-comes next:
+Honest baseline. The first, third and fifth entries below are struck
+through because M1 closed them; they stay listed so a reader can see what
+the milestones were aimed at.
 
-* **Passes are hand-written Rust.** `ForwardPipeline` and `DeferredPipeline`
-  each own their attachments, their depth texture and a pipeline cache, and
-  `record()` writes out `begin_render_pass` by hand. Adding a fourth pass
-  means a fourth struct that repeats all of it.
+* ~~**Passes are hand-written Rust.**~~ Closed by M1: a pipeline is a list
+  of `PassDesc`s, and `wxsl_render::graph` orders, allocates and records
+  them.
 * **Render path is a two-valued enum.** `RenderPath::{Forward, Deferred}`
   binds one flag, `abi::FEATURE_DEFERRED`, which picks one of exactly two
   `@if`-gated fragment entry points that `codegen::write_entry_points`
   prints as a format string. There is no room in that shape for a third,
-  fourth or fifth entry point.
-* **One draw per frame.** `Renderer::render` takes one mesh and one material.
-  `pipeline::FrameInput` already carries `draws: &[Draw]`, so the plumbing
-  underneath is ready, but nothing above it builds a list.
-* **The material bind group is not bound.** `MaterialPipelines::new` binds
-  group 0 only, with a comment saying group 1 joins it "when a graph can
-  declare parameters". There are no texture or sampler value types, so a
-  graph cannot sample anything at all. Shadows, bakes and postprocess all
-  need this before they need anything else.
-* **No device feature negotiation.** `gpu.rs` calls `request_device` with
-  `..Default::default()`, so no optional feature is ever requested and no
-  code can ask whether one is available.
+  fourth or fifth entry point. M1 moved the enum from the renderer onto the
+  pass, which is where M2 replaces it with a stage.
+* ~~**One draw per frame.**~~ Closed by M1: `RenderRequest` takes a
+  `DrawList`, and every draw's transform is a row of one storage buffer.
+* **The material bind group is not bound.** The pipeline layout binds group
+  0, and group 3 when a pass declares reads; group 1 waits for M3. There are
+  no texture or sampler value types, so a graph cannot sample anything at
+  all. Shadows, bakes and postprocess all need this before they need
+  anything else.
+* ~~**No device feature negotiation.**~~ Closed by M1: `gpu.rs` asks for the
+  optional features the later milestones want and records what was granted
+  in `DeviceCaps`.
 * **Four lights, no shadows, no transparency.** `MAX_LIGHTS = 4` in a fixed
   uniform array; `Light` has no shadow data; nothing anywhere blends.
 
@@ -287,70 +287,44 @@ derivation assumes build time, so making a saved buffer appear in the palette
 is calling the same function — which was the entire point of writing it as an
 API rather than as a build script.
 
-### M1 — The render graph, with today's two paths on it
+### M1 — The render graph, with today's two paths on it — **done**
 
-Rewrite `wxsl-render::pipeline` as a declarative engine, and express forward
-and deferred as pass lists built in Rust (not yet as graphs).
+Landed as [ADR 0021](docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md),
+which is now where the reasoning lives. What shipped, and the four things a
+later milestone needs to know:
 
-* `pass` module: `PassDesc`, `PassState`, `Attachment`, `ResourceId`,
-  `ResourceDesc`. `PassState` carries `cull_mode`, `depth_compare`,
-  `depth_write`, `blend` — **and the depth format**. `DEPTH_FORMAT` is a
-  `const` today (`Depth32Float`, on the grounds that there is "no stencil
-  work to do"), which quietly forecloses every stencil technique: portal
-  masking, per-object outline masks, shadow volumes. A pass picks its own.
-* `ResourceDesc` describes more than a screen-sized 2D target from the
-  start, because retrofitting an allocator is worse than over-describing one:
-  * **Dimension**: 2D, 2D array, cube, 3D. Cascaded shadows want an array,
-    reflection probes want a cube, froxel volumetrics want a 3D texture.
-  * **Persistence**: `Transient` (created at first write, reusable after its
-    last read) or `Persistent { history: n }` (ping-ponged, survives the
-    frame). Without the second, **every temporal technique is out** — TAA,
-    temporally stabilised SSR, auto-exposure, trailing bloom. This is the one
-    addition that genuinely changes the allocator's shape, so it cannot be
-    bolted on later.
-* `graph` module in `wxsl-render`: topological order, transient allocation
-  with reuse, history rotation for persistent resources, the recorder.
-* `MaterialPipelines` learns to key on `(variant, stage, PassState)` so cull
-  mode, blend and depth format stop being baked into one hardcoded
-  descriptor.
-* Scene submission replaces the single mesh: meshes and instances, each
-  instance carrying a material and a transform, plus the **tags** it was
-  authored with. A geometry pass draws a *tag expression* (`opaque`,
-  `transparent`, `opaque && outlined`), so the material says what it is and
-  the pass says what it draws, with neither introspecting the other. A draw
-  may override its tags for the odd case.
-* `wxsl_core::scene::Scene` — meshes, instances, materials, tags — and the
-  facade translates it into a `DrawList`. `wxsl_render::scene::Scene` becomes
-  `Environment` in the same pass, while there are few callers.
-* Instance transforms move into a **storage buffer** in the frame group,
-  addressed by `@builtin(instance_index)`, replacing ADR 0010's per-object
-  dynamic offset. One binding, one upload, and a shape a culling pass can
-  write indices into. The only limit worth noting is `DownlevelFlags::
-  VERTEX_STORAGE`, which the WebGPU baseline satisfies and WebGL does not —
-  and WebGL is not a target.
-* glTF geometry import behind a `gltf` feature, and **indices widen from
-  `u16` to `u32`** — 65k vertices is a limit any real mesh crosses, and it is
-  cheaper to change while `Mesh::new` has four callers.
-* A geometry pass takes its draws from either the scene or an **indirect
-  buffer**, so GPU-driven culling and GPU particles become a later pass
-  rather than a later redesign of the draw path.
-* `PassKind::Compute` exists from the start. This is nearly free: the repo
-  already runs a compute pass — MSDF glyph generation (`ui::msdf_gpu`,
-  `MSDF_MODULE`, ADR 0014) — so compute pipelines, their bind groups and
-  their variant compilation are solved problems here. The render graph
-  generalizes what works rather than inventing it. First *used* in M7.
-* `gpu.rs` grows feature negotiation: ask for the optional features we want,
-  record what was granted in a `DeviceCaps` the passes can query.
+`wxsl_render::pass` describes a pass and `wxsl_render::graph` runs a list of
+them. `ForwardPipeline`, `DeferredPipeline` and the `Pipeline` trait are
+gone; `pipeline::forward_graph` and `pipeline::deferred_graph` build the two
+stock lists, and `Renderer::set_graph` takes anyone else's.
+`wxsl_core::scene::Scene` is the document, `wxsl_render::environment::Environment`
+is the camera and lights, `wxsl::scene::SceneResources` is the translation
+between them, and instance transforms are one storage buffer in the frame
+group. `u32` indices, glTF import behind a `gltf` feature, and `DeviceCaps`
+all landed as planned.
 
-**Done when** `render_cube` still asserts the two paths match, the deferred
-path is a three-entry pass list, and two tests hold: the transient allocator
-reuses one texture across two non-overlapping lifetimes, and a resource
-declared `Persistent { history: 2 }` hands a pass the previous frame's
-contents.
+* **The deferred pass list is two passes, not the three this plan
+  predicted.** G-buffer, then lighting. There is no honest third at M1: the
+  depth prepass belongs to M2 (it needs the `DepthOnly` stage) and a
+  present/tonemap pass would be pure waste, because the ABI's shading
+  function already encodes sRGB. The pass *count* was never the point; the
+  pass *list* was.
+* **`Read` carries a history depth, and that is what makes the ordering
+  work.** A read of `history: 0` is an edge from whoever wrote it; a read
+  further back is no edge at all. Without that distinction a temporal pass
+  is a cycle, and TAA would have needed the scheduler rewritten.
+* **A pass may not sample what it attaches**, and the scheduler says so by
+  name. Loading an attachment is the supported way to read what is already
+  there. This was found by the test that expected a *cycle* and got a valid
+  schedule: they are two different mistakes and only one of them is a cycle.
+* **Buffers are not graph resources yet.** Only textures are allocated,
+  aliased and rotated; an indirect buffer is handed to a pass directly. That
+  is enough for M2 through M7 and is an extension rather than a rewrite when
+  a compute pass wants a transient buffer.
 
-**ADR** — "A declarative render graph, and material stages instead of a
-render-path enum". Amends ADR 0005, ADR 0008 and ADR 0010 (instance transforms
-leave the dynamic offset for a storage buffer).
+**Still owed**: `MaterialPipelines` was to key on `(variant, stage,
+PassState)`; it keys on `(variant, PassState, target formats)` because the
+stage does not exist until M2, and `variant` already carries the path.
 
 ### M2 — Stages in the ABI and codegen
 

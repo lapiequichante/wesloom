@@ -28,6 +28,8 @@ default = ["render", "stdlib"]
 render = ["dep:wxsl-render"]
 editor = ["dep:wxsl-editor", "render"]
 stdlib = ["dep:wxsl-stdlib"]
+# glTF/GLB geometry import, for scenes whose meshes come from a file.
+gltf = ["render", "wxsl-render/gltf"]
 
 [[example]]
 name = "pbr_cube"
@@ -54,6 +56,12 @@ name = "editor_frame"
 # Drives the editor for a few frames on a real device; skips when there is no
 # adapter, like render_cube.rs.
 required-features = ["editor", "stdlib"]
+
+[[test]]
+name = "scene"
+# The scene document and its translation into a draw list; the rendering
+# half skips when there is no adapter, like render_cube.rs.
+required-features = ["render", "stdlib"]
 
 [[test]]
 name = "wgsl_types"

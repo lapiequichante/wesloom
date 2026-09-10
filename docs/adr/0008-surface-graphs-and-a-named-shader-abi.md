@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md)
+Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
 
 ## Context
 
@@ -120,3 +120,15 @@ module cannot see declarations in the root module that imports it, so
 - Graphs that want to output something other than a surface (a post-process
   effect, a compute kernel) are not covered by this ADR and would need a
   second ABI shape alongside this one.
+
+## Amendment (ADR 0021)
+
+The frame group's third binding changed name and kind:
+`abi::BINDING_OBJECT` / `object: Object` (a uniform) became
+`abi::BINDING_INSTANCES` / `instances: array<Instance>` (a read-only storage
+buffer), and `VertexIn` gained `@builtin(instance_index)`. The rule this ADR
+establishes is unchanged and is exactly why the change is a small one: the
+two halves — `wxsl_core::abi` and `crates/wxsl-stdlib/shaders/wxsl/` — are
+edited together, and a test asserts the shipped shader declares what the
+constants name. See
+[ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md).

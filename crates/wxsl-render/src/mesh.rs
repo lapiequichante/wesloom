@@ -5,6 +5,8 @@
 //! two halves of one contract — the `@location` numbers must line up, so the
 //! two are edited together.
 
+use core::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
@@ -15,7 +17,7 @@ use glam::Vec3;
 /// a sign rather than a third vector keeps the vertex smaller and cannot
 /// disagree with the normal after interpolation.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Vertex {
     /// Object-space position.
     pub position: [f32; 3],
@@ -44,6 +46,37 @@ impl Vertex {
     };
 }
 
+/// One mesh's geometry on the CPU: what a generator or an importer
+/// produces, and what [`Mesh::upload`] takes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MeshData {
+    /// The vertices.
+    pub vertices: Vec<Vertex>,
+    /// Triangle indices, three per triangle.
+    pub indices: Vec<u32>,
+}
+
+impl MeshData {
+    /// The geometry, as a pair.
+    pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
+        MeshData { vertices, indices }
+    }
+
+    /// How many triangles.
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    /// Append `other`, shifting its indices — how an importer merges every
+    /// primitive of a file into one mesh.
+    pub fn extend(&mut self, other: &MeshData) {
+        let base = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(&other.vertices);
+        self.indices
+            .extend(other.indices.iter().map(|index| index + base));
+    }
+}
+
 /// An indexed triangle mesh on the GPU.
 pub struct Mesh {
     vertices: wgpu::Buffer,
@@ -53,7 +86,11 @@ pub struct Mesh {
 
 impl Mesh {
     /// Upload `vertices` and `indices` as a mesh.
-    pub fn new(device: &wgpu::Device, label: &str, vertices: &[Vertex], indices: &[u16]) -> Self {
+    ///
+    /// Indices are `u32`, not `u16`: 65k vertices is a limit any real mesh
+    /// crosses, and paying four bytes an index is cheaper than discovering
+    /// the ceiling from a glTF file that renders as confetti (ADR 0021).
+    pub fn new(device: &wgpu::Device, label: &str, vertices: &[Vertex], indices: &[u32]) -> Self {
         use wgpu::util::DeviceExt as _;
         Mesh {
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -68,6 +105,11 @@ impl Mesh {
             }),
             index_count: indices.len() as u32,
         }
+    }
+
+    /// Upload CPU geometry as a mesh.
+    pub fn upload(device: &wgpu::Device, label: &str, data: &MeshData) -> Self {
+        Mesh::new(device, label, &data.vertices, &data.indices)
     }
 
     /// A cube of edge length `size`, centred on the origin.
@@ -126,9 +168,25 @@ impl Mesh {
 
     /// Bind this mesh's buffers and draw it once.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.draw_instances(pass, 0..1);
+    }
+
+    /// Bind this mesh's buffers and draw `instances` of it.
+    ///
+    /// The range is not a count: it is *which rows of the frame's instance
+    /// buffer* to draw, because `@builtin(instance_index)` starts at the
+    /// first instance rather than at zero. Drawing one object is
+    /// `index..index + 1`.
+    pub fn draw_instances(&self, pass: &mut wgpu::RenderPass<'_>, instances: Range<u32>) {
+        self.bind(pass);
+        pass.draw_indexed(0..self.index_count, 0, instances);
+    }
+
+    /// Bind this mesh's buffers without drawing — what an indirect draw
+    /// needs, since the draw itself comes from a buffer.
+    pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
     }
 }
 
@@ -189,7 +247,7 @@ impl MeshKind {
 /// A UV sphere's vertices and indices, on the CPU.
 ///
 /// `segments` divisions around the equator, `rings` from pole to pole.
-pub fn sphere_geometry(radius: f32, segments: u16, rings: u16) -> (Vec<Vertex>, Vec<u16>) {
+pub fn sphere_geometry(radius: f32, segments: u16, rings: u16) -> (Vec<Vertex>, Vec<u32>) {
     let segments = segments.max(3);
     let rings = rings.max(2);
     let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
@@ -217,10 +275,10 @@ pub fn sphere_geometry(radius: f32, segments: u16, rings: u16) -> (Vec<Vertex>, 
         }
     }
 
-    let stride = segments + 1;
-    let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
-    for ring in 0..rings {
-        for segment in 0..segments {
+    let stride = u32::from(segments) + 1;
+    let mut indices = Vec::with_capacity(usize::from(segments) * usize::from(rings) * 6);
+    for ring in 0..u32::from(rings) {
+        for segment in 0..u32::from(segments) {
             let top_left = ring * stride + segment;
             let top_right = top_left + 1;
             let bottom_left = top_left + stride;
@@ -244,7 +302,7 @@ pub fn sphere_geometry(radius: f32, segments: u16, rings: u16) -> (Vec<Vertex>, 
 /// A subdivided quad's vertices and indices, on the CPU.
 ///
 /// In the xz plane, facing +y, centred on the origin.
-pub fn plane_geometry(size: f32, subdivisions: u16) -> (Vec<Vertex>, Vec<u16>) {
+pub fn plane_geometry(size: f32, subdivisions: u16) -> (Vec<Vertex>, Vec<u32>) {
     let steps = subdivisions.max(1);
     let half = size * 0.5;
     let mut vertices = Vec::with_capacity(((steps + 1) * (steps + 1)) as usize);
@@ -261,10 +319,10 @@ pub fn plane_geometry(size: f32, subdivisions: u16) -> (Vec<Vertex>, Vec<u16>) {
         }
     }
 
-    let stride = steps + 1;
-    let mut indices = Vec::with_capacity((steps * steps * 6) as usize);
-    for row in 0..steps {
-        for column in 0..steps {
+    let stride = u32::from(steps) + 1;
+    let mut indices = Vec::with_capacity(usize::from(steps) * usize::from(steps) * 6);
+    for row in 0..u32::from(steps) {
+        for column in 0..u32::from(steps) {
             let near_left = row * stride + column;
             let near_right = near_left + 1;
             let far_left = near_left + stride;
@@ -286,7 +344,7 @@ pub fn torus_geometry(
     tube_radius: f32,
     segments: u16,
     rings: u16,
-) -> (Vec<Vertex>, Vec<u16>) {
+) -> (Vec<Vertex>, Vec<u32>) {
     let segments = segments.max(3);
     let rings = rings.max(3);
     let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
@@ -311,10 +369,10 @@ pub fn torus_geometry(
         }
     }
 
-    let stride = rings + 1;
-    let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
-    for segment in 0..segments {
-        for ring in 0..rings {
+    let stride = u32::from(rings) + 1;
+    let mut indices = Vec::with_capacity(usize::from(segments) * usize::from(rings) * 6);
+    for segment in 0..u32::from(segments) {
+        for ring in 0..u32::from(rings) {
             let here = segment * stride + ring;
             let next_ring = here + 1;
             let next_segment = here + stride;
@@ -330,7 +388,7 @@ pub fn torus_geometry(
 /// The cube's vertices and indices, on the CPU.
 ///
 /// Separate from [`Mesh::cube`] so it can be tested without a GPU.
-pub fn cube_geometry(size: f32) -> (Vec<Vertex>, Vec<u16>) {
+pub fn cube_geometry(size: f32) -> (Vec<Vertex>, Vec<u32>) {
     // (normal, tangent): the tangent is the direction texture u runs in.
     let faces = [
         (Vec3::X, Vec3::NEG_Z),
@@ -347,7 +405,7 @@ pub fn cube_geometry(size: f32) -> (Vec<Vertex>, Vec<u16>) {
     for (normal, tangent) in faces {
         let bitangent = normal.cross(tangent);
         let center = normal * half;
-        let base = vertices.len() as u16;
+        let base = vertices.len() as u32;
         // Counter-clockwise seen from outside the cube, which is the default
         // front face — so back-face culling keeps the outside.
         for (u, v) in [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)] {
@@ -407,7 +465,7 @@ mod tests {
     }
 
     /// One primitive's geometry, for the invariants they all share.
-    type Geometry = (MeshKind, Vec<Vertex>, Vec<u16>);
+    type Geometry = (MeshKind, Vec<Vertex>, Vec<u32>);
 
     /// Every primitive's geometry.
     fn all_geometry() -> Vec<Geometry> {
