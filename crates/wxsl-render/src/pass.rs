@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 
-use wxsl_core::abi::MaterialStage;
+use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::scene::TagExpr;
 
 /// A resource in a [`crate::graph::RenderGraph`], by index.
@@ -324,6 +324,57 @@ impl DepthAttachment {
             layer: 0,
         }
     }
+
+    /// Target a single layer of an array resource — one shadow map slice,
+    /// one cascade.
+    pub fn with_layer(mut self, layer: u32) -> Self {
+        self.layer = layer;
+        self
+    }
+}
+
+/// Where a pass renders *from*.
+///
+/// The frame supplies a small list of points of view — the camera, and one
+/// per light that casts a shadow — and a pass names which of them its
+/// vertex stage transforms against. Nothing in a shader changes: `camera`
+/// in the frame group is whichever view this pass named, so
+/// `transform_vertex` is the same function in a shadow pass as in the
+/// forward one.
+///
+/// A pass renders from a view rather than carrying a matrix, because the
+/// matrices are the *environment*'s and a pass list is built once and
+/// scheduled against many frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PassView {
+    /// The frame's camera.
+    #[default]
+    Camera,
+    /// The point of view light `index` casts its shadow from.
+    ///
+    /// A light that casts none still has a view slot — an identity matrix
+    /// nothing draws against — so that turning shadows off for one light
+    /// does not renumber the others.
+    Light {
+        /// Index into the frame's lights, below [`wxsl_core::abi::MAX_LIGHTS`].
+        index: u32,
+    },
+}
+
+impl PassView {
+    /// Position of this view in the frame's view list.
+    ///
+    /// The camera is always first, so a pipeline with no shadow passes
+    /// uses offset zero and pays nothing for the mechanism.
+    pub fn slot(self) -> usize {
+        match self {
+            PassView::Camera => 0,
+            PassView::Light { index } => 1 + index as usize,
+        }
+    }
+
+    /// How many view slots a frame needs: the camera plus every light.
+    pub const COUNT: usize = 1 + abi::MAX_LIGHTS;
 }
 
 /// The pipeline state a pass draws with.
@@ -539,6 +590,8 @@ pub struct PassDesc {
     pub label: String,
     /// What the pass does.
     pub kind: PassKind,
+    /// Which point of view it renders from.
+    pub view: PassView,
     /// Colour attachments, in `@location` order.
     pub color: Vec<Attachment>,
     /// Depth attachment, if any.
@@ -560,6 +613,7 @@ impl PassDesc {
         PassDesc {
             label: label.into(),
             kind: PassKind::Geometry { source, stage },
+            view: PassView::default(),
             color: Vec::new(),
             depth: None,
             state: PassState::OPAQUE,
@@ -573,6 +627,7 @@ impl PassDesc {
         PassDesc {
             label: label.into(),
             kind: PassKind::Screen { shader },
+            view: PassView::default(),
             color: Vec::new(),
             depth: None,
             state: PassState::FULLSCREEN,
@@ -593,6 +648,7 @@ impl PassDesc {
                 entry: entry.into(),
                 workgroups,
             },
+            view: PassView::default(),
             color: Vec::new(),
             depth: None,
             state: PassState::FULLSCREEN,
@@ -622,6 +678,12 @@ impl PassDesc {
     /// Set the pipeline state.
     pub fn with_state(mut self, state: PassState) -> Self {
         self.state = state;
+        self
+    }
+
+    /// Render from `view` instead of the camera.
+    pub fn with_view(mut self, view: PassView) -> Self {
+        self.view = view;
         self
     }
 

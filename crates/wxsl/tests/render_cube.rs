@@ -470,10 +470,18 @@ fn the_depth_prepass_leaves_the_forward_image_alone() {
     let image = &images[0];
 
     let graph = renderer.render_graph();
-    assert_eq!(graph.passes().len(), 2, "prepass plus shading pass");
+    // One shadow pass per light slot, then the prepass and the shading
+    // pass. The shadow passes are always there and cost a clear each when
+    // no light is casting; see `pipeline::shadow_passes`.
+    assert_eq!(
+        graph.passes().len(),
+        wxsl::core::abi::MAX_LIGHTS + 2,
+        "a shadow pass per light, then prepass plus shading pass"
+    );
     assert_eq!(
         renderer.stages(),
         vec![
+            wxsl::core::abi::MaterialStage::SHADOW,
             wxsl::core::abi::MaterialStage::DEPTH_ONLY,
             wxsl::core::abi::MaterialStage::FORWARD_LIT
         ]

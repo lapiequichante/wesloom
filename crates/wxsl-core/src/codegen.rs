@@ -189,6 +189,7 @@ pub fn generate(
     // declares no uniform, exactly as it emits no code. Over all three
     // terminals, not one stage's: see `Graph::reachable_from`.
     let interface = graph.interface_of(registry, &graph.reachable_from(&outputs));
+    let stage = options.stage;
     let mut emitter = Emitter {
         graph,
         registry,
@@ -205,7 +206,6 @@ pub fn generate(
     // — in different functions, so the `let` names cannot collide, and a
     // shader compiler's common-subexpression pass removes the duplicate
     // work where it can (ADR 0025).
-    let stage = options.stage;
     let vertex = match outputs.vertex {
         Some(node) => Some(emitter.emit_partition(node, ShaderStage::Vertex)?),
         None => None,
@@ -214,6 +214,24 @@ pub fn generate(
         Some(node) => Some(emitter.emit_partition(node, ShaderStage::Fragment)?),
         None => None,
     };
+    // One partition per computed interpolant, each a vertex-stage root of
+    // its own: two interpolants from unrelated subgraphs cost only what
+    // each of them reads.
+    //
+    // And none at all in a stage with no fragment program: an interpolant
+    // exists to be read per fragment, so a plain depth prepass computes
+    // nothing for it and leaves its location zeroed. The *struct* keeps
+    // the location either way — the interface is per material — which is
+    // what makes this a saving in the vertex stage rather than a
+    // different pipeline layout.
+    let has_fragment = stage.needs_surface() || outputs.discard.is_some();
+    let mut varyings = Vec::with_capacity(outputs.varyings.len());
+    if has_fragment {
+        for (name, node) in &outputs.varyings {
+            let part = emitter.emit_partition(*node, ShaderStage::Vertex)?;
+            varyings.push((name.clone(), part));
+        }
+    }
     // The one partition a stage may not need at all: a depth or shadow
     // pass wants the vertex offset and the alpha test, and nothing else.
     let surface = stage
@@ -221,17 +239,17 @@ pub fn generate(
         .then(|| emitter.emit_partition(outputs.surface, ShaderStage::Fragment))
         .transpose()?;
 
-    emitter.request_abi_imports(vertex.is_some(), surface.is_some());
+    emitter.request_abi_imports(vertex.is_some(), surface.is_some(), !varyings.is_empty());
     let parts = Partitions {
         vertex,
         surface,
         discard,
+        varyings,
     };
     // A stage with nothing to write has a fragment entry only when the
     // material discards; otherwise it has no fragment state at all,
     // which is what makes a depth prepass cheap.
-    let fragment_entry = (stage.needs_surface() || parts.discard.is_some())
-        .then(|| stage.fragment_entry().to_string());
+    let fragment_entry = has_fragment.then(|| stage.fragment_entry().to_string());
 
     let interface = emitter.interface.clone();
     let source = emitter.finish(graph, &macros, &parts);
@@ -268,6 +286,8 @@ impl Partition {
 
 /// The partitions one stage's module is built from.
 struct Partitions {
+    /// One per computed interpolant, in the interface's location order.
+    varyings: Vec<(WxslIdent, Partition)>,
     /// The vertex-stage offset, when the graph has a vertex output.
     vertex: Option<Partition>,
     /// The surface, when this stage writes one.
@@ -350,7 +370,7 @@ impl Emitter<'_> {
     /// The deferred-path items are imported unconditionally; when the
     /// deferred fragment entry is dropped by conditional translation they
     /// become unused, and the compiler strips them.
-    fn request_abi_imports(&mut self, displaces: bool, shades: bool) {
+    fn request_abi_imports(&mut self, displaces: bool, shades: bool, interpolates: bool) {
         // Only what this stage's module actually mentions. A shadow
         // module for an alpha-tested material imports the context and
         // nothing else — no `Surface`, no shading function, no G-buffer.
@@ -359,7 +379,9 @@ impl Emitter<'_> {
             self.request_import(abi::SURFACE_MODULE, abi::DEFAULT_SURFACE_FN);
         }
         self.request_import(abi::SURFACE_MODULE, abi::CONTEXT_STRUCT);
-        if displaces {
+        // Both halves of the vertex stage read it: the displacement and
+        // every computed interpolant.
+        if displaces || interpolates {
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_STRUCT);
         }
         if self.options.emit_entry_points {
@@ -370,6 +392,9 @@ impl Emitter<'_> {
                 self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_OFFSET_FN);
             } else {
                 self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_FN);
+            }
+            if interpolates {
+                self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_FN);
             }
             self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
             match self.options.stage.output() {
@@ -650,11 +675,14 @@ impl Emitter<'_> {
                 let name = self.declared_name(node, node::SETTING_NAME)?;
                 let geometry = &self.interface.geometry;
                 // Which backing a name has is the *declaration's* business
-                // and not the node's, so this is where the two frequencies
-                // stop being different: a per-vertex value was
-                // interpolated into `attrs`, a per-instance one is a field
-                // of the row the flat index points at.
-                let expr = if geometry.vertex_attribute(name.as_str()).is_some() {
+                // and not the node's, so this is where the three
+                // frequencies stop being different: a per-vertex value and
+                // a computed interpolant were both interpolated into
+                // `attrs`, and a per-instance one is a field of the row
+                // the flat index points at.
+                let interpolated = geometry.vertex_attribute(name.as_str()).is_some()
+                    || geometry.computed_varying(name.as_str()).is_some();
+                let expr = if interpolated {
                     Some(format!("{}.{name}", abi::MATERIAL_ATTRIBUTES_VAR))
                 } else {
                     geometry.instance().field(name.as_str()).and_then(|_| {
@@ -676,7 +704,10 @@ impl Emitter<'_> {
                 self.bindings
                     .insert(SocketRef::new(node, socket.name.as_str()), expr);
             }
-            NodeBody::SurfaceOutput | NodeBody::VertexOutput | NodeBody::DiscardOutput => {
+            NodeBody::SurfaceOutput
+            | NodeBody::VertexOutput
+            | NodeBody::DiscardOutput
+            | NodeBody::VaryingOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
             }
@@ -868,6 +899,37 @@ impl Emitter<'_> {
             out.push_str("}\n");
         }
 
+        // One function per computed interpolant, before the fragment
+        // ones because they run first — and because reading the module
+        // top to bottom should read as vertex stage then fragment stage.
+        for (name, part) in &parts.varyings {
+            let Some(varying) = interface.geometry.computed_varying(name.as_str()) else {
+                continue;
+            };
+            // Unreachable — the socket is not optional — but a generated
+            // function has to return something whatever the graph is.
+            let zero = varying
+                .ty
+                .zero()
+                .and_then(|value| value.wxsl_literal())
+                .unwrap_or_else(|| "0.0".to_string());
+            let _ = write!(
+                out,
+                "\nfn {}{name}({}: {}{attributes}) -> {} {{\n",
+                abi::VARYING_FN_PREFIX,
+                abi::VERTEX_CONTEXT_VAR,
+                abi::VERTEX_CONTEXT_STRUCT,
+                varying.ty.wxsl_type(),
+            );
+            out.push_str(&part.body);
+            let _ = writeln!(
+                out,
+                "    return {};",
+                part.input(abi::SOCKET_VARYING, &zero)
+            );
+            out.push_str("}\n");
+        }
+
         if let Some(discard) = &parts.discard {
             let _ = write!(
                 out,
@@ -987,6 +1049,12 @@ fn write_geometry_declarations(out: &mut String, geometry: &GeometryInterface) {
     for attribute in geometry.vertex() {
         let _ = writeln!(out, "    {}: {},", attribute.name, attribute.ty.wxsl_type());
     }
+    // Present in the vertex stage too, where they are the value being
+    // computed rather than a value to read — left zeroed there, and
+    // `Graph::check_outputs` is what stops anything reading them.
+    for varying in geometry.computed() {
+        let _ = writeln!(out, "    {}: {},", varying.name, varying.ty.wxsl_type());
+    }
     out.push_str("}\n");
 
     if geometry.instance_index_location().is_some() {
@@ -1027,6 +1095,15 @@ fn extra_varyings(geometry: &GeometryInterface) -> String {
             attribute.varying,
             attribute.name,
             attribute.ty.wxsl_type(),
+        );
+    }
+    for varying in geometry.computed() {
+        let _ = writeln!(
+            out,
+            "    @location({}) {}: {},",
+            varying.varying,
+            varying.name,
+            varying.ty.wxsl_type(),
         );
     }
     out
@@ -1095,14 +1172,27 @@ fn write_entry_points(
 ) {
     let geometry = &interface.geometry;
     write_geometry_io(out, geometry);
+    // Bound once when anything in the vertex stage wants it — the
+    // displacement, an interpolant, or both — and never computed twice.
+    // Everything reads the *undisplaced* context, which is the input to
+    // the displacement rather than its result.
+    let needs_context = parts.vertex.is_some() || !parts.varyings.is_empty();
+    let context = match needs_context {
+        true => format!(
+            "    let {var} = {call}(input);\n",
+            var = abi::VERTEX_CONTEXT_VAR,
+            call = abi::VERTEX_CONTEXT_FN,
+        ),
+        false => String::new(),
+    };
     // How the vertex entry gets its transform: the plain one, or the one
     // that takes an offset the graph computed first.
     let transform = |args: &str| match parts.vertex.is_some() {
         true => format!(
-            "{}(input, {}({}(input){args}))",
+            "{}(input, {}({}{args}))",
             abi::TRANSFORM_VERTEX_OFFSET_FN,
             abi::VERTEX_FN,
-            abi::VERTEX_CONTEXT_FN,
+            abi::VERTEX_CONTEXT_VAR,
         ),
         false => format!("{}(input)", abi::TRANSFORM_VERTEX_FN),
     };
@@ -1112,7 +1202,7 @@ fn write_entry_points(
             "
 @vertex
 fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
-    return {call};
+{context}    return {call};
 }}
 ",
             vertex = options.vertex_entry,
@@ -1130,7 +1220,7 @@ fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
         // a graph may displace a vertex by something the geometry
         // supplied — a per-vertex wind weight, a per-instance scale.
         let mut prologue = String::new();
-        if parts.vertex.is_some() {
+        if needs_context {
             let _ = writeln!(
                 prologue,
                 "    var {var}: {ty};",
@@ -1159,7 +1249,7 @@ fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
             "
 @vertex
 fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
-{prologue}    let base = {call};
+{prologue}{context}    let base = {call};
     var out: {vertex_out};
 ",
             vertex = options.vertex_entry,
@@ -1184,6 +1274,16 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         }
         for attribute in geometry.vertex() {
             let _ = writeln!(out, "    out.{name} = extra.{name};", name = attribute.name);
+        }
+        // What the graph computed for itself, one call each.
+        for (name, _) in &parts.varyings {
+            let _ = writeln!(
+                out,
+                "    out.{name} = {prefix}{name}({var}{args});",
+                prefix = abi::VARYING_FN_PREFIX,
+                var = abi::VERTEX_CONTEXT_VAR,
+                args = format_args!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
+            );
         }
         out.push_str("    return out;\n}\n");
     }
@@ -1215,12 +1315,16 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
                 field = abi::INSTANCE_INDEX_FIELD,
             );
         }
-        for attribute in geometry.vertex() {
+        for name in geometry
+            .vertex()
+            .iter()
+            .map(|attribute| &attribute.name)
+            .chain(geometry.computed().iter().map(|varying| &varying.name))
+        {
             let _ = writeln!(
                 unpack,
                 "    {var}.{name} = extra.{name};",
                 var = abi::MATERIAL_ATTRIBUTES_VAR,
-                name = attribute.name,
             );
         }
         (

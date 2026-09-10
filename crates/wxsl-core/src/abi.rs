@@ -17,7 +17,7 @@
 //! generated from the ABI instead of being declared twice.
 
 use crate::macros::{MacroDef, MacroValue};
-use crate::node::{NodeDefinition, Socket, Value, ValueType};
+use crate::node::{GenericParam, NodeDefinition, SettingDef, Socket, Value, ValueType};
 
 /// Module holding [`CONTEXT_STRUCT`], [`SURFACE_STRUCT`] and
 /// [`DEFAULT_SURFACE_FN`].
@@ -229,6 +229,17 @@ pub const GBUFFER_STRUCT: &str = "GBuffer";
 /// Packs a surface into the G-buffer ([`MaterialStage::GBUFFER`]).
 pub const PACK_GBUFFER_FN: &str = "pack_gbuffer";
 
+/// Shadow map bindings and the filtered lookup over them.
+///
+/// Its own module rather than more of `bindings.wxsl`, because it is the
+/// one part of the frame group with an algorithm attached: the PCF kernel
+/// and the normal-offset bias live with the two bindings they read.
+/// `shading.wxsl` imports it, so both render paths get the same lookup.
+pub const SHADOW_MODULE: &str = "package::wxsl::shadow";
+/// Attenuation of one light at one point, in `[0, 1]`
+/// ([`SHADOW_MODULE`]).
+pub const SHADOW_FACTOR_FN: &str = "shadow_factor";
+
 /// Deferred path: the standalone module holding the lighting pass, compiled
 /// as its own root (it shades the G-buffer, so it has no material graph).
 pub const LIGHTING_PASS_MODULE: &str = "package::wxsl::lighting_pass";
@@ -380,6 +391,43 @@ pub const BINDING_INSTANCES: u32 = 2;
 /// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 pub const BINDING_INSTANCE_ATTRIBUTES: u32 = 3;
 
+/// [`GROUP_FRAME`] binding of the shadow maps, one array layer per light.
+///
+/// In the frame group and not the pass group, because a shadow map is
+/// frame-global in exactly the way the lights it comes from are: the
+/// forward stage and the deferred lighting pass read it through the same
+/// binding, so `shading.wxsl` needs one lookup rather than one per path.
+/// The pass group could not do that — it already holds the G-buffer in
+/// the deferred path, and its bindings are numbered per pass.
+pub const BINDING_SHADOW_MAPS: u32 = 4;
+
+/// [`GROUP_FRAME`] binding of the comparison sampler used with
+/// [`BINDING_SHADOW_MAPS`].
+///
+/// A `sampler_comparison`, so the hardware does the depth test and the
+/// bilinear filter in one fetch: that is what makes a PCF kernel four
+/// taps' worth of filtering per tap rather than a hand-rolled average of
+/// hard comparisons.
+pub const BINDING_SHADOW_SAMPLER: u32 = 5;
+
+/// How many lights the scene uniform carries, and therefore how many
+/// slices the shadow map array has.
+///
+/// Fixed rather than a macro variable: it is the length of an array in a
+/// host-shared buffer, so it cannot vary per shader variant without the
+/// Rust and WXSL halves disagreeing about the layout. Must match
+/// `WXSL_MAX_LIGHTS` in `shaders/wxsl/bindings.wxsl`.
+pub const MAX_LIGHTS: usize = 4;
+
+/// Edge length in texels of one shadow map slice.
+///
+/// One fixed resolution for every light, and no packing code. An atlas
+/// with a rect per light is the eventual answer — a shadow needs more
+/// texels the closer the light is to what it falls on — and it is a
+/// contained change when it comes: one [`BINDING_SHADOW_MAPS`] of a
+/// different shape, plus a rect in the light.
+pub const SHADOW_MAP_RESOLUTION: u32 = 1024;
+
 /// How much precision a G-buffer target needs.
 ///
 /// The ABI says what each target carries and therefore what precision it
@@ -445,6 +493,21 @@ pub fn abi_macros() -> Vec<MacroDef> {
             MacroValue::Flag(false),
             "Shade surfaces as their world-space normal instead of lighting them.",
         ),
+        MacroDef::new(
+            FEATURE_RECEIVE_SHADOWS,
+            MacroValue::Flag(true),
+            "Attenuate each light by the shadow map it casts into.",
+        ),
+        MacroDef::new(
+            FEATURE_RELATIVE_TO_EYE,
+            MacroValue::Flag(false),
+            "Measure world-space positions from the camera rather than the origin.",
+        ),
+        MacroDef::new(
+            FEATURE_PREVIOUS_FRAME,
+            MacroValue::Flag(false),
+            "Read the previous frame's clock, so a time-driven graph answers for where it was.",
+        ),
     ]
 }
 
@@ -452,6 +515,37 @@ pub fn abi_macros() -> Vec<MacroDef> {
 pub const FEATURE_TONEMAP: &str = "wxsl_tonemap";
 /// Feature flag: output normals instead of shading (see [`abi_macros`]).
 pub const FEATURE_DEBUG_NORMALS: &str = "wxsl_debug_normals";
+/// Feature flag: sample the shadow maps when shading (see [`abi_macros`]).
+///
+/// What a material's `receive_shadow` becomes. A flag rather than a
+/// uniform, so a material that does not receive shadows does not compile
+/// the lookup at all — and so the two paths agree, since the deferred
+/// lighting pass is compiled against the same macro set.
+pub const FEATURE_RECEIVE_SHADOWS: &str = "wxsl_receive_shadows";
+/// Feature flag: world space is measured from the camera (see
+/// [`abi_macros`]).
+///
+/// The ABI half of relative-to-eye rendering, landed while the vertex
+/// stage was open rather than retrofitted once many materials read
+/// `world_position`: with the flag on, `SurfaceContext::world_position` is
+/// camera-relative and the eye is at the origin. `world_origin()` in
+/// `bindings.wxsl` is the one explicit way back to absolute space, and the
+/// only two things that take it are a point light's falloff and the shadow
+/// lookup.
+///
+/// What the flag does *not* yet buy is the precision it exists for: that
+/// needs model matrices pre-translated by the camera in `f64` on the host,
+/// which is a milestone of its own.
+pub const FEATURE_RELATIVE_TO_EYE: &str = "wxsl_relative_to_eye";
+/// Feature flag: time-driven nodes read the previous frame's clock (see
+/// [`abi_macros`]).
+///
+/// The shape a velocity stage needs, settled while the vertex stage was
+/// open. A motion vector for an object the *graph* moves is wrong unless
+/// the vertex offset itself is re-evaluated for the previous frame, and
+/// one switch over the whole graph is the only version of that an author
+/// cannot forget half of.
+pub const FEATURE_PREVIOUS_FRAME: &str = "wxsl_previous_frame";
 
 // ---------------------------------------------------------------------------
 // The UI pass
@@ -653,6 +747,13 @@ pub const VERTEX_FN: &str = "wxsl_vertex";
 /// stage that needs it and nothing else compiles the alpha subgraph and
 /// leaves the rest of the material out of the module entirely.
 pub const DISCARD_FN: &str = "wxsl_discard";
+/// Prefix of the generated function computing one declared interpolant.
+///
+/// One function per interpolant rather than one returning all of them: a
+/// graph that computes two of them from unrelated subgraphs should not
+/// have to evaluate both to get one, and each is its own partition
+/// anyway.
+pub const VARYING_FN_PREFIX: &str = "wxsl_varying_";
 /// Name of the generated vertex entry point.
 pub const VERTEX_ENTRY: &str = "vs_main";
 
@@ -1007,10 +1108,15 @@ pub const SURFACE_OUTPUT_ID: &str = "output.surface";
 pub const VERTEX_OUTPUT_ID: &str = "output.vertex";
 /// Registry id of the discard output node.
 pub const DISCARD_OUTPUT_ID: &str = "output.discard";
+/// Definition id of the node that writes one declared interpolant
+/// ([`varying_output_def`]).
+pub const VARYING_OUTPUT_ID: &str = "output.varying";
 /// The input socket [`VERTEX_OUTPUT_ID`] takes its offset on.
 pub const SOCKET_POSITION_OFFSET: &str = "position_offset";
 /// The input socket [`DISCARD_OUTPUT_ID`] takes its condition on.
 pub const SOCKET_DISCARD: &str = "discard";
+/// Input socket of [`VARYING_OUTPUT_ID`].
+pub const SOCKET_VARYING: &str = "value";
 
 /// Registry id of the context-read node for `field`.
 pub fn context_node_id(field: &str) -> String {
@@ -1098,6 +1204,56 @@ pub fn vertex_output_def() -> NodeDefinition {
         )
         .vertex_output()
 }
+
+/// The terminal that writes one declared interpolant.
+///
+/// The vertex half of an `AttributeFrequency::Computed` attribute: the
+/// graph declares the name and type once, this node says what the vertex
+/// stage puts in it, and `input.attribute` reads it back on the fragment
+/// side — the same node that reads a stream the mesh carries, because
+/// from the reader's side there is no difference worth a second node.
+pub fn varying_output_def() -> NodeDefinition {
+    NodeDefinition::builder(VARYING_OUTPUT_ID, "Interpolant output")
+        .category("output")
+        .doc(
+            "Computes one declared interpolant in the vertex stage, to be \
+             read per fragment. The graph declares the name and the type; \
+             this says what goes in it. Each interpolant costs one of the \
+             16 inter-stage locations, and the graph is told when it runs \
+             out.",
+        )
+        .setting(
+            SettingDef::new(
+                crate::node::SETTING_NAME,
+                "name",
+                "Which declared interpolant this writes.",
+            )
+            .with_default("value"),
+        )
+        .generic_param(GenericParam::new("T", INTERPOLANT_TYPES.to_vec()))
+        .input(
+            Socket::new(SOCKET_VARYING, ValueType::F32)
+                .with_doc("What the vertex stage computes for this interpolant.")
+                .generic("T")
+                // Unfed while its branch is being built, like every other
+                // terminal's input: it writes its type's zero until
+                // something is wired in.
+                .optional(),
+        )
+        .varying_output()
+}
+
+/// The types an inter-stage location can carry.
+///
+/// The same four a per-vertex attribute may be, and for the neighbouring
+/// reason: a `@location` is interpolated, and a matrix has no
+/// interpolation and no single location to live at.
+pub const INTERPOLANT_TYPES: &[ValueType] = &[
+    ValueType::F32,
+    ValueType::Vec2,
+    ValueType::Vec3,
+    ValueType::Vec4,
+];
 
 /// The fragment-stage terminal node: throw this fragment away.
 ///

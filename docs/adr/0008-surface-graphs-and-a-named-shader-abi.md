@@ -185,3 +185,23 @@ The "named vocabulary, edited in two places, held together by a test"
 shape this ADR establishes is unchanged and is why the addition is small:
 `abi::VERTEX_ONLY_FIELDS` is the new table, and `vertex.wxsl` is its
 other half. See [0025](0025-a-material-graph-spans-shader-stages.md).
+
+## Amendment (ADR 0026)
+
+Two frames of reference, both macro flags on the hand-written ABI, both
+landed while the vertex stage was open because retrofitting either once
+many materials read `world_position` or `time` is a migration rather than
+an edit.
+
+`wxsl_relative_to_eye` measures world space from the camera instead of the
+origin, and `world_origin()` in `bindings.wxsl` is the one explicit way
+back to absolute space — the two places that need it, a point light's
+falloff and the shadow lookup, take it. The flag is correct today and not
+yet *useful*: the precision it exists for needs model matrices
+pre-translated on the host in `f64`.
+
+`wxsl_previous_frame` makes every time-driven node read the previous
+frame's clock at once. A velocity stage needs the vertex offset evaluated
+at `t-1`, not only the model matrix, or motion vectors come out wrong on
+exactly the objects the graph is moving; one switch over the whole graph
+is the only version of that an author cannot half-forget.

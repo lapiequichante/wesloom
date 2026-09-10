@@ -211,7 +211,7 @@ pub struct Graph {
 
 /// A graph's terminal nodes, which are also the roots codegen partitions
 /// from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphOutputs {
     /// The surface output. Always present in a valid graph.
     pub surface: NodeId,
@@ -219,6 +219,13 @@ pub struct GraphOutputs {
     pub vertex: Option<NodeId>,
     /// The discard output, if the graph has one.
     pub discard: Option<NodeId>,
+    /// One terminal per declared interpolant the graph writes, by name,
+    /// in name order.
+    ///
+    /// A `Vec` and not an `Option`, because unlike the other three there
+    /// is one of these *per declaration*: each is its own root, its own
+    /// partition and its own inter-stage location.
+    pub varyings: Vec<(WxslIdent, NodeId)>,
 }
 
 /// Which shader stage a partition of the graph is compiled into.
@@ -252,18 +259,33 @@ pub enum AttributeFrequency {
     /// One value per instance, from a field appended to the frame's
     /// instance storage buffer.
     Instance,
+    /// One value the graph's *own* vertex stage computes, interpolated to
+    /// the fragment stage.
+    ///
+    /// The only frequency the geometry does not supply, and the reason
+    /// the reading node is the same either way: from the fragment side a
+    /// value the mesh carried and one the vertex partition computed
+    /// arrive identically, as a `@location` that was interpolated. What
+    /// differs is who writes it — `abi::VARYING_OUTPUT_ID`, a terminal of
+    /// its own — and that a vertex-stage node may not read one, because
+    /// that is the stage computing it.
+    Computed,
 }
 
 impl AttributeFrequency {
     /// Every frequency, for a UI offering a choice.
-    pub const ALL: &'static [AttributeFrequency] =
-        &[AttributeFrequency::Vertex, AttributeFrequency::Instance];
+    pub const ALL: &'static [AttributeFrequency] = &[
+        AttributeFrequency::Vertex,
+        AttributeFrequency::Instance,
+        AttributeFrequency::Computed,
+    ];
 
     /// The name used in the serialized graph and in the editor.
     pub fn name(self) -> &'static str {
         match self {
             AttributeFrequency::Vertex => "vertex",
             AttributeFrequency::Instance => "instance",
+            AttributeFrequency::Computed => "computed",
         }
     }
 
@@ -318,6 +340,15 @@ impl AttributeDecl {
             name: name.into(),
             ty,
             frequency: AttributeFrequency::Instance,
+        }
+    }
+
+    /// An interpolant the graph computes in its own vertex stage.
+    pub fn computed(name: impl Into<String>, ty: ValueType) -> Self {
+        AttributeDecl {
+            name: name.into(),
+            ty,
+            frequency: AttributeFrequency::Computed,
         }
     }
 }
@@ -682,14 +713,18 @@ impl Graph {
 
     /// Every node any of `outputs` depends on.
     ///
-    /// The union across all three terminals, not one stage's partition.
+    /// The union across every terminal, not one stage's partition.
     /// The interface is per *material*: a bind group layout that narrowed
     /// per stage would mean a depth pass and a shading pass wanted
     /// different bind groups for the same object, and a pipeline layout
     /// may be a superset of what its shader uses anyway.
     pub fn reachable_from(&self, outputs: &GraphOutputs) -> BTreeSet<NodeId> {
         let mut reachable = self.dependencies_of(outputs.surface);
-        for extra in [outputs.vertex, outputs.discard].into_iter().flatten() {
+        let extras = [outputs.vertex, outputs.discard]
+            .into_iter()
+            .flatten()
+            .chain(outputs.varyings.iter().map(|(_, node)| *node));
+        for extra in extras {
             reachable.extend(self.dependencies_of(extra));
         }
         reachable
@@ -784,6 +819,7 @@ impl Graph {
         let geometry = GeometryInterface::new(
             self.declared_attributes(AttributeFrequency::Vertex),
             self.declared_attributes(AttributeFrequency::Instance),
+            self.declared_attributes(AttributeFrequency::Computed),
         );
 
         // Declared, not inferred: the whole block is bound whether the
@@ -1735,6 +1771,12 @@ impl Graph {
         self.terminals(registry, NodeDefinition::is_discard_output)
     }
 
+    /// Every node writing a declared interpolant, whether or not the name
+    /// it points at exists.
+    pub fn varying_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_varying_output)
+    }
+
     fn terminals(
         &self,
         registry: &NodeRegistry,
@@ -1760,10 +1802,25 @@ impl Graph {
         let surfaces = self.surface_outputs(registry);
         let &surface = surfaces.first().filter(|_| surfaces.len() == 1)?;
         let one = |found: Vec<NodeId>| found.first().copied().filter(|_| found.len() == 1);
+        // In name order, and only for names the graph actually
+        // declared as computed: a writer naming something else is
+        // reported by `check_outputs` rather than silently compiled.
+        let mut varyings: Vec<(WxslIdent, NodeId)> = self
+            .varying_outputs(registry)
+            .into_iter()
+            .filter_map(|node| {
+                let name = self.declared_name(registry, node, node::SETTING_NAME)?;
+                let decl = self.attribute(name.as_str())?;
+                (decl.frequency == AttributeFrequency::Computed).then_some((name, node))
+            })
+            .collect();
+        varyings.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        varyings.dedup_by(|(a, _), (b, _)| a == b);
         Some(GraphOutputs {
             surface,
             vertex: one(self.vertex_outputs(registry)),
             discard: one(self.discard_outputs(registry)),
+            varyings,
         })
     }
 
@@ -2050,6 +2107,7 @@ impl Graph {
                 });
             }
         }
+        self.check_varying_outputs(registry, errors);
 
         // A vertex-only node under a fragment terminal is the mistake
         // this catches: `object_position` has no meaning by the time the
@@ -2076,6 +2134,113 @@ impl Graph {
                             .to_string(),
                     });
                 }
+            }
+        }
+
+        // And the mirror mistake, which only exists now that a graph can
+        // compute an interpolant: reading one from the vertex stage,
+        // which is the stage computing it.
+        let vertex_roots = self
+            .vertex_outputs(registry)
+            .into_iter()
+            .chain(self.varying_outputs(registry));
+        for root in vertex_roots {
+            for id in self.dependencies_of(root) {
+                let Some(name) = self.attribute_read_name(registry, id) else {
+                    continue;
+                };
+                let Some(decl) = self.attribute(name.as_str()) else {
+                    continue;
+                };
+                if decl.frequency != AttributeFrequency::Computed {
+                    continue;
+                }
+                let def = self.nodes.get(&id).map(|node| node.def.clone());
+                errors.push(GraphError::WrongStage {
+                    node: id,
+                    def: def.unwrap_or_default(),
+                    output: root,
+                    reason: format!(
+                        "`{name}` is an interpolant the vertex stage computes, so \
+                         only the fragment stage can read it"
+                    ),
+                });
+            }
+        }
+    }
+
+    /// The name a [`NodeBody::AttributeRead`] node reads, if that is what
+    /// `node` is.
+    fn attribute_read_name(&self, registry: &NodeRegistry, node: NodeId) -> Option<WxslIdent> {
+        let def = registry.get(&self.nodes.get(&node)?.def)?;
+        matches!(def.body, NodeBody::AttributeRead)
+            .then(|| self.declared_name(registry, node, node::SETTING_NAME))
+            .flatten()
+    }
+
+    /// Every declared interpolant is written exactly once, and every
+    /// writer names one.
+    ///
+    /// Both halves matter and for different reasons: a declaration
+    /// nothing writes spends an inter-stage location on an undefined
+    /// value, and a writer naming nothing has no location to write to.
+    fn check_varying_outputs(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
+        let mut written: BTreeMap<String, Vec<NodeId>> = BTreeMap::new();
+        for node in self.varying_outputs(registry) {
+            let Some(name) = self.declared_name(registry, node, node::SETTING_NAME) else {
+                errors.push(GraphError::InvalidAttribute {
+                    reason: format!(
+                        "the interpolant output on node {} names no interpolant",
+                        node.0
+                    ),
+                });
+                continue;
+            };
+            match self.attribute(name.as_str()) {
+                Some(decl) if decl.frequency == AttributeFrequency::Computed => {}
+                Some(decl) => errors.push(GraphError::InvalidAttribute {
+                    reason: format!(
+                        "`{name}` is declared as a {} attribute, and the geometry \
+                         supplies it — only a computed one is written by the graph",
+                        decl.frequency
+                    ),
+                }),
+                None => errors.push(GraphError::UnknownAttribute {
+                    node,
+                    attribute: name.as_str().to_string(),
+                    declared: self
+                        .attributes
+                        .iter()
+                        .map(|decl| decl.name.clone())
+                        .collect(),
+                }),
+            }
+            written
+                .entry(name.as_str().to_string())
+                .or_default()
+                .push(node);
+        }
+        for (name, nodes) in &written {
+            if nodes.len() > 1 {
+                errors.push(GraphError::DuplicateOutput {
+                    kind: format!("{} `{name}`", abi::VARYING_OUTPUT_ID),
+                    nodes: nodes.clone(),
+                });
+            }
+        }
+        for decl in &self.attributes {
+            if decl.frequency != AttributeFrequency::Computed {
+                continue;
+            }
+            if !written.contains_key(decl.name.trim()) {
+                errors.push(GraphError::InvalidAttribute {
+                    reason: format!(
+                        "`{}` is a computed interpolant and nothing writes it; add an \
+                         `{}` node or drop the declaration",
+                        decl.name.trim(),
+                        abi::VARYING_OUTPUT_ID,
+                    ),
+                });
             }
         }
     }
@@ -2129,6 +2294,18 @@ impl Graph {
                         ));
                     }
                 }
+                AttributeFrequency::Computed => {
+                    // The same four types a per-vertex stream may be, and
+                    // for the neighbouring reason: this one *is* the
+                    // `@location`, and a matrix has no interpolation.
+                    if !abi::INTERPOLANT_TYPES.contains(&decl.ty) {
+                        invalid(format!(
+                            "`{name}` is {}, and an interpolated value is a \
+                             float or a float vector",
+                            decl.ty
+                        ));
+                    }
+                }
             }
         }
         if per_vertex > abi::MAX_VERTEX_ATTRIBUTES {
@@ -2143,13 +2320,14 @@ impl Graph {
         let geometry = GeometryInterface::new(
             self.declared_attributes(AttributeFrequency::Vertex),
             self.declared_attributes(AttributeFrequency::Instance),
+            self.declared_attributes(AttributeFrequency::Computed),
         );
         let used = geometry.varyings_used();
         if used > abi::MAX_VARYING_LOCATIONS {
             invalid(format!(
                 "{used} inter-stage locations used, and there are {}: \
-                 {} for the shading basis{}, and {} declared per-vertex \
-                 attribute(s)",
+                 {} for the shading basis{}, {} declared per-vertex \
+                 attribute(s) and {} computed interpolant(s)",
                 abi::MAX_VARYING_LOCATIONS,
                 abi::VERTEX_OUT_FIELDS.len(),
                 if geometry.instance_index_location().is_some() {
@@ -2158,6 +2336,7 @@ impl Graph {
                     ""
                 },
                 geometry.vertex().len(),
+                geometry.computed().len(),
             ));
         }
     }

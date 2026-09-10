@@ -26,8 +26,8 @@ use wxsl_core::scene::TagExpr;
 use crate::graph::{PassBinding, RenderGraph};
 use crate::mesh::{AttributeValues, Vertex};
 use crate::pass::{
-    Attachment, DepthAttachment, DrawSource, PassDesc, PassState, Read, ResourceDesc, ResourceId,
-    ScreenShader, DEPTH_FORMAT,
+    Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
+    Read, ResourceDesc, ResourceId, ScreenShader, DEPTH_FORMAT,
 };
 use crate::variants::{ShaderVariant, VariantKey};
 
@@ -152,6 +152,50 @@ fn everything() -> DrawSource {
     DrawSource::Scene(TagExpr::Always)
 }
 
+/// Declare the shadow maps and the passes that fill them.
+///
+/// One pass per light slot, always — not one per light that happens to be
+/// casting this frame. A pass list is built once and scheduled against
+/// every frame after it, and which lights cast shadows is the
+/// *environment*'s business and changes whenever the application says so.
+/// So the shape is fixed at [`abi::MAX_LIGHTS`] and a slot whose light
+/// casts nothing is cleared and left alone, which reads as "fully lit" —
+/// the same answer, for the cost of a clear.
+///
+/// Front faces are *not* culled, which is the usual trick for hiding
+/// self-shadowing acne. It only works on closed geometry, and this
+/// milestone exists for the two cases that are not closed: an alpha-tested
+/// leaf and a displaced surface. The normal-offset bias in `shadow.wxsl`
+/// is what handles the acne instead.
+fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
+    let maps = graph.declare_shadow_maps(
+        ResourceDesc::color("shadow maps", DEPTH_FORMAT)
+            .with_extent(Extent::Fixed {
+                width: abi::SHADOW_MAP_RESOLUTION,
+                height: abi::SHADOW_MAP_RESOLUTION,
+            })
+            .with_dimension(Dimension::D2Array, abi::MAX_LIGHTS as u32)
+            // Both because nothing in the pass list reads this resource:
+            // it is sampled through the frame group, so the graph infers
+            // neither the usage nor the lifetime and is told both.
+            .with_usage(wgpu::TextureUsages::TEXTURE_BINDING)
+            .persistent(0),
+    );
+    for light in 0..abi::MAX_LIGHTS as u32 {
+        graph.pass(
+            PassDesc::geometry(
+                format!("shadow {light}"),
+                everything(),
+                MaterialStage::SHADOW,
+            )
+            .with_view(PassView::Light { index: light })
+            .with_depth(DepthAttachment::clear(maps, 1.0).with_layer(light))
+            .with_state(PassState::OPAQUE.with_cull_mode(None)),
+        );
+    }
+    maps
+}
+
 /// The forward pipeline: a depth prepass, then shade what survived it.
 ///
 /// Two passes rather than one, and the second is the reason M2 exists: the
@@ -168,6 +212,7 @@ fn everything() -> DrawSource {
 /// nothing and tolerates it.
 pub fn forward_graph(target: TargetConfig) -> RenderGraph {
     let mut graph = RenderGraph::new(target.format);
+    shadow_passes(&mut graph);
     let depth = graph.resource(ResourceDesc::color("forward depth", DEPTH_FORMAT));
     graph.pass(
         PassDesc::geometry("depth prepass", everything(), MaterialStage::DEPTH_ONLY)
@@ -190,6 +235,7 @@ pub fn forward_graph(target: TargetConfig) -> RenderGraph {
 /// orders the two passes.
 pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
     let mut graph = RenderGraph::new(target.format);
+    shadow_passes(&mut graph);
     let gbuffer: Vec<ResourceId> = abi::GBUFFER_TARGETS
         .iter()
         .map(|entry| {
@@ -553,9 +599,11 @@ mod tests {
     #[test]
     fn the_forward_pipeline_is_a_depth_prepass_and_a_shading_pass() {
         let graph = forward_graph(config());
-        assert_eq!(graph.passes().len(), 2);
+        // A shadow pass per light slot comes first; the two that make this
+        // pipeline what it is follow.
+        assert_eq!(graph.passes().len(), abi::MAX_LIGHTS + 2);
 
-        let prepass = &graph.passes()[0];
+        let prepass = &graph.passes()[abi::MAX_LIGHTS];
         assert!(matches!(
             prepass.kind,
             PassKind::Geometry {
@@ -569,7 +617,7 @@ mod tests {
         assert!(!MaterialStage::DEPTH_ONLY.needs_surface());
         assert!(prepass.state.depth_write);
 
-        let shading = &graph.passes()[1];
+        let shading = &graph.passes()[abi::MAX_LIGHTS + 1];
         assert!(matches!(
             shading.kind,
             PassKind::Geometry {
@@ -586,24 +634,77 @@ mod tests {
 
         // Loading the depth the prepass wrote is what orders the two.
         let schedule = graph.schedule().expect("the forward pass list schedules");
-        assert_eq!(schedule.order(), &[0, 1]);
-        assert_eq!(schedule.slots().len(), 1, "one depth texture, shared");
+        assert_eq!(
+            schedule.order(),
+            (0..abi::MAX_LIGHTS + 2).collect::<Vec<_>>()
+        );
+        // The shadow maps and the depth buffer: two textures, and the
+        // shadow maps are never handed to anything else because the frame
+        // group holds a view of them all frame.
+        assert_eq!(schedule.slots().len(), 2);
+    }
+
+    #[test]
+    fn every_pipeline_fills_one_shadow_slice_per_light_from_that_lights_view() {
+        for pipeline in StockPipeline::ALL {
+            let graph = pipeline.graph(config());
+            let maps = graph.shadow_maps().expect("shadow maps are declared");
+            let desc = graph.resource_desc(maps).expect("declared resource");
+            assert_eq!(desc.dimension, Dimension::D2Array);
+            assert_eq!(desc.layers, abi::MAX_LIGHTS as u32);
+            assert_eq!(desc.format, DEPTH_FORMAT);
+            // Nothing in the pass list reads it — the frame group does —
+            // so both of these have to be spelled out.
+            assert!(desc.usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+            assert_ne!(desc.persistence, crate::pass::Persistence::Transient);
+
+            let shadow: Vec<&PassDesc> = graph
+                .passes()
+                .iter()
+                .filter(|pass| {
+                    matches!(
+                        pass.kind,
+                        PassKind::Geometry {
+                            stage: MaterialStage::SHADOW,
+                            ..
+                        }
+                    )
+                })
+                .collect();
+            assert_eq!(shadow.len(), abi::MAX_LIGHTS, "{pipeline}");
+            for (index, pass) in shadow.iter().enumerate() {
+                let index = index as u32;
+                assert_eq!(pass.view, PassView::Light { index });
+                let depth = pass.depth.expect("a shadow pass writes depth");
+                assert_eq!(depth.resource, maps);
+                assert_eq!(depth.layer, index, "one slice per light");
+                assert!(pass.color.is_empty());
+                // Two-sided: the milestone's cases are an alpha-tested
+                // leaf and a displaced surface, neither of them closed.
+                assert_eq!(pass.state.cull_mode, None);
+            }
+        }
     }
 
     #[test]
     fn the_deferred_pipeline_is_a_geometry_pass_and_a_screen_pass() {
         let graph = deferred_graph(config());
-        assert_eq!(graph.passes().len(), 2);
-        assert_eq!(graph.passes()[0].color.len(), abi::GBUFFER_TARGETS.len());
+        let material = abi::MAX_LIGHTS;
+        let lighting = material + 1;
+        assert_eq!(graph.passes().len(), lighting + 1);
+        assert_eq!(
+            graph.passes()[material].color.len(),
+            abi::GBUFFER_TARGETS.len()
+        );
         assert!(matches!(
-            graph.passes()[0].kind,
+            graph.passes()[material].kind,
             PassKind::Geometry {
                 stage: MaterialStage::GBUFFER,
                 ..
             }
         ));
         assert!(matches!(
-            graph.passes()[1].kind,
+            graph.passes()[lighting].kind,
             PassKind::Screen {
                 shader: ScreenShader::DeferredLighting
             }
@@ -611,11 +712,11 @@ mod tests {
         // The lighting pass reads every G-buffer target plus depth, and
         // those reads are what order it after the material pass.
         assert_eq!(
-            graph.passes()[1].reads.len(),
+            graph.passes()[lighting].reads.len(),
             abi::GBUFFER_TARGETS.len() + 1
         );
         let schedule = graph.schedule().expect("the deferred pass list schedules");
-        assert_eq!(schedule.order(), &[0, 1]);
+        assert_eq!(schedule.order(), (0..=lighting).collect::<Vec<_>>());
     }
 
     #[test]

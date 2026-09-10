@@ -4,7 +4,14 @@
 // `VertexIn`'s locations are the vertex buffer layout `wxsl-render`'s
 // `mesh` module declares; the two must be edited together.
 
-import package::wxsl::bindings::{camera, instance_normal_matrix, instances, scene};
+import package::wxsl::bindings::{
+    camera,
+    eye_position,
+    frame_time,
+    instance_normal_matrix,
+    instances,
+    world_origin,
+};
 import package::wxsl::surface::SurfaceContext;
 
 struct VertexIn {
@@ -61,13 +68,13 @@ fn vertex_context(input: VertexIn) -> VertexContext {
     var out: VertexContext;
     out.object_position = input.position;
     out.object_normal = input.normal;
-    out.world_position = world.xyz;
+    out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;
     out.world_bitangent = cross(normal, tangent) * input.tangent.w;
-    out.view_direction = normalize(camera.position - world.xyz);
+    out.view_direction = normalize(eye_position() - out.world_position);
     out.uv = input.uv;
-    out.time = scene.time;
+    out.time = frame_time();
     return out;
 }
 
@@ -87,7 +94,7 @@ fn transform_vertex_offset(input: VertexIn, offset: vec3f) -> VertexOut {
 
     var out: VertexOut;
     out.clip_position = camera.view_proj * world;
-    out.world_position = world.xyz;
+    out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;
     out.world_bitangent = cross(normal, tangent) * input.tangent.w;
@@ -115,8 +122,8 @@ fn surface_context(vertex: VertexOut) -> SurfaceContext {
     ctx.world_normal = normalize(vertex.world_normal);
     ctx.world_tangent = normalize(vertex.world_tangent);
     ctx.world_bitangent = normalize(vertex.world_bitangent);
-    ctx.view_direction = normalize(camera.position - vertex.world_position);
+    ctx.view_direction = normalize(eye_position() - vertex.world_position);
     ctx.uv = vertex.uv;
-    ctx.time = scene.time;
+    ctx.time = frame_time();
     return ctx;
 }

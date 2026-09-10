@@ -350,6 +350,8 @@ fn demo_environment(aspect: f32, time: f32) -> Environment {
         ambient_ground: Vec3::new(0.05, 0.04, 0.035),
         exposure: 1.0,
         time,
+        // Nothing here has a velocity stage to be the previous frame of.
+        previous_time: time,
     }
 }
 

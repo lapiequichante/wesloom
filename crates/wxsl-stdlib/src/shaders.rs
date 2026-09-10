@@ -30,6 +30,7 @@ modules! {
     "package::wxsl::bindings" => "wxsl/bindings.wxsl",
     "package::wxsl::surface" => "wxsl/surface.wxsl",
     "package::wxsl::vertex" => "wxsl/vertex.wxsl",
+    "package::wxsl::shadow" => "wxsl/shadow.wxsl",
     "package::wxsl::shading" => "wxsl/shading.wxsl",
     "package::wxsl::deferred" => "wxsl/deferred.wxsl",
     "package::wxsl::lighting_pass" => "wxsl/lighting_pass.wxsl",

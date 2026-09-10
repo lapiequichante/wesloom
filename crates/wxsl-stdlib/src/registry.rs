@@ -87,6 +87,7 @@ pub fn abi_nodes() -> Vec<NodeDefinition> {
     defs.push(abi::surface_output_def());
     defs.push(abi::vertex_output_def());
     defs.push(abi::discard_output_def());
+    defs.push(abi::varying_output_def());
     defs
 }
 
@@ -1027,12 +1028,12 @@ pub fn declaration_nodes() -> Vec<NodeDefinition> {
         NodeDefinition::builder("input.attribute", "Geometry attribute")
             .category("input")
             .doc(
-                "One attribute the geometry supplies: a per-vertex stream \
-                 the mesh carries, or a per-instance value the draw does. \
-                 The graph declares the attribute and its type; whether it \
-                 arrives per vertex or per instance is part of that \
-                 declaration and not of this node, so moving it from one \
-                 to the other rewires nothing.",
+                "One declared attribute: a per-vertex stream the mesh \
+                 carries, a per-instance value the draw supplies, or an \
+                 interpolant the graph's own vertex stage computed. The \
+                 graph declares the name, the type and which of the three \
+                 it is; none of that is on this node, so moving an \
+                 attribute between them rewires nothing.",
             )
             .setting(
                 SettingDef::new(
@@ -1250,6 +1251,10 @@ mod tests {
         // freshly placed node is most likely to want and the narrower of
         // the two in what it accepts.
         graph.declare_attribute(AttributeDecl::vertex("color", parameter_types()[0]));
+        // And `output.varying` writes one the graph declares as computed,
+        // under *its* default name. At `f32`, which is the first of
+        // `abi::INTERPOLANT_TYPES` and so the type it resolves to fresh.
+        graph.declare_attribute(AttributeDecl::computed("value", ValueType::F32));
         let mut resource_inputs = 0;
         for def in registry.iter() {
             if def.is_surface_output() {

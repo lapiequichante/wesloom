@@ -147,7 +147,26 @@ facade crate's feature set, not about the workspace.
   in the fragment stage, a mesh that cannot supply a stream reported by
   name, and a glTF file's `COLOR_0` driving a graph. Skips with no
   adapter.
-- The two share `crates/wxsl/tests/probe/mod.rs`, and that is the point:
+- `cargo test -p wxsl --test shadows` — shadows on a real device, and
+  the only place M5's partitioning is checked for being *right* rather
+  than for compiling: an alpha-discarding material casting a perforated
+  shadow and a displacing one casting a displaced shadow are true only
+  if those subgraphs reached a stage that writes no colour. Also that
+  forward and deferred shade the same ground identically, which is what
+  keeps one `shadow_factor` in `shading.wxsl` rather than two. Skips with
+  no adapter.
+- `cargo test -p wxsl --test interpolants` — a value the vertex partition
+  computes arriving in the fragment stage, two of them not crossing
+  locations, and the four ways of declaring one wrong. The GPU half
+  matters because a location the two entry points number differently
+  compiles fine and draws the wrong thing.
+- `cargo test -p wxsl --test frame_of_reference` — the two ABI flags
+  nothing consumes yet: `wxsl_relative_to_eye` must change no pixel near
+  the origin (an exact equality, because the algebra cancels), and
+  `wxsl_previous_frame` must move every time-driven node back one frame
+  at once.
+- The geometry tests share `crates/wxsl/tests/probe/mod.rs`, and that is
+  the point:
   the computed uniform layout and the computed instance row are the only
   host-shared layouts in the repo with no `#[repr(C)]` mirror to check
   them against, so they get by test what the mirrors get by construction —

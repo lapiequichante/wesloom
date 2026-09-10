@@ -570,6 +570,9 @@ pub fn preview_environment(time: f32) -> Environment {
         ambient_ground: Vec3::new(0.05, 0.05, 0.06),
         exposure: 1.0,
         time,
+        // The preview has no velocity stage; there is nothing to be the
+        // previous frame *of*.
+        previous_time: time,
     }
 }
 

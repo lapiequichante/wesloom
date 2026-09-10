@@ -88,6 +88,7 @@ impl ShaderLibrary {
         for module in [
             abi::SURFACE_MODULE,
             abi::VERTEX_MODULE,
+            abi::SHADOW_MODULE,
             abi::SHADING_MODULE,
             abi::DEFERRED_MODULE,
             abi::LIGHTING_PASS_MODULE,

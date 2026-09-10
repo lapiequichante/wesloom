@@ -63,9 +63,21 @@ declares (`wxsl_core::node::SettingDef`). Distinct from a node's label and
 colour, which are metadata a reader chooses and codegen never sees
 (ADR 0019).
 
-**Terminal** — a graph's output node. There are three:
-`output.surface` (required), `output.vertex` (an object-space position
-offset) and `output.discard`. Each is the root of its own **partition**.
+**Terminal** — a graph's output node. `output.surface` (required),
+`output.vertex` (an object-space position offset), `output.discard`, and
+one `output.varying` per declared **interpolant**. Each is the root of
+its own **partition**.
+
+**Interpolant** — a value the graph's own vertex stage computes and the
+fragment stage reads back down an inter-stage location. Declared as an
+attribute of frequency `computed`, written by `output.varying`, and read
+by the same `input.attribute` node that reads a stream the mesh carries.
+See [ADR 0027](adr/0027-a-graph-computes-its-own-interpolants.md).
+
+**View** — a point of view a pass renders from: the camera, or the one a
+light casts its shadow from. Named by `PassDesc::view`, and reached by a
+dynamic offset on the frame group's camera binding, so no shader knows
+which one it is running under. See [ADR 0026](adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md).
 
 **Partition** — the subgraph reachable from one terminal, compiled into
 one function. A node reachable from two terminals is compiled into both.

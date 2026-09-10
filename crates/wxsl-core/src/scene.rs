@@ -226,7 +226,7 @@ pub enum MeshSource {
 }
 
 /// One material in a scene: the graph, the macro values it was authored
-/// with, and the tags it draws under.
+/// with, the tags it draws under, and how it takes part in shadowing.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MaterialEntry {
@@ -241,17 +241,47 @@ pub struct MaterialEntry {
     /// What this material *is*, for a pass to select on.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tags: Tags,
+    /// Whether the shadow passes draw this material.
+    ///
+    /// A property of the material in the same way its tags are — what it
+    /// *is*, not how it is drawn — and on by default, because a material
+    /// nobody thought about should behave like an object.
+    #[cfg_attr(feature = "serde", serde(default = "yes"))]
+    pub cast_shadow: bool,
+    /// Whether this material's shading is attenuated by the shadow maps.
+    ///
+    /// Unlike [`MaterialEntry::cast_shadow`] this one changes the
+    /// generated code: off means the lookup is not compiled at all
+    /// ([ADR 0026](../../../docs/adr/0026-a-material-casts-and-receives-shadows.md)).
+    #[cfg_attr(feature = "serde", serde(default = "yes"))]
+    pub receive_shadow: bool,
+}
+
+/// The default of both shadow flags. A function because that is the shape
+/// `serde(default = ...)` takes.
+fn yes() -> bool {
+    true
 }
 
 impl MaterialEntry {
-    /// A named material from `graph`, tagged `opaque`.
+    /// A named material from `graph`, tagged `opaque`, casting and
+    /// receiving shadows.
     pub fn new(name: impl Into<String>, graph: Graph) -> Self {
         MaterialEntry {
             name: name.into(),
             graph,
             macros: MacroSet::new(),
             tags: Tags::from_iter([TAG_OPAQUE]),
+            cast_shadow: true,
+            receive_shadow: true,
         }
+    }
+
+    /// Set both shadow flags.
+    pub fn with_shadows(mut self, cast: bool, receive: bool) -> Self {
+        self.cast_shadow = cast;
+        self.receive_shadow = receive;
+        self
     }
 
     /// Replace the tags.

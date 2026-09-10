@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted
+Status: Accepted, amended by [0027](0027-a-graph-computes-its-own-interpolants.md)
 
 Amends [0008](0008-surface-graphs-and-a-named-shader-abi.md),
 [0010](0010-four-bind-groups-allocated-by-update-frequency.md)
@@ -223,3 +223,16 @@ rules are ever got wrong.
 If this changes, also update `wxsl_core::abi`'s vertex and instance
 tables, `docs/architecture.md`'s bind-group table, and
 `crates/wxsl-stdlib/shaders/README.md`'s.
+
+## Amendment (ADR 0027)
+
+A third frequency: `AttributeFrequency::Computed`, a value the graph's own
+vertex stage produces rather than one the geometry supplies. The reading
+node is unchanged — this ADR's claim that which backing a name has is the
+declaration's business and not the node's is what makes that possible —
+and the writing side is a terminal, `output.varying`.
+
+The accountant here now counts three kinds of spender rather than two, and
+interpolants are numbered *after* everything the geometry brings so that
+declaring one never moves a vertex attribute's location. See
+[0027](0027-a-graph-computes-its-own-interpolants.md).

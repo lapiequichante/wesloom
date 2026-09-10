@@ -16,15 +16,83 @@
 //! graph ([`Material::from_graph_with_macros`]), which is what a "toggle
 //! this at runtime" UI wants: the graph keeps the values it was authored
 //! with, and the override lives with the material instance.
+//!
+//! # Shadows, on either side
+//!
+//! Two flags say how a material takes part in shadowing, and they are as
+//! much a property of the material as its tags are: `cast_shadow` is
+//! whether the shadow passes draw it at all, and `receive_shadow` is
+//! whether its shading samples the maps. They land in different places
+//! because they *are* different things — one is a selection, the other is
+//! code — and [`MaterialOptions`] is where an author sets both at once
+//! ([ADR 0026](../../../docs/adr/0026-a-material-casts-and-receives-shadows.md)).
 
-use wxsl_core::abi::MaterialStage;
+use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
-use wxsl_core::macros::MacroSet;
+use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::resources::{BufferLayout, FieldLayout, MaterialInterface, VertexAttributeBinding};
 
 use crate::error::RenderError;
+
+/// How a material is compiled, beyond the graph itself.
+///
+/// Everything an author sets on a material that is not a node: the macro
+/// overrides, and the two shadow flags.
+#[derive(Clone, Debug)]
+pub struct MaterialOptions {
+    /// Macro values taking precedence over the ones the graph pins.
+    pub macros: MacroSet,
+    /// Whether the shadow passes draw this material.
+    ///
+    /// Off for anything a shadow would only get in the way of: a ground
+    /// plane, a skybox, a glowing decal. A selection, not code — the
+    /// generated modules of a material that casts and one that does not
+    /// are identical.
+    pub cast_shadow: bool,
+    /// Whether this material's shading is attenuated by the shadow maps.
+    ///
+    /// Code, not a selection: it is
+    /// [`abi::FEATURE_RECEIVE_SHADOWS`], so a material that does not
+    /// receive shadows does not compile the lookup and the variant cache
+    /// keeps the two apart on their macro sets.
+    pub receive_shadow: bool,
+}
+
+impl Default for MaterialOptions {
+    fn default() -> Self {
+        MaterialOptions {
+            macros: MacroSet::new(),
+            cast_shadow: true,
+            receive_shadow: true,
+        }
+    }
+}
+
+impl MaterialOptions {
+    /// The defaults, with `macros` on top.
+    pub fn with_macros(macros: MacroSet) -> Self {
+        MaterialOptions {
+            macros,
+            ..MaterialOptions::default()
+        }
+    }
+
+    /// The macro set these options compile with: `macros`, plus the
+    /// receive-shadows flag they pin.
+    ///
+    /// The flag wins over anything the graph or the caller put under the
+    /// same name, because it is the field's whole meaning.
+    fn effective_macros(&self) -> MacroSet {
+        let mut macros = self.macros.clone();
+        macros.set(
+            abi::FEATURE_RECEIVE_SHADOWS,
+            MacroValue::Flag(self.receive_shadow),
+        );
+        macros
+    }
+}
 
 /// A graph compiled to WXSL, one module per stage.
 #[derive(Clone, Debug)]
@@ -47,12 +115,14 @@ pub struct Material {
     /// buffers are grouped by — and, like [`Material::signature`], it
     /// cannot change while the material exists.
     instance_signature: String,
+    cast_shadow: bool,
+    receive_shadow: bool,
 }
 
 impl Material {
     /// Compile `graph` with the macro values the graph and the ABI ask for.
     pub fn from_graph(graph: &Graph, registry: &NodeRegistry) -> Result<Self, RenderError> {
-        Self::from_graph_with_macros(graph, registry, &MacroSet::new())
+        Self::with_options(graph, registry, &MaterialOptions::default())
     }
 
     /// Compile `graph`, with `overrides` taking precedence over the macro
@@ -66,21 +136,47 @@ impl Material {
         registry: &NodeRegistry,
         overrides: &MacroSet,
     ) -> Result<Self, RenderError> {
+        Self::with_options(
+            graph,
+            registry,
+            &MaterialOptions::with_macros(overrides.clone()),
+        )
+    }
+
+    /// Compile `graph` under `options`.
+    pub fn with_options(
+        graph: &Graph,
+        registry: &NodeRegistry,
+        options: &MaterialOptions,
+    ) -> Result<Self, RenderError> {
+        let overrides = options.effective_macros();
         let mut stages = Vec::with_capacity(MaterialStage::ALL.len());
         for stage in MaterialStage::ALL {
-            let options = CodegenOptions {
+            let codegen_options = CodegenOptions {
                 stage: *stage,
                 override_macros: overrides.clone(),
                 ..CodegenOptions::default()
             };
-            stages.push(codegen::generate(graph, registry, &options)?);
+            stages.push(codegen::generate(graph, registry, &codegen_options)?);
         }
         Ok(Material {
             name: graph.name().to_string(),
             signature: stages[0].interface.signature(),
             instance_signature: stages[0].interface.geometry.instance().signature(),
             stages,
+            cast_shadow: options.cast_shadow,
+            receive_shadow: options.receive_shadow,
         })
+    }
+
+    /// Whether the shadow passes draw this material.
+    pub fn cast_shadow(&self) -> bool {
+        self.cast_shadow
+    }
+
+    /// Whether this material's shading is attenuated by the shadow maps.
+    pub fn receive_shadow(&self) -> bool {
+        self.receive_shadow
     }
 
     /// The generated module for `stage`.

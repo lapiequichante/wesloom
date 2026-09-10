@@ -29,6 +29,17 @@ struct Light {
     kind: f32,
     color: vec3f,
     intensity: f32,
+    // World space to this light's clip space, for looking its shadow map
+    // up. Meaningless — and never read — when `shadow_slice` is negative.
+    shadow_view_proj: mat4x4f,
+    // Which layer of `shadow_maps` this light rendered into, or -1 for a
+    // light that casts no shadow. The slice is the light's own index, so
+    // that turning shadows off for one light does not renumber the others.
+    shadow_slice: i32,
+    // How far along the surface normal a shadow lookup is nudged before it
+    // is compared, in world units. See `shadow.wxsl`.
+    shadow_normal_bias: f32,
+    _pad0: vec2f,
 }
 
 struct Scene {
@@ -41,7 +52,11 @@ struct Scene {
     light_count: u32,
     time: f32,
     exposure: f32,
-    _pad2: f32,
+    // What `time` was last frame. A velocity stage compiles the same
+    // graph with `wxsl_previous_frame` on and gets last frame's answer
+    // out of every time-driven node, which is the only way a motion
+    // vector is right for an object the *graph* moves.
+    previous_time: f32,
 }
 
 struct Instance {
@@ -61,6 +76,60 @@ struct Instance {
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> scene: Scene;
 @group(0) @binding(2) var<storage, read> instances: array<Instance>;
+// Where every world-space position in the shader ABI is measured from.
+//
+// Zero normally. Under `wxsl_relative_to_eye` it is the camera, so that
+// `world_position` stays small however far from the origin the scene sits
+// — an f32 loses a millimetre of resolution somewhere past 10^4 units, and
+// the fix is to never let the number get big rather than to widen it.
+//
+// This is the "explicit absolute origin" a node needs in order to read
+// absolute world space at all in that mode: `world_position +
+// world_origin()`. Everything in this ABI that has to work in absolute
+// space — a point light's falloff, a shadow lookup — does exactly that,
+// which is why the flag is correct today. What it is not yet is *useful*:
+// the precision only arrives once model matrices are pre-translated by the
+// camera in f64 on the host, which is M10's half of the job.
+@macro const wxsl_relative_to_eye: bool = false;
+
+@if(wxsl_relative_to_eye)
+fn world_origin() -> vec3f {
+    return camera.position;
+}
+
+@if(!wxsl_relative_to_eye)
+fn world_origin() -> vec3f {
+    return vec3f(0.0, 0.0, 0.0);
+}
+
+// Where the eye is, in the same frame as `world_position` — and therefore
+// exactly zero under `wxsl_relative_to_eye`.
+fn eye_position() -> vec3f {
+    return camera.position - world_origin();
+}
+
+// Which frame's clock a time-driven node reads.
+//
+// One switch rather than a second `input.time` node: a velocity stage
+// wants *every* time-driven node in the graph to answer for the previous
+// frame at once, and a node the author has to remember to swap is a node
+// they will forget.
+@macro const wxsl_previous_frame: bool = false;
+
+@if(wxsl_previous_frame)
+fn frame_time() -> f32 {
+    return scene.previous_time;
+}
+
+@if(!wxsl_previous_frame)
+fn frame_time() -> f32 {
+    return scene.time;
+}
+
+// Bindings 3, 4 and 5 of this group are declared where they are used:
+// the per-instance attributes a material declares are generated into the
+// material's own module (ADR 0024), and the shadow maps are in
+// `shadow.wxsl` with the lookup that reads them.
 
 // One light's contribution at a point: unit vector towards the light, and the
 // radiance arriving along it.
@@ -81,7 +150,8 @@ fn sample_light(index: u32, world_position: vec3f) -> LightSample {
         out.radiance = light.color * light.intensity;
         return out;
     }
-    let offset = light.position_or_direction - world_position;
+    // The light's position is absolute; `world_position` may not be.
+    let offset = light.position_or_direction - world_origin() - world_position;
     let distance_squared = max(dot(offset, offset), 1e-4);
     out.direction = offset / sqrt(distance_squared);
     out.radiance = light.color * light.intensity / distance_squared;

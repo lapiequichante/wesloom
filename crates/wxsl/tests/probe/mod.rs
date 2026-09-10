@@ -82,6 +82,7 @@ pub fn unlit() -> Environment {
         ambient_ground: Vec3::ZERO,
         exposure: 1.0,
         time: 0.0,
+        previous_time: 0.0,
     }
 }
 
@@ -166,12 +167,26 @@ pub fn render_list(
     target: &OffscreenTarget,
     draws: &wxsl::render::DrawList<'_>,
 ) -> Result<Vec<u8>, wxsl::render::RenderError> {
+    render_list_in(gpu, renderer, target, draws, &unlit())
+}
+
+/// [`render_list`], in an environment of the caller's choosing.
+///
+/// What a test that is about the *environment* rather than the material
+/// needs: the frame clock, where the eye is, what is casting.
+pub fn render_list_in(
+    gpu: &GpuContext,
+    renderer: &mut Renderer,
+    target: &OffscreenTarget,
+    draws: &wxsl::render::DrawList<'_>,
+    environment: &Environment,
+) -> Result<Vec<u8>, wxsl::render::RenderError> {
     renderer.render(
         &gpu.device,
         &gpu.queue,
         &RenderRequest {
             view: target.view(),
-            environment: &unlit(),
+            environment,
             draws,
         },
     )?;

@@ -30,12 +30,19 @@ nodes.
   layout is computed from the graph rather than written twice, because
   there is no fixed struct to mirror
   ([ADR 0023](docs/adr/0023-a-material-declares-its-resources.md)).
-- Materials that **span shader stages**: a graph can move the vertex and
-  discard the fragment as well as shade it, and each of those is compiled
-  from its own subgraph into the passes that need it. A depth or shadow
-  pass compiles the displacement and the alpha test and leaves the rest of
-  the material out of the module
-  ([ADR 0025](docs/adr/0025-a-material-graph-spans-shader-stages.md)).
+- Materials that **span shader stages**: a graph can move the vertex,
+  discard the fragment and hand itself interpolants as well as shade, and
+  each of those is compiled from its own subgraph into the passes that
+  need it. A depth or shadow pass compiles the displacement and the alpha
+  test and leaves the rest of the material out of the module
+  ([ADR 0025](docs/adr/0025-a-material-graph-spans-shader-stages.md),
+  [ADR 0027](docs/adr/0027-a-graph-computes-its-own-interpolants.md)).
+- **Shadows** that follow what the graph did: a displacing material casts
+  a displaced shadow and an alpha-tested one casts a perforated shadow,
+  because the shadow pass compiles those parts of the graph and no
+  others. PCF over a per-light slice of a depth array, biased by normal
+  offset, read from the same function in both render paths
+  ([ADR 0026](docs/adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
 - Materials that **declare what they require of their geometry** too: a
   per-vertex stream the mesh must carry — a second UV set, a vertex
   colour, a wind weight — or a per-instance value the draw supplies, read

@@ -1,0 +1,96 @@
+// Shadow maps, and the one filtered lookup both render paths use.
+//
+// The two bindings below are part of the frame group (`abi::GROUP_FRAME`),
+// beside the camera and the lights: a shadow map is frame-global in exactly
+// the way the light it comes from is. Putting them here rather than in the
+// pass group is what lets the forward stage and the deferred lighting pass
+// share `shadow_factor` instead of each growing a lookup of its own.
+//
+// One slice per light, at a fixed resolution — `abi::SHADOW_MAP_RESOLUTION`
+// — and a light that casts no shadow has `shadow_slice < 0` and is skipped
+// before anything is sampled.
+
+import package::wxsl::bindings::{scene, world_origin};
+
+// How many texels either side of the centre the PCF kernel reaches. 1 is a
+// 3x3 kernel of hardware-filtered comparisons, which is nine fetches and
+// looks like a 4x4 box because each fetch is already bilinear.
+const WXSL_SHADOW_PCF_RADIUS: i32 = 1;
+
+@group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
+@group(0) @binding(5) var shadow_sampler: sampler_comparison;
+
+// How much of light `index` reaches `world_position`: 1.0 fully lit, 0.0
+// fully shadowed.
+//
+// `n_dot_l` is the cosine the caller already computed for its lighting
+// term, passed in rather than recomputed because the bias needs it: a
+// surface the light grazes is the one whose depth samples straddle a texel,
+// so it needs the most offset.
+//
+// # Why normal offset and not depth bias
+//
+// A constant depth bias moves the comparison, so it must be large enough
+// for the worst slope in the scene and then peels every contact shadow away
+// from its object. Offsetting the *sample point* along the surface normal
+// instead moves it sideways in the shadow map, which is where the error
+// actually is, and it costs nothing on a flat-on surface. It is also the
+// only one of the two that behaves on the two things a graph can do to
+// geometry: a displaced vertex has a normal that no longer matches its
+// position, and a perforated one has depth discontinuities everywhere.
+fn shadow_factor(
+    index: u32,
+    world_position: vec3f,
+    world_normal: vec3f,
+    n_dot_l: f32,
+) -> f32 {
+    let light = scene.lights[index];
+    // No slice, or a surface facing away from the light — which contributes
+    // nothing whether or not it is shadowed.
+    if light.shadow_slice < 0 || n_dot_l <= 0.0 {
+        return 1.0;
+    }
+
+    // tan(acos(n_dot_l)), clamped: how far along the surface one texel of
+    // depth error reaches at this angle.
+    let slope = clamp(sqrt(1.0 - n_dot_l * n_dot_l) / max(n_dot_l, 1e-3), 0.0, 4.0);
+    let offset = world_normal * light.shadow_normal_bias * (1.0 + slope);
+
+    // `shadow_view_proj` is absolute, so this is one of the two places
+    // that has to put the origin back (see `world_origin`).
+    let clip =
+        light.shadow_view_proj * vec4f(world_position + offset + world_origin(), 1.0);
+    let ndc = clip.xyz / clip.w;
+    // Past the far plane of the light's view: nothing was rendered there to
+    // cast a shadow, so it is lit rather than black.
+    if ndc.z <= 0.0 || ndc.z >= 1.0 {
+        return 1.0;
+    }
+    let uv = vec2f(ndc.x, -ndc.y) * 0.5 + vec2f(0.5);
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return 1.0;
+    }
+
+    let texel = 1.0 / vec2f(textureDimensions(shadow_maps));
+    var sum = 0.0;
+    var taps = 0.0;
+    for (var y = -WXSL_SHADOW_PCF_RADIUS; y <= WXSL_SHADOW_PCF_RADIUS; y = y + 1) {
+        for (var x = -WXSL_SHADOW_PCF_RADIUS; x <= WXSL_SHADOW_PCF_RADIUS; x = x + 1) {
+            let tap = uv + vec2f(f32(x), f32(y)) * texel;
+            // `...Level` rather than `textureSampleCompare`, which needs
+            // uniform control flow: this is called from inside a light loop
+            // after an early return, and a shadow map has no mip chain to
+            // pick a level from anyway.
+            sum = sum
+                + textureSampleCompareLevel(
+                    shadow_maps,
+                    shadow_sampler,
+                    tap,
+                    light.shadow_slice,
+                    ndc.z,
+                );
+            taps = taps + 1.0;
+        }
+    }
+    return sum / taps;
+}

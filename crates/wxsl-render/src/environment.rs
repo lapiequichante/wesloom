@@ -20,13 +20,13 @@ use glam::{Mat4, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
 
+use crate::pass::PassView;
+
 /// Maximum lights the scene uniform carries.
 ///
-/// Fixed rather than a macro variable: it is the length of an array in a
-/// host-shared buffer, so it cannot vary per shader variant without the Rust
-/// and WXSL sides disagreeing about the layout. Must match
-/// `WXSL_MAX_LIGHTS` in `shaders/wxsl/bindings.wxsl`.
-pub const MAX_LIGHTS: usize = 4;
+/// The ABI owns the number, because it is the length of an array in a
+/// host-shared buffer *and* the layer count of the shadow map array.
+pub const MAX_LIGHTS: usize = abi::MAX_LIGHTS;
 
 /// Where the camera is and what it can see.
 #[derive(Clone, Copy, Debug)]
@@ -79,13 +79,7 @@ impl Camera {
 
     /// The uniform this camera fills in.
     pub fn uniform(&self) -> CameraUniform {
-        let view_proj = self.view_proj();
-        CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            inverse_view_proj: view_proj.inverse().to_cols_array_2d(),
-            position: self.eye.to_array(),
-            _padding: 0.0,
-        }
+        CameraUniform::new(self.view_proj(), self.eye)
     }
 }
 
@@ -96,6 +90,16 @@ pub enum LightKind {
     Point,
     /// Infinitely far away: one direction, no falloff.
     Directional,
+}
+
+/// Where a light renders its shadow map from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowView {
+    /// World space to the light's clip space.
+    pub view_proj: Mat4,
+    /// Where the light's view sits, which is what a graph reading
+    /// `view_direction` in a shadow pass sees.
+    pub eye: Vec3,
 }
 
 /// One light.
@@ -110,9 +114,44 @@ pub struct Light {
     pub color: Vec3,
     /// Radiant intensity multiplier.
     pub intensity: f32,
+    /// Whether this light renders a shadow map.
+    ///
+    /// Only a [`LightKind::Directional`] light can: one slice is one point
+    /// of view, and a point light needs six. A point light asking for a
+    /// shadow gets none rather than a wrong one, and
+    /// [`Light::shadow_view`] is where that is decided.
+    pub casts_shadow: bool,
+    /// Half the edge of the world-space box a directional light shadows,
+    /// centred on the origin.
+    ///
+    /// Fixed and centred rather than fitted to the camera: cascades are
+    /// what make a shadow follow a view without blurring into nothing, and
+    /// they are a milestone of their own. Until then this is the knob that
+    /// trades area for texels.
+    pub shadow_extent: f32,
+    /// How deep the directional light's view is, along its own direction.
+    pub shadow_distance: f32,
+    /// How far along the surface normal a lookup is nudged before it is
+    /// compared, in world units. See `shaders/wxsl/shadow.wxsl`.
+    pub shadow_normal_bias: f32,
 }
 
 impl Light {
+    /// The shadow settings every light starts with: none.
+    ///
+    /// Off by default, because a shadow map is a pass per light and an
+    /// application that has not asked for one should not pay for four.
+    pub const DEFAULTS: Light = Light {
+        kind: LightKind::Directional,
+        position_or_direction: Vec3::Y,
+        color: Vec3::ONE,
+        intensity: 1.0,
+        casts_shadow: false,
+        shadow_extent: 8.0,
+        shadow_distance: 32.0,
+        shadow_normal_bias: 0.03,
+    };
+
     /// A point light at `position`.
     pub fn point(position: Vec3, color: Vec3, intensity: f32) -> Self {
         Light {
@@ -120,6 +159,7 @@ impl Light {
             position_or_direction: position,
             color,
             intensity,
+            ..Light::DEFAULTS
         }
     }
 
@@ -130,10 +170,65 @@ impl Light {
             position_or_direction: direction.normalize_or_zero(),
             color,
             intensity,
+            ..Light::DEFAULTS
         }
     }
 
-    fn uniform(&self) -> LightUniform {
+    /// Cast a shadow, over a box `extent` wide centred on the origin.
+    pub fn casting_shadow(mut self, extent: f32) -> Self {
+        self.casts_shadow = true;
+        self.shadow_extent = extent.max(1e-3);
+        self
+    }
+
+    /// Set the normal-offset bias, in world units.
+    pub fn with_normal_bias(mut self, bias: f32) -> Self {
+        self.shadow_normal_bias = bias;
+        self
+    }
+
+    /// The point of view this light renders its shadow map from, or
+    /// `None` when it casts none.
+    ///
+    /// An orthographic box along the light's direction, centred on the
+    /// origin and deep enough to contain what is in front of it. `directx`
+    /// is the same NDC convention [`Camera::view_proj`] uses, so a depth
+    /// written by one and compared by the other means the same thing.
+    pub fn shadow_view(&self) -> Option<ShadowView> {
+        if !self.casts_shadow || self.kind != LightKind::Directional {
+            return None;
+        }
+        let direction = self.position_or_direction.normalize_or_zero();
+        if direction.length_squared() < 1e-6 {
+            return None;
+        }
+        let half = self.shadow_extent.max(1e-3);
+        let depth = self.shadow_distance.max(half);
+        // `position_or_direction` points *towards* the light, so the eye
+        // sits that way from the origin and looks back at it.
+        let eye = direction * depth;
+        // Any up vector not parallel to the direction; a light straight
+        // overhead is the ordinary case and the one that would degenerate.
+        let up = if direction.y.abs() > 0.99 {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        };
+        let projection = glam::camera::rh::proj::directx::orthographic(
+            -half,
+            half,
+            -half,
+            half,
+            0.0,
+            depth * 2.0,
+        );
+        Some(ShadowView {
+            view_proj: projection * glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, up),
+            eye,
+        })
+    }
+
+    fn uniform(&self, shadow_slice: i32, shadow_view_proj: Mat4) -> LightUniform {
         LightUniform {
             position_or_direction: self.position_or_direction.to_array(),
             kind: match self.kind {
@@ -142,6 +237,10 @@ impl Light {
             },
             color: self.color.to_array(),
             intensity: self.intensity,
+            shadow_view_proj: shadow_view_proj.to_cols_array_2d(),
+            shadow_slice,
+            shadow_normal_bias: self.shadow_normal_bias,
+            _padding: [0.0; 2],
         }
     }
 }
@@ -165,6 +264,14 @@ pub struct Environment {
     pub exposure: f32,
     /// Seconds since the renderer started, for animated materials.
     pub time: f32,
+    /// What [`Environment::time`] was on the previous frame.
+    ///
+    /// Only read by a shader compiled with
+    /// [`abi::FEATURE_PREVIOUS_FRAME`], which is how a velocity stage gets
+    /// last frame's answer out of a time-driven graph.
+    /// [`Environment::advance`] keeps it up to date; an application that
+    /// has no velocity stage may leave it alone.
+    pub previous_time: f32,
 }
 
 impl Default for Environment {
@@ -176,11 +283,23 @@ impl Default for Environment {
             ambient_ground: Vec3::new(0.10, 0.08, 0.07),
             exposure: 1.0,
             time: 0.0,
+            previous_time: 0.0,
         }
     }
 }
 
 impl Environment {
+    /// Move the clock to `time`, remembering what it was.
+    ///
+    /// A method rather than a field an application sets twice, because
+    /// "the previous frame" is a fact about the sequence of frames and
+    /// getting it out of step is silent: the velocity stage would compute
+    /// a motion vector of zero and everything would look almost right.
+    pub fn advance(&mut self, time: f32) {
+        self.previous_time = self.time;
+        self.time = time;
+    }
+
     /// The uniform this environment fills in.
     ///
     /// Lights beyond [`MAX_LIGHTS`] are dropped: the alternative is silently
@@ -188,8 +307,15 @@ impl Environment {
     pub fn uniform(&self) -> SceneUniform {
         let mut lights = [LightUniform::zeroed(); MAX_LIGHTS];
         let count = self.lights.len().min(MAX_LIGHTS);
-        for (slot, light) in lights.iter_mut().zip(&self.lights[..count]) {
-            *slot = light.uniform();
+        for (index, (slot, light)) in lights.iter_mut().zip(&self.lights[..count]).enumerate() {
+            // A light's shadow slice is its own index, so turning shadows
+            // off for one does not renumber the others — and the pass that
+            // fills slice `i` is the one that was built for light `i`.
+            let (shadow_slice, view_proj) = match light.shadow_view() {
+                Some(view) => (index as i32, view.view_proj),
+                None => (-1, Mat4::IDENTITY),
+            };
+            *slot = light.uniform(shadow_slice, view_proj);
         }
         SceneUniform {
             lights,
@@ -200,8 +326,39 @@ impl Environment {
             light_count: count as u32,
             time: self.time,
             exposure: self.exposure,
-            _padding2: 0.0,
+            previous_time: self.previous_time,
         }
+    }
+
+    /// Every point of view this frame renders from, in [`PassView::slot`]
+    /// order: the camera, then one per light.
+    ///
+    /// Always the full length, so a pass's view slot is a fixed offset
+    /// rather than a lookup into whatever lights happen to exist. A light
+    /// that casts no shadow gets the camera's own view, which nothing ever
+    /// draws against — the pass built for it issues no draws at all.
+    pub fn views(&self) -> Vec<CameraUniform> {
+        let camera = self.camera.uniform();
+        let mut views = vec![camera; PassView::COUNT];
+        for (index, light) in self.lights.iter().take(MAX_LIGHTS).enumerate() {
+            let Some(view) = light.shadow_view() else {
+                continue;
+            };
+            let slot = PassView::Light {
+                index: index as u32,
+            }
+            .slot();
+            views[slot] = CameraUniform::new(view.view_proj, view.eye);
+        }
+        views
+    }
+
+    /// Whether light `index` renders a shadow map this frame.
+    pub fn light_casts_shadow(&self, index: u32) -> bool {
+        self.lights
+            .get(index as usize)
+            .filter(|_| (index as usize) < MAX_LIGHTS)
+            .is_some_and(|light| light.shadow_view().is_some())
     }
 }
 
@@ -218,6 +375,22 @@ pub struct CameraUniform {
     _padding: f32,
 }
 
+impl CameraUniform {
+    /// One point of view: its world-to-clip matrix and where it sits.
+    ///
+    /// Not only the camera's — a shadow pass fills one of these from the
+    /// light it renders for, which is what lets the shader keep reading
+    /// `camera` and mean whichever view the pass named.
+    pub fn new(view_proj: Mat4, position: Vec3) -> Self {
+        CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            inverse_view_proj: view_proj.inverse().to_cols_array_2d(),
+            position: position.to_array(),
+            _padding: 0.0,
+        }
+    }
+}
+
 /// Host mirror of `Light` in `shaders/wxsl/bindings.wxsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -230,6 +403,14 @@ pub struct LightUniform {
     pub color: [f32; 3],
     /// Intensity multiplier.
     pub intensity: f32,
+    /// World space to this light's clip space, for the shadow lookup.
+    pub shadow_view_proj: [[f32; 4]; 4],
+    /// Layer of the shadow map array this light rendered into, or -1 for a
+    /// light that casts no shadow.
+    pub shadow_slice: i32,
+    /// Normal-offset bias, in world units.
+    pub shadow_normal_bias: f32,
+    _padding: [f32; 2],
 }
 
 /// Host mirror of `Scene` in `shaders/wxsl/bindings.wxsl`.
@@ -250,7 +431,8 @@ pub struct SceneUniform {
     pub time: f32,
     /// Exposure multiplier.
     pub exposure: f32,
-    _padding2: f32,
+    /// What `time` was last frame.
+    pub previous_time: f32,
 }
 
 /// Host mirror of one element of `instances` in
@@ -406,10 +588,24 @@ impl InstanceRows {
 /// and WebGL does not — and WebGL is not a target
 /// ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
 pub struct FrameBindings {
-    camera: wgpu::Buffer,
+    /// Every point of view of the frame, one [`CameraUniform`] each at
+    /// [`FrameBindings::view_stride`] apart, addressed by a dynamic
+    /// offset. The camera is first; see [`PassView`].
+    views: wgpu::Buffer,
+    view_stride: u32,
     scene: wgpu::Buffer,
     instances: wgpu::Buffer,
     capacity: usize,
+    /// The shadow maps currently bound, and where they came from — the
+    /// pool's generation and slot — so that rebinding the same texture is
+    /// free. `None` while the placeholder is bound.
+    shadow_source: Option<(u64, usize)>,
+    shadow_view: wgpu::TextureView,
+    /// What [`ShadowMaps::Detached`] binds instead.
+    shadow_placeholder: wgpu::TextureView,
+    shadow_sampler: wgpu::Sampler,
+    /// Kept alive because the views above may be of it.
+    _shadow_fallback: wgpu::Texture,
     /// One buffer and bind group per *declared attribute* row shape,
     /// keyed by [`BufferLayout::signature`]. The empty shape — a material
     /// declaring none — is always present and is what a pass with no
@@ -418,28 +614,52 @@ pub struct FrameBindings {
     layout: wgpu::BindGroupLayout,
 }
 
-/// One attribute row shape's buffer and frame bind group.
+/// One attribute row shape's buffer and frame bind groups.
 struct InstanceGroup {
     buffer: wgpu::Buffer,
     /// In rows, not bytes.
     capacity: usize,
     stride: usize,
-    bind_group: wgpu::BindGroup,
+    bound: wgpu::BindGroup,
+    detached: wgpu::BindGroup,
+}
+
+/// Whether a frame bind group points at the real shadow maps.
+///
+/// Two groups per shape rather than one, for a `wgpu` rule with no way
+/// around it: a texture may not be sampled and written in the same pass,
+/// and a shadow pass has the frame group bound while drawing into the very
+/// texture its binding 4 points at. The shader never reads it — a shadow
+/// stage compiles no shading — but the usage tracker works on bind groups,
+/// not on what the shader does with them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowMaps {
+    /// The maps this frame rendered. What every pass that shades binds.
+    Bound,
+    /// A one-texel placeholder. What a pass *writing* the maps binds.
+    Detached,
 }
 
 impl FrameBindings {
     /// Create the buffers, layout and bind group.
     pub fn new(device: &wgpu::Device) -> Self {
-        let uniform = |label: &str, size: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        };
-        let camera = uniform("wxsl camera", size_of::<CameraUniform>() as u64);
-        let scene = uniform("wxsl scene", size_of::<SceneUniform>() as u64);
+        // One uniform per view, each at an offset the hardware will accept
+        // as a dynamic one.
+        let alignment = device.limits().min_uniform_buffer_offset_alignment;
+        let size = size_of::<CameraUniform>() as u32;
+        let view_stride = size.div_ceil(alignment.max(1)) * alignment.max(1);
+        let views = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wxsl views"),
+            size: u64::from(view_stride) * PassView::COUNT as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scene = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wxsl scene"),
+            size: size_of::<SceneUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let capacity = INITIAL_INSTANCE_CAPACITY;
         let instances = instance_buffer(
             device,
@@ -448,7 +668,46 @@ impl FrameBindings {
             capacity,
         );
 
-        let buffer = |binding: u32, storage: bool| wgpu::BindGroupLayoutEntry {
+        // A one-texel slice per light, cleared to nothing and never
+        // rendered into: a pipeline with no shadow passes still declares
+        // the bindings, and an unfilled binding is a validation error
+        // rather than a black frame.
+        let shadow_fallback = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wxsl shadow fallback"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: abi::MAX_LIGHTS as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let shadow_placeholder = shadow_fallback.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        // Until a pipeline with shadow passes hands its texture over, the
+        // placeholder is what everything reads: an empty depth map is a
+        // fully lit scene.
+        let shadow_view = shadow_placeholder.clone();
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("wxsl shadow sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            // `Less`: a fragment nearer than what the light saw is lit, so
+            // the comparison returns 1 where the sample survives.
+            compare: Some(wgpu::CompareFunction::Less),
+            ..Default::default()
+        });
+
+        let buffer = |binding: u32, storage: bool, dynamic: bool| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
@@ -457,7 +716,7 @@ impl FrameBindings {
                 } else {
                     wgpu::BufferBindingType::Uniform
                 },
-                has_dynamic_offset: false,
+                has_dynamic_offset: dynamic,
                 min_binding_size: None,
             },
             count: None,
@@ -465,21 +724,47 @@ impl FrameBindings {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("wxsl frame bindings"),
             entries: &[
-                buffer(abi::BINDING_CAMERA, false),
-                buffer(abi::BINDING_SCENE, false),
-                buffer(abi::BINDING_INSTANCES, true),
+                // Dynamic, because which point of view a pass renders from
+                // is the pass's business and the shader's `camera` is
+                // whichever one it named. A pipeline with no shadow passes
+                // binds offset zero and pays nothing.
+                buffer(abi::BINDING_CAMERA, false, true),
+                buffer(abi::BINDING_SCENE, false, false),
+                buffer(abi::BINDING_INSTANCES, true, false),
                 // Always here, whether or not the material being drawn
                 // declares anything: a frame group whose shape changed
                 // per material would invalidate every pipeline layout
                 // built against it.
-                buffer(abi::BINDING_INSTANCE_ATTRIBUTES, true),
+                buffer(abi::BINDING_INSTANCE_ATTRIBUTES, true, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_SHADOW_MAPS,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_SHADOW_SAMPLER,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
         let mut bindings = FrameBindings {
-            camera,
+            views,
+            view_stride,
             scene,
             instances,
             capacity,
+            shadow_source: None,
+            shadow_view,
+            shadow_placeholder,
+            shadow_sampler,
+            _shadow_fallback: shadow_fallback,
             groups: BTreeMap::new(),
             layout,
         };
@@ -503,6 +788,95 @@ impl FrameBindings {
         self.groups.keys().filter(|key| *key != BASE_SHAPE).count()
     }
 
+    /// Byte offset of one view in the views buffer — the dynamic offset a
+    /// pass rendering from it binds with.
+    pub fn view_offset(&self, view: PassView) -> u32 {
+        self.view_stride * view.slot() as u32
+    }
+
+    /// Bind `texture` as the shadow maps.
+    ///
+    /// `source` says where the view came from — the resource pool's
+    /// generation and slot — and rebinding the same one is free, which
+    /// matters because this is called every frame and rebuilding the bind
+    /// groups is not.
+    pub fn set_shadow_maps(
+        &mut self,
+        device: &wgpu::Device,
+        source: (u64, usize),
+        texture: &wgpu::TextureView,
+    ) {
+        if self.shadow_source == Some(source) {
+            return;
+        }
+        self.shadow_source = Some(source);
+        self.shadow_view = texture.clone();
+        self.rebuild_groups(device);
+    }
+
+    /// Rebuild every frame bind group from the buffers currently held.
+    fn rebuild_groups(&mut self, device: &wgpu::Device) {
+        let keys: Vec<String> = self.groups.keys().cloned().collect();
+        for key in keys {
+            let attributes = self.groups[&key].buffer.clone();
+            let bound = self.build_group(device, &attributes, ShadowMaps::Bound);
+            let detached = self.build_group(device, &attributes, ShadowMaps::Detached);
+            if let Some(group) = self.groups.get_mut(&key) {
+                group.bound = bound;
+                group.detached = detached;
+            }
+        }
+    }
+
+    /// One frame bind group over `attributes`.
+    fn build_group(
+        &self,
+        device: &wgpu::Device,
+        attributes: &wgpu::Buffer,
+        shadows: ShadowMaps,
+    ) -> wgpu::BindGroup {
+        let shadow_view = match shadows {
+            ShadowMaps::Bound => &self.shadow_view,
+            ShadowMaps::Detached => &self.shadow_placeholder,
+        };
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wxsl frame bindings"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_CAMERA,
+                    // The bound range is one view, not the whole array:
+                    // that is what a dynamic offset indexes.
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.views,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(size_of::<CameraUniform>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_SCENE,
+                    resource: self.scene.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_INSTANCES,
+                    resource: self.instances.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_INSTANCE_ATTRIBUTES,
+                    resource: attributes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_SHADOW_MAPS,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_SHADOW_SAMPLER,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+            ],
+        })
+    }
+
     /// Create or grow one shape's buffer, rebuilding its bind group when
     /// the buffer moves.
     fn ensure(&mut self, device: &wgpu::Device, key: &str, stride: usize, rows: usize) {
@@ -520,21 +894,16 @@ impl FrameBindings {
             None => rows.max(INITIAL_INSTANCE_CAPACITY),
         };
         let buffer = instance_buffer(device, "wxsl instance attributes", stride, grown);
-        let bind_group = frame_bind_group(
-            device,
-            &self.layout,
-            &self.camera,
-            &self.scene,
-            &self.instances,
-            &buffer,
-        );
+        let bound = self.build_group(device, &buffer, ShadowMaps::Bound);
+        let detached = self.build_group(device, &buffer, ShadowMaps::Detached);
         self.groups.insert(
             key.to_string(),
             InstanceGroup {
                 buffer,
                 capacity: grown,
                 stride,
-                bind_group,
+                bound,
+                detached,
             },
         );
     }
@@ -556,16 +925,7 @@ impl FrameBindings {
             size_of::<InstanceTransform>(),
             capacity,
         );
-        for group in self.groups.values_mut() {
-            group.bind_group = frame_bind_group(
-                device,
-                &self.layout,
-                &self.camera,
-                &self.scene,
-                &self.instances,
-                &group.buffer,
-            );
-        }
+        self.rebuild_groups(device);
     }
 
     /// Upload `environment` and every instance transform of the frame.
@@ -581,11 +941,16 @@ impl FrameBindings {
         transforms: &[InstanceTransform],
         rows: &InstanceRows,
     ) {
-        queue.write_buffer(
-            &self.camera,
-            0,
-            bytemuck::bytes_of(&environment.camera.uniform()),
-        );
+        // Every point of view the frame has, camera first: one write per
+        // view rather than one buffer per view, so a pass switches between
+        // them with a dynamic offset and nothing is rebound.
+        for (slot, view) in environment.views().iter().enumerate() {
+            queue.write_buffer(
+                &self.views,
+                u64::from(self.view_stride) * slot as u64,
+                bytemuck::bytes_of(view),
+            );
+        }
         queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&environment.uniform()));
 
         self.grow_instances(device, transforms.len());
@@ -620,18 +985,21 @@ impl FrameBindings {
     /// Falls back to the empty shape, which is right for a pass with no
     /// material behind it and harmless for one whose rows were never
     /// uploaded — such a draw has nothing to read.
-    pub fn instance_group(&self, signature: &str) -> &wgpu::BindGroup {
+    pub fn instance_group(&self, signature: &str, shadows: ShadowMaps) -> &wgpu::BindGroup {
         self.groups
             .get(signature)
             .or_else(|| self.groups.get(BASE_SHAPE))
-            .map(|group| &group.bind_group)
+            .map(|group| match shadows {
+                ShadowMaps::Bound => &group.bound,
+                ShadowMaps::Detached => &group.detached,
+            })
             .expect("the empty attribute shape is created up front")
     }
 
     /// The bind group for a material that declares no per-instance
     /// attributes.
-    pub fn bind_group(&self) -> &wgpu::BindGroup {
-        self.instance_group(BASE_SHAPE)
+    pub fn bind_group(&self, shadows: ShadowMaps) -> &wgpu::BindGroup {
+        self.instance_group(BASE_SHAPE, shadows)
     }
 }
 
@@ -653,39 +1021,6 @@ fn instance_buffer(
         size: (capacity.max(1) * stride.max(4)) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn frame_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    camera: &wgpu::Buffer,
-    scene: &wgpu::Buffer,
-    instances: &wgpu::Buffer,
-    attributes: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("wxsl frame bindings"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: abi::BINDING_CAMERA,
-                resource: camera.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: abi::BINDING_SCENE,
-                resource: scene.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: abi::BINDING_INSTANCES,
-                resource: instances.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: abi::BINDING_INSTANCE_ATTRIBUTES,
-                resource: attributes.as_entire_binding(),
-            },
-        ],
     })
 }
 
@@ -749,15 +1084,18 @@ mod tests {
         // vec3f aligns to 16 in WGSL, so every uniform struct is a multiple
         // of 16 bytes and each vec3 is padded to its own 16.
         assert_eq!(size_of::<CameraUniform>(), 64 + 64 + 16);
-        assert_eq!(size_of::<LightUniform>(), 32);
+        // Two vec3+scalar pairs, then a mat4x4f (aligned to 16, so it
+        // starts at 32), then the slice, the bias and their padding.
+        assert_eq!(size_of::<LightUniform>(), 16 + 16 + 64 + 16);
         assert_eq!(
             size_of::<SceneUniform>(),
-            MAX_LIGHTS * 32 + 16 + 16 + 16,
+            MAX_LIGHTS * 112 + 16 + 16 + 16,
             "scene uniform layout drifted from bindings.wxsl"
         );
         assert_eq!(size_of::<InstanceTransform>(), 128);
         for size in [
             size_of::<CameraUniform>(),
+            size_of::<LightUniform>(),
             size_of::<SceneUniform>(),
             size_of::<InstanceTransform>(),
         ] {
@@ -798,6 +1136,6 @@ mod tests {
         let light = Light::directional(Vec3::new(0.0, 3.0, 4.0), Vec3::ONE, 2.0);
         let length = light.position_or_direction.length();
         assert!((length - 1.0).abs() < 1e-6);
-        assert_eq!(light.uniform().kind, 1.0);
+        assert_eq!(light.uniform(-1, Mat4::IDENTITY).kind, 1.0);
     }
 }

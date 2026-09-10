@@ -20,7 +20,7 @@ use wxsl_core::node::NodeRegistry;
 use wxsl_core::scene::{MeshSource, Scene, SceneError, Tags};
 use wxsl_render::bindings::MaterialBindings;
 use wxsl_render::draw::{DrawItem, DrawList, InstanceAttributes};
-use wxsl_render::material::Material;
+use wxsl_render::material::{Material, MaterialOptions};
 use wxsl_render::mesh::Mesh;
 use wxsl_render::renderer::Renderer;
 use wxsl_render::RenderError;
@@ -78,12 +78,19 @@ impl SceneResources {
         let mut materials = Vec::with_capacity(scene.materials.len());
         for entry in &scene.materials {
             materials.push(
-                Material::from_graph_with_macros(&entry.graph, registry, &entry.macros).map_err(
-                    |error| LoadError::Material {
-                        material: entry.name.clone(),
-                        error,
+                Material::with_options(
+                    &entry.graph,
+                    registry,
+                    &MaterialOptions {
+                        macros: entry.macros.clone(),
+                        cast_shadow: entry.cast_shadow,
+                        receive_shadow: entry.receive_shadow,
                     },
-                )?,
+                )
+                .map_err(|error| LoadError::Material {
+                    material: entry.name.clone(),
+                    error,
+                })?,
             );
         }
 

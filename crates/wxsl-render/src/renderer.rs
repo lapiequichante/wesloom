@@ -40,12 +40,12 @@ use wxsl_core::abi::{self, MaterialStage};
 
 use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
-use crate::environment::{Environment, FrameBindings};
+use crate::environment::{Environment, FrameBindings, ShadowMaps};
 use crate::error::RenderError;
 use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
 use crate::library::ShaderLibrary;
 use crate::material::Material;
-use crate::pass::{DrawSource, PassKind, ScreenShader};
+use crate::pass::{DrawSource, PassKind, PassView, ScreenShader};
 use crate::pipeline::{MaterialGroups, PipelineCache, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::variants::{
@@ -503,7 +503,7 @@ impl Renderer {
         request: &RenderRequest<'_>,
     ) -> Result<(), RenderError> {
         self.poll_swap(device)?;
-        let plan = self.compile_frame(device, request.draws)?;
+        let plan = self.compile_frame(device, request.environment, request.draws)?;
 
         // One row per draw, in every shape the frame's materials asked
         // for — and the place a draw that forgot a declared per-instance
@@ -517,6 +517,17 @@ impl Renderer {
             &rows,
         );
         self.pool.configure(device, &self.schedule, self.target);
+        // After the pool, because this is the one resource read from
+        // outside the pass list: the frame group binds it, so the renderer
+        // is what carries the view across (`abi::BINDING_SHADOW_MAPS`).
+        if let Some(maps) = self.graph.shadow_maps() {
+            if let Some(slot) = self.schedule.slot(maps, self.pool.frame(), 0) {
+                if let Some(view) = self.pool.slot_view(slot) {
+                    self.bindings
+                        .set_shadow_maps(device, (self.pool.generation(), slot), view);
+                }
+            }
+        }
 
         // Destructured so the recording closure can hold the pipeline cache
         // mutably while the graph and the pool are borrowed alongside it.
@@ -530,6 +541,10 @@ impl Renderer {
             ..
         } = self;
 
+        // A pass drawing *into* the shadow maps must not also have them
+        // bound, so which of the two frame groups it gets is decided from
+        // what it writes.
+        let shadow_maps = graph.shadow_maps();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("wxsl frame"),
         });
@@ -540,6 +555,10 @@ impl Renderer {
             pool,
             &[(RenderGraph::TARGET, request.view)],
             |pass, encoder| {
+                let shadows = match shadow_maps {
+                    Some(maps) if pass.desc.written().any(|id| id == maps) => ShadowMaps::Detached,
+                    _ => ShadowMaps::Bound,
+                };
                 record_pass(
                     device,
                     bindings,
@@ -548,6 +567,7 @@ impl Renderer {
                     &plan,
                     request.draws,
                     pass,
+                    shadows,
                     encoder,
                 )
             },
@@ -566,12 +586,25 @@ impl Renderer {
     fn compile_frame(
         &mut self,
         device: &wgpu::Device,
+        environment: &Environment,
         draws: &DrawList<'_>,
     ) -> Result<FramePlan, RenderError> {
         let mut plan = FramePlan::default();
         for (index, pass) in self.graph.passes().iter().enumerate() {
             match &pass.kind {
                 PassKind::Geometry { source, stage } => {
+                    // A shadow pass built for a light that is not casting
+                    // this frame draws nothing at all. Its slice is still
+                    // cleared to the far plane, which reads as "lit" —
+                    // the same answer as an empty shadow map, for the cost
+                    // of a clear rather than of a pass list rebuilt every
+                    // time the application moves a light.
+                    if let PassView::Light { index: light } = pass.view {
+                        if !environment.light_casts_shadow(light) {
+                            plan.geometry.insert(index, Vec::new());
+                            continue;
+                        }
+                    }
                     let selected: Vec<u32> = match source {
                         DrawSource::Scene(selector) => {
                             draws.select(selector).map(|(index, _)| index).collect()
@@ -581,6 +614,14 @@ impl Renderer {
                     let mut variants = Vec::with_capacity(selected.len());
                     for instance in selected {
                         let item = &draws.items()[instance as usize];
+                        // The other half of the shadow story, and the one
+                        // that is a *selection*: a material that casts no
+                        // shadow is simply not drawn into one. Filtered
+                        // here rather than while recording, so it does not
+                        // compile a variant it will never draw.
+                        if *stage == MaterialStage::SHADOW && !item.material.cast_shadow() {
+                            continue;
+                        }
                         // Before anything is recorded: a mesh that cannot
                         // supply what the material declares is an error
                         // naming all three, not a `wgpu` complaint about
@@ -641,6 +682,7 @@ fn record_pass(
     plan: &FramePlan,
     draws: &DrawList<'_>,
     pass: &RecordedPass<'_>,
+    shadows: ShadowMaps,
     encoder: PassEncoder<'_, '_>,
 ) -> Result<(), RenderError> {
     let index = pass.index;
@@ -649,7 +691,12 @@ fn record_pass(
             let Some(entries) = plan.geometry.get(&index) else {
                 return Ok(());
             };
-            render.set_bind_group(abi::GROUP_FRAME, bindings.bind_group(), &[]);
+            // Which point of view this pass renders from, as the dynamic
+            // offset of the frame group's camera binding. Zero for
+            // everything but a shadow pass, so the mechanism is invisible
+            // to a pipeline that has none.
+            let view = &[bindings.view_offset(pass.desc.view)];
+            render.set_bind_group(abi::GROUP_FRAME, bindings.bind_group(shadows), view);
             if let Some(group) = pass.pass_bind_group.as_ref() {
                 render.set_bind_group(abi::GROUP_PASS, group, &[]);
             }
@@ -662,7 +709,11 @@ fn record_pass(
                 let item = &draws.items()[*instance as usize];
                 let shape = item.material.instance_signature();
                 if bound_shape != Some(shape) {
-                    render.set_bind_group(abi::GROUP_FRAME, bindings.instance_group(shape), &[]);
+                    render.set_bind_group(
+                        abi::GROUP_FRAME,
+                        bindings.instance_group(shape, shadows),
+                        view,
+                    );
                     bound_shape = Some(shape);
                 }
                 let groups = layouts.layouts(device, item.material.interface());
@@ -742,7 +793,11 @@ fn record_pass(
                 &pass.pass_bindings,
             );
             render.set_pipeline(pipeline);
-            render.set_bind_group(abi::GROUP_FRAME, bindings.bind_group(), &[]);
+            render.set_bind_group(
+                abi::GROUP_FRAME,
+                bindings.bind_group(shadows),
+                &[bindings.view_offset(pass.desc.view)],
+            );
             if let Some(group) = pass.pass_bind_group.as_ref() {
                 render.set_bind_group(abi::GROUP_PASS, group, &[]);
             }

@@ -41,6 +41,7 @@ use crate::pipeline::TargetConfig;
 pub struct RenderGraph {
     resources: Vec<ResourceDesc>,
     passes: Vec<PassDesc>,
+    shadow_maps: Option<ResourceId>,
 }
 
 impl RenderGraph {
@@ -52,6 +53,7 @@ impl RenderGraph {
         RenderGraph {
             resources: vec![ResourceDesc::imported("target", format)],
             passes: Vec::new(),
+            shadow_maps: None,
         }
     }
 
@@ -81,6 +83,27 @@ impl RenderGraph {
     /// Look up a resource description.
     pub fn resource_desc(&self, id: ResourceId) -> Option<&ResourceDesc> {
         self.resources.get(id.index())
+    }
+
+    /// Declare `desc` as the graph's shadow maps: the layered depth texture
+    /// the renderer binds into the frame group.
+    ///
+    /// Named rather than inferred, because this is the one resource read
+    /// from *outside* the graph. Every other read is a
+    /// [`crate::pass::Read`] and therefore an ordering edge and a usage
+    /// flag; this one is bound beside the camera and the lights, where a
+    /// pass list has no say (`abi::BINDING_SHADOW_MAPS`). The shadow passes
+    /// still order correctly because nothing else writes the resource and
+    /// declaration order is the tie-break.
+    pub fn declare_shadow_maps(&mut self, desc: ResourceDesc) -> ResourceId {
+        let id = self.resource(desc);
+        self.shadow_maps = Some(id);
+        id
+    }
+
+    /// The shadow maps, if this pipeline has any.
+    pub fn shadow_maps(&self) -> Option<ResourceId> {
+        self.shadow_maps
     }
 
     /// Order the passes, validate them, and decide which physical texture
@@ -349,8 +372,13 @@ impl RenderGraph {
                     entry.label = format!("{} [{ring}]", slot_desc.label);
                 }
                 slots.push(entry);
-                // A persistent slot is never free for anything else.
-                slot_free_after.push(if length > 1 { usize::MAX } else { last[index] });
+                // A persistent slot is never free for anything else — a
+                // ring of one included. `Persistent { history: 0 }` is how
+                // a resource says "somebody outside the pass list holds a
+                // view of me", and handing its texture to a later transient
+                // would rebind that view to someone else's contents.
+                let transient = desc.persistence == Persistence::Transient;
+                slot_free_after.push(if transient { last[index] } else { usize::MAX });
             }
             allocations[index] = Allocation::Ring { base, length };
         }
@@ -598,6 +626,7 @@ pub struct ResourcePool {
     bind_groups: HashMap<(Vec<PassBinding>, Vec<usize>), wgpu::BindGroup>,
     bind_layouts: HashMap<Vec<PassBinding>, wgpu::BindGroupLayout>,
     frame: u64,
+    generation: u64,
 }
 
 struct Slot {
@@ -636,7 +665,23 @@ impl ResourcePool {
             bind_groups: HashMap::new(),
             bind_layouts: HashMap::new(),
             frame: 0,
+            generation: 0,
         }
+    }
+
+    /// How many times the pool has actually reallocated.
+    ///
+    /// What anything holding a view of a slot watches: the views a caller
+    /// took out are stale exactly when this has moved on, and no more
+    /// often — [`ResourcePool::configure`] runs every frame and usually
+    /// does nothing.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The whole-resource view of one slot, for binding it as a texture.
+    pub fn slot_view(&self, slot: usize) -> Option<&wgpu::TextureView> {
+        self.slots.get(slot).map(|slot| &slot.view)
     }
 
     /// The frame counter the ring rotation is taken modulo.
@@ -681,6 +726,7 @@ impl ResourcePool {
         }
         self.layout = schedule.slots().to_vec();
         self.target = Some(target);
+        self.generation += 1;
     }
 
     /// The texture serving one slot, if the pool has been configured.

@@ -274,7 +274,7 @@ the renderer scene-graph-free.
 
 ## What a material graph is
 
-Three terminals, not one.
+Several terminals, not one.
 
 * **`output.surface`** — the material, evaluated per fragment. Required,
   and unique.
@@ -284,6 +284,9 @@ Three terminals, not one.
   same thing as `alpha`: alpha is a blend weight the deferred path cannot
   honour and does not stop depth being written, while a discarded
   fragment leaves a hole that a shadow can shine through.
+* **`output.varying`** — one per declared interpolant: a value the vertex
+  stage computes and the fragment stage reads back
+  ([ADR 0027](adr/0027-a-graph-computes-its-own-interpolants.md)).
 
 Codegen partitions the graph by reachability **from each terminal
 separately**, and emits one function per partition: `wxsl_vertex`,
@@ -306,7 +309,8 @@ The vertex side reads a `VertexContext`, which is a *superset* of the
 computed before any displacement. So `input.uv` is one node that works in
 either stage, and the only vertex-only inputs are the two object-space
 ones — reading those from the fragment side is a named error rather than
-a compile failure.
+a compile failure. The mirror mistake is named too: a computed
+interpolant read from the vertex stage, which is the stage computing it.
 
 ## What a material declares
 
@@ -332,13 +336,40 @@ point of all of it:
 A fourth thing it can ask for does not come in through a bind group at
 all:
 
-* **Attributes the geometry supplies** (`Graph::attributes`, read by
-  `input.attribute`). Per vertex, and the mesh must carry a stream of that
-  name; or per instance, and the draw must supply a value. Which of the
-  two is part of the *declaration* and not of the reading node, so moving
-  an attribute between them rewires nothing. A mesh or a draw that cannot
+* **Attributes** (`Graph::attributes`, read by `input.attribute`). Per
+  vertex, and the mesh must carry a stream of that name; per instance,
+  and the draw must supply a value; or **computed**, and the graph's own
+  vertex stage writes it through `output.varying`. Which of the three is
+  part of the *declaration* and not of the reading node, so moving an
+  attribute between them rewires nothing. A mesh or a draw that cannot
   supply one is an error naming the material, the attribute and the mesh
   — reported while the frame is compiled, before a pass is opened.
+
+And two flags, which are facts about the material in the way its tags
+are: **`cast_shadow`**, whether the shadow passes draw it, and
+**`receive_shadow`**, whether its shading is attenuated by the maps. The
+first is a selection and changes no generated code; the second is a macro
+and so a variant of its own ([ADR 0026](adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
+
+## How a shadow gets there
+
+One depth 2D texture array, one slice per light, in the **frame group**
+beside the lights themselves — so `shading.wxsl` has one `shadow_factor`
+and the forward stage and the deferred lighting pass both inherit it.
+
+A pass renders from a **view**: `PassDesc::view` names the camera or a
+light, and the frame group's camera binding is addressed by a dynamic
+offset, so `camera.view_proj` in a shadow pass is the light's and
+`transform_vertex` never learns that shadows exist. Both stock pipelines
+declare one shadow pass per light slot up front; a slot whose light is
+not casting is cleared and drawn into by nothing, which reads as fully
+lit.
+
+The lookup is PCF over a comparison sampler, biased by **normal offset**
+rather than depth bias — the sample point moves along the surface normal
+instead of the comparison moving, which is where the error actually is
+and the only version that behaves on a displaced vertex or a perforated
+surface.
   [ADR 0024](adr/0024-a-material-declares-the-geometry-it-requires.md).
 
 Each declaring node carries a **setting** — a string the node instance

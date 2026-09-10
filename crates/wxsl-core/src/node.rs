@@ -968,6 +968,15 @@ pub enum NodeBody {
     VertexOutput,
     /// The graph's discard terminal: whether to throw the fragment away.
     DiscardOutput,
+    /// A terminal writing one declared interpolant, named by the setting
+    /// [`SETTING_NAME`].
+    ///
+    /// Several per graph, unlike the other three, because each declared
+    /// interpolant is its own root and its own partition. The reading
+    /// side is an ordinary [`NodeBody::AttributeRead`]: from the fragment
+    /// side there is nothing to tell a value the vertex stage computed
+    /// from one the mesh carried.
+    VaryingOutput,
 }
 
 /// Setting name every [`NodeBody::Param`] and [`NodeBody::Resource`] node
@@ -1229,6 +1238,20 @@ impl NodeDefinition {
         matches!(self.body, NodeBody::DiscardOutput)
     }
 
+    /// Whether this writes one declared interpolant.
+    pub fn is_varying_output(&self) -> bool {
+        matches!(self.body, NodeBody::VaryingOutput)
+    }
+
+    /// Whether this is a terminal of any kind — a root partitioning
+    /// starts from, rather than a node something else reads.
+    pub fn is_terminal(&self) -> bool {
+        self.is_surface_output()
+            || self.is_vertex_output()
+            || self.is_discard_output()
+            || self.is_varying_output()
+    }
+
     /// Whether this node can only be compiled into the vertex stage.
     pub fn is_vertex_only(&self) -> bool {
         matches!(self.body, NodeBody::VertexContextRead(_))
@@ -1427,6 +1450,22 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
+    /// Finish with a [`NodeBody::VaryingOutput`] body.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the definition declares the [`SETTING_NAME`] setting
+    /// that says which interpolant it writes.
+    pub fn varying_output(mut self) -> NodeDefinition {
+        assert!(
+            self.def.setting(SETTING_NAME).is_some(),
+            "varying output `{}` must declare a `{SETTING_NAME}` setting",
+            self.def.id
+        );
+        self.def.body = NodeBody::VaryingOutput;
+        self.build()
+    }
+
     /// Finish with a [`NodeBody::VertexContextRead`] body.
     ///
     /// # Panics
@@ -1451,7 +1490,10 @@ impl NodeDefinitionBuilder {
         // built. Nothing else may be.
         let terminal = matches!(
             self.def.body,
-            NodeBody::SurfaceOutput | NodeBody::VertexOutput | NodeBody::DiscardOutput
+            NodeBody::SurfaceOutput
+                | NodeBody::VertexOutput
+                | NodeBody::DiscardOutput
+                | NodeBody::VaryingOutput
         );
         if !terminal {
             for socket in &self.def.inputs {

@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted
+Status: Accepted, amended by [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0027](0027-a-graph-computes-its-own-interpolants.md)
 
 Amends [0008](0008-surface-graphs-and-a-named-shader-abi.md),
 [0022](0022-material-stages-replace-the-render-path-enum.md)
@@ -172,3 +172,27 @@ If this changes, also update `wxsl_core::abi`'s stage table and context
 field tables, `docs/architecture.md`'s "What a material declares" section,
 and `crates/wxsl-stdlib/shaders/wxsl/vertex.wxsl`, which is the other half
 of `VertexContext`.
+
+## Amendment (ADR 0026)
+
+The consumer this ADR was built for exists. `MaterialStage::SHADOW` is
+asked for by a real pass, and the two acceptance tests it predicted —
+a perforated material casting a perforated shadow, a displacing one
+casting a displaced shadow — are written and pass on hardware.
+
+One thing it recorded has stopped being true: `depth_only` and `shadow` no
+longer produce the same picture, because a shadow pass binds a different
+view. The generated *source* is still identical for a material that
+neither displaces nor discards, and the variant key still holds the stage,
+so nothing about the cache changed. See [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md).
+
+## Amendment (ADR 0027)
+
+A graph has more than three terminals. `output.varying` is one per
+declared interpolant, each a vertex-stage root of its own compiled into
+`wxsl_varying_<name>`, and `GraphOutputs::varyings` carries them.
+
+The typing rule this ADR called "the single typing rule partitioning
+needs" gained its mirror image: a vertex-only node may not feed a fragment
+terminal, and a computed interpolant may not be read from a vertex
+terminal. Both are `GraphError::WrongStage`. See [0027](0027-a-graph-computes-its-own-interpolants.md).

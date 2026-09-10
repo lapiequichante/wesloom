@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md)
+Status: Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)
 
 Amends [0005](0005-render-pipeline-abstraction-and-shader-switching.md),
 [0008](0008-surface-graphs-and-a-named-shader-abi.md),
@@ -187,3 +187,18 @@ either a lie or a translator nobody asked for.
 * If the pass or resource vocabulary changes, `docs/architecture.md`'s
   "How a frame is drawn" section and `AGENTS.md`'s test-command list are the
   two places outside the code that describe it.
+
+## Amendment (ADR 0026)
+
+A pass description gained a **point of view**. `PassDesc::view` names one
+of the frame's views — the camera, or a light's — and the frame group's
+camera binding is addressed by a dynamic offset, so a pass renders from
+somewhere else without any shader knowing that is possible.
+
+This ADR's resource description already had everything the shadow maps
+needed (`Dimension::D2Array`, a fixed extent, a layer per attachment);
+what it did not have was a resource read from *outside* the pass list.
+`RenderGraph::declare_shadow_maps` names that one, because every other
+read is a `Read` and therefore an ordering edge and a usage flag, and this
+one is bound beside the lights where a pass list has no say. See
+[0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md).

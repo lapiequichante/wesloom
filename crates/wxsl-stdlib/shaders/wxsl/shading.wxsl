@@ -15,12 +15,16 @@
 // * `wxsl_tonemap` applies the filmic curve. Off means the raw linear
 //   value is encoded and written, which is what a comparison against a
 //   reference render wants.
+// * `wxsl_receive_shadows` attenuates each light by its shadow map. What a
+//   material's `receive_shadow` becomes, and off means the lookup is not
+//   compiled at all.
 
 import package::color::linear_to_srgb::linear_to_srgb;
 import package::color::tonemap_filmic::tonemap_filmic;
 import package::lighting::ambient_environment::ambient_environment;
 import package::lighting::pbr_direct::pbr_direct;
 import package::wxsl::bindings::{sample_light, scene, WXSL_MAX_LIGHTS};
+import package::wxsl::shadow::shadow_factor;
 import package::wxsl::surface::{Surface, SurfaceContext};
 
 // The two knobs this module switches on, with their defaults. A renderer or
@@ -28,6 +32,7 @@ import package::wxsl::surface::{Surface, SurfaceContext};
 // arm is not selected, so the unused one costs nothing.
 @macro const wxsl_debug_normals: bool = false;
 @macro const wxsl_tonemap: bool = true;
+@macro const wxsl_receive_shadows: bool = true;
 
 @if(wxsl_debug_normals)
 fn shade_surface(surface: Surface, ctx: SurfaceContext) -> vec4f {
@@ -43,6 +48,17 @@ fn shade_surface(surface: Surface, ctx: SurfaceContext) -> vec4f {
     let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
     for (var index = 0u; index < light_count; index = index + 1u) {
         let light = sample_light(index, ctx.world_position);
+        // Declared unconditionally and overwritten under the flag, the same
+        // shape the tonemap uses below: a `let` inside the `@if` would be
+        // removed along with it and take the multiply with it.
+        var shadow = 1.0;
+        @if(wxsl_receive_shadows)
+        shadow = shadow_factor(
+            index,
+            ctx.world_position,
+            normal,
+            saturate(dot(normal, light.direction)),
+        );
         lit = lit
             + pbr_direct(
                 normal,
@@ -52,7 +68,8 @@ fn shade_surface(surface: Surface, ctx: SurfaceContext) -> vec4f {
                 surface.base_color,
                 surface.metallic,
                 surface.roughness,
-            );
+            )
+                * shadow;
     }
 
     // Ambient stands in for everything the light loop cannot see, so it is

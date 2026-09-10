@@ -479,7 +479,25 @@ pub struct VertexAttributeBinding {
 pub struct GeometryInterface {
     vertex: Vec<VertexAttributeBinding>,
     instance: BufferLayout,
+    computed: Vec<VaryingBinding>,
     instance_index_location: Option<u32>,
+}
+
+/// One interpolant the graph's own vertex stage computes.
+///
+/// Not something the geometry supplies — so not, strictly, part of what a
+/// material *requires* of it — but it is an inter-stage location, and
+/// there is exactly one accountant for those.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VaryingBinding {
+    /// Its name: what the writing node names, what the reading node
+    /// names, and the field name in the IO structs.
+    pub name: WxslIdent,
+    /// Its type.
+    pub ty: ValueType,
+    /// `@location` in `abi::MATERIAL_VERTEX_OUT_STRUCT` and
+    /// `abi::MATERIAL_VARYINGS_STRUCT`.
+    pub varying: u32,
 }
 
 impl GeometryInterface {
@@ -491,6 +509,7 @@ impl GeometryInterface {
     pub fn new(
         vertex: impl IntoIterator<Item = (WxslIdent, ValueType)>,
         instance: impl IntoIterator<Item = (WxslIdent, ValueType)>,
+        computed: impl IntoIterator<Item = (WxslIdent, ValueType)>,
     ) -> Self {
         let instance = BufferLayout::storage([], instance);
 
@@ -504,7 +523,7 @@ impl GeometryInterface {
         let mut declared: Vec<(WxslIdent, ValueType)> = vertex.into_iter().collect();
         declared.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
         declared.dedup_by(|(a, _), (b, _)| a == b);
-        let vertex = declared
+        let vertex: Vec<VertexAttributeBinding> = declared
             .into_iter()
             .enumerate()
             .map(|(index, (name, ty))| VertexAttributeBinding {
@@ -516,11 +535,41 @@ impl GeometryInterface {
             })
             .collect();
 
+        // After the per-vertex ones, so that adding an interpolant never
+        // moves an attribute's location — and therefore never invalidates
+        // a pipeline built for a mesh that has not changed.
+        let mut declared: Vec<(WxslIdent, ValueType)> = computed.into_iter().collect();
+        declared.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        declared.dedup_by(|(a, _), (b, _)| a == b);
+        let first_computed = first_extra + vertex.len() as u32;
+        let computed = declared
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, ty))| VaryingBinding {
+                name,
+                ty,
+                varying: first_computed + index as u32,
+            })
+            .collect();
+
         GeometryInterface {
             vertex,
             instance,
+            computed,
             instance_index_location,
         }
+    }
+
+    /// The interpolants the graph computes, in location order.
+    pub fn computed(&self) -> &[VaryingBinding] {
+        &self.computed
+    }
+
+    /// Look one up by name.
+    pub fn computed_varying(&self, name: &str) -> Option<&VaryingBinding> {
+        self.computed
+            .iter()
+            .find(|entry| entry.name.as_str() == name)
     }
 
     /// The per-vertex attributes, in location order.
@@ -559,7 +608,7 @@ impl GeometryInterface {
     /// Whether the material declares nothing at all, and so wants exactly
     /// the geometry every material has always wanted.
     pub fn is_empty(&self) -> bool {
-        self.vertex.is_empty() && self.instance.is_empty()
+        self.vertex.is_empty() && self.instance.is_empty() && self.computed.is_empty()
     }
 
     /// How many of `abi::MAX_VARYING_LOCATIONS` this material spends.
@@ -572,6 +621,7 @@ impl GeometryInterface {
         abi::VERTEX_OUT_FIELDS.len()
             + usize::from(self.instance_index_location.is_some())
             + self.vertex.len()
+            + self.computed.len()
     }
 
     /// A stable description of the shape, for a cache key.
@@ -586,6 +636,10 @@ impl GeometryInterface {
         }
         out.push('/');
         out.push_str(&self.instance.signature());
+        out.push('/');
+        for varying in &self.computed {
+            let _ = write!(out, "{}:{}@{};", varying.name, varying.ty, varying.varying);
+        }
         out
     }
 }
@@ -594,7 +648,7 @@ impl Default for GeometryInterface {
     /// The base geometry: no declared attributes, and an instance row that
     /// is exactly `abi::INSTANCE_BASE_FIELDS`.
     fn default() -> Self {
-        GeometryInterface::new([], [])
+        GeometryInterface::new([], [], [])
     }
 }
 
@@ -791,7 +845,7 @@ mod tests {
         // The reason the *index* goes down the pipe rather than the
         // values: one inter-stage location covers any number of them.
         let ident = |name: &str| WxslIdent::new(name).expect("valid");
-        let one = GeometryInterface::new([], [(ident("tint"), ValueType::Vec3)]);
+        let one = GeometryInterface::new([], [(ident("tint"), ValueType::Vec3)], []);
         let many = GeometryInterface::new(
             [],
             [
@@ -799,6 +853,7 @@ mod tests {
                 (ident("age"), ValueType::F32),
                 (ident("phase"), ValueType::Vec2),
             ],
+            [],
         );
         assert_eq!(one.varyings_used(), many.varyings_used());
         assert_eq!(one.varyings_used(), abi::VERTEX_OUT_FIELDS.len() + 1);
@@ -821,6 +876,7 @@ mod tests {
                 (ident("color"), ValueType::Vec4),
             ],
             [(ident("tint"), ValueType::Vec3)],
+            [],
         );
         // Name order, not declaration order: reordering the list must not
         // renumber anything.
@@ -840,13 +896,47 @@ mod tests {
     }
 
     #[test]
+    fn a_computed_interpolant_is_numbered_after_everything_the_geometry_brings() {
+        // Adding an interpolant must not move a vertex attribute: an
+        // attribute's location is in the vertex buffer layout, and moving
+        // it is a repipeline and a re-upload for a mesh that did not
+        // change.
+        let ident = |name: &str| WxslIdent::new(name).expect("valid");
+        let attributes = [(ident("color"), ValueType::Vec4)];
+        let plain = GeometryInterface::new(attributes.clone(), [], []);
+        let computing = GeometryInterface::new(
+            attributes.clone(),
+            [],
+            [
+                (ident("wobble"), ValueType::F32),
+                (ident("bend"), ValueType::Vec2),
+            ],
+        );
+        let color = |geometry: &GeometryInterface| {
+            let entry = geometry.vertex_attribute("color").expect("declared");
+            (entry.location, entry.slot, entry.varying)
+        };
+        assert_eq!(color(&plain), color(&computing));
+
+        // Name order among themselves, and after the attribute.
+        let bend = computing.computed_varying("bend").expect("declared");
+        let wobble = computing.computed_varying("wobble").expect("declared");
+        assert_eq!(bend.varying, color(&computing).2 + 1);
+        assert_eq!(wobble.varying, bend.varying + 1);
+        // And they are locations like any other, so the accountant counts
+        // them.
+        assert_eq!(computing.varyings_used(), plain.varyings_used() + 2);
+        assert_ne!(plain.signature(), computing.signature());
+    }
+
+    #[test]
     fn what_the_geometry_wants_is_part_of_the_shape_a_pipeline_is_built_for() {
         // Not a bind group, but a vertex buffer layout — so two materials
         // that differ only there must not share a pipeline.
         let ident = |name: &str| WxslIdent::new(name).expect("valid");
         let plain = MaterialInterface::default();
         let declaring = MaterialInterface {
-            geometry: GeometryInterface::new([(ident("color"), ValueType::Vec3)], []),
+            geometry: GeometryInterface::new([(ident("color"), ValueType::Vec3)], [], []),
             ..MaterialInterface::default()
         };
         assert_ne!(plain.signature(), declaring.signature());
