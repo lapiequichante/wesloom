@@ -955,6 +955,19 @@ pub enum NodeBody {
     /// Which frequency a name has is *not* on the node, so moving an
     /// attribute from per-vertex to per-instance rewires nothing.
     AttributeRead,
+    /// Reads one field of `abi::VERTEX_CONTEXT_STRUCT` that
+    /// `abi::CONTEXT_STRUCT` does not have — object space, which only the
+    /// vertex stage has.
+    ///
+    /// The one body that pins a node to a stage. Everything else in the
+    /// vocabulary compiles in either, which is why partitioning is a
+    /// reachability question and not a typing one
+    /// ([ADR 0025](../../../docs/adr/0025-a-material-graph-spans-shader-stages.md)).
+    VertexContextRead(WxslIdent),
+    /// The graph's vertex-stage terminal: an object-space position offset.
+    VertexOutput,
+    /// The graph's discard terminal: whether to throw the fragment away.
+    DiscardOutput,
 }
 
 /// Setting name every [`NodeBody::Param`] and [`NodeBody::Resource`] node
@@ -1206,6 +1219,21 @@ impl NodeDefinition {
         matches!(self.body, NodeBody::SurfaceOutput)
     }
 
+    /// Whether this is the graph's terminal vertex-output node.
+    pub fn is_vertex_output(&self) -> bool {
+        matches!(self.body, NodeBody::VertexOutput)
+    }
+
+    /// Whether this is the graph's terminal discard node.
+    pub fn is_discard_output(&self) -> bool {
+        matches!(self.body, NodeBody::DiscardOutput)
+    }
+
+    /// Whether this node can only be compiled into the vertex stage.
+    pub fn is_vertex_only(&self) -> bool {
+        matches!(self.body, NodeBody::VertexContextRead(_))
+    }
+
     /// Every `(module, item)` pair this node needs imported.
     pub fn all_imports(&self) -> Vec<(ModulePath, WxslIdent)> {
         let mut imports = self.imports.clone();
@@ -1387,6 +1415,29 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
+    /// Finish with a [`NodeBody::VertexOutput`] body.
+    pub fn vertex_output(mut self) -> NodeDefinition {
+        self.def.body = NodeBody::VertexOutput;
+        self.build()
+    }
+
+    /// Finish with a [`NodeBody::DiscardOutput`] body.
+    pub fn discard_output(mut self) -> NodeDefinition {
+        self.def.body = NodeBody::DiscardOutput;
+        self.build()
+    }
+
+    /// Finish with a [`NodeBody::VertexContextRead`] body.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `field` is not a valid WXSL identifier.
+    pub fn vertex_context_read(mut self, field: &str) -> NodeDefinition {
+        self.def.body =
+            NodeBody::VertexContextRead(WxslIdent::new(field).expect("invalid context field name"));
+        self.build()
+    }
+
     /// Finish without changing the body.
     ///
     /// # Panics
@@ -1394,11 +1445,19 @@ impl NodeDefinitionBuilder {
     /// Panics if an [`NodeBody::Expr`] body has a different number of
     /// expressions than the node has outputs.
     pub fn build(self) -> NodeDefinition {
-        if !matches!(self.def.body, NodeBody::SurfaceOutput) {
+        // A terminal's inputs may be unfed — that is what makes a
+        // half-wired graph still compile, and what makes a vertex or
+        // discard output free to leave in place while its branch is
+        // built. Nothing else may be.
+        let terminal = matches!(
+            self.def.body,
+            NodeBody::SurfaceOutput | NodeBody::VertexOutput | NodeBody::DiscardOutput
+        );
+        if !terminal {
             for socket in &self.def.inputs {
                 assert!(
                     !socket.optional,
-                    "input `{}` of `{}` is optional, which only a surface output node supports",
+                    "input `{}` of `{}` is optional, which only an output node supports",
                     socket.name, self.def.id
                 );
             }

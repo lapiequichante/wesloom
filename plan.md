@@ -6,7 +6,7 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0, M1, M2, M3, M4.
+**Landed so far:** M0, M1, M2, M3, M4, and the first half of M5.
 
 ## How to read this
 
@@ -347,12 +347,12 @@ thread while the previous one keeps presenting.
   subgraph and nothing else — and a module that is already per stage has
   somewhere to put that. It also means the source hash separates stages
   before the cache key's `stage` field even looks.
-* **The depth-only module still carries the whole material function.** It
-  imports neither the shading function nor the G-buffer, but the graph is
-  in there, so a macro change that only affects colour recompiles the
-  prepass too: `a_macro_change_compiles_a_new_variant` sees four variants
-  where two would do. That number is the measure of what M5's partitioning
-  is worth, and the test says so in a comment.
+* ~~**The depth-only module still carries the whole material function.**~~
+  Closed by M5's partitioning: a stage compiles only the subgraphs
+  reachable from the terminals it needs, so an ordinary material's
+  prepass module is now the vertex entry and nothing else — no material
+  function, and no fragment stage at all.
+  `every_stage_compiles_from_the_same_graph` asserts both directions.
 * **The prepass tests `LessEqual`, not `Equal`.** WGSL promises nothing
   about two pipelines running the same vertex code producing bit-identical
   clip positions unless the position builtin is marked `@invariant`, which
@@ -403,13 +403,14 @@ deliberately outside `ValueType::ALL`. Groups 1 and 2 arrive on the draw.
 * **Binding 0 of group 1 is reserved for the parameter buffer even when
   there is none**, so a graph gaining its first parameter cannot renumber
   the textures above it.
-* **The depth-only stage declares the textures too.** M2 recorded that
-  its module still carries the whole material function; now that function
-  can call `textureSample`, so the prepass's pipeline layout includes
-  group 1 and a textured material has to be bound before its *depth* pass
-  can run. Harmless — a pipeline layout may be a superset of what the
-  shader uses, and the bindings are per draw anyway — and it is the same
-  cost M5's partitioning removes, now with a second symptom.
+* **The depth-only stage declares the textures too.** *Half closed by
+  M5.* The prepass module no longer *calls* `textureSample` — it does not
+  contain the material function at all — but the declarations are still
+  emitted and group 1 is still in its pipeline layout, because the
+  interface is deliberately per material rather than per stage: two bind
+  groups for one object would cost more than an unused binding does. So
+  a textured material still has to be bound before its depth pass runs,
+  and that is now a decision rather than a gap.
 * **The layout is only checked on a GPU.** Every other host-shared layout
   here has a `#[repr(C)]` mirror and a test on the sizes; this one has no
   second half, so `crates/wxsl/tests/material_resources.rs` checks it
@@ -470,12 +471,15 @@ changed at all.
   `Graph::check_attributes`. M5's graph-computed interpolants are the
   next thing to spend from it, and they should be counted there rather
   than in a second place.
-* **Per-stage narrowing is still owed.** A depth-only stage binds every
-  declared vertex buffer and passes the index down, because the declared
-  set is uniform across stages. That is the M5 item the plan already
-  named; the interface is computed from the declarations rather than
-  from reachability precisely so the instance array can stay one upload
-  for the whole frame.
+* **Per-stage narrowing is still owed at the *binding* level.** M5
+  narrowed the code — a depth stage compiles no surface — but not the
+  interface: a depth pipeline still declares every vertex buffer and
+  still passes the instance index down, because
+  `MaterialInterface::geometry` is per material. That is deliberate
+  twice over: the instance array stays one upload for the whole frame,
+  and a vertex layout that changed per stage would be a second pipeline
+  for the same mesh. Narrowing it would want the *declarations* to be
+  reachability-driven too, which is a bigger change than it looks.
 * **The layout computer now has both its customers**, which is what the
   table shape was for. `crates/wxsl/tests/probe/mod.rs` holds one probe
   graph and both GPU test files run it — once in the uniform address
@@ -524,44 +528,86 @@ changed at all.
   textures. One copy gets white, the identity for the multiply, so every
   reference image in `render_cube.rs` is unchanged.
 
-### M5 — Multiple outputs, partitioning, and shadows
+### M5 — Multiple outputs, partitioning, and shadows — **half done**
 
 The first milestone that changes what a material *is*, and shadows are its
-first consumer.
+first consumer. The change to what a material is has landed; the consumer
+has not.
 
-* Vertex output node (position offset, and interpolants the *graph*
-  computes — M4 already brought in the ones the geometry supplies) and an
-  explicit discard output.
-* `codegen` partitions per stage: reachability from the outputs a stage
-  needs, per shader stage, duplicating shared nodes.
-* `Shadow` stage; a `Shadow map` pass node; automatic Z-buffer generation per
-  shadowing light; shadow lookup in `shading.wxsl` so forward and deferred
-  get it from the same code, exactly as they get lighting today.
-* Storage is a **2D texture array**: one slice per light, one per cascade of
-  a directional, fixed resolution per slice, no packing code — and M1's
-  `ResourceDesc` already describes the dimension. An atlas with per-light
-  resolution is the eventual answer and a contained change when it comes:
-  one `ResourceDesc`, plus a rect per light in the frame uniform.
-* Filtering is **PCF** over a comparison sampler with a small fixed kernel,
-  biased by **normal offset** rather than depth bias. Not a detail: a
-  constant depth bias behaves badly on exactly the two things this milestone
+**Done, as [ADR 0025](docs/adr/0025-a-material-graph-spans-shader-stages.md):**
+
+A graph has three terminals — `output.surface`, and the optional
+`output.vertex` (an object-space position offset) and `output.discard` —
+and codegen partitions by reachability from each separately, emitting
+`wxsl_vertex`, `wxsl_discard` and `wxsl_material`. A node feeding two
+terminals is compiled into both. A stage compiles only the partitions it
+needs, so a depth or shadow module is the displacement and the alpha test
+and nothing else, and a material that does not discard gets no fragment
+stage there at all. `MaterialStage::SHADOW` is a row in the stage table
+and compiles correctly.
+
+* **`VertexContext` is a superset of `SurfaceContext`.** Same field names,
+  same types, computed before displacement — so `input.uv` is one node
+  that works in either stage and the input palette did not fork. Only
+  `object_position` and `object_normal` are vertex-only, and reading one
+  from the fragment side is `GraphError::WrongStage`. That is the single
+  typing rule partitioning needs; everything else is reachability.
+* **`fragment_entry` moved from the stage to the material.** Whether a
+  depth or shadow stage has a fragment program depends on whether the
+  material discards, so `MaterialStageDesc::fragment_entry` is always a
+  name and `GeneratedShader::fragment_entry` is the `Option`.
+* **The interface stays per material**, over the union of all three
+  terminals. A bind group layout that narrowed per stage would mean two
+  bind groups for one object; a pipeline layout may be a superset of what
+  its shader uses, so the union is free.
+* **`depth_only` and `shadow` currently generate byte-identical source**
+  for a material that neither displaces nor discards. Harmless — the
+  variant key holds the stage too — and it stops being true the moment
+  the shadow stage renders from a light's point of view, which is the
+  next item below.
+* **The vertex output is object-space, and the normal is not
+  recomputed.** Doing that properly needs the derivative of the
+  displacement, which a graph does not hand over, and a confidently wrong
+  normal is worse than the undisplaced one. A graph that wants a correct
+  displaced normal will need a second vertex output, and that is a
+  decision to take when something asks for it.
+
+**Still owed, and why the milestone is not closed:**
+
+* **The shadow pass itself.** A depth **2D texture array** — one slice per
+  light, one per cascade of a directional, fixed resolution per slice, no
+  packing code, and M1's `ResourceDesc` already describes the dimension.
+  Per-light view-projection matrices in the frame group beside the
+  lights they come from. A `Shadow map` pass node, and automatic
+  generation of one pass per shadowing light.
+* **The lookup**, in `shading.wxsl`, so forward and deferred get it from
+  the same code exactly as they get lighting today. **PCF** over a
+  comparison sampler with a small fixed kernel, biased by **normal
+  offset** rather than depth bias — not a detail, because a constant
+  depth bias behaves badly on exactly the two things this milestone
   introduces, displaced vertices and perforated alpha. PCSS is a later
-  option, and it wants M1's history resources for its noise.
-* Land the relative-to-eye ABI hook here (see M10) while the vertex stage is
-  already open.
-* The `Velocity` stage needs the vertex offset evaluated at `t-1`, not just
-  the model matrix at `t-1`. So a time-driven input needs a "previous frame"
-  variant, or motion vectors come out wrong on exactly the objects that have
-  motion. Settle that shape here rather than in M7, which is only where it
-  gets consumed.
+  option and it wants M1's history resources for its noise.
+* **An atlas with per-light resolution** is the eventual answer to the
+  texture array, and a contained change when it comes: one `ResourceDesc`,
+  plus a rect per light in the frame uniform.
+* **The relative-to-eye ABI hook** (see M10), which belongs here while the
+  vertex stage is already open.
+* **The previous-frame shape for a time-driven input.** The `Velocity`
+  stage needs the vertex offset evaluated at `t-1`, not just the model
+  matrix at `t-1`, or motion vectors come out wrong on exactly the
+  objects that have motion. Settle it here rather than in M7, which is
+  only where it gets consumed.
+* **Interpolants the graph computes.** M4 brought in the ones the geometry
+  supplies; a vertex partition that wants to hand a *computed* value to
+  the fragment side needs a declared varying, and the accountant in
+  `Graph::check_attributes` is where its location comes from.
 
-**Done when** a material that discards by alpha casts a matching perforated
-shadow, and a material that displaces vertices casts a shadow of its
-displaced shape — the two things that are only true if the partitioning is
-right.
-
-**ADR** — "A material graph spans shader stages, and compiles per pass
-stage".
+**Done when** a material that discards by alpha casts a matching
+perforated shadow, and a material that displaces vertices casts a shadow
+of its displaced shape — the two things that are only true if the
+partitioning is right. Neither can be written until the shadow pass
+exists; the partitioning half is asserted directly instead, by
+`every_stage_compiles_from_the_same_graph`.
 
 ### M6 — Lighting models, by ID in the G-buffer
 
@@ -697,7 +743,7 @@ different text model than the immediate-mode layer's, that is worth one.
 | Risk | Mitigation |
 |---|---|
 | **Variant explosion**: stages x macros x lighting models x baseline/native. | Compile lazily, key precisely, and let the pipeline graph declare up front which combinations it needs, so they are warmed once instead of stuttering. Track it: `cache_stats()` already exists. |
-| **Stage partitioning subtly wrong**: a node duplicated across stages that rounds differently, or a varying that should have been recomputed. | M5's two acceptance tests are exactly the cases that fail if it is wrong. Extend `graph_to_wgsl` to compile every node in every stage, as it already does for every path. |
+| **Stage partitioning subtly wrong**: a node duplicated across stages that rounds differently, or a varying that should have been recomputed. | *Half addressed.* `graph_to_wgsl` compiles every node in every stage, and every vertex-only node through the vertex terminal, so a partition that fails to compile is caught. What is not yet covered is a partition that compiles and is *wrong*, which is what M5's two acceptance tests are for — and they need the shadow pass first. |
 | **A computed layout disagreeing with what the host writes.** Two of them: M3's uniform parameters and M4's per-instance attribute row. | *Done.* They are the only layouts in the repo with no `#[repr(C)]` mirror to be checked against, so they get by test what the mirrors get by construction — and by the *same* test: `tests/probe/mod.rs` holds one probe graph, `material_resources.rs` runs it over the uniform address space and `material_geometry.rs` over the storage one, at every `ValueType`, comparing what a shader read with a literal its compiler inlined. The instance *transform* row was deliberately left mirrored rather than computed, which is what closed the one bug this risk was really about. |
 | **Bind groups**: four, all spoken for. | The allocation table above, decided now. `SceneBindings` is one struct in one file if group 0 needs to grow. |
 | **Two implementations of every pass** (baseline and native). | Only where the baseline genuinely cannot express the technique — so far exactly one place, M8's float blending. Any second implementation owes a test asserting the two agree, as `msdf` already does for its CPU and compute generators. |

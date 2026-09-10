@@ -82,9 +82,23 @@ fn every_stage_compiles_from_the_same_graph() {
     // pipeline shapes (ADR 0005, generalized by ADR 0022).
     for wgsl in [&forward, &deferred, &depth] {
         assert!(wgsl.contains("fn vs_main"), "{wgsl}");
-        // The graph's nodes reached the shader.
+    }
+    // The graph's nodes reached the stages that need a surface — and
+    // deliberately *not* the one that does not. A depth prepass wants the
+    // vertex offset and the alpha test, and the demo graph has neither,
+    // so its module is the vertex entry and nothing else (ADR 0025).
+    // This is what partitioning bought.
+    for wgsl in [&forward, &deferred] {
         assert!(wgsl.contains("fbm3"), "{wgsl}");
     }
+    assert!(
+        !depth.contains("fbm3"),
+        "the prepass compiled the surface:\n{depth}"
+    );
+    assert!(
+        !depth.contains("fn fs_"),
+        "a material that does not discard needs no fragment stage:\n{depth}"
+    );
     assert!(forward.contains("fn fs_forward_lit"), "{forward}");
     assert!(deferred.contains("fn fs_gbuffer"), "{deferred}");
 
@@ -312,6 +326,8 @@ fn graph_using(
     }
     let output = def.output(socket).expect("an output of this node");
     let produced = graph.effective_type(node, output)?;
+    // Always a surface output, because a graph without one does not
+    // compile — even when what is under test belongs to the other stage.
     let surface = graph.add_node(abi::SURFACE_OUTPUT_ID);
 
     // Adapt whatever it produces to a surface field, since sockets are
@@ -384,6 +400,34 @@ fn graph_using(
         // `sample.texture_2d` above rather than as outputs here.
         ValueType::TextureCube | ValueType::Sampler => return None,
     };
+    // A vertex-only node reaches the *vertex* terminal instead: it reads
+    // object space, which the fragment stage has not got, and
+    // `Graph::validate` says so if it is wired the other way (ADR 0025).
+    // That also gets these nodes compiled into the depth and shadow
+    // stages, which is where a displacement most needs to be right.
+    if def.is_vertex_only() {
+        let vertex = graph.add_node(abi::VERTEX_OUTPUT_ID);
+        let (source, source_socket) = if field == "base_color" {
+            (source, source_socket)
+        } else {
+            let splat = graph.add_node("convert.splat");
+            graph
+                .set_generic(registry, splat, "T", ValueType::Vec3)
+                .ok()?;
+            graph
+                .wire(registry, (source, source_socket.as_str()), (splat, "value"))
+                .ok()?;
+            (splat, "out".to_string())
+        };
+        graph
+            .wire(
+                registry,
+                (source, source_socket.as_str()),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .ok()?;
+        return Some(graph);
+    }
     graph
         .wire(registry, (source, source_socket.as_str()), (surface, field))
         .ok()?;
@@ -449,8 +493,13 @@ fn every_node_in_the_library_compiles_for_every_stage() {
                     match compile(&material, *stage) {
                         Ok(wgsl) => {
                             // A node that compiled but got stripped would
-                            // make this test vacuous.
-                            if let NodeBody::Call(func) = &def.body {
+                            // make this test vacuous — in the stages that
+                            // compile the surface at all. A depth or
+                            // shadow stage is *supposed* to leave it out
+                            // (ADR 0025), and the test above asserts that
+                            // it does.
+                            if let (NodeBody::Call(func), true) = (&def.body, stage.needs_surface())
+                            {
                                 assert!(
                                     wgsl.contains(func.name.as_str()),
                                     "{label} compiled without calling {}:\n{wgsl}",

@@ -28,13 +28,59 @@ struct VertexOut {
     @location(4) uv: vec2f,
 }
 
-// Object space to clip space, carrying a world-space shading basis along.
+// What a material graph reads when it is compiled into the vertex stage.
 //
-// Every material stage uses this unchanged — a depth-only pass is this and
-// nothing else. Stages differ in what the fragment stage does with the
-// surface, never in how geometry is transformed.
-fn transform_vertex(input: VertexIn) -> VertexOut {
+// A superset of `SurfaceContext`: every field a fragment-side node reads
+// is here too, under the same name and type, which is what lets one
+// `input.uv` node serve both stages instead of forking the input
+// vocabulary in half. The two extra fields are object space, which the
+// fragment stage neither has nor wants.
+//
+// Everything here describes the vertex *before* any displacement the
+// graph computes — it is the input to that computation, not its result.
+struct VertexContext {
+    object_position: vec3f,
+    object_normal: vec3f,
+    world_position: vec3f,
+    world_normal: vec3f,
+    world_tangent: vec3f,
+    world_bitangent: vec3f,
+    view_direction: vec3f,
+    uv: vec2f,
+    time: f32,
+}
+
+// Build the vertex-stage context. `wxsl_core::abi::CONTEXT_FIELDS` plus
+// `VERTEX_ONLY_FIELDS` is the Rust half of the struct above.
+fn vertex_context(input: VertexIn) -> VertexContext {
     let world = instances[input.instance].model * vec4f(input.position, 1.0);
+    let normal_matrix = instance_normal_matrix(input.instance);
+    let normal = normalize(normal_matrix * input.normal);
+    let tangent = normalize(normal_matrix * input.tangent.xyz);
+
+    var out: VertexContext;
+    out.object_position = input.position;
+    out.object_normal = input.normal;
+    out.world_position = world.xyz;
+    out.world_normal = normal;
+    out.world_tangent = tangent;
+    out.world_bitangent = cross(normal, tangent) * input.tangent.w;
+    out.view_direction = normalize(camera.position - world.xyz);
+    out.uv = input.uv;
+    out.time = scene.time;
+    return out;
+}
+
+// Object space to clip space, carrying a world-space shading basis along,
+// with `offset` added to the vertex in object space first.
+//
+// Object space, so a displaced object still follows its own transform and
+// a displacement along the mesh's own normal means what it says. The
+// shading basis is *not* recomputed from the displaced surface: doing
+// that needs the derivative of the displacement, which a graph does not
+// hand over, and a wrong normal is worse than the undisplaced one.
+fn transform_vertex_offset(input: VertexIn, offset: vec3f) -> VertexOut {
+    let world = instances[input.instance].model * vec4f(input.position + offset, 1.0);
     let normal_matrix = instance_normal_matrix(input.instance);
     let normal = normalize(normal_matrix * input.normal);
     let tangent = normalize(normal_matrix * input.tangent.xyz);
@@ -47,6 +93,16 @@ fn transform_vertex(input: VertexIn) -> VertexOut {
     out.world_bitangent = cross(normal, tangent) * input.tangent.w;
     out.uv = input.uv;
     return out;
+}
+
+// Object space to clip space, undisplaced.
+//
+// Every material stage uses this unchanged unless the graph has a vertex
+// output — a depth-only pass is this and nothing else. Stages differ in
+// what the fragment stage does with the surface, never in how geometry is
+// transformed.
+fn transform_vertex(input: VertexIn) -> VertexOut {
+    return transform_vertex_offset(input, vec3f(0.0, 0.0, 0.0));
 }
 
 // Interpolated vertex output to material input.

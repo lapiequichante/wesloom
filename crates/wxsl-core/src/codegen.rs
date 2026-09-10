@@ -43,7 +43,7 @@ use std::fmt::Write as _;
 
 use crate::abi;
 use crate::error::{CodegenError, GraphError, GraphErrors};
-use crate::graph::{Graph, NodeId, SocketRef};
+use crate::graph::{Graph, NodeId, ShaderStage, SocketRef};
 use crate::macros::{MacroSet, MacroValue};
 use crate::node::{self, FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value};
 use crate::resources::{GeometryInterface, MaterialInterface};
@@ -124,6 +124,14 @@ pub struct GeneratedShader {
     pub macros: MacroSet,
     /// Name of the material function in [`Self::source`].
     pub material_fn: String,
+    /// Name of the fragment entry point in [`Self::source`], or `None`
+    /// when this module has none.
+    ///
+    /// Per *material*, not per stage: a depth or shadow stage emits one
+    /// only for a material that discards, and a pipeline built for one
+    /// that does not has no fragment state at all
+    /// ([ADR 0025](../../../docs/adr/0025-a-material-graph-spans-shader-stages.md)).
+    pub fragment_entry: Option<String>,
     /// What must be bound before this module can run: the material's own
     /// uniform parameters, its textures and samplers, and the block it
     /// expects the application to supply.
@@ -164,11 +172,11 @@ pub fn generate(
 ) -> Result<GeneratedShader, CodegenError> {
     graph.validate(registry)?;
 
-    let outputs = graph.surface_outputs(registry);
-    let output_node = match outputs.len() {
+    let found = graph.surface_outputs(registry);
+    let outputs = match found.len() {
         0 => return Err(CodegenError::NoOutputNode),
-        1 => outputs[0],
-        _ => return Err(CodegenError::MultipleOutputNodes(outputs)),
+        1 => graph.outputs(registry).expect("exactly one surface output"),
+        _ => return Err(CodegenError::MultipleOutputNodes(found)),
     };
 
     // Precedence, weakest first: the caller's defaults, each node's declared
@@ -176,47 +184,97 @@ pub fn generate(
     let mut macros = options.base_macros.clone();
     macros.overlay(&graph.effective_macros(registry)?);
     macros.overlay(&options.override_macros);
-    let needed = graph.dependencies_of(output_node);
-    let order = graph
-        .topological_order(Some(&needed))
-        .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
 
     // Over the *reachable* set, not the whole graph: a parked branch
-    // declares no uniform, exactly as it emits no code.
-    let interface = graph.interface_of(registry, &needed);
+    // declares no uniform, exactly as it emits no code. Over all three
+    // terminals, not one stage's: see `Graph::reachable_from`.
+    let interface = graph.interface_of(registry, &graph.reachable_from(&outputs));
     let mut emitter = Emitter {
         graph,
         registry,
         options,
         interface,
+        stage: ShaderStage::Fragment,
         bindings: BTreeMap::new(),
         imports: BTreeMap::new(),
         body: String::new(),
     };
-    emitter.request_abi_imports();
 
-    for node in &order {
-        if *node == output_node {
-            continue;
-        }
-        emitter.emit_node(*node)?;
-    }
-    let surface = emitter.emit_surface(output_node)?;
+    // One partition per terminal, each compiled from its own roots and
+    // into its own function. A node feeding two of them is emitted twice
+    // — in different functions, so the `let` names cannot collide, and a
+    // shader compiler's common-subexpression pass removes the duplicate
+    // work where it can (ADR 0025).
+    let stage = options.stage;
+    let vertex = match outputs.vertex {
+        Some(node) => Some(emitter.emit_partition(node, ShaderStage::Vertex)?),
+        None => None,
+    };
+    let discard = match outputs.discard {
+        Some(node) => Some(emitter.emit_partition(node, ShaderStage::Fragment)?),
+        None => None,
+    };
+    // The one partition a stage may not need at all: a depth or shadow
+    // pass wants the vertex offset and the alpha test, and nothing else.
+    let surface = stage
+        .needs_surface()
+        .then(|| emitter.emit_partition(outputs.surface, ShaderStage::Fragment))
+        .transpose()?;
+
+    emitter.request_abi_imports(vertex.is_some(), surface.is_some());
+    let parts = Partitions {
+        vertex,
+        surface,
+        discard,
+    };
+    // A stage with nothing to write has a fragment entry only when the
+    // material discards; otherwise it has no fragment state at all,
+    // which is what makes a depth prepass cheap.
+    let fragment_entry = (stage.needs_surface() || parts.discard.is_some())
+        .then(|| stage.fragment_entry().to_string());
 
     let interface = emitter.interface.clone();
-    let source = emitter.finish(graph, &macros, &surface);
+    let source = emitter.finish(graph, &macros, &parts);
     let source_hash = stable_hash(source.as_bytes());
     Ok(GeneratedShader {
         source,
         macros,
         material_fn: options.material_fn.clone(),
+        fragment_entry,
         interface,
         source_hash,
     })
 }
 
-/// Assignments the surface output node contributes, as `(field, expression)`.
-type SurfaceAssignments = Vec<(String, String)>;
+/// One compiled partition: the statements leading up to a terminal, and
+/// what that terminal's inputs came out as.
+struct Partition {
+    /// `let` statements, in dependency order.
+    body: String,
+    /// The terminal's fed inputs, as `(socket, expression)`.
+    inputs: Vec<(String, String)>,
+}
+
+impl Partition {
+    /// The expression feeding `socket`, or `fallback` when nothing does.
+    fn input<'a>(&'a self, socket: &str, fallback: &'a str) -> &'a str {
+        self.inputs
+            .iter()
+            .find(|(name, _)| name == socket)
+            .map(|(_, expr)| expr.as_str())
+            .unwrap_or(fallback)
+    }
+}
+
+/// The partitions one stage's module is built from.
+struct Partitions {
+    /// The vertex-stage offset, when the graph has a vertex output.
+    vertex: Option<Partition>,
+    /// The surface, when this stage writes one.
+    surface: Option<Partition>,
+    /// The discard test, when the graph has a discard output.
+    discard: Option<Partition>,
+}
 
 struct Emitter<'a> {
     graph: &'a Graph,
@@ -225,11 +283,19 @@ struct Emitter<'a> {
     /// What the module declares it needs bound, computed once from the
     /// reachable set and then both *emitted* and handed back.
     interface: MaterialInterface,
-    /// Expression that reads each already-emitted node output.
+    /// Which shader stage the partition being emitted compiles into.
+    ///
+    /// Only two things read it — a context read and an attribute read —
+    /// because those are the only expressions that are spelled
+    /// differently on the two sides of the interpolator.
+    stage: ShaderStage,
+    /// Expression that reads each already-emitted node output. Cleared
+    /// between partitions: a node emitted into two of them is two `let`
+    /// bindings in two functions.
     bindings: BTreeMap<SocketRef, String>,
     /// Items to import, grouped by module and deduplicated.
     imports: BTreeMap<ModulePath, Vec<WxslIdent>>,
-    /// The material function's statements.
+    /// The partition's statements.
     body: String,
 }
 
@@ -243,29 +309,74 @@ impl Emitter<'_> {
         }
     }
 
+    /// Compile everything `terminal` depends on into one function body.
+    fn emit_partition(
+        &mut self,
+        terminal: NodeId,
+        stage: ShaderStage,
+    ) -> Result<Partition, CodegenError> {
+        let needed = self.graph.dependencies_of(terminal);
+        let order = self
+            .graph
+            .topological_order(Some(&needed))
+            .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
+        self.stage = stage;
+        self.bindings.clear();
+        self.body.clear();
+        for node in &order {
+            if *node == terminal {
+                continue;
+            }
+            self.emit_node(*node)?;
+        }
+        let inputs = self.emit_terminal(terminal)?;
+        Ok(Partition {
+            body: core::mem::take(&mut self.body),
+            inputs,
+        })
+    }
+
+    /// The struct a context read reads through in the stage being
+    /// emitted.
+    fn context_var(&self) -> &'static str {
+        match self.stage {
+            ShaderStage::Vertex => abi::VERTEX_CONTEXT_VAR,
+            ShaderStage::Fragment => abi::CONTEXT_VAR,
+        }
+    }
+
     /// Import the fixed vocabulary every generated module uses.
     ///
     /// The deferred-path items are imported unconditionally; when the
     /// deferred fragment entry is dropped by conditional translation they
     /// become unused, and the compiler strips them.
-    fn request_abi_imports(&mut self) {
-        self.request_import(abi::SURFACE_MODULE, abi::SURFACE_STRUCT);
+    fn request_abi_imports(&mut self, displaces: bool, shades: bool) {
+        // Only what this stage's module actually mentions. A shadow
+        // module for an alpha-tested material imports the context and
+        // nothing else — no `Surface`, no shading function, no G-buffer.
+        if shades {
+            self.request_import(abi::SURFACE_MODULE, abi::SURFACE_STRUCT);
+            self.request_import(abi::SURFACE_MODULE, abi::DEFAULT_SURFACE_FN);
+        }
         self.request_import(abi::SURFACE_MODULE, abi::CONTEXT_STRUCT);
-        self.request_import(abi::SURFACE_MODULE, abi::DEFAULT_SURFACE_FN);
+        if displaces {
+            self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_STRUCT);
+        }
         if self.options.emit_entry_points {
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_IN_STRUCT);
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_OUT_STRUCT);
-            self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_FN);
-            // Only what this stage's entry point actually calls. A
-            // depth-only module imports neither the shading function nor
-            // the G-buffer, and it is the smaller for it.
+            if displaces {
+                self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_FN);
+                self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_OFFSET_FN);
+            } else {
+                self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_FN);
+            }
+            self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
             match self.options.stage.output() {
                 abi::StageOutput::Color => {
-                    self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
                     self.request_import(abi::SHADING_MODULE, abi::SHADE_SURFACE_FN);
                 }
                 abi::StageOutput::GBuffer => {
-                    self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
                     self.request_import(abi::DEFERRED_MODULE, abi::GBUFFER_STRUCT);
                     self.request_import(abi::DEFERRED_MODULE, abi::PACK_GBUFFER_FN);
                 }
@@ -438,7 +549,7 @@ impl Emitter<'_> {
                     }
                 }
             }
-            NodeBody::ContextRead(field) => {
+            NodeBody::ContextRead(field) | NodeBody::VertexContextRead(field) => {
                 let socket =
                     def.outputs
                         .first()
@@ -447,9 +558,13 @@ impl Emitter<'_> {
                             outputs: 0,
                             exprs: 1,
                         })?;
+                // The same node in either stage, reading whichever
+                // context struct this partition was handed — which is
+                // exactly why the vertex context is a superset of the
+                // fragment one.
                 self.bindings.insert(
                     SocketRef::new(node, socket.name.as_str()),
-                    format!("ctx.{field}"),
+                    format!("{}.{field}", self.context_var()),
                 );
             }
             NodeBody::Param => {
@@ -561,7 +676,7 @@ impl Emitter<'_> {
                 self.bindings
                     .insert(SocketRef::new(node, socket.name.as_str()), expr);
             }
-            NodeBody::SurfaceOutput => {
+            NodeBody::SurfaceOutput | NodeBody::VertexOutput | NodeBody::DiscardOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
             }
@@ -570,7 +685,7 @@ impl Emitter<'_> {
     }
 
     /// Collect the surface field assignments from the output node.
-    fn emit_surface(&mut self, node: NodeId) -> Result<SurfaceAssignments, CodegenError> {
+    fn emit_terminal(&mut self, node: NodeId) -> Result<Vec<(String, String)>, CodegenError> {
         let def = self.definition(node)?.clone();
         let mut assignments = Vec::new();
         for socket in &def.inputs {
@@ -654,15 +769,14 @@ impl Emitter<'_> {
         Ok(out)
     }
 
-    fn finish(self, graph: &Graph, macros: &MacroSet, surface: &SurfaceAssignments) -> String {
+    fn finish(self, graph: &Graph, macros: &MacroSet, parts: &Partitions) -> String {
         let Emitter {
             options,
             interface,
             imports,
-            body,
             ..
         } = self;
-        let mut out = String::with_capacity(body.len() + 2048);
+        let mut out = String::with_capacity(2048);
 
         let _ = writeln!(
             out,
@@ -733,27 +847,69 @@ impl Emitter<'_> {
                 abi::MATERIAL_ATTRIBUTES_STRUCT
             )
         };
-        let _ = write!(
-            out,
-            "\nfn {}(ctx: {}{attributes}) -> {} {{\n",
-            options.material_fn,
-            abi::CONTEXT_STRUCT,
-            abi::SURFACE_STRUCT
-        );
-        out.push_str(&body);
-        let _ = writeln!(
-            out,
-            "    var surface: {} = {}(ctx);",
-            abi::SURFACE_STRUCT,
-            abi::DEFAULT_SURFACE_FN
-        );
-        for (field, expr) in surface {
-            let _ = writeln!(out, "    surface.{field} = {expr};");
+
+        // One function per partition, in stage order. Each is a complete
+        // little program over its own subgraph; nothing is shared
+        // between them but the module's declarations.
+        if let Some(vertex) = &parts.vertex {
+            let _ = write!(
+                out,
+                "\nfn {}({}: {}{attributes}) -> vec3f {{\n",
+                abi::VERTEX_FN,
+                abi::VERTEX_CONTEXT_VAR,
+                abi::VERTEX_CONTEXT_STRUCT,
+            );
+            out.push_str(&vertex.body);
+            let _ = writeln!(
+                out,
+                "    return {};",
+                vertex.input(abi::SOCKET_POSITION_OFFSET, "vec3f(0.0, 0.0, 0.0)")
+            );
+            out.push_str("}\n");
         }
-        out.push_str("    return surface;\n}\n");
+
+        if let Some(discard) = &parts.discard {
+            let _ = write!(
+                out,
+                "\nfn {}({}: {}{attributes}) -> bool {{\n",
+                abi::DISCARD_FN,
+                abi::CONTEXT_VAR,
+                abi::CONTEXT_STRUCT,
+            );
+            out.push_str(&discard.body);
+            let _ = writeln!(
+                out,
+                "    return {};",
+                discard.input(abi::SOCKET_DISCARD, "false")
+            );
+            out.push_str("}\n");
+        }
+
+        if let Some(surface) = &parts.surface {
+            let _ = write!(
+                out,
+                "\nfn {}({}: {}{attributes}) -> {} {{\n",
+                options.material_fn,
+                abi::CONTEXT_VAR,
+                abi::CONTEXT_STRUCT,
+                abi::SURFACE_STRUCT
+            );
+            out.push_str(&surface.body);
+            let _ = writeln!(
+                out,
+                "    var surface: {} = {}({});",
+                abi::SURFACE_STRUCT,
+                abi::DEFAULT_SURFACE_FN,
+                abi::CONTEXT_VAR,
+            );
+            for (field, expr) in &surface.inputs {
+                let _ = writeln!(out, "    surface.{field} = {expr};");
+            }
+            out.push_str("    return surface;\n}\n");
+        }
 
         if options.emit_entry_points {
-            write_entry_points(&mut out, options, &interface);
+            write_entry_points(&mut out, options, &interface, parts);
         }
         out
     }
@@ -931,22 +1087,38 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
 /// the fragment stage does with the surface, never in how geometry is
 /// transformed — so a stage with no fragment entry is a complete,
 /// depth-writing shader on its own.
-fn write_entry_points(out: &mut String, options: &CodegenOptions, interface: &MaterialInterface) {
+fn write_entry_points(
+    out: &mut String,
+    options: &CodegenOptions,
+    interface: &MaterialInterface,
+    parts: &Partitions,
+) {
     let geometry = &interface.geometry;
     write_geometry_io(out, geometry);
+    // How the vertex entry gets its transform: the plain one, or the one
+    // that takes an offset the graph computed first.
+    let transform = |args: &str| match parts.vertex.is_some() {
+        true => format!(
+            "{}(input, {}({}(input){args}))",
+            abi::TRANSFORM_VERTEX_OFFSET_FN,
+            abi::VERTEX_FN,
+            abi::VERTEX_CONTEXT_FN,
+        ),
+        false => format!("{}(input)", abi::TRANSFORM_VERTEX_FN),
+    };
     if geometry.is_empty() {
         let _ = write!(
             out,
             "
 @vertex
 fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
-    return {transform}(input);
+    return {call};
 }}
 ",
             vertex = options.vertex_entry,
             vertex_in = abi::VERTEX_IN_STRUCT,
             vertex_out = abi::VERTEX_OUT_STRUCT,
-            transform = abi::TRANSFORM_VERTEX_FN,
+            call = transform(""),
         );
     } else {
         let extra_param = if geometry.vertex().is_empty() {
@@ -954,18 +1126,46 @@ fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
         } else {
             format!(", extra: {}", abi::MATERIAL_VERTEX_IN_STRUCT)
         };
+        // The attributes struct is built before the transform, because
+        // a graph may displace a vertex by something the geometry
+        // supplied — a per-vertex wind weight, a per-instance scale.
+        let mut prologue = String::new();
+        if parts.vertex.is_some() {
+            let _ = writeln!(
+                prologue,
+                "    var {var}: {ty};",
+                var = abi::MATERIAL_ATTRIBUTES_VAR,
+                ty = abi::MATERIAL_ATTRIBUTES_STRUCT,
+            );
+            if geometry.instance_index_location().is_some() {
+                let _ = writeln!(
+                    prologue,
+                    "    {var}.{field} = input.instance;",
+                    var = abi::MATERIAL_ATTRIBUTES_VAR,
+                    field = abi::INSTANCE_INDEX_FIELD,
+                );
+            }
+            for attribute in geometry.vertex() {
+                let _ = writeln!(
+                    prologue,
+                    "    {var}.{name} = extra.{name};",
+                    var = abi::MATERIAL_ATTRIBUTES_VAR,
+                    name = attribute.name,
+                );
+            }
+        }
         let _ = write!(
             out,
             "
 @vertex
 fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
-    let base = {transform}(input);
+{prologue}    let base = {call};
     var out: {vertex_out};
 ",
             vertex = options.vertex_entry,
             vertex_in = abi::VERTEX_IN_STRUCT,
             vertex_out = abi::MATERIAL_VERTEX_OUT_STRUCT,
-            transform = abi::TRANSFORM_VERTEX_FN,
+            call = transform(&format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR)),
         );
         let _ = writeln!(
             out,
@@ -989,9 +1189,12 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     }
 
     let stage = options.stage;
-    let Some(fragment) = stage.fragment_entry() else {
+    if !stage.needs_surface() && parts.discard.is_none() {
+        // Nothing to write and nothing to throw away: no fragment stage
+        // at all, which is the whole economy of a depth prepass.
         return;
-    };
+    }
+    let fragment = stage.fragment_entry();
     // Unpacking the extras into a plain struct, rather than handing the
     // IO struct itself to the material function: the material function is
     // ordinary code, and an entry-point IO type is not the shape to make
@@ -1026,26 +1229,41 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
         )
     };
+    // The discard test comes first in every stage that has one — before
+    // the surface is even evaluated, which is the point of it being its
+    // own function.
+    let test = match parts.discard.is_some() {
+        true => format!(
+            "    if {discard}({ctx}{args}) {{\n        discard;\n    }}\n",
+            discard = abi::DISCARD_FN,
+            ctx = abi::CONTEXT_VAR,
+        ),
+        false => String::new(),
+    };
+    let prologue = format!(
+        "    let {ctx} = {context}(vertex);\n{unpack}{test}",
+        ctx = abi::CONTEXT_VAR,
+        context = abi::SURFACE_CONTEXT_FN,
+    );
     let body = match stage.output() {
         abi::StageOutput::Color => format!(
-            "-> @location(0) vec4f {{\n    let ctx = {context}(vertex);\n{unpack}    \
-             return {shade}({material}(ctx{args}), ctx);\n}}\n",
-            context = abi::SURFACE_CONTEXT_FN,
+            "-> @location(0) vec4f {{\n{prologue}    \
+             return {shade}({material}({ctx}{args}), {ctx});\n}}\n",
+            ctx = abi::CONTEXT_VAR,
             shade = abi::SHADE_SURFACE_FN,
             material = options.material_fn,
         ),
         abi::StageOutput::GBuffer => format!(
-            "-> {gbuffer} {{\n    let ctx = {context}(vertex);\n{unpack}    \
-             return {pack}({material}(ctx{args}));\n}}\n",
+            "-> {gbuffer} {{\n{prologue}    \
+             return {pack}({material}({ctx}{args}));\n}}\n",
+            ctx = abi::CONTEXT_VAR,
             gbuffer = abi::GBUFFER_STRUCT,
-            context = abi::SURFACE_CONTEXT_FN,
             material = options.material_fn,
             pack = abi::PACK_GBUFFER_FN,
         ),
-        // Unreachable while every entry-less stage returns nothing, which
-        // a test in `abi` asserts. Written as an empty body rather than a
-        // panic so that adding a stage cannot take the process down.
-        abi::StageOutput::Nothing => "{\n}\n".to_string(),
+        // Reached only when the material discards: a depth or shadow
+        // stage whose whole fragment program is the alpha test.
+        abi::StageOutput::Nothing => format!("{{\n{prologue}}}\n"),
     };
     let _ = write!(
         out,
@@ -1225,19 +1443,25 @@ mod tests {
         assert!(gbuffer.contains("pack_gbuffer"));
         assert!(!gbuffer.contains("shade_surface"));
 
-        // Depth only: a vertex entry and nothing else. It still carries the
-        // material function, because *which part* of a graph a stage needs
-        // is M5's question, not this one — but it imports neither the
-        // shading function nor the G-buffer.
+        // Depth only: a vertex entry and *nothing else*. Not the
+        // shading function, not the G-buffer, and — since this graph
+        // neither displaces nor discards — not the material function
+        // either, nor any fragment stage at all
+        // ([ADR 0025](../../../docs/adr/0025-a-material-graph-spans-shader-stages.md)).
         let depth = module(abi::MaterialStage::DEPTH_ONLY);
         assert!(depth.contains("fn vs_main(input: VertexIn) -> VertexOut"));
         assert!(!depth.contains("@fragment"));
         assert!(!depth.contains("shade_surface"));
         assert!(!depth.contains("pack_gbuffer"));
-        assert!(depth.contains("fn wxsl_material"));
+        assert!(!depth.contains("fn wxsl_material"));
+        // The shadow stage is the same shape, from a light's point of view.
+        let shadow = module(abi::MaterialStage::SHADOW);
+        assert!(!shadow.contains("fn wxsl_material"));
 
-        // Three stages, three different modules — which is what lets the
-        // variant cache tell them apart by source hash alone.
+        // Four stages, four different modules — which is what lets the
+        // variant cache tell them apart by source hash alone. Depth and
+        // shadow differ only in the stage comment their macros carry,
+        // which is enough and is why the key holds the stage too.
         for pair in [(&forward, &gbuffer), (&forward, &depth), (&gbuffer, &depth)] {
             assert_ne!(pair.0, pair.1);
         }
@@ -1525,12 +1749,24 @@ mod tests {
             Err(CodegenError::NoOutputNode)
         );
 
+        // Two of them is now reported by validation, which runs first
+        // and reports every duplicated terminal under one rule.
+        // `MultipleOutputNodes` stays as the belt-and-braces path for a
+        // caller that reached codegen without validating.
         graph.add_node(abi::SURFACE_OUTPUT_ID);
         graph.add_node(abi::SURFACE_OUTPUT_ID);
-        assert!(matches!(
-            generate(&graph, &registry, &CodegenOptions::default()),
-            Err(CodegenError::MultipleOutputNodes(nodes)) if nodes.len() == 2
-        ));
+        let Err(CodegenError::Invalid(errors)) =
+            generate(&graph, &registry, &CodegenOptions::default())
+        else {
+            panic!("two surface outputs is an error");
+        };
+        assert!(
+            errors.0.iter().any(
+                |error| matches!(error, GraphError::DuplicateOutput { nodes, .. }
+                    if nodes.len() == 2)
+            ),
+            "{errors:?}"
+        );
     }
 
     #[test]

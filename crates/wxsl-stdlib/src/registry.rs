@@ -83,7 +83,10 @@ pub fn registry() -> NodeRegistry {
 /// reader per [`abi::CONTEXT_FIELDS`] entry, and the surface output node.
 pub fn abi_nodes() -> Vec<NodeDefinition> {
     let mut defs = abi::context_node_defs();
+    defs.extend(abi::vertex_context_node_defs());
     defs.push(abi::surface_output_def());
+    defs.push(abi::vertex_output_def());
+    defs.push(abi::discard_output_def());
     defs
 }
 

@@ -367,12 +367,14 @@ impl PipelineCache {
         })
     }
 
-    /// The pipeline for drawing `variant`'s geometry for `stage` in a pass
-    /// with this state and these targets, created on first use.
+    /// The pipeline for drawing `variant`'s geometry in a pass with this
+    /// state and these targets, created on first use.
     ///
-    /// A stage with no fragment entry gets a pipeline with no fragment
-    /// state at all — which is what a depth prepass is, and why it is
-    /// cheap.
+    /// `fragment_entry` is the *module's*, not the stage's: whether a
+    /// depth or shadow stage has a fragment program is a property of the
+    /// material — one that discards needs one, one that does not gets a
+    /// pipeline with no fragment state at all, which is why a depth
+    /// prepass is cheap (ADR 0025).
     #[allow(clippy::too_many_arguments)]
     pub fn geometry(
         &mut self,
@@ -381,7 +383,7 @@ impl PipelineCache {
         material: &MaterialGroups<'_>,
         pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
-        stage: MaterialStage,
+        fragment_entry: Option<&str>,
         state: PassState,
         targets: &[Option<wgpu::ColorTargetState>],
         pass_shape: &[PassBinding],
@@ -396,7 +398,7 @@ impl PipelineCache {
             targets,
             pass_shape,
             abi::VERTEX_ENTRY,
-            stage.fragment_entry(),
+            fragment_entry,
             true,
         )
     }
@@ -561,9 +563,10 @@ mod tests {
                 ..
             }
         ));
-        // No colour at all, and no fragment shader to run: the whole point.
+        // No colour at all, and — unless the material discards — no
+        // fragment shader to run either: the whole point.
         assert!(prepass.color.is_empty());
-        assert!(MaterialStage::DEPTH_ONLY.fragment_entry().is_none());
+        assert!(!MaterialStage::DEPTH_ONLY.needs_surface());
         assert!(prepass.state.depth_write);
 
         let shading = &graph.passes()[1];

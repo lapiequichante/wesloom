@@ -677,7 +677,7 @@ fn record_pass(
                     },
                     pass.pass_layout.as_ref(),
                     variant,
-                    *stage,
+                    item.material.shader(*stage).fragment_entry.as_deref(),
                     pass.desc.state,
                     &pass.color_formats,
                     &pass.pass_bindings,

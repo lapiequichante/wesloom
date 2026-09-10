@@ -63,6 +63,16 @@ declares (`wxsl_core::node::SettingDef`). Distinct from a node's label and
 colour, which are metadata a reader chooses and codegen never sees
 (ADR 0019).
 
+**Terminal** — a graph's output node. There are three:
+`output.surface` (required), `output.vertex` (an object-space position
+offset) and `output.discard`. Each is the root of its own **partition**.
+
+**Partition** — the subgraph reachable from one terminal, compiled into
+one function. A node reachable from two terminals is compiled into both.
+Which partitions a stage compiles is what makes a depth or shadow pass
+cheap, and what makes a displaced or perforated object cast a matching
+shadow. See [ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md).
+
 **Tags** — open-ended labels a material or an instance is authored with
 (`opaque`, `transparent`, `outlined`). A geometry pass draws a *tag
 expression* over the draw list, so the material says what it is and the

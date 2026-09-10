@@ -272,6 +272,42 @@ behind them belong to the application, which is the same rule that keeps
 the renderer scene-graph-free.
 [ADR 0023](adr/0023-a-material-declares-its-resources.md).
 
+## What a material graph is
+
+Three terminals, not one.
+
+* **`output.surface`** — the material, evaluated per fragment. Required,
+  and unique.
+* **`output.vertex`** — an object-space offset added to the vertex before
+  it is transformed. Optional.
+* **`output.discard`** — throw this fragment away. Optional, and not the
+  same thing as `alpha`: alpha is a blend weight the deferred path cannot
+  honour and does not stop depth being written, while a discarded
+  fragment leaves a hole that a shadow can shine through.
+
+Codegen partitions the graph by reachability **from each terminal
+separately**, and emits one function per partition: `wxsl_vertex`,
+`wxsl_discard`, `wxsl_material`. A node feeding two terminals is compiled
+into both — two `let` bindings in two functions, which is what a shader
+compiler's common-subexpression pass is for, and cheaper than the
+alternative of spending an inter-stage location on it.
+
+**A stage compiles only the partitions it needs.** A pass that writes no
+colour — a depth prepass, a shadow pass — wants the vertex offset and the
+alpha test and nothing else, so the material function is not in its
+module at all. A material that does not discard gets no fragment stage
+there either. That is why a displaced object casts a displaced shadow and
+a perforated one casts a perforated shadow: the parts that decide those
+things are compiled into the pass that draws them, and the rest is not.
+[ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md).
+
+The vertex side reads a `VertexContext`, which is a *superset* of the
+`SurfaceContext` the fragment side reads: same field names, same types,
+computed before any displacement. So `input.uv` is one node that works in
+either stage, and the only vertex-only inputs are the two object-space
+ones — reading those from the fragment side is a named error rather than
+a compile failure.
+
 ## What a material declares
 
 A graph does not only compute. Three things it can ask for from outside

@@ -123,7 +123,10 @@ facade crate's feature set, not about the workspace.
   trip.
   A node whose WXSL does not compile fails here. (A node *descriptor*
   disagreeing with its WXSL is no longer a thing that can happen — the
-  descriptor is derived from the WXSL, ADR 0020.)
+  descriptor is derived from the WXSL, ADR 0020.) It also asserts what a
+  stage *leaves out*: a depth prepass module must not contain the
+  material function, which is the whole of what ADR 0025's partitioning
+  bought and the only place it is checked directly.
 - `cargo test -p wxsl --test render_cube` — renders on a real device and
   compares the two paths' images. Also covers what only a device can show
   about the render graph: that each instance reads its own row of the

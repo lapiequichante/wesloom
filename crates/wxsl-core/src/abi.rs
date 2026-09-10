@@ -30,6 +30,11 @@ pub const SHADING_MODULE: &str = "package::wxsl::shading";
 pub const DEFERRED_MODULE: &str = "package::wxsl::deferred";
 /// Per-fragment inputs handed to the material function.
 pub const CONTEXT_STRUCT: &str = "SurfaceContext";
+/// Parameter name a generated function receives a [`CONTEXT_STRUCT`] as.
+pub const CONTEXT_VAR: &str = "ctx";
+/// Parameter name a generated function receives a
+/// [`VERTEX_CONTEXT_STRUCT`] as.
+pub const VERTEX_CONTEXT_VAR: &str = "vtx";
 /// Material properties the material function returns.
 pub const SURFACE_STRUCT: &str = "Surface";
 /// Returns a [`SURFACE_STRUCT`] pre-filled from a [`CONTEXT_STRUCT`]: sensible
@@ -46,6 +51,21 @@ pub const VERTEX_OUT_STRUCT: &str = "VertexOut";
 pub const TRANSFORM_VERTEX_FN: &str = "transform_vertex";
 /// Builds a [`CONTEXT_STRUCT`] from a [`VERTEX_OUT_STRUCT`].
 pub const SURFACE_CONTEXT_FN: &str = "surface_context";
+
+/// Per-vertex inputs handed to the generated vertex function.
+///
+/// The vertex stage's counterpart to [`CONTEXT_STRUCT`], and deliberately
+/// a *superset* of it: every field a fragment-side node reads is here too,
+/// computed before any displacement, plus the two only the vertex stage
+/// has. That is what lets one `input.uv` node serve both stages instead of
+/// forking the input vocabulary in half
+/// ([ADR 0025](../../../docs/adr/0025-a-material-graph-spans-shader-stages.md)).
+pub const VERTEX_CONTEXT_STRUCT: &str = "VertexContext";
+/// Builds a [`VERTEX_CONTEXT_STRUCT`] from a [`VERTEX_IN_STRUCT`].
+pub const VERTEX_CONTEXT_FN: &str = "vertex_context";
+/// [`TRANSFORM_VERTEX_FN`] with an object-space position offset applied
+/// before the model transform.
+pub const TRANSFORM_VERTEX_OFFSET_FN: &str = "transform_vertex_offset";
 
 /// Struct a generated module declares for the *declared* per-vertex
 /// attributes, taken as the vertex entry's **second** parameter.
@@ -617,6 +637,22 @@ pub const UI_KIND_TEXT: u32 = 2;
 
 /// Name of the generated material function.
 pub const MATERIAL_FN: &str = "wxsl_material";
+/// Name of the generated vertex function: the object-space position
+/// offset a graph's vertex output produces.
+///
+/// A separate function from [`MATERIAL_FN`] because it runs in a
+/// different shader stage, and a separate *subgraph*: codegen partitions
+/// the graph by which output each node is reachable from, and a node
+/// feeding both is emitted in both (ADR 0025).
+pub const VERTEX_FN: &str = "wxsl_vertex";
+/// Name of the generated discard function: whether this fragment should
+/// be thrown away.
+///
+/// Its own function, and its own partition, because it is the *only*
+/// thing a depth-only or shadow stage needs from the fragment side. A
+/// stage that needs it and nothing else compiles the alpha subgraph and
+/// leaves the rest of the material out of the module entirely.
+pub const DISCARD_FN: &str = "wxsl_discard";
 /// Name of the generated vertex entry point.
 pub const VERTEX_ENTRY: &str = "vs_main";
 
@@ -657,9 +693,15 @@ impl StageOutput {
 pub struct MaterialStageDesc {
     /// Identifier, as used in labels, on a command line and in the editor.
     pub name: &'static str,
-    /// Fragment entry point emitted for this stage, or `None` when the
-    /// stage has none.
-    pub fragment_entry: Option<&'static str>,
+    /// Name the fragment entry point takes *if* one is emitted.
+    ///
+    /// Always a name, never `None`: whether a
+    /// [`StageOutput::Nothing`] stage has a fragment entry at all is a
+    /// property of the *material*, not of the stage — one that discards
+    /// needs a fragment stage to discard in, and one that does not needs
+    /// no fragment state at all. `GeneratedShader::fragment_entry` is the
+    /// answer for a given material (ADR 0025).
+    pub fragment_entry: &'static str,
     /// What that entry returns.
     pub output: StageOutput,
     /// What the stage is for.
@@ -681,22 +723,31 @@ pub struct MaterialStageDesc {
 pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
     MaterialStageDesc {
         name: "forward_lit",
-        fragment_entry: Some("fs_forward_lit"),
+        fragment_entry: "fs_forward_lit",
         output: StageOutput::Color,
         doc: "Shade the surface where it is evaluated, and write the final colour.",
     },
     MaterialStageDesc {
         name: "gbuffer",
-        fragment_entry: Some("fs_gbuffer"),
+        fragment_entry: "fs_gbuffer",
         output: StageOutput::GBuffer,
         doc: "Write the surface into the G-buffer for a later lighting pass to shade.",
     },
     MaterialStageDesc {
         name: "depth_only",
-        fragment_entry: None,
+        fragment_entry: "fs_depth_only",
         output: StageOutput::Nothing,
-        doc: "Write depth and nothing else: a depth prepass, and the shape a shadow \
-              pass will take once it has a bias and an alpha subgraph to discard with.",
+        doc: "Write depth and nothing else: a depth prepass. A material that \
+              discards still gets a fragment stage here, because a prepass that \
+              filled the holes would occlude what should show through them.",
+    },
+    MaterialStageDesc {
+        name: "shadow",
+        fragment_entry: "fs_shadow",
+        output: StageOutput::Nothing,
+        doc: "Write depth into a shadow map slice. The same shape as a depth \
+              prepass, from a light's point of view — and the reason the vertex \
+              and alpha subgraphs had to become separable at all.",
     },
 ];
 
@@ -715,12 +766,15 @@ impl MaterialStage {
     pub const GBUFFER: MaterialStage = MaterialStage(1);
     /// Write depth and nothing else.
     pub const DEPTH_ONLY: MaterialStage = MaterialStage(2);
+    /// Write depth into a shadow map, from a light's point of view.
+    pub const SHADOW: MaterialStage = MaterialStage(3);
 
     /// Every stage, in table order.
     pub const ALL: &'static [MaterialStage] = &[
         MaterialStage::FORWARD_LIT,
         MaterialStage::GBUFFER,
         MaterialStage::DEPTH_ONLY,
+        MaterialStage::SHADOW,
     ];
 
     /// The stage at `index` in [`MATERIAL_STAGES`], if there is one.
@@ -752,10 +806,19 @@ impl MaterialStage {
             .find(|stage| stage.name().eq_ignore_ascii_case(text))
     }
 
-    /// The fragment entry point emitted for this stage, or `None` when it
-    /// has none.
-    pub fn fragment_entry(self) -> Option<&'static str> {
+    /// The name this stage's fragment entry point takes if one is
+    /// emitted. See [`MaterialStageDesc::fragment_entry`].
+    pub fn fragment_entry(self) -> &'static str {
         self.desc().fragment_entry
+    }
+
+    /// Whether this stage needs the material's `Surface` at all.
+    ///
+    /// The whole of what partitioning turns on: a stage that writes no
+    /// colour needs the vertex offset and the discard test, and nothing
+    /// else from the graph (ADR 0025).
+    pub fn needs_surface(self) -> bool {
+        self.output() != StageOutput::Nothing
     }
 
     /// What the fragment entry returns.
@@ -791,6 +854,10 @@ impl core::fmt::Display for MaterialStage {
 }
 
 /// One field of [`CONTEXT_STRUCT`], and the node that reads it.
+///
+/// Every one of these is also a field of [`VERTEX_CONTEXT_STRUCT`], at the
+/// same name and type, which is why one node definition serves both
+/// stages. [`VERTEX_ONLY_FIELDS`] is what the vertex context has *on top*.
 pub struct ContextField {
     /// Field name in the WXSL struct, and the node id suffix.
     pub name: &'static str,
@@ -847,6 +914,27 @@ pub const CONTEXT_FIELDS: &[ContextField] = &[
         ty: ValueType::F32,
         label: "Time",
         doc: "Seconds since the renderer started, for animated materials.",
+    },
+];
+
+/// Fields [`VERTEX_CONTEXT_STRUCT`] has that [`CONTEXT_STRUCT`] does not.
+///
+/// Object space, which the fragment stage has no access to and no use
+/// for: by then the geometry has been transformed and interpolated. A
+/// node reading one of these is therefore vertex-only, and
+/// `Graph::validate` says so if it is wired into the surface.
+pub const VERTEX_ONLY_FIELDS: &[ContextField] = &[
+    ContextField {
+        name: "object_position",
+        ty: ValueType::Vec3,
+        label: "Object position",
+        doc: "The vertex's position in object space, before the model transform.",
+    },
+    ContextField {
+        name: "object_normal",
+        ty: ValueType::Vec3,
+        label: "Object normal",
+        doc: "The vertex's normal in object space, unit length.",
     },
 ];
 
@@ -915,6 +1003,14 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
 
 /// Registry id of the surface output node.
 pub const SURFACE_OUTPUT_ID: &str = "output.surface";
+/// Registry id of the vertex output node.
+pub const VERTEX_OUTPUT_ID: &str = "output.vertex";
+/// Registry id of the discard output node.
+pub const DISCARD_OUTPUT_ID: &str = "output.discard";
+/// The input socket [`VERTEX_OUTPUT_ID`] takes its offset on.
+pub const SOCKET_POSITION_OFFSET: &str = "position_offset";
+/// The input socket [`DISCARD_OUTPUT_ID`] takes its condition on.
+pub const SOCKET_DISCARD: &str = "discard";
 
 /// Registry id of the context-read node for `field`.
 pub fn context_node_id(field: &str) -> String {
@@ -947,6 +1043,9 @@ pub fn surface_output_def() -> NodeDefinition {
 }
 
 /// One node definition per [`CONTEXT_FIELDS`] entry.
+///
+/// Usable in either shader stage, because every field is in both context
+/// structs under the same name.
 pub fn context_node_defs() -> Vec<NodeDefinition> {
     CONTEXT_FIELDS
         .iter()
@@ -958,6 +1057,69 @@ pub fn context_node_defs() -> Vec<NodeDefinition> {
                 .context_read(field.name)
         })
         .collect()
+}
+
+/// One node definition per [`VERTEX_ONLY_FIELDS`] entry.
+pub fn vertex_context_node_defs() -> Vec<NodeDefinition> {
+    VERTEX_ONLY_FIELDS
+        .iter()
+        .map(|field| {
+            NodeDefinition::builder(context_node_id(field.name), field.label)
+                .category("input")
+                .doc(field.doc)
+                .output(Socket::new("out", field.ty).with_doc(field.doc))
+                .vertex_context_read(field.name)
+        })
+        .collect()
+}
+
+/// The vertex-stage terminal node: an object-space position offset.
+///
+/// Object space, not world: it is added to the vertex before the model
+/// transform, so a displaced object still follows its own transform, and
+/// a mesh's own normal is the axis a displacement along the surface
+/// wants. A graph with no such node compiles a vertex stage identical to
+/// the one it always had.
+pub fn vertex_output_def() -> NodeDefinition {
+    NodeDefinition::builder(VERTEX_OUTPUT_ID, "Vertex output")
+        .category("output")
+        .doc(
+            "Moves the vertex, in object space, before it is transformed. \
+             The one place a material graph runs in the vertex stage — so \
+             everything feeding it is compiled there too, including into a \
+             shadow pass, which is what makes a displaced object cast a \
+             displaced shadow.",
+        )
+        .input(
+            Socket::new(SOCKET_POSITION_OFFSET, ValueType::Vec3)
+                .with_doc("Object-space offset added to the vertex position.")
+                .with_default(Value::Vec3([0.0, 0.0, 0.0]))
+                .optional(),
+        )
+        .vertex_output()
+}
+
+/// The fragment-stage terminal node: throw this fragment away.
+///
+/// Separate from [`SURFACE_FIELDS`]' `alpha` and not a substitute for it:
+/// `alpha` is a blend weight the deferred path cannot honour, while this
+/// removes the fragment before anything is written — including depth,
+/// which is what lets a perforated material cast a perforated shadow.
+pub fn discard_output_def() -> NodeDefinition {
+    NodeDefinition::builder(DISCARD_OUTPUT_ID, "Discard")
+        .category("output")
+        .doc(
+            "Throws the fragment away when true, writing neither colour \
+             nor depth. This is the only part of a material a depth or \
+             shadow pass compiles, so keep what feeds it cheap.",
+        )
+        .input(
+            Socket::new(SOCKET_DISCARD, ValueType::Bool)
+                .with_doc("Discard the fragment when true.")
+                .with_default(Value::Bool(false))
+                .optional(),
+        )
+        .discard_output()
 }
 
 #[cfg(test)]
@@ -1039,7 +1201,7 @@ mod tests {
             MaterialStage::parse("  GBuffer "),
             Some(MaterialStage::GBUFFER)
         );
-        assert_eq!(MaterialStage::parse("shadow"), None);
+        assert_eq!(MaterialStage::parse("velocity"), None);
         let mut names: Vec<&str> = MATERIAL_STAGES.iter().map(|stage| stage.name).collect();
         names.sort_unstable();
         names.dedup();
@@ -1057,13 +1219,26 @@ mod tests {
             GBUFFER_TARGETS.len()
         );
         assert_eq!(MaterialStage::DEPTH_ONLY.color_targets(), 0);
-        // And a stage with no fragment entry must write nothing.
+        assert_eq!(MaterialStage::SHADOW.color_targets(), 0);
+        // A stage that needs no surface writes no colour, and the
+        // converse: those are the same stages, and it is what
+        // partitioning turns on.
         for stage in MaterialStage::ALL {
-            if stage.fragment_entry().is_none() {
-                assert_eq!(stage.output(), StageOutput::Nothing);
-                assert_eq!(stage.color_targets(), 0);
-            }
+            assert_eq!(stage.needs_surface(), stage.color_targets() > 0);
+            assert_eq!(
+                stage.needs_surface(),
+                stage.output() != StageOutput::Nothing
+            );
         }
+        // Every stage names a fragment entry; whether one is *emitted*
+        // is a property of the material (ADR 0025).
+        let mut entries: Vec<&str> = MATERIAL_STAGES
+            .iter()
+            .map(|stage| stage.fragment_entry)
+            .collect();
+        entries.sort_unstable();
+        entries.dedup();
+        assert_eq!(entries.len(), MATERIAL_STAGES.len());
     }
 
     #[test]

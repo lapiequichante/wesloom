@@ -253,6 +253,29 @@ pub enum GraphError {
         /// What was wrong with them.
         reason: String,
     },
+    /// More than one terminal node of a kind that allows only one.
+    DuplicateOutput {
+        /// The kind, by its registry id.
+        kind: String,
+        /// Every node of that kind.
+        nodes: Vec<NodeId>,
+    },
+    /// A node that only compiles in one shader stage is reachable from a
+    /// terminal belonging to the other.
+    ///
+    /// The only typing rule partitioning needs: everything else in the
+    /// vocabulary compiles in either stage, so which stage a node lands
+    /// in is otherwise a reachability question with no wrong answers.
+    WrongStage {
+        /// The node that cannot go there.
+        node: NodeId,
+        /// Its definition.
+        def: String,
+        /// The terminal it is reachable from.
+        output: NodeId,
+        /// Why it cannot be compiled into that terminal's stage.
+        reason: String,
+    },
 }
 
 /// Whether a socket lookup was for an input or an output.
@@ -413,6 +436,25 @@ impl fmt::Display for GraphError {
             GraphError::InvalidAttribute { reason } => {
                 write!(f, "the attribute declarations are unusable: {reason}")
             }
+            GraphError::DuplicateOutput { kind, nodes } => write!(
+                f,
+                "a graph may have one `{kind}` node, and this one has {}: {}",
+                nodes.len(),
+                nodes
+                    .iter()
+                    .map(|node| node.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            GraphError::WrongStage {
+                node,
+                def,
+                output,
+                reason,
+            } => write!(
+                f,
+                "node {node} (`{def}`) feeds node {output}, and {reason}"
+            ),
             GraphError::InvalidMacroName { name } => {
                 write!(f, "macro name `{name}` is not a valid WXSL identifier")
             }

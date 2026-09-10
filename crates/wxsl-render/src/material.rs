@@ -194,18 +194,33 @@ mod tests {
         graph.add_node(abi::SURFACE_OUTPUT_ID);
         let material = Material::from_graph(&graph, &registry).unwrap();
 
-        let mut keys: Vec<u64> = MaterialStage::ALL
+        // The cache key, which is what decides whether one stage can be
+        // served another's compiled module. It holds the stage as well
+        // as the source hash (ADR 0022), and it has to: two stages that
+        // want the same *source* — a depth prepass and a shadow pass of
+        // a material that neither displaces nor discards produce
+        // byte-identical modules — are still two different pipelines.
+        let keys: std::collections::HashSet<_> = MaterialStage::ALL
             .iter()
-            .map(|stage| material.shader(*stage).variant_key())
+            .map(|stage| crate::variants::ShaderVariants::material_key(&material, *stage))
             .collect();
-        let count = keys.len();
-        keys.sort_unstable();
-        keys.dedup();
         assert_eq!(
             keys.len(),
-            count,
+            MaterialStage::ALL.len(),
             "two stages share a variant key, so one would be served the other's shader"
         );
+
+        // The stages that write something do each produce their own
+        // source; the two that write nothing may coincide.
+        let mut shading: Vec<u64> = MaterialStage::ALL
+            .iter()
+            .filter(|stage| stage.needs_surface())
+            .map(|stage| material.shader(*stage).variant_key())
+            .collect();
+        let count = shading.len();
+        shading.sort_unstable();
+        shading.dedup();
+        assert_eq!(shading.len(), count);
         assert!(material
             .wxsl(MaterialStage::GBUFFER)
             .contains("fn fs_gbuffer"));

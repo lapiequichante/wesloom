@@ -209,6 +209,31 @@ pub struct Graph {
     next_id: u32,
 }
 
+/// A graph's terminal nodes, which are also the roots codegen partitions
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphOutputs {
+    /// The surface output. Always present in a valid graph.
+    pub surface: NodeId,
+    /// The vertex output, if the graph has one.
+    pub vertex: Option<NodeId>,
+    /// The discard output, if the graph has one.
+    pub discard: Option<NodeId>,
+}
+
+/// Which shader stage a partition of the graph is compiled into.
+///
+/// Not the same thing as a [`crate::abi::MaterialStage`], which is a whole
+/// *pipeline* stage: a `forward_lit` material stage has both of these in
+/// it. This is the axis a node's availability is decided on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ShaderStage {
+    /// Runs once per vertex.
+    Vertex,
+    /// Runs once per fragment.
+    Fragment,
+}
+
 /// How often an attribute's value changes: once per vertex, or once per
 /// drawn instance.
 ///
@@ -649,11 +674,25 @@ impl Graph {
     /// [`crate::codegen::generate`] is where that is reported, and this
     /// answers an empty interface rather than duplicating the error.
     pub fn interface(&self, registry: &NodeRegistry) -> MaterialInterface {
-        let outputs = self.surface_outputs(registry);
-        let Some(&output) = outputs.first().filter(|_| outputs.len() == 1) else {
+        let Some(outputs) = self.outputs(registry) else {
             return MaterialInterface::default();
         };
-        self.interface_of(registry, &self.dependencies_of(output))
+        self.interface_of(registry, &self.reachable_from(&outputs))
+    }
+
+    /// Every node any of `outputs` depends on.
+    ///
+    /// The union across all three terminals, not one stage's partition.
+    /// The interface is per *material*: a bind group layout that narrowed
+    /// per stage would mean a depth pass and a shading pass wanted
+    /// different bind groups for the same object, and a pipeline layout
+    /// may be a superset of what its shader uses anyway.
+    pub fn reachable_from(&self, outputs: &GraphOutputs) -> BTreeSet<NodeId> {
+        let mut reachable = self.dependencies_of(outputs.surface);
+        for extra in [outputs.vertex, outputs.discard].into_iter().flatten() {
+            reachable.extend(self.dependencies_of(extra));
+        }
+        reachable
     }
 
     /// [`Graph::interface`] over an already-computed reachable set — what
@@ -1683,14 +1722,49 @@ impl Graph {
     /// A compilable graph has exactly one; the plural return lets both
     /// "none" and "several" be reported precisely.
     pub fn surface_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_surface_output)
+    }
+
+    /// Every vertex-output node. At most one is valid.
+    pub fn vertex_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_vertex_output)
+    }
+
+    /// Every discard-output node. At most one is valid.
+    pub fn discard_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_discard_output)
+    }
+
+    fn terminals(
+        &self,
+        registry: &NodeRegistry,
+        is_kind: fn(&NodeDefinition) -> bool,
+    ) -> Vec<NodeId> {
         self.nodes()
-            .filter(|(_, node)| {
-                registry
-                    .get(&node.def)
-                    .is_some_and(|def| def.is_surface_output())
-            })
+            .filter(|(_, node)| registry.get(&node.def).is_some_and(|def| is_kind(def)))
             .map(|(id, _)| id)
             .collect()
+    }
+
+    /// The graph's three terminals: the surface, and the optional vertex
+    /// and discard outputs.
+    ///
+    /// What partitioning starts from. Each is a separate root, and a node
+    /// reachable from two of them is compiled into both — which is the
+    /// whole of what "a graph spans shader stages" means
+    /// ([ADR 0025](../../../docs/adr/0025-a-material-graph-spans-shader-stages.md)).
+    ///
+    /// Answers `None` when the surface output is missing or duplicated;
+    /// [`crate::codegen::generate`] is where that is reported.
+    pub fn outputs(&self, registry: &NodeRegistry) -> Option<GraphOutputs> {
+        let surfaces = self.surface_outputs(registry);
+        let &surface = surfaces.first().filter(|_| surfaces.len() == 1)?;
+        let one = |found: Vec<NodeId>| found.first().copied().filter(|_| found.len() == 1);
+        Some(GraphOutputs {
+            surface,
+            vertex: one(self.vertex_outputs(registry)),
+            discard: one(self.discard_outputs(registry)),
+        })
     }
 
     /// Check every invariant against `registry`, reporting all problems found.
@@ -1809,6 +1883,7 @@ impl Graph {
     fn check_declarations(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
         self.check_user_block(errors);
         self.check_attributes(errors);
+        self.check_outputs(registry, errors);
         // One name is one binding, so two nodes naming the same parameter
         // are the same parameter — which is a feature, as long as they
         // agree about its type.
@@ -1952,6 +2027,55 @@ impl Graph {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// One terminal of each kind at most, and nothing wired into a
+    /// terminal that cannot compile in that terminal's stage.
+    ///
+    /// The second half is the only typing rule partitioning needs. A
+    /// missing surface output is [`crate::codegen::generate`]'s to
+    /// report, because a graph mid-edit legitimately has none.
+    fn check_outputs(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
+        for (kind, found) in [
+            (abi::SURFACE_OUTPUT_ID, self.surface_outputs(registry)),
+            (abi::VERTEX_OUTPUT_ID, self.vertex_outputs(registry)),
+            (abi::DISCARD_OUTPUT_ID, self.discard_outputs(registry)),
+        ] {
+            if found.len() > 1 {
+                errors.push(GraphError::DuplicateOutput {
+                    kind: kind.to_string(),
+                    nodes: found,
+                });
+            }
+        }
+
+        // A vertex-only node under a fragment terminal is the mistake
+        // this catches: `object_position` has no meaning by the time the
+        // surface is shaded, and the generated fragment function has no
+        // struct to read it from.
+        let fragment_roots = self
+            .surface_outputs(registry)
+            .into_iter()
+            .chain(self.discard_outputs(registry));
+        for root in fragment_roots {
+            for id in self.dependencies_of(root) {
+                let Some(node) = self.nodes.get(&id) else {
+                    continue;
+                };
+                let Some(def) = registry.get(&node.def) else {
+                    continue;
+                };
+                if def.is_vertex_only() {
+                    errors.push(GraphError::WrongStage {
+                        node: id,
+                        def: def.id.clone(),
+                        output: root,
+                        reason: "it reads object space, which only the vertex stage has"
+                            .to_string(),
+                    });
+                }
             }
         }
     }

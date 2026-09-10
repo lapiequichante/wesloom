@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md)
+Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md)
 
 ## Context
 
@@ -170,3 +170,18 @@ reason as ADR 0023's: the row of declared per-instance attributes has no
 instance *transform* row is untouched and keeps both its mirror and its
 test. See
 [0024](0024-a-material-declares-the-geometry-it-requires.md).
+
+## Amendment (ADR 0025)
+
+"A material graph describes a surface" is now too narrow by one and a
+half. A graph may also produce an **object-space vertex offset** and a
+**discard decision**, and each is a terminal of its own with a subgraph
+of its own. The ABI gains a second context struct for the vertex side —
+`VertexContext`, a superset of `SurfaceContext` under the same field
+names, so the vocabulary of `input.*` nodes does not fork — and
+`transform_vertex_offset` beside `transform_vertex`.
+
+The "named vocabulary, edited in two places, held together by a test"
+shape this ADR establishes is unchanged and is why the addition is small:
+`abi::VERTEX_ONLY_FIELDS` is the new table, and `vertex.wxsl` is its
+other half. See [0025](0025-a-material-graph-spans-shader-stages.md).

@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted
+Status: Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md)
 
 Amends [0005](0005-render-pipeline-abstraction-and-shader-switching.md),
 [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
@@ -174,3 +174,24 @@ the state machine.
   drawn" section, `docs/glossary.md`'s *material stage* entry and
   `AGENTS.md`'s ABI note are the three places outside the code that
   describe it.
+
+## Amendment (ADR 0025)
+
+This ADR left one thing open and one thing owed.
+
+The open thing: *which part* of a graph a stage needs. It is now
+answered. A stage compiles the partitions reachable from the terminals it
+needs — `MaterialStage::needs_surface` is the whole rule — so the
+depth-only module no longer carries the material function, and the cost
+this ADR recorded is gone.
+
+The owed thing: `MaterialStageDesc::fragment_entry` was an
+`Option<&'static str>`, on the theory that whether a stage has a fragment
+program is a property of the stage. It is not: a depth or shadow stage
+needs one exactly when the *material* discards. So the table field is now
+always a name, and `GeneratedShader::fragment_entry` is the `Option` —
+per material, and what the pipeline is built from.
+
+`MaterialStage::SHADOW` is a fourth row in the table, added the way this
+ADR intended rows to be added: one row plus the constant that names it.
+See [0025](0025-a-material-graph-spans-shader-stages.md).
