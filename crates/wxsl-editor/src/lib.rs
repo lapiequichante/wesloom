@@ -29,6 +29,7 @@
 //! # let (ui_font, mono_font) = (Vec::new(), Vec::new());
 //! let mut editor = Editor::new(
 //!     &device,
+//!     &queue,
 //!     EditorConfig::new(library, registry, graph, ui_font, mono_font),
 //! )?;
 //!

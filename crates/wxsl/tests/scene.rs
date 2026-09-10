@@ -105,21 +105,50 @@ fn a_dangling_index_is_reported_before_anything_is_uploaded() {
     );
 }
 
+/// A 1x1 white texture and a default sampler: the identity for the demo
+/// material, which multiplies its albedo by whatever it samples.
+fn white_texture(gpu: &GpuContext) -> (wgpu::TextureView, wgpu::Sampler) {
+    let extent = wgpu::Extent3d {
+        width: 1,
+        height: 1,
+        depth_or_array_layers: 1,
+    };
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("white"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        &[255u8, 255, 255, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        extent,
+    );
+    (
+        texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        gpu.device
+            .create_sampler(&wgpu::SamplerDescriptor::default()),
+    )
+}
+
 #[test]
 fn a_scene_document_renders() {
     let Some(gpu) = gpu() else { return };
     let registry = wxsl::stdlib::registry();
     let scene = demo_scene();
-    let resources = wxsl::scene::SceneResources::load(&gpu.device, &scene, &registry, None)
+    let mut resources = wxsl::scene::SceneResources::load(&gpu.device, &scene, &registry, None)
         .expect("the scene loads");
     assert_eq!(resources.meshes().len(), 2);
     assert_eq!(resources.materials().len(), 1);
-
-    let draws = resources.draw_list();
-    assert_eq!(draws.len(), 2);
-    // Both shapes are opaque, and only one carries the extra tag.
-    let outlined = TagExpr::parse("outlined").expect("parses");
-    assert_eq!(draws.select(&outlined).count(), 1);
 
     let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
     let mut renderer = Renderer::new(
@@ -128,6 +157,29 @@ fn a_scene_document_renders() {
         TargetConfig::new(SIZE, SIZE, target.format()),
     )
     .expect("the stdlib library satisfies the ABI");
+
+    // The document names meshes and materials but not images, so the
+    // texture the demo material samples is the application's to supply —
+    // and until it does, the scene says so by name rather than drawing
+    // black (ADR 0023).
+    resources.create_bindings(&gpu.device, &mut renderer);
+    let unbound = resources
+        .upload(&gpu.device, &gpu.queue)
+        .expect_err("the demo material declares a texture");
+    assert!(unbound.to_string().contains("albedo"), "{unbound}");
+    let (view, sampler) = white_texture(&gpu);
+    let bindings = resources.bindings_mut(0).expect("created above");
+    bindings.set_texture("albedo", &view).expect("declared");
+    bindings.set_sampler("linear", &sampler).expect("declared");
+    resources
+        .upload(&gpu.device, &gpu.queue)
+        .expect("everything is bound now");
+
+    let draws = resources.draw_list();
+    assert_eq!(draws.len(), 2);
+    // Both shapes are opaque, and only one carries the extra tag.
+    let outlined = TagExpr::parse("outlined").expect("parses");
+    assert_eq!(draws.select(&outlined).count(), 1);
     let environment = Environment {
         camera: Camera {
             eye: glam::Vec3::new(0.0, 0.5, 6.0),

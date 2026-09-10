@@ -81,13 +81,13 @@ pub const BIND_GROUPS: &[BindGroup] = &[
     BindGroup {
         index: GROUP_MATERIAL,
         name: "material",
-        doc: "A material's parameters, textures and samplers.",
+        doc: "A material's uniform parameters, textures and samplers, all declared by its graph.",
         application_owned: false,
     },
     BindGroup {
         index: GROUP_USER,
         name: "user",
-        doc: "Unused by wxsl: the slot an application binds its own resources in.",
+        doc: "The application's own slot. A material may declare the block it expects to find here, but never what is in it.",
         application_owned: true,
     },
     BindGroup {
@@ -114,10 +114,21 @@ pub struct BindGroup {
 /// (`package::wxsl::bindings`). Rebound once per frame, and once only —
 /// every draw in the frame indexes the same instance buffer.
 pub const GROUP_FRAME: u32 = 0;
-/// Per-material data: the parameters a graph exposes, plus its textures.
+/// Per-material data: the uniform parameters a graph exposes, plus its
+/// textures and samplers.
+///
+/// Its layout is not fixed by this module, because it is not fixed at all:
+/// the graph decides it, and
+/// [`crate::resources::MaterialInterface`] is the computed answer that
+/// codegen emits and the renderer binds against (ADR 0023).
 pub const GROUP_MATERIAL: u32 = 1;
-/// The application's own slot. Nothing in wxsl binds here, and it is the
-/// only group a node definition may declare a binding in.
+/// The application's own slot.
+///
+/// Nothing in wxsl *owns* anything here. A material may declare the block
+/// it expects to find at [`BINDING_USER_BLOCK`] and hand out the layout,
+/// and the application hands back a bind group — so the two agree through
+/// `wgpu`'s own validation rather than through a convention either side
+/// could drift from (ADR 0023).
 pub const GROUP_USER: u32 = 2;
 /// Per-pass data, such as the G-buffer the deferred lighting pass samples.
 ///
@@ -131,6 +142,44 @@ pub const GROUP_PASS: u32 = 3;
 pub const BINDING_CAMERA: u32 = 0;
 /// [`GROUP_FRAME`] binding of the scene uniform (lights, ambient, time).
 pub const BINDING_SCENE: u32 = 1;
+/// [`GROUP_MATERIAL`] binding of the material's uniform parameter buffer.
+///
+/// Always reserved, even for a material that declares no parameters: a
+/// graph that gains its first parameter must not renumber the textures
+/// already bound after it, because a binding index that moves is a bind
+/// group that has to be rebuilt for no reason. An unused binding in a
+/// pipeline layout costs nothing.
+pub const BINDING_MATERIAL_PARAMS: u32 = 0;
+/// First [`GROUP_MATERIAL`] binding available to a declared texture or
+/// sampler; they take the indices upwards from here, in name order.
+pub const MATERIAL_RESOURCE_BINDING_BASE: u32 = BINDING_MATERIAL_PARAMS + 1;
+/// [`GROUP_USER`] binding of the block a material *requires the
+/// application to supply*.
+///
+/// The one binding in the application's own group that wxsl has anything
+/// to say about — and it says only what shape it expects, never what is
+/// in it (ADR 0023).
+pub const BINDING_USER_BLOCK: u32 = 0;
+
+/// Name of the generated struct holding a material's uniform parameters.
+pub const MATERIAL_PARAMS_STRUCT: &str = "MaterialParams";
+/// Name of the generated variable holding a material's uniform parameters.
+pub const MATERIAL_PARAMS_VAR: &str = "material";
+
+/// Names a generated material module reserves for itself, which a graph
+/// may therefore not give a texture, a sampler or an application block.
+///
+/// Short, because everything else in a generated module is either
+/// prefixed (`n3_out`, which
+/// [`crate::error::GraphError::InvalidSetting`] also rejects) or imported
+/// under a mangled name.
+pub const RESERVED_NAMES: &[&str] = &[
+    MATERIAL_PARAMS_VAR,
+    MATERIAL_PARAMS_STRUCT,
+    "ctx",
+    "surface",
+];
+
 /// [`GROUP_FRAME`] binding of the instance transform storage buffer.
 ///
 /// A storage buffer, not a uniform with a dynamic offset: one binding and

@@ -14,8 +14,10 @@ use wxsl::core::graph::Graph;
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
+use wxsl::render::wgpu;
 use wxsl::render::{
-    Camera, DrawItem, Environment, Light, RenderRequest, Renderer, StockPipeline, TargetConfig,
+    Camera, DrawItem, Environment, Light, MaterialBindings, RenderRequest, Renderer, StockPipeline,
+    TargetConfig,
 };
 
 const SIZE: u32 = 128;
@@ -69,8 +71,11 @@ fn render(
     .expect("the stdlib library satisfies the ABI");
     let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
     let environment = test_environment();
+    let bindings = demo_bindings(gpu, &mut renderer, &material);
     let draws = wxsl::render::single_draw(
-        DrawItem::new(&mesh, &material).with_transform(Mat4::from_rotation_y(0.6)),
+        DrawItem::new(&mesh, &material)
+            .with_transform(Mat4::from_rotation_y(0.6))
+            .with_bindings(&bindings),
     );
 
     let mut images = Vec::new();
@@ -91,6 +96,62 @@ fn render(
         images.push(target.read_rgba8(&gpu.device, &gpu.queue));
     }
     (images, renderer)
+}
+
+/// The demo material's bind group, with a plain white texture in it.
+///
+/// The demo graph multiplies its albedo by a sampled texture (ADR 0023),
+/// and white is the identity for that — so every image in this file is
+/// what it was before the graph learned to sample, and a difference here
+/// is a difference in something else.
+fn demo_bindings(
+    gpu: &GpuContext,
+    renderer: &mut Renderer,
+    material: &Material,
+) -> MaterialBindings {
+    let mut bindings = renderer.material_bindings(&gpu.device, material);
+    let extent = wgpu::Extent3d {
+        width: 1,
+        height: 1,
+        depth_or_array_layers: 1,
+    };
+    let white = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("white"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        white.as_image_copy(),
+        &[255u8, 255, 255, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        extent,
+    );
+    let view = white.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = gpu
+        .device
+        .create_sampler(&wgpu::SamplerDescriptor::default());
+    for resource in &material.interface().resources {
+        let name = resource.name.as_str();
+        let bound = if resource.ty == wxsl::core::node::ValueType::Sampler {
+            bindings.set_sampler(name, &sampler)
+        } else {
+            bindings.set_texture(name, &view)
+        };
+        bound.expect("the interface named this resource");
+    }
+    bindings
+        .upload(&gpu.device, &gpu.queue)
+        .expect("everything the graph declares is bound");
+    bindings
 }
 
 fn pixel(image: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -235,8 +296,11 @@ fn a_macro_change_compiles_a_new_variant() {
         let mut macros = MacroSet::new();
         macros.set("WXSL_FBM_OCTAVES", MacroValue::Int(octaves));
         let material = Material::from_graph_with_macros(&graph, &registry, &macros).unwrap();
+        let bindings = demo_bindings(&gpu, &mut renderer, &material);
         let draws = wxsl::render::single_draw(
-            DrawItem::new(&mesh, &material).with_transform(Mat4::from_rotation_y(0.6)),
+            DrawItem::new(&mesh, &material)
+                .with_transform(Mat4::from_rotation_y(0.6))
+                .with_bindings(&bindings),
         );
         renderer
             .render(
@@ -288,8 +352,11 @@ fn a_requested_pipeline_swap_never_shows_a_frame_of_the_new_one_early() {
     .expect("the stdlib library satisfies the ABI");
     let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
     let environment = test_environment();
+    let bindings = demo_bindings(&gpu, &mut renderer, &material);
     let draws = wxsl::render::single_draw(
-        DrawItem::new(&mesh, &material).with_transform(Mat4::from_rotation_y(0.6)),
+        DrawItem::new(&mesh, &material)
+            .with_transform(Mat4::from_rotation_y(0.6))
+            .with_bindings(&bindings),
     );
     let frame = |renderer: &mut Renderer| {
         renderer
@@ -439,11 +506,14 @@ fn every_instance_lands_where_its_own_transform_puts_it() {
         ..test_environment()
     };
 
+    let bindings = demo_bindings(&gpu, &mut renderer, &material);
     let draws: wxsl::render::DrawList<'_> = [
         DrawItem::new(&mesh, &material)
-            .with_transform(Mat4::from_translation(Vec3::new(-1.4, 0.0, 0.0))),
+            .with_transform(Mat4::from_translation(Vec3::new(-1.4, 0.0, 0.0)))
+            .with_bindings(&bindings),
         DrawItem::new(&mesh, &material)
-            .with_transform(Mat4::from_translation(Vec3::new(1.4, 0.0, 0.0))),
+            .with_transform(Mat4::from_translation(Vec3::new(1.4, 0.0, 0.0)))
+            .with_bindings(&bindings),
     ]
     .into_iter()
     .collect();

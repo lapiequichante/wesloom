@@ -2,7 +2,7 @@
 
 Date: 2026-09-09
 
-Status: Accepted
+Status: Accepted, amended by [0023](0023-a-material-declares-its-resources.md)
 
 ## Context
 
@@ -105,3 +105,18 @@ cannot hide.
 - The editor gained a "changed but not compiled" request flag: renaming a
   node or recolouring it marks the document modified without triggering a
   shader rebuild.
+
+
+## Amendment (ADR 0023)
+
+There is now a *third* kind of per-instance data, and it is the one this
+ADR's rule does not cover: a **setting**
+(`wxsl_core::node::SettingDef`) is a string a node instance carries that
+changes what it compiles to. A `param.value`'s `name` is the uniform's
+identity — rename it and the host writes a different field — so unlike a
+label it is emphatically not metadata, and unlike a colour it is not free
+to change.
+
+The distinction this ADR draws still holds and is why the new thing needed
+its own home rather than reusing `Node::label`: a label is what a *reader*
+calls a node and codegen never sees it. See [0023](0023-a-material-declares-its-resources.md).

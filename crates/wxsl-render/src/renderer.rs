@@ -19,6 +19,16 @@
 //!   presenting, and the swap lands in one frame.
 //!   [`Renderer::swap_progress`] is what a `compiling 3/7` indicator reads.
 //!
+//! # What a draw carries
+//!
+//! Group 0 is the frame's and the renderer owns it. Groups 1 and 2 are the
+//! material's — the parameters and textures its graph declares, and the
+//! block it expects the application to supply — and both arrive *on the
+//! draw*, because the resources behind them belong to the application.
+//! [`Renderer::material_bindings`] makes the first and
+//! [`Renderer::user_layout`] describes the second
+//! ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+//!
 //! Either way the variant cache keeps what it compiled, keyed on the
 //! *stage* rather than the pipeline — so the second swap between two
 //! pipelines is free, and the third costs nothing at all.
@@ -28,6 +38,7 @@ use std::sync::Arc;
 
 use wxsl_core::abi::{self, MaterialStage};
 
+use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
 use crate::environment::{Environment, FrameBindings};
 use crate::error::RenderError;
@@ -35,7 +46,7 @@ use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedul
 use crate::library::ShaderLibrary;
 use crate::material::Material;
 use crate::pass::{DrawSource, PassKind, ScreenShader};
-use crate::pipeline::{PipelineCache, StockPipeline, TargetConfig};
+use crate::pipeline::{MaterialGroups, PipelineCache, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::variants::{
     CacheStats, LightingRequest, MaterialRequest, ShaderVariant, ShaderVariants,
@@ -62,6 +73,7 @@ pub struct Renderer {
     library: ShaderLibrary,
     variants: ShaderVariants,
     bindings: FrameBindings,
+    layouts: BindingLayouts,
     pipelines: PipelineCache,
     pool: ResourcePool,
     graph: RenderGraph,
@@ -94,6 +106,7 @@ impl Renderer {
         pool.configure(device, &schedule, target);
         Ok(Renderer {
             bindings: FrameBindings::new(device),
+            layouts: BindingLayouts::new(),
             library,
             variants: ShaderVariants::new(),
             pipelines: PipelineCache::new(),
@@ -297,6 +310,57 @@ impl Renderer {
         Ok(())
     }
 
+    /// Somewhere to put `material`'s uniform parameters, textures and
+    /// samplers.
+    ///
+    /// Starts at the values the graph's `param` nodes declared; a texture
+    /// or sampler the graph declares has to be bound before the material
+    /// can draw, and [`MaterialBindings::upload`] names any that were
+    /// not. Hand the result to a draw with
+    /// [`DrawItem::with_bindings`].
+    ///
+    /// One per *object*, not one per material, whenever two objects
+    /// sharing a material want different values — that is the whole
+    /// reason these are not owned by the [`Material`].
+    pub fn material_bindings(
+        &mut self,
+        device: &wgpu::Device,
+        material: &Material,
+    ) -> MaterialBindings {
+        let interface = material.interface();
+        let layouts = self.layouts.layouts(device, interface);
+        // A material declaring nothing still gets bindings, with an empty
+        // layout: it keeps the caller from having to ask whether it needs
+        // any, and an empty bind group is never bound.
+        let layout = match layouts.material.as_ref() {
+            Some(layout) => layout.clone(),
+            None => device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("wxsl material (empty)"),
+                entries: &[],
+            }),
+        };
+        MaterialBindings::new(device, interface, &layout)
+    }
+
+    /// The layout of the block `material` expects the application to
+    /// supply, or `None` if it expects none.
+    ///
+    /// The application creates its own buffer and bind group against
+    /// this, and hands the group back on the draw
+    /// ([`DrawItem::with_user`]). What is in it is never this crate's
+    /// business; `wgpu` is what checks the two agree
+    /// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+    pub fn user_layout(
+        &mut self,
+        device: &wgpu::Device,
+        material: &Material,
+    ) -> Option<&wgpu::BindGroupLayout> {
+        self.layouts
+            .layouts(device, material.interface())
+            .user
+            .as_ref()
+    }
+
     /// The current target size and format.
     pub fn target(&self) -> TargetConfig {
         self.target
@@ -446,6 +510,7 @@ impl Renderer {
         // mutably while the graph and the pool are borrowed alongside it.
         let Renderer {
             bindings,
+            layouts,
             pipelines,
             pool,
             graph,
@@ -466,6 +531,7 @@ impl Renderer {
                 record_pass(
                     device,
                     bindings,
+                    layouts,
                     pipelines,
                     &plan,
                     request.draws,
@@ -545,9 +611,11 @@ struct FramePlan {
 }
 
 /// Issue one pass's work into the encoder the graph opened.
+#[allow(clippy::too_many_arguments)]
 fn record_pass(
     device: &wgpu::Device,
     bindings: &FrameBindings,
+    layouts: &mut BindingLayouts,
     pipelines: &mut PipelineCache,
     plan: &FramePlan,
     draws: &DrawList<'_>,
@@ -566,9 +634,15 @@ fn record_pass(
             }
             for (instance, variant) in entries {
                 let item = &draws.items()[*instance as usize];
+                let groups = layouts.layouts(device, item.material.interface());
                 let pipeline = pipelines.geometry(
                     device,
                     bindings.layout(),
+                    &MaterialGroups {
+                        material: groups.material.as_ref(),
+                        user: groups.user.as_ref(),
+                        signature: item.material.signature(),
+                    },
                     pass.pass_layout.as_ref(),
                     variant,
                     *stage,
@@ -577,6 +651,26 @@ fn record_pass(
                     &pass.pass_bindings,
                 );
                 render.set_pipeline(pipeline);
+                // Groups 1 and 2 are the material's — one it fills and one
+                // it only describes — and both are per draw, because the
+                // resources behind them are the application's.
+                if groups.material.is_some() {
+                    let group = item
+                        .bindings
+                        .and_then(MaterialBindings::bind_group)
+                        .ok_or_else(|| RenderError::MissingDrawBindings {
+                            material: item.material.name.clone(),
+                            group: "material",
+                        })?;
+                    render.set_bind_group(abi::GROUP_MATERIAL, group, &[]);
+                }
+                if groups.user.is_some() {
+                    let group = item.user.ok_or_else(|| RenderError::MissingDrawBindings {
+                        material: item.material.name.clone(),
+                        group: "user",
+                    })?;
+                    render.set_bind_group(abi::GROUP_USER, group, &[]);
+                }
                 match source {
                     DrawSource::Scene(_) => {
                         item.mesh.draw_instances(render, *instance..*instance + 1);

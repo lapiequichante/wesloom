@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
+Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md)
 
 ## Context
 
@@ -113,3 +113,17 @@ application can check its layout before `wgpu` validation does.
   pipeline either: they are built from a pass's declared reads, in order,
   which is how the deferred lighting pass gets the same G-buffer bindings it
   always had.
+
+- **Amended by [0023](0023-a-material-declares-its-resources.md):** group 1 is now
+  bound, and its layout is per material rather than fixed — a graph
+  declares its own parameters, textures and samplers, and
+  `wxsl_core::resources::MaterialInterface` is the computed answer. Group
+  2's *ownership* is unchanged and nothing of ours goes in it, but the row
+  above saying "never touched by wxsl" is now too strong: a material may
+  **declare the block it expects to find there** and hand out the layout,
+  and the application hands back a bind group. What this ADR anticipated —
+  node definitions declaring their own bindings in group 2, with codegen
+  rejecting collisions — is not what happened: the declaration is
+  graph-level rather than per node, because the application's buffer has
+  the layout it has and a block inferred from the fields one graph happens
+  to read would put them at the wrong offsets.

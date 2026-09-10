@@ -70,6 +70,8 @@ modules! {
     "package::math::safe_normalize" => "math/safe_normalize.wxsl",
     "package::math::smootherstep" => "math/smootherstep.wxsl",
 
+    "package::sample::texture_2d" => "sample/texture_2d.wxsl",
+
     "package::sdf::box" => "sdf/box.wxsl",
     "package::sdf::smooth_union" => "sdf/smooth_union.wxsl",
     "package::sdf::sphere" => "sdf/sphere.wxsl",

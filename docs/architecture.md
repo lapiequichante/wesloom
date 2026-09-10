@@ -238,8 +238,8 @@ higher-numbered groups when a lower one is rebound.
 | # | Slot | Rebound | Holds |
 |---|---|---|---|
 | 0 | `frame` | per frame | Camera, scene lighting, the instance transform buffer |
-| 1 | `material` | per material | A graph's parameters, textures, samplers |
-| 2 | `user` | whenever | Nothing wxsl binds — the application's slot |
+| 1 | `material` | per material | A graph's uniform parameters, textures and samplers, all of them declared by the graph |
+| 2 | `user` | per material | Nothing wxsl binds. A material may *declare* the block it expects here; the application fills it |
 | 3 | `pass` | per pass | Whatever a pass declares it reads: the G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
 
 Instance transforms share the frame group despite changing per draw, as one
@@ -259,6 +259,54 @@ The pass group is no longer hand-written per pipeline: it is built from a
 pass's `reads`, in declaration order, at bindings 0..n. The deferred
 lighting pass's G-buffer bindings are what that produces for the deferred
 pass list, and a screen effect's inputs will be what it produces later.
+
+Groups 1 and 2 have no fixed layout at all, because a *material* decides
+them. `wxsl_core::resources::MaterialInterface` is that decision, computed
+from the reachable part of the graph: the uniform parameters and their
+offsets, the textures and samplers and their bindings, and the block the
+application is expected to supply. Codegen emits the declarations from it
+and `wxsl_render::bindings` builds the bind groups from it, so the two
+halves cannot disagree — see the next section. Both groups arrive on the
+*draw* (`DrawItem::bindings` and `DrawItem::user`), because the resources
+behind them belong to the application, which is the same rule that keeps
+the renderer scene-graph-free.
+[ADR 0023](adr/0023-a-material-declares-its-resources.md).
+
+## What a material declares
+
+A graph does not only compute. Three things it can ask for from outside
+itself, and the difference between the first and a `const` node is the
+point of all of it:
+
+* **Uniform parameters** (`param.value`). A field of one buffer in group
+  1, so changing one is a buffer write — no new shader variant, no new
+  pipeline. A `const` is inlined into the generated WXSL, so changing one
+  *is* a recompile. Both look like a value on the canvas; only one is a
+  slider.
+* **Textures and samplers** (`texture.texture_2d`, `texture.sampler`),
+  bound by name in group 1 and read by `sample.texture_2d`. These are the
+  first socket types that carry a *handle* rather than a value, so they
+  live in `ValueType` but not in `ValueType::ALL`.
+* **The application's block** (`Graph::user_block`, read by `input.user`).
+  Different in kind: the material does not own it. It states the shape,
+  `Renderer::user_layout` hands out the `BindGroupLayout`, and the
+  application hands back a `BindGroup`. `wgpu` checks that they agree, so
+  there is no validation of ours to keep in sync.
+
+Each declaring node carries a **setting** — a string the node instance
+holds that names the thing it declares. A setting is not a label: renaming
+a `param.value` renames the uniform.
+
+**The layout is computed, not mirrored.** This is the one host-shared
+buffer in the repo with no `#[repr(C)]` struct beside it, because its
+fields are whatever the graph declared.
+`wxsl_core::resources::BufferLayout` computes the offsets under WGSL's
+uniform rules — a `vec3f` aligns to 16 and occupies 12, a `mat3x3f` is
+three columns each padded to 16 — and it is the *only* thing that knows
+them: the shader's struct is generated from it, and the host writes
+through it. `crates/wxsl/tests/material_resources.rs` checks the result on
+a GPU at every type, which is what replaces the mirror test everything
+else here gets.
 
 ## Macro variables
 

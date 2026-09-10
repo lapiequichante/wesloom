@@ -51,6 +51,48 @@ pub enum RenderError {
     /// rather than left as an indicator counting to a total it can no
     /// longer reach.
     SwapAbandoned,
+    /// A parameter could not be written: no such name, or the wrong type
+    /// for the one there is.
+    MaterialParameter {
+        /// The parameter that was addressed.
+        name: String,
+        /// What `wxsl-core`'s layout objected to.
+        reason: String,
+    },
+    /// A texture or sampler was bound under a name the material's graph
+    /// does not declare. Almost always a typo against the `name` setting
+    /// on a `texture.*` node.
+    UndeclaredMaterialResource {
+        /// The name that was used.
+        name: String,
+    },
+    /// A texture was bound where the graph declares a sampler, or the
+    /// other way round.
+    MaterialResourceKind {
+        /// The resource's name.
+        name: String,
+        /// What the graph declares it as.
+        declared: String,
+    },
+    /// A declared texture or sampler was never bound, so there is no bind
+    /// group to build. Named, because "the surface is black" is a much
+    /// worse way to find this out.
+    UnboundMaterialResource {
+        /// The resource's name.
+        name: String,
+        /// What kind of resource it is.
+        kind: String,
+    },
+    /// A draw's material declares a group the draw did not carry: either
+    /// [`crate::draw::DrawItem::bindings`] for its own parameters and
+    /// textures, or [`crate::draw::DrawItem::user`] for the block it
+    /// expects the application to supply.
+    MissingDrawBindings {
+        /// The material's name.
+        material: String,
+        /// Which group is missing, by its `abi::BIND_GROUPS` name.
+        group: &'static str,
+    },
     /// A pass wants a resource the graph does not own and nobody supplied a
     /// view for. Every imported resource — the frame's target above all —
     /// has to be handed to [`crate::graph::RenderGraph::record`].
@@ -117,6 +159,25 @@ impl fmt::Display for RenderError {
             RenderError::SwapAbandoned => {
                 f.write_str("the pipeline swap was abandoned: its compiler thread is gone")
             }
+            RenderError::MaterialParameter { name, reason } => {
+                write!(f, "cannot set parameter `{name}`: {reason}")
+            }
+            RenderError::UndeclaredMaterialResource { name } => write!(
+                f,
+                "this material declares no texture or sampler called `{name}`"
+            ),
+            RenderError::MaterialResourceKind { name, declared } => write!(
+                f,
+                "`{name}` is declared as {declared}, and was bound as something else"
+            ),
+            RenderError::UnboundMaterialResource { name, kind } => write!(
+                f,
+                "the {kind} `{name}` was never bound, so this material cannot draw"
+            ),
+            RenderError::MissingDrawBindings { material, group } => write!(
+                f,
+                "`{material}` declares a `{group}` bind group, but the draw carried none"
+            ),
             RenderError::MissingImport { resource } => write!(
                 f,
                 "no view was supplied for the imported resource `{resource}`"

@@ -15,6 +15,7 @@
 use glam::Mat4;
 use wxsl_core::scene::{TagExpr, Tags};
 
+use crate::bindings::MaterialBindings;
 use crate::environment::InstanceTransform;
 use crate::material::Material;
 use crate::mesh::Mesh;
@@ -35,6 +36,25 @@ pub struct DrawItem<'a> {
     pub transform: Mat4,
     /// What this draw *is*, for a pass to select on.
     pub tags: &'a Tags,
+    /// The material's own bind group: its uniform parameters, its
+    /// textures and its samplers (`abi::GROUP_MATERIAL`).
+    ///
+    /// Per *draw* rather than per material, because two objects sharing a
+    /// material with different textures is ordinary — and because the
+    /// renderer holds no resources of the application's, by the same rule
+    /// that keeps it scene-graph-free. A material declaring neither a
+    /// parameter nor a texture needs none.
+    pub bindings: Option<&'a MaterialBindings>,
+    /// The bind group for the block the material *expects the application
+    /// to supply* (`abi::GROUP_USER`).
+    ///
+    /// The material hands out the layout
+    /// ([`crate::renderer::Renderer::user_layout`]) and the application
+    /// hands back a group. Nothing here knows what is in it: `wgpu`
+    /// checks that the shape matches, so there is no validation of ours
+    /// to keep in sync
+    /// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+    pub user: Option<&'a wgpu::BindGroup>,
 }
 
 impl<'a> DrawItem<'a> {
@@ -45,6 +65,8 @@ impl<'a> DrawItem<'a> {
             material,
             transform: Mat4::IDENTITY,
             tags: Tags::EMPTY,
+            bindings: None,
+            user: None,
         }
     }
 
@@ -57,6 +79,20 @@ impl<'a> DrawItem<'a> {
     /// Tag it.
     pub fn with_tags(mut self, tags: &'a Tags) -> Self {
         self.tags = tags;
+        self
+    }
+
+    /// Draw it with these material bindings. Required whenever the
+    /// material declares a parameter, a texture or a sampler.
+    pub fn with_bindings(mut self, bindings: &'a MaterialBindings) -> Self {
+        self.bindings = Some(bindings);
+        self
+    }
+
+    /// Supply the application's own bind group. Required whenever the
+    /// material declares a block it expects to find there.
+    pub fn with_user(mut self, group: &'a wgpu::BindGroup) -> Self {
+        self.user = Some(group);
         self
     }
 

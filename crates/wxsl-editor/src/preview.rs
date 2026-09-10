@@ -21,8 +21,8 @@ use wxsl_render::gpu::OffscreenTarget;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
 use wxsl_render::{
-    Camera, DrawItem, Environment, Light, Material, Mesh, MeshKind, RenderError, RenderRequest,
-    Renderer, ShaderLibrary, StockPipeline, SwapProgress, TargetConfig,
+    Camera, DrawItem, Environment, Light, Material, MaterialBindings, Mesh, MeshKind, RenderError,
+    RenderRequest, Renderer, ShaderLibrary, StockPipeline, SwapProgress, TargetConfig,
 };
 
 use crate::highlight::{self, Run};
@@ -64,6 +64,19 @@ pub struct Preview {
     mesh: Mesh,
     mesh_kind: MeshKind,
     material: Option<Material>,
+    /// The material's own bind group, rebuilt whenever the graph changes
+    /// what it declares.
+    bindings: Option<MaterialBindings>,
+    /// A zero-filled stand-in for the block the graph expects the
+    /// *application* to supply. The editor is not that application, so
+    /// there is nothing truer it could bind — and binding nothing would
+    /// mean the graph could not be previewed at all.
+    user: Option<wgpu::BindGroup>,
+    /// Bound wherever a graph declares a texture it has no way to supply
+    /// yet. A checker rather than white, so "this is a placeholder" is
+    /// visible rather than a guess.
+    placeholder: wgpu::TextureView,
+    placeholder_sampler: wgpu::Sampler,
     wxsl: String,
     wgsl: String,
     // Computed once, alongside `wxsl`/`wgsl`, rather than every frame the
@@ -94,6 +107,7 @@ impl Preview {
     /// the interface can draw it as an image.
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         ui: &mut UiRenderer,
         library: ShaderLibrary,
     ) -> Result<Self, RenderError> {
@@ -111,6 +125,16 @@ impl Preview {
             mesh: Mesh::from_kind(device, MeshKind::default()),
             mesh_kind: MeshKind::default(),
             material: None,
+            bindings: None,
+            user: None,
+            placeholder: placeholder_texture(device, queue),
+            placeholder_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("wxsl preview placeholder"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            }),
             wxsl: String::new(),
             wgsl: String::new(),
             wxsl_highlight: Vec::new(),
@@ -242,6 +266,7 @@ impl Preview {
             Ok(material) => {
                 self.wxsl = material.wxsl(self.renderer.display_stage()).to_string();
                 self.wxsl_highlight = highlight::highlight(&self.wxsl);
+                self.rebind(device, &material);
                 self.material = Some(material);
                 self.status = PreviewStatus::Ok;
                 self.refresh_wgsl(device);
@@ -250,6 +275,53 @@ impl Preview {
                 self.status = PreviewStatus::Failed(vec![error.to_string()]);
             }
         }
+    }
+
+    /// Rebuild the material's own bind group, and the stand-in for the
+    /// application's.
+    ///
+    /// Every declared texture and sampler gets the placeholder, because
+    /// the editor has no way to author one yet and a material that cannot
+    /// be bound cannot be previewed. The parameters start at whatever the
+    /// graph declared, which is what the author just typed.
+    fn rebind(&mut self, device: &wgpu::Device, material: &Material) {
+        let mut bindings = self.renderer.material_bindings(device, material);
+        for resource in &material.interface().resources {
+            let name = resource.name.as_str();
+            let bound = match resource.ty {
+                wxsl_core::node::ValueType::Sampler => {
+                    bindings.set_sampler(name, &self.placeholder_sampler)
+                }
+                _ => bindings.set_texture(name, &self.placeholder),
+            };
+            debug_assert!(bound.is_ok(), "the interface named this resource");
+        }
+        self.bindings = Some(bindings);
+
+        self.user = material.interface().user.as_ref().map(|block| {
+            // Zeroed: the editor is not the application, so the honest
+            // stand-in is "nothing has been set".
+            let size = u64::from(block.layout.size()).max(16);
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("wxsl preview application block"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let layout = self
+                .renderer
+                .user_layout(device, material)
+                .expect("the material declares a block")
+                .clone();
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("wxsl preview application block"),
+                layout: &layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: wxsl_core::abi::BINDING_USER_BLOCK,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
+        });
     }
 
     /// Re-read the WGSL for the active path, compiling it if needed.
@@ -302,10 +374,19 @@ impl Preview {
         if self.spinning {
             self.angle += dt * 0.6;
         }
+        if let Some(bindings) = self.bindings.as_mut() {
+            bindings.upload(device, queue)?;
+        }
         let environment = preview_environment(time);
         let model = Mat4::from_rotation_y(self.angle) * Mat4::from_rotation_x(self.angle * 0.35);
-        let draws =
-            wxsl_render::single_draw(DrawItem::new(&self.mesh, material).with_transform(model));
+        let mut item = DrawItem::new(&self.mesh, material).with_transform(model);
+        if let Some(bindings) = self.bindings.as_ref() {
+            item = item.with_bindings(bindings);
+        }
+        if let Some(user) = self.user.as_ref() {
+            item = item.with_user(user);
+        }
+        let draws = wxsl_render::single_draw(item);
         self.renderer.render(
             device,
             queue,
@@ -321,6 +402,58 @@ impl Preview {
     pub fn drag(&mut self, delta: f32) {
         self.angle += delta * 0.01;
     }
+}
+
+/// An 8x8 magenta-and-grey checker, for a texture the graph declares and
+/// the editor cannot yet supply.
+///
+/// The universal "nothing is bound here" signal, and deliberately loud:
+/// white would look like a material choice, and black like a bug in the
+/// lighting.
+fn placeholder_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    const SIDE: u32 = 8;
+    let mut texels = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let dark = (x / 2 + y / 2) % 2 == 0;
+            texels.extend_from_slice(if dark {
+                &[220u8, 30, 200, 255]
+            } else {
+                &[40u8, 40, 44, 255]
+            });
+        }
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("wxsl preview placeholder"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // Not `Srgb`: what a material samples is linear, because the ABI
+        // encodes sRGB itself at the end of shading.
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        &texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(SIDE * 4),
+            rows_per_image: Some(SIDE),
+        },
+        wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// The camera and lights the preview uses.

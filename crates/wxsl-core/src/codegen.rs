@@ -1,7 +1,7 @@
 //! Turns a validated graph into WXSL source, ready for the WXSL compiler to
 //! resolve and lower to WGSL.
 //!
-//! The emitted module has four parts:
+//! The emitted module has five parts:
 //!
 //! 1. **Imports** — the shader ABI ([`crate::abi`]) plus whatever each node's
 //!    definition asks for. Node implementations are *imported*, never pasted:
@@ -12,17 +12,25 @@
 //!    self-contained (ADR 0011). Flag macros are not
 //!    imported: they are bound as WXSL conditional-translation features by
 //!    the caller ([`GeneratedShader::macros`]).
-//! 3. **The material function** — one `let` per node output, in dependency
+//! 3. **Declarations** — the material's own bind group and the block it
+//!    expects from the application: a uniform struct whose fields and
+//!    offsets `wxsl-core` computed
+//!    ([`crate::resources::MaterialInterface`]), and one `var` per
+//!    declared texture and sampler. A graph does not only compute; it says
+//!    what must be bound before it can run
+//!    ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+//! 4. **The material function** — one `let` per node output, in dependency
 //!    order, ending in the [`crate::abi::SURFACE_STRUCT`] the graph produces.
-//! 4. **Entry points** — a vertex entry shared by both render paths, and two
-//!    `@if`-gated fragment entries: one that shades to a colour (forward) and
-//!    one that writes a G-buffer (deferred). One module, compiled once per
-//!    path, is exactly what
-//!    [ADR 0005](../../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)
-//!    asks for — the graph author writes no path-specific nodes.
+//! 5. **Entry points** — a vertex entry, shared by every stage, and the one
+//!    fragment entry [`CodegenOptions::stage`] calls for: a colour, a
+//!    G-buffer, or none at all. One module *per stage* is what
+//!    [ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)
+//!    asks for — the graph author writes no stage-specific nodes.
 //!
 //! Only the nodes the output node actually depends on are emitted, so a
-//! half-finished branch parked on the editor canvas costs nothing.
+//! half-finished branch parked on the editor canvas costs nothing — and
+//! the interface is computed over that same reachable set, so a parked
+//! `param.value` declares no uniform either.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -31,7 +39,8 @@ use crate::abi;
 use crate::error::{CodegenError, GraphError, GraphErrors};
 use crate::graph::{Graph, NodeId, SocketRef};
 use crate::macros::{MacroSet, MacroValue};
-use crate::node::{FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value};
+use crate::node::{self, FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value};
+use crate::resources::MaterialInterface;
 use crate::wxsl::{stable_hash, ModulePath, WxslIdent};
 
 /// Module path the generated material module is mounted at.
@@ -109,6 +118,15 @@ pub struct GeneratedShader {
     pub macros: MacroSet,
     /// Name of the material function in [`Self::source`].
     pub material_fn: String,
+    /// What must be bound before this module can run: the material's own
+    /// uniform parameters, its textures and samplers, and the block it
+    /// expects the application to supply.
+    ///
+    /// Emitted into [`Self::source`] *and* handed out here, because the
+    /// renderer has to build bind groups matching what was emitted, and
+    /// re-deriving them from the graph a second time is exactly how the
+    /// two halves would come to disagree.
+    pub interface: MaterialInterface,
     /// Stable hash of the source. See [`GeneratedShader::variant_key`].
     pub source_hash: u64,
 }
@@ -157,10 +175,14 @@ pub fn generate(
         .topological_order(Some(&needed))
         .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
 
+    // Over the *reachable* set, not the whole graph: a parked branch
+    // declares no uniform, exactly as it emits no code.
+    let interface = graph.interface_of(registry, &needed);
     let mut emitter = Emitter {
         graph,
         registry,
         options,
+        interface,
         bindings: BTreeMap::new(),
         imports: BTreeMap::new(),
         body: String::new(),
@@ -175,12 +197,14 @@ pub fn generate(
     }
     let surface = emitter.emit_surface(output_node)?;
 
+    let interface = emitter.interface.clone();
     let source = emitter.finish(graph, &macros, &surface);
     let source_hash = stable_hash(source.as_bytes());
     Ok(GeneratedShader {
         source,
         macros,
         material_fn: options.material_fn.clone(),
+        interface,
         source_hash,
     })
 }
@@ -192,6 +216,9 @@ struct Emitter<'a> {
     graph: &'a Graph,
     registry: &'a NodeRegistry,
     options: &'a CodegenOptions,
+    /// What the module declares it needs bound, computed once from the
+    /// reachable set and then both *emitted* and handed back.
+    interface: MaterialInterface,
     /// Expression that reads each already-emitted node output.
     bindings: BTreeMap<SocketRef, String>,
     /// Items to import, grouped by module and deduplicated.
@@ -239,6 +266,29 @@ impl Emitter<'_> {
                 abi::StageOutput::Nothing => {}
             }
         }
+    }
+
+    /// The trimmed value of a declaring node's `setting`.
+    ///
+    /// `Graph::validate` has already rejected an empty or malformed one, so
+    /// reaching the error here means codegen ran on an unvalidated graph.
+    fn declared_name(&self, node: NodeId, setting: &str) -> Result<String, CodegenError> {
+        let value = self
+            .graph
+            .setting(self.registry, node, setting)
+            .unwrap_or_default()
+            .trim();
+        if WxslIdent::new(value).is_none() {
+            return Err(CodegenError::Invalid(GraphErrors(vec![
+                GraphError::InvalidSetting {
+                    node,
+                    setting: setting.to_string(),
+                    value: value.to_string(),
+                    reason: "must be a valid WXSL identifier".to_string(),
+                },
+            ])));
+        }
+        Ok(value.to_string())
     }
 
     fn definition(&self, node: NodeId) -> Result<&NodeDefinition, CodegenError> {
@@ -396,6 +446,77 @@ impl Emitter<'_> {
                     format!("ctx.{field}"),
                 );
             }
+            NodeBody::Param => {
+                let socket =
+                    def.outputs
+                        .first()
+                        .ok_or_else(|| CodegenError::OutputArityMismatch {
+                            def: def.id.clone(),
+                            outputs: 0,
+                            exprs: 1,
+                        })?;
+                // A field read off the uniform buffer, bound as an
+                // expression rather than a `let`: it is one uniform load
+                // wherever it is used, and giving it a name would only add
+                // a line. `read_expr` rather than `material.name` because
+                // a `bool` parameter is stored as a `u32` and this is not
+                // the place that knows it.
+                let name = self.declared_name(node, node::SETTING_NAME)?;
+                let expr = self
+                    .interface
+                    .params
+                    .read_expr(abi::MATERIAL_PARAMS_VAR, &name)
+                    .ok_or_else(|| {
+                        // Only reachable if `interface_of` and this walk
+                        // disagreed about what is reachable.
+                        CodegenError::UndeclaredParam {
+                            node,
+                            name: name.clone(),
+                        }
+                    })?;
+                self.bindings
+                    .insert(SocketRef::new(node, socket.name.as_str()), expr);
+            }
+            NodeBody::Resource => {
+                let socket =
+                    def.outputs
+                        .first()
+                        .ok_or_else(|| CodegenError::OutputArityMismatch {
+                            def: def.id.clone(),
+                            outputs: 0,
+                            exprs: 1,
+                        })?;
+                // The declared variable *is* the value: a texture handle
+                // is passed to `textureSample` and to functions by name.
+                let name = self.declared_name(node, node::SETTING_NAME)?;
+                self.bindings
+                    .insert(SocketRef::new(node, socket.name.as_str()), name);
+            }
+            NodeBody::UserRead => {
+                let socket =
+                    def.outputs
+                        .first()
+                        .ok_or_else(|| CodegenError::OutputArityMismatch {
+                            def: def.id.clone(),
+                            outputs: 0,
+                            exprs: 1,
+                        })?;
+                let field = self.declared_name(node, node::SETTING_FIELD)?;
+                let user = self
+                    .interface
+                    .user
+                    .as_ref()
+                    .ok_or(CodegenError::NoUserBlock { node })?;
+                let expr = user
+                    .layout
+                    .read_expr(user.name.as_str(), &field)
+                    .ok_or_else(|| CodegenError::UndeclaredParam {
+                        node,
+                        name: field.clone(),
+                    })?;
+                self.bindings
+                    .insert(SocketRef::new(node, socket.name.as_str()), expr);
+            }
             NodeBody::SurfaceOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
@@ -492,6 +613,7 @@ impl Emitter<'_> {
     fn finish(self, graph: &Graph, macros: &MacroSet, surface: &SurfaceAssignments) -> String {
         let Emitter {
             options,
+            interface,
             imports,
             body,
             ..
@@ -553,6 +675,8 @@ impl Emitter<'_> {
             }
         }
 
+        write_declarations(&mut out, &interface);
+
         let _ = write!(
             out,
             "\nfn {}(ctx: {}) -> {} {{\n",
@@ -576,6 +700,52 @@ impl Emitter<'_> {
             write_entry_points(&mut out, options);
         }
         out
+    }
+}
+
+/// Emit what the material needs bound: its own group, and the block it
+/// expects the application to supply.
+///
+/// The struct is generated from the computed layout rather than written
+/// with `@align`/`@size` attributes, because the field order was chosen so
+/// that WGSL's own rules put every field exactly where the layout says.
+/// Two statements of the same offsets would be two places to disagree.
+fn write_declarations(out: &mut String, interface: &MaterialInterface) {
+    if interface.material_group_is_empty() && interface.user.is_none() {
+        return;
+    }
+    out.push('\n');
+    if !interface.params.is_empty() {
+        out.push_str(&interface.params.wgsl_struct(abi::MATERIAL_PARAMS_STRUCT));
+        let _ = writeln!(
+            out,
+            "@group({}) @binding({}) var<uniform> {}: {};",
+            abi::GROUP_MATERIAL,
+            abi::BINDING_MATERIAL_PARAMS,
+            abi::MATERIAL_PARAMS_VAR,
+            abi::MATERIAL_PARAMS_STRUCT,
+        );
+    }
+    for resource in &interface.resources {
+        let _ = writeln!(
+            out,
+            "@group({}) @binding({}) var {}: {};",
+            abi::GROUP_MATERIAL,
+            resource.binding,
+            resource.name,
+            resource.ty.wxsl_type(),
+        );
+    }
+    if let Some(user) = &interface.user {
+        out.push_str(&user.layout.wgsl_struct(&user.struct_name));
+        let _ = writeln!(
+            out,
+            "@group({}) @binding({}) var<uniform> {}: {};",
+            abi::GROUP_USER,
+            abi::BINDING_USER_BLOCK,
+            user.name,
+            user.struct_name,
+        );
     }
 }
 

@@ -104,6 +104,11 @@ pub struct PortLayout {
     pub row: Rect,
     /// Whether an edge feeds it (inputs only).
     pub connected: bool,
+    /// Whether this input takes a pinned literal and nothing else, so it
+    /// has no port to drag a wire onto
+    /// ([`wxsl_core::node::Socket::constant`]). The row is still drawn —
+    /// the value is worth seeing — but there is nothing to connect.
+    pub constant: bool,
 }
 
 /// One node, laid out.
@@ -130,6 +135,9 @@ impl NodeLayout {
             (PortKind::Input, &self.inputs),
         ] {
             for port in ports {
+                if port.constant {
+                    continue;
+                }
                 let distance = port.center.distance(point);
                 if distance <= radius && best.is_none_or(|(_, _, best)| distance < best) {
                     best = Some((kind, port, distance));
@@ -202,6 +210,7 @@ pub fn layout_node(
             center: Vec2::new(rect.max.x, row.center().y),
             row,
             connected: false,
+            constant: false,
         });
         y += row_height;
     }
@@ -214,6 +223,7 @@ pub fn layout_node(
             center: Vec2::new(rect.min.x, row.center().y),
             row,
             connected: (queries.connected)(socket.name.as_str()),
+            constant: socket.constant,
         });
         y += row_height;
     }
@@ -684,6 +694,12 @@ impl Canvas {
             (PortKind::Input, &layout.inputs),
         ] {
             for port in ports {
+                // No port at all for an input that takes only a pinned
+                // literal: there is nothing an edge into it could mean, so
+                // offering somewhere to drop one would be a lie.
+                if port.constant {
+                    continue;
+                }
                 let hovered = port.center.distance(pointer) <= radius * 2.0;
                 let color = theme.type_color(port.ty);
                 ui.draw().circle(

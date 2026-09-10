@@ -6,7 +6,7 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0, M1, M2.
+**Landed so far:** M0, M1, M2, M3.
 
 ## How to read this
 
@@ -25,8 +25,8 @@ superseding its row, not by quietly diverging inside a milestone.
 | Culling | **Convention, as a per-pass knob.** The opaque pass culls back faces; an outline pass culls front faces. `cull_mode` is a field of a pass description, never a constant in the code. |
 | How an object picks its queue | **Tags on the material, a tag expression on the pass.** The material declares what it *is* (`opaque`, `transparent`, `outlined`); a geometry pass declares what it *draws*. No introspection of graphs, and a draw may override its tags. |
 | How a node is declared | **The `.wxsl` file is the definition.** *Done — [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md).* Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
-| How a material declares a uniform | **A `param` node, with the layout computed rather than mirrored.** `const` inlines into the shader, so editing one compiles a new variant; `param` is a field of group 1's uniform buffer, so editing one only writes bytes. `wxsl-core` computes the WGSL layout — `vec3f`'s 16-byte alignment makes a hand-written Rust mirror impossible — and emits an offset table `wxsl-render` writes through. |
-| How a material uses the application's slot | **It declares a block and hands out the layout; the application hands back a bind group.** Group 2 stays the application's and holds nothing of ours, but a material may now state what it expects to find there. `wgpu` validates the match, so there is no checking code of ours to keep in sync. |
+| How a material declares a uniform | *Done — [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md).* **A `param` node, with the layout computed rather than mirrored.** `const` inlines into the shader, so editing one compiles a new variant; `param` is a field of group 1's uniform buffer, so editing one only writes bytes. `wxsl-core` computes the WGSL layout — `vec3f`'s 16-byte alignment makes a hand-written Rust mirror impossible — and emits an offset table `wxsl-render` writes through. |
+| How a material uses the application's slot | *Done — [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md).* **It declares a block and hands out the layout; the application hands back a bind group.** Group 2 stays the application's and holds nothing of ours, but a material may now state what it expects to find there. `wgpu` validates the match, so there is no checking code of ours to keep in sync. |
 | How a material requires a *vertex* attribute | **The base four are ABI and always present; declared extras are separate vertex buffers at locations 4 and up.** Read with one `input.attribute` node carrying the name, so `NodeRegistry` stays global and static. A mesh that lacks a declared attribute fails when the draw list is built, naming both sides. |
 | How a material requires an *instance* attribute | **A field of the instance storage buffer, not an instance-step vertex buffer.** Same declaration in the editor, different backing, and for the reason already settled two rows up: one binding however many attributes, no vertex-slot pressure, and it survives a GPU culling pass that emits instance *indices*. A fragment stage reads them by passing `instance_index` down as one flat varying and re-indexing. |
 | Lighting models | **A registry of WXSL functions, hand-written first.** A model is one function of fixed signature plus a small id; whether that function was written or generated is invisible to the dispatch, so graph-authored models land later against the same registry. |
@@ -49,11 +49,11 @@ the milestones were aimed at.
   the flag is gone.
 * ~~**One draw per frame.**~~ Closed by M1: `RenderRequest` takes a
   `DrawList`, and every draw's transform is a row of one storage buffer.
-* **The material bind group is not bound.** The pipeline layout binds group
-  0, and group 3 when a pass declares reads; group 1 waits for M3. There are
-  no texture or sampler value types, so a graph cannot sample anything at
-  all. Shadows, bakes and postprocess all need this before they need
-  anything else. **This is now the only load-bearing gap left.**
+* ~~**The material bind group is not bound.**~~ Closed by M3: a graph
+  declares its own uniform parameters, textures and samplers, and
+  `wxsl_core::resources::MaterialInterface` is what codegen emits and the
+  renderer binds. Group 2 is bound too, when a graph declares the block it
+  expects the application to supply.
 * ~~**No device feature negotiation.**~~ Closed by M1: `gpu.rs` asks for the
   optional features the later milestones want and records what was granted
   in `DeviceCaps`.
@@ -62,9 +62,9 @@ the milestones were aimed at.
 
 What *is* solid and should not be disturbed: the graph model and its typing,
 the WXSL compiler and its template monomorphization, the variant cache's
-shape (`(source+macros hash, path)` generalizes cleanly), the ABI-as-tables
-idea, and the editor's canvas — a pipeline graph is a second canvas over the
-same model, not a second editor.
+shape (`(source+macros hash, stage)`), the ABI-as-tables idea, the computed
+layout M4 reuses for the instance buffer, and the editor's canvas — a
+pipeline graph is a second canvas over the same model, not a second editor.
 
 ## The shape of the answer
 
@@ -224,8 +224,8 @@ discovering the collision in M7:
 | Group | Gains |
 |---|---|
 | 0 `frame` | the shadow atlas and its per-light matrices — produced once per frame, read by every lit pass, so it belongs with the lights it comes from, not in a pass group — and the instance storage buffer, whose *width* a material decides once it can declare per-instance attributes (M4) |
-| 1 `material` | the material's **uniform parameters** — one buffer whose layout is computed from the graph — plus its own textures and samplers, and baked lookups (M9). This is the group that finally gets bound. |
-| 2 `user` | still the application's, and still nothing of ours in it — but a material may now **declare the layout it expects** there and hand it out, so the application binds against the material rather than against a convention. **This supersedes this row's earlier "untouched"**: the slot's ownership is unchanged, what is new is that the material can describe it. |
+| 1 `material` | *Bound, as of M3.* the material's **uniform parameters** — one buffer whose layout is computed from the graph — plus its own textures and samplers, and baked lookups (M9). Its layout is per material, so the pipeline cache keys on the interface's *shape*. |
+| 2 `user` | *Done in M3.* still the application's, and still nothing of ours in it — but a material may now **declare the layout it expects** there and hand it out, so the application binds against the material rather than against a convention. **This supersedes this row's earlier "untouched"**: the slot's ownership is unchanged, what is new is that the material can describe it. |
 | 3 `pass` | pass-local reads: the G-buffer, peel buffers, a screen effect's inputs. Already its job. |
 
 The one that could go either way is the shadow atlas, and putting it in
@@ -372,70 +372,68 @@ None is stubbed out, because each needs something that does not exist yet
 row would be a lie about readiness. `depth_only` is the shape `Shadow`
 takes once it has the first two.
 
-### M3 — What a material declares: uniforms, textures, samplers
+### M3 — What a material declares: uniforms, textures, samplers — **done**
 
-The prerequisite for M5 through M9, and the first half of a larger idea: a
-material graph does not only *compute*, it **declares what it needs from
-outside itself**. Three kinds of resource land here. The fourth — what it
-needs from the geometry — is M4, and it is the same idea again.
+Landed as [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md),
+which is now where the reasoning lives. What shipped, and the five things
+a later milestone needs to know:
 
-No pipeline work in either.
+`wxsl_core::resources` computes a `MaterialInterface` from the reachable
+part of a graph — the parameter layout, the textures and samplers with
+their bindings, and the block the application supplies — and it is
+carried on `GeneratedShader`, so codegen emits the declarations from the
+same table `wxsl_render::bindings` builds the bind groups from. Three
+node bodies declare (`param.value`, `texture.*`, `input.user`), each
+carrying a *setting*: a string a node instance holds that changes what it
+compiles to. `ValueType` gained `Texture2d`, `TextureCube` and `Sampler`,
+deliberately outside `ValueType::ALL`. Groups 1 and 2 arrive on the draw.
 
-**Uniform parameters, in group 1.** A `param` node looks like `const` in the
-editor and is nothing like it underneath. A `const` is inlined into the
-generated WXSL, so editing one compiles a new variant; a `param` is a field
-of one uniform buffer, so editing one is a buffer write. That difference *is*
-the feature — a slider that does not recompile.
+* **The layout computer is the thing M4 reuses, and it is why it is a
+  table.** `BufferLayout::uniform` orders fields by alignment, widest
+  first, then by name, and both writes and reads go through it. M4's
+  widened instance buffer is the second customer; the only change it
+  needs is the storage address space's slightly looser struct alignment,
+  which is one branch.
+* **A setting is a third kind of per-instance data**, distinct from
+  ADR 0019's label and colour, and M4's `input.attribute` is the next
+  user of it: the mechanism is in place and needs no new concept.
+* **`bool` is a `u32` in the buffer**, because WGSL's uniform address
+  space has no `bool` at all. `BufferLayout::read_expr` is the one place
+  that knows, and it emits `(material.flag != 0u)`.
+* **Binding 0 of group 1 is reserved for the parameter buffer even when
+  there is none**, so a graph gaining its first parameter cannot renumber
+  the textures above it.
+* **The depth-only stage declares the textures too.** M2 recorded that
+  its module still carries the whole material function; now that function
+  can call `textureSample`, so the prepass's pipeline layout includes
+  group 1 and a textured material has to be bound before its *depth* pass
+  can run. Harmless — a pipeline layout may be a superset of what the
+  shader uses, and the bindings are per draw anyway — and it is the same
+  cost M5's partitioning removes, now with a second symptom.
+* **The layout is only checked on a GPU.** Every other host-shared layout
+  here has a `#[repr(C)]` mirror and a test on the sizes; this one has no
+  second half, so `crates/wxsl/tests/material_resources.rs` checks it
+  against hardware at every `ValueType`, comparing what the shader read
+  with a literal the compiler inlined. That file is what notices if the
+  alignment rules are ever got wrong.
 
-* One node kind, `param.value`, generic over every `ValueType` (ADR 0018's
-  rule: one node per operation, not one per operation and type), carrying a
-  name and a default.
-* `wxsl-core` collects the reachable ones, orders them stably, and computes
-  the **WGSL uniform layout**. That is where the trap is: `vec3f` aligns to
-  16 bytes, so a naive field order either wastes a third of the buffer or,
-  worse, leaves the host and the shader disagreeing about offsets — silently,
-  every frame.
-* So this **breaks ADR 0008's mirroring rule, deliberately**: there is no
-  `#[repr(C)]` struct that can mirror a layout the graph decides. `wxsl-core`
-  emits an offset/size table alongside the struct and `wxsl-render` writes
-  parameters through it by name. First place in the repo where the Rust half
-  of a layout is *computed* rather than written — and the machinery M4's
-  instance attributes and M9's bake passes both reuse.
-* The variant key gains the parameter **layout**, never the parameter
-  **values**. Getting that wrong turns every slider back into a recompile,
-  which is the whole thing this milestone buys.
+**Deviations worth naming:**
 
-**Textures and samplers, also group 1.** `ValueType::{Texture2d, Sampler,
-…}` — naming to settle: these are not values in the same sense a `vec3f` is,
-and may want a socket kind of their own rather than a widened `ValueType`.
-Then `sample.texture_2d` and friends in `wxsl-stdlib`, which M0 makes cheap:
-each one is a file and nothing else.
-
-**The application's own block, in group 2.** Different in kind from the two
-above — the material does not *define* this resource, it **requires** one.
-The ABI has always reserved the slot for exactly this: group 2's doc says it
-is the only group a node definition may bind in.
-
-* The graph declares a named block with typed fields; codegen emits the
-  struct and `@group(2) @binding(0) var<uniform> …`.
-* The renderer cannot fill it, because it does not own the data. So: **the
-  material hands out the `BindGroupLayout`, the application hands back a
-  `BindGroup`.** No validation code of ours, and a mismatch is `wgpu`'s own
-  error naming the binding rather than a wrong picture.
-* The cost, accepted: the layout is per-material, so an application with two
-  materials declaring different blocks binds per material rather than once
-  per frame. That is the right price — the alternative is one global layout
-  every material must agree with, which is the coupling group 2 exists to
-  avoid.
-
-**Done when** the demo cube samples a real texture through a graph, dragging
-its roughness slider leaves `cache_stats()` reporting zero new misses, and an
-application-supplied uniform reaches a node without `wxsl-render` knowing
-what is in it.
-
-**ADR** — "A material declares its resources: uniforms, textures, and the
-application's slot". Amends ADR 0010's material-group row, and ADR 0008's
-rule that a layout's two halves are written twice.
+* **`convert.to_float` was not in the plan.** `param.value` is generic
+  over every value type, and nothing in the library consumed an `i32`,
+  `u32` or `bool` — so an integer parameter was a value with nowhere to
+  go, and the coverage test skipped it. One node, three lines, and the
+  gap the test had been documenting since M0 closes with it.
+* **The editor can name a texture but not supply one.** The preview binds
+  a magenta checker to anything a graph declares, because there is no way
+  to *author* an image yet: a scene document names meshes and materials
+  and not pictures. Visible placeholder rather than a black surface, and
+  it stays that way until M9 gives an image a name.
+* **`SceneResources` grew two steps rather than one.**
+  `create_bindings` then `upload`, with the gap in between being where an
+  application supplies the textures the document could not. A single
+  `bind` would have had to either fail on any textured material or
+  silently draw it wrong.
 
 ### M4 — The interface a material requires of its geometry
 
@@ -479,9 +477,12 @@ gets is decided by its frequency rather than by the author:
   *indices* and an instance-step stream would have to be compacted to match.
 * So declared per-instance attributes are **fields appended to the instance
   storage buffer**, whose base fields (model matrix, normal matrix) stay ABI
-  and always present. Its layout is computed from the graph by the same code
-  M3 wrote for uniform parameters — the second customer, which is what
-  justifies that code being a table rather than a struct.
+  and always present. Its layout is computed from the graph by
+  `wxsl_core::resources::BufferLayout`, which M3 shipped — the second
+  customer, and what justifies that code being a table rather than a
+  struct. The storage address space does not round a struct's alignment up
+  to 16 the way the uniform one does, so the one change it needs is a
+  second constructor beside `BufferLayout::uniform`.
 * **A fragment stage cannot read `@builtin(instance_index)`** — WGSL offers
   it in the vertex stage only. The fix is one `@interpolate(flat) u32`
   varying carrying the index down, and the fragment stage re-indexes the
@@ -492,10 +493,12 @@ gets is decided by its frequency rather than by the author:
 
 #### Both halves
 
-* **Reading one is `input.attribute` with the name as a node parameter**,
+* **Reading one is `input.attribute` with the name as a node setting**,
   validated against the graph's declared set — not a generated node kind per
   attribute. The alternative makes `NodeRegistry` per-graph, and it is global
-  and shared today; one node kind carrying a name keeps it that way. Whether
+  and shared today; one node kind carrying a name keeps it that way. The
+  mechanism exists: M3's `SettingDef` is exactly this, and `param.value`
+  and the `texture.*` nodes are three worked examples of it. Whether
   a name is per-vertex or per-instance comes from the declaration, so the
   node does not have to say, and moving an attribute from one to the other
   rewires nothing.
@@ -700,7 +703,7 @@ different text model than the immediate-mode layer's, that is worth one.
 |---|---|
 | **Variant explosion**: stages x macros x lighting models x baseline/native. | Compile lazily, key precisely, and let the pipeline graph declare up front which combinations it needs, so they are warmed once instead of stuttering. Track it: `cache_stats()` already exists. |
 | **Stage partitioning subtly wrong**: a node duplicated across stages that rounds differently, or a varying that should have been recomputed. | M5's two acceptance tests are exactly the cases that fail if it is wrong. Extend `graph_to_wgsl` to compile every node in every stage, as it already does for every path. |
-| **A computed layout disagreeing with what the host writes.** Two of them now: M3's uniform parameters and M4's widened instance buffer. | They are the only layouts in the repo with no `#[repr(C)]` mirror to be checked against, so they get by test what the mirrors get by construction: read every parameter and every instance field back out of the buffer through a trivial graph, at every `ValueType`, including the `f32`-then-`vec3f` ordering that alignment breaks. One layout computer, one test, two customers. |
+| **A computed layout disagreeing with what the host writes.** Two of them: M3's uniform parameters and M4's widened instance buffer. | *Half done.* They are the only layouts in the repo with no `#[repr(C)]` mirror to be checked against, so they get by test what the mirrors get by construction. M3's half is `material_resources.rs`: every parameter written, read back through the layout on the host, and read back *again* through a shader comparing it with an inlined literal, at every `ValueType`. M4 extends the same test to the instance buffer. |
 | **Bind groups**: four, all spoken for. | The allocation table above, decided now. `SceneBindings` is one struct in one file if group 0 needs to grow. |
 | **Two implementations of every pass** (baseline and native). | Only where the baseline genuinely cannot express the technique — so far exactly one place, M8's float blending. Any second implementation owes a test asserting the two agree, as `msdf` already does for its CPU and compute generators. |
 | **The pipeline graph becoming a second, worse editor.** | It reuses `wxsl-core`'s model, `wxsl-editor`'s canvas and the same registry. If a pipeline node needs a mechanism material nodes lack, that is a signal to generalize the mechanism, not to fork the editor. |

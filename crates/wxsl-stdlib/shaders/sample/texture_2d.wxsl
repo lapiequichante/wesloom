@@ -1,0 +1,18 @@
+// Sample a 2D texture
+//
+// Read a colour out of a texture at a UV coordinate, with filtering and
+// mip selection chosen by the sampler. Wire a `texture.texture_2d` node
+// into `tex` and a `texture.sampler` node into `samp`.
+//
+// The texture and the sampler are separate inputs because WGSL keeps them
+// separate: one texture can be read through a clamping sampler in one
+// place and a repeating one in another, and one sampler serves every
+// texture that wants its filtering. The mip level comes from the screen
+// derivatives of `uv`, so this is a fragment-stage function.
+fn sample_texture_2d(
+    tex: texture_2d<f32>,
+    samp: sampler,
+    uv: vec2f, // @default 0.0, 0.0
+) -> vec4f {
+    return textureSample(tex, samp, uv);
+}

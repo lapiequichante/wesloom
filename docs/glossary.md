@@ -35,6 +35,25 @@ document. Not to be confused with the *environment*.
 alongside the draws. Called `Scene` until M1, which is why the rename
 happened.
 
+**Parameter** — a value a material's graph declares (`param.value`) that
+lives in a uniform buffer rather than in the shader text, so the host
+changes it with a buffer write and no recompile. The counterpart to a
+*constant*, which is inlined and therefore costs a new shader variant when
+it changes. See
+[ADR 0023](adr/0023-a-material-declares-its-resources.md).
+
+**Interface** — what a material needs bound before it can draw: its
+parameters and their computed offsets, its textures and samplers, and the
+block it expects the application to supply
+(`wxsl_core::resources::MaterialInterface`). Computed from the graph, and
+the single source both the generated WGSL and the bind groups come from.
+
+**Setting** — a string-valued property of a *node instance* that changes
+what it compiles to, such as the name of the parameter a `param.value`
+declares (`wxsl_core::node::SettingDef`). Distinct from a node's label and
+colour, which are metadata a reader chooses and codegen never sees
+(ADR 0019).
+
 **Tags** — open-ended labels a material or an instance is authored with
 (`opaque`, `transparent`, `outlined`). A geometry pass draws a *tag
 expression* over the draw list, so the material says what it is and the

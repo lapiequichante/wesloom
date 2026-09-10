@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
+Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md)
 
 ## Context
 
@@ -132,3 +132,21 @@ two halves — `wxsl_core::abi` and `crates/wxsl-stdlib/shaders/wxsl/` — are
 edited together, and a test asserts the shipped shader declares what the
 constants name. See
 [ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md).
+
+
+## Amendment (ADR 0023)
+
+This ADR's rule that a host-shared layout is written twice — a
+`#[repr(C)]` struct in Rust, a `struct` in WXSL, checked against each
+other — has one deliberate exception. A material's **uniform parameters**
+are whatever its graph declares, so there is no Rust struct to write:
+`wxsl_core::resources::BufferLayout` computes the offsets, the WGSL struct
+is generated from it, and the host writes through it. One half, not two,
+and therefore nothing to keep in step. What replaces the mirror test is a
+GPU test at every `ValueType`, comparing what the shader read with a
+literal the compiler inlined.
+
+The graph also gained *declarations*: textures and samplers in group 1,
+and the block it expects the application to supply in group 2. Neither is
+part of the fixed vocabulary this ADR names, because neither is fixed. See
+[0023](0023-a-material-declares-its-resources.md).

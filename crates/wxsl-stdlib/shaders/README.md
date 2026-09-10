@@ -32,9 +32,17 @@ definition, and `build.rs` runs it over everything under a category
 directory, so there is no Rust to write for a new function. See "The shape of
 a node source" below for what the derivation reads.
 
-`filter/` and `sample/` are empty: both are mostly about sampling textures,
-which the node model does not carry yet. They stay as directories so the
-category layout is not a surprise later.
+`filter/` is empty: it is mostly about sampling neighbourhoods of a
+texture, which needs the screen domain (M7) to be worth much. It stays as
+a directory so the category layout is not a surprise later.
+
+`sample/` holds the texture readers. Their signatures name
+`texture_2d<f32>` and `sampler`, which the derivation maps to socket types
+like any other — a texture is a value in WGSL, so a node can take one
+([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+The *texture itself* is declared by a `texture.*` node in the registry, not
+by a file here: there is no function to write for "a texture the
+application binds".
 
 ## `wxsl/` — the shader ABI
 
@@ -66,9 +74,14 @@ contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by
 | # | Slot | Declared in | Holds |
 |---|---|---|---|
 | 0 | `frame` | `bindings.wxsl` | Camera, scene, the instance transform storage buffer |
-| 1 | `material` | *generated* | A graph's parameters and textures |
-| 2 | `user` | — | Nothing here. The application's slot. |
+| 1 | `material` | *generated* | A graph's uniform parameters, textures and samplers |
+| 2 | `user` | *generated* | The application's slot. A graph may declare the block it expects there; nothing in this crate binds it |
 | 3 | `pass` | `lighting_pass.wxsl` | G-buffer, and future shadow/IBL resources |
+
+Groups 1 and 2 say *generated* because they have no fixed layout: a
+material's graph decides them, and `wxsl_core::resources` computes the
+result ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+There is nothing to write here for either.
 
 Nothing in this crate may bind `@group(2)`, and only pass plumbing may bind
 `@group(3)`: a library function must compile for every material stage, and group

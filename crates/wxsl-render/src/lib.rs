@@ -54,6 +54,7 @@
 
 #![warn(missing_docs)]
 
+pub mod bindings;
 pub mod draw;
 pub mod environment;
 pub mod error;
@@ -77,6 +78,7 @@ pub mod variants;
 pub use glam;
 pub use wgpu;
 
+pub use bindings::{BindingLayouts, MaterialBindings};
 pub use draw::{DrawItem, DrawList};
 pub use environment::{Camera, Environment, FrameBindings, InstanceTransform, Light};
 pub use error::RenderError;

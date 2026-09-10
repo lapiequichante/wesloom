@@ -23,6 +23,13 @@
 //! count, `Space` pauses the rotation, `Esc` quits. Every one of those but
 //! `Space` changes which shader is compiled, and the status line shows the
 //! variant cache absorbing it.
+//!
+//! `[` and `]` are the other half of that story: they change the graph's
+//! `tint` **parameter**, which is a field of the material's uniform buffer
+//! rather than a constant in the shader, so the compile count does not
+//! move at all (ADR 0023). The graph also samples a texture — this file
+//! generates one, because the material *declares* what it needs and the
+//! application supplies it.
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -83,6 +90,7 @@ KEYS (windowed):
     T              toggle the tonemap
     R              toggle ridged noise
     Up / Down      noise octaves +/- 1
+    [ / ]          dim / brighten the `tint` parameter (no recompile)
     Space          pause rotation
     Esc or Q       quit
 ";
@@ -345,6 +353,121 @@ fn demo_environment(aspect: f32, time: f32) -> Environment {
     }
 }
 
+/// A procedural 64x64 texture for whatever the graph declares.
+///
+/// Generated rather than loaded so the example stays a single file with no
+/// asset to find: a warm checker with a little per-texel variation, in
+/// **linear** space, because the ABI encodes sRGB itself at the end of
+/// shading and a material samples linear values like everything else.
+fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::Sampler) {
+    const SIDE: u32 = 64;
+    let mut texels = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let square = ((x / 8) + (y / 8)) % 2 == 0;
+            let grain = (((x * 7 + y * 13) % 11) as f32 / 11.0 - 0.5) * 0.06;
+            let base = if square { 0.82 } else { 0.30 };
+            let level = ((base + grain).clamp(0.0, 1.0) * 255.0) as u8;
+            // Slightly warm on the light squares, so the checker is
+            // visible in the shaded image rather than only in the albedo.
+            texels.extend_from_slice(&[
+                level,
+                (level as f32 * 0.94) as u8,
+                (level as f32 * 0.86) as u8,
+                255,
+            ]);
+        }
+    }
+    let extent = wgpu::Extent3d {
+        width: SIDE,
+        height: SIDE,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("pbr_cube checker"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        &texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(SIDE * 4),
+            rows_per_image: Some(SIDE),
+        },
+        extent,
+    );
+    (
+        texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("pbr_cube sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        }),
+    )
+}
+
+/// Fill in everything `material`'s graph declares.
+///
+/// The application does not decide what a material needs — it *reads*
+/// what the graph declared and supplies it by name. Which is why this
+/// works unchanged for `--graph`: point the example at a graph declaring
+/// three textures and all three get the checker.
+fn demo_bindings(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut Renderer,
+    material: &Material,
+    texture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> Result<wxsl::render::MaterialBindings, Box<dyn Error>> {
+    let mut bindings = renderer.material_bindings(device, material);
+    for resource in &material.interface().resources {
+        let name = resource.name.as_str();
+        if resource.ty == wxsl::core::node::ValueType::Sampler {
+            bindings.set_sampler(name, sampler)?;
+        } else {
+            bindings.set_texture(name, texture)?;
+        }
+    }
+    bindings.upload(device, queue)?;
+    Ok(bindings)
+}
+
+/// A one-line summary of what a material needs bound, for the startup
+/// banner: the shape, never the values.
+fn interface_summary(material: &Material) -> String {
+    let interface = material.interface();
+    if interface.material_group_is_empty() && interface.user.is_none() {
+        return "declares nothing".to_string();
+    }
+    let mut parts: Vec<String> = interface
+        .params
+        .fields()
+        .iter()
+        .map(|field| format!("{}: {}", field.name, field.ty))
+        .collect();
+    parts.extend(
+        interface
+            .resources
+            .iter()
+            .map(|entry| format!("{}: {}", entry.name, entry.ty)),
+    );
+    if let Some(user) = &interface.user {
+        parts.push(format!("{} (application)", user.name));
+    }
+    parts.join(", ")
+}
+
 fn cube_transform(time: f32) -> Mat4 {
     Mat4::from_rotation_y(time * 0.45) * Mat4::from_rotation_x(time * 0.21)
 }
@@ -355,13 +478,24 @@ fn cube_transform(time: f32) -> Mat4 {
 /// one is the shortest demonstration that the renderer takes a draw *list*:
 /// every copy is a row of the frame's instance storage buffer, and one
 /// upload serves all of them (ADR 0021).
-fn cube_draws<'a>(mesh: &'a Mesh, material: &'a Material, count: u32, time: f32) -> DrawList<'a> {
+fn cube_draws<'a>(
+    mesh: &'a Mesh,
+    material: &'a Material,
+    bindings: &'a wxsl::render::MaterialBindings,
+    count: u32,
+    time: f32,
+) -> DrawList<'a> {
     let spin = cube_transform(time);
     (0..count.max(1))
         .map(|index| {
             let offset = index as f32 - (count.max(1) - 1) as f32 * 0.5;
             let place = Mat4::from_translation(Vec3::new(offset * 2.4, 0.0, 0.0));
-            DrawItem::new(mesh, material).with_transform(place * spin)
+            // Every copy shares one bind group: the parameters and the
+            // texture are the material's, and only the transform is the
+            // instance's.
+            DrawItem::new(mesh, material)
+                .with_transform(place * spin)
+                .with_bindings(bindings)
         })
         .collect()
 }
@@ -379,10 +513,11 @@ fn run_headless(
     let gpu = pollster::block_on(GpuContext::headless())?;
     println!("adapter: {}", gpu.adapter.get_info().name);
     println!(
-        "graph:   {} ({} nodes)\nmacros:  {}",
+        "graph:   {} ({} nodes)\nmacros:  {}\nbinds:   {}",
         graph.name(),
         graph.node_count(),
-        material.macros().signature()
+        material.macros().signature(),
+        interface_summary(material)
     );
 
     let target = OffscreenTarget::new(&gpu.device, width, height);
@@ -392,9 +527,18 @@ fn run_headless(
         TargetConfig::new(width, height, target.format()),
     )?;
     let mesh = Mesh::cube(&gpu.device, 1.6);
+    let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
+    let bindings = demo_bindings(
+        &gpu.device,
+        &gpu.queue,
+        &mut renderer,
+        material,
+        &texture,
+        &sampler,
+    )?;
     // A fixed time, so two runs produce identical images.
     let environment = demo_environment(width as f32 / height as f32, 1.0);
-    let draws = cube_draws(&mesh, material, options.instances, 0.6);
+    let draws = cube_draws(&mesh, material, &bindings, options.instances, 0.6);
 
     std::fs::create_dir_all(&options.out_dir)?;
     let mut images = Vec::new();
@@ -505,6 +649,11 @@ struct State {
     gpu: GpuContext,
     renderer: Renderer,
     mesh: Mesh,
+    /// What the material's graph declared it needs. Rebuilt whenever the
+    /// material is, because a graph edit can change what it declares.
+    bindings: wxsl::render::MaterialBindings,
+    texture: wgpu::TextureView,
+    sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
 }
 
@@ -531,7 +680,79 @@ impl App {
             Ok(material) => self.material = material,
             Err(error) => eprintln!("cannot recompile the material: {error}"),
         }
+        // A macro change cannot alter what the graph declares today, but a
+        // graph edit could, and rebinding from the new interface is the
+        // shape that stays right when it does.
+        if let Some(state) = self.state.as_mut() {
+            match demo_bindings(
+                &state.gpu.device,
+                &state.gpu.queue,
+                &mut state.renderer,
+                &self.material,
+                &state.texture,
+                &state.sampler,
+            ) {
+                Ok(bindings) => state.bindings = bindings,
+                Err(error) => eprintln!("cannot bind the material: {error}"),
+            }
+        }
         self.report();
+    }
+
+    /// Scale the first `f32` or `vec3f` parameter the material declares.
+    ///
+    /// The point of the key, and of the number it prints: this is a write
+    /// into a uniform buffer, so the compile count beside it does not
+    /// move. The `const.value` node one row up in the same graph would
+    /// cost a new variant for the same visible change (ADR 0023).
+    fn adjust_parameter(&mut self, factor: f32) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let Some(field) = self
+            .material
+            .interface()
+            .params
+            .fields()
+            .iter()
+            .find(|field| {
+                matches!(
+                    field.ty,
+                    wxsl::core::node::ValueType::F32 | wxsl::core::node::ValueType::Vec3
+                )
+            })
+            .cloned()
+        else {
+            eprintln!("this graph declares no scalar or colour parameter to change");
+            return;
+        };
+        let name = field.name.as_str();
+        let Some(current) = state.bindings.get(name) else {
+            return;
+        };
+        let scaled = match current {
+            wxsl::core::node::Value::F32(value) => {
+                wxsl::core::node::Value::F32((value * factor).clamp(0.02, 8.0))
+            }
+            wxsl::core::node::Value::Vec3(value) => wxsl::core::node::Value::Vec3(
+                value.map(|channel| (channel * factor).clamp(0.02, 8.0)),
+            ),
+            other => other,
+        };
+        if let Err(error) = state.bindings.set(name, scaled) {
+            eprintln!("cannot set `{name}`: {error}");
+            return;
+        }
+        if let Err(error) = state.bindings.upload(&state.gpu.device, &state.gpu.queue) {
+            eprintln!("cannot upload `{name}`: {error}");
+            return;
+        }
+        let stats = state.renderer.cache_stats();
+        println!(
+            "{name} = {scaled:?}  |  {} variants, {} compiles (unchanged: a parameter is a buffer write)",
+            state.renderer.variant_count(),
+            stats.misses
+        );
     }
 
     fn report(&self) {
@@ -627,7 +848,13 @@ impl App {
             .paused_at
             .unwrap_or_else(|| self.started.elapsed().as_secs_f32());
         let environment = demo_environment(size.width as f32 / size.height.max(1) as f32, time);
-        let draws = cube_draws(&state.mesh, &self.material, self.options.instances, time);
+        let draws = cube_draws(
+            &state.mesh,
+            &self.material,
+            &state.bindings,
+            self.options.instances,
+            time,
+        );
 
         if let Err(error) = state.renderer.render(
             &state.gpu.device,
@@ -753,6 +980,16 @@ impl App {
             TargetConfig::new(size.width, size.height, format),
         )?;
         let mesh = Mesh::cube(&gpu.device, 1.6);
+        let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
+        let mut renderer = renderer;
+        let bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            &mut renderer,
+            &self.material,
+            &texture,
+            &sampler,
+        )?;
 
         let mut state = State {
             window,
@@ -760,11 +997,15 @@ impl App {
             gpu,
             renderer,
             mesh,
+            bindings,
+            texture,
+            sampler,
             format,
         };
         state.renderer.set_pipeline(self.options.pipeline);
         configure_surface(&mut state, size.width, size.height);
         println!("adapter: {}", state.gpu.adapter.get_info().name);
+        println!("binds:   {}", interface_summary(&self.material));
         Ok(state)
     }
 
@@ -794,6 +1035,8 @@ impl App {
             KeyCode::KeyR => self.toggle_flag("wxsl_fbm_ridged"),
             KeyCode::ArrowUp => self.adjust_octaves(1),
             KeyCode::ArrowDown => self.adjust_octaves(-1),
+            KeyCode::BracketRight => self.adjust_parameter(1.25),
+            KeyCode::BracketLeft => self.adjust_parameter(0.8),
             KeyCode::Space => {
                 self.paused_at = match self.paused_at {
                     // Resuming keeps the phase, so the cube does not jump.

@@ -153,7 +153,11 @@ impl Editor {
     /// Fails if a font cannot be read or the shader library is missing the UI
     /// or ABI modules — both worth reporting now rather than as an empty
     /// window later.
-    pub fn new(device: &wgpu::Device, config: EditorConfig) -> Result<Self, RenderError> {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: EditorConfig,
+    ) -> Result<Self, RenderError> {
         let EditorConfig {
             library,
             registry,
@@ -171,7 +175,7 @@ impl Editor {
         let mut fonts = GlyphCache::new(generator);
         let ui_font = fonts.add_font(Font::from_bytes(ui_font, 0)?);
         let mono_font = fonts.add_font(Font::from_bytes(mono_font, 0)?);
-        let preview = Preview::new(device, &mut renderer, library.clone())?;
+        let preview = Preview::new(device, queue, &mut renderer, library.clone())?;
 
         // A graph from the node format may carry no positions at all, and a
         // pile of nodes at the origin is unusable.
@@ -982,6 +986,7 @@ fn inspector_panel(
                     content += metrics.row_gap + widgets::color_picker_height(&theme, width, false);
                 }
             }
+            content += (small_row + row) * definition.settings.len() as f32;
             for param in &definition.generics {
                 let (_, rows) =
                     picker_grid(param.allowed.len(), width, metrics.row_gap, button_width);
@@ -1125,6 +1130,38 @@ fn inspector_panel(
                 }
             }
 
+            // A node's *settings*: string-valued properties that change
+            // what it compiles to rather than how it looks. A
+            // `param.value`'s `name` is the uniform's identity — rename it
+            // and the host writes a different field — which is why this is
+            // not the node label above (ADR 0019, ADR 0023).
+            for setting in &definition.settings {
+                let setting_name = setting.name.as_str();
+                ui.small_label(
+                    next(metrics.small_text_size * 1.4),
+                    &format!("{}  {}", setting.label, setting.doc),
+                    theme.palette.text_dim,
+                    Align::Left,
+                );
+                let mut value = graph
+                    .setting(registry, id, setting_name)
+                    .unwrap_or_default()
+                    .to_string();
+                let field_id = Id::new("inspector.setting")
+                    .with(u64::from(id.0))
+                    .with(Id::new(setting_name).0);
+                if ui
+                    .text_field(field_id, next(metrics.row_height), &mut value)
+                    .changed
+                {
+                    graph.set_setting(id, setting_name, value.trim());
+                    // A declaration, not decoration: renaming a parameter
+                    // changes the generated struct, so the material has to
+                    // be recompiled rather than merely redrawn.
+                    requests.changed_graph = true;
+                }
+            }
+
             // A generic node (one node kind serving every type it allows,
             // e.g. `math.add` instead of a separate `math.add.f32`/`.vec3f`/…
             // — see `wxsl_core::node::GenericParam`) needs its type picked
@@ -1248,7 +1285,7 @@ fn inspector_panel(
                 // makes the value typeable at all. Nothing is pinned until
                 // the user actually edits it, so validation still reports
                 // the input as unfed in the meantime.
-                let Some(mut value) = value.or_else(|| resolved_ty.map(|ty| ty.zero())) else {
+                let Some(mut value) = value.or_else(|| resolved_ty.and_then(|ty| ty.zero())) else {
                     ui.small_label(
                         editor_rect,
                         "pick a type above, or connect something",

@@ -23,6 +23,13 @@ nodes.
   and deferred are two such lists, and switching between them recompiles
   nothing the graph author has to think about — each pass names the
   material *stage* it draws with, and one graph compiles for all of them.
+- Materials that **declare what they need from outside themselves**:
+  uniform parameters the host changes with a buffer write and no
+  recompile, textures and samplers it binds by name, and a block the
+  *application* fills and this library never looks inside. The uniform
+  layout is computed from the graph rather than written twice, because
+  there is no fixed struct to mirror
+  ([ADR 0023](docs/adr/0023-a-material-declares-its-resources.md)).
 - A built-in library of granular base nodes (math, color, lighting, SDFs,
   noise, …), in the spirit of libraries like [LYGIA](https://lygia.xyz) but
   written entirely from scratch — see
@@ -90,6 +97,12 @@ the window, `F` and `D` switch pipeline (compiled in the background, so the
 frame never stutters) and `N`/`T`/`R`/`Up`/`Down` change macro variables,
 each of which compiles a new shader variant once and then hits the cache.
 
+The same graph samples a texture the example generates and multiplies in a
+`tint` **parameter**, and `[`/`]` change that parameter live: a field of
+the material's uniform buffer, so the compile count printed beside it does
+not move. That is the difference between a `param` node and the `const`
+one row above it in the same graph.
+
 ```text
         forward pipeline                      deferred pipeline
   ┌────────────┐  ┌──────────────┐   ┌──────────────────┐  ┌────────────────┐
@@ -103,8 +116,8 @@ each of which compiles a new shader variant once and then hits the cache.
 
 | Crate | What it is |
 |---|---|
-| [`wxsl-core`](crates/wxsl-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, and graph → WXSL codegen. No `wgpu`, no GUI toolkit. |
-| [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: the render graph that turns a list of passes into a frame, WXSL → WGSL compilation, the shader variant cache, and the forward and deferred pass lists. |
+| [`wxsl-core`](crates/wxsl-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, the computed layout of what a material declares, and graph → WXSL codegen. No `wgpu`, no GUI toolkit. |
+| [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: the render graph that turns a list of passes into a frame, WXSL → WGSL compilation, the shader variant cache, a material's bind groups, and the forward and deferred pass lists. |
 | [`wxsl-render`](crates/wxsl-render)'s [`ui`](crates/wxsl-render/src/ui) | The 2D layer the editor is drawn with: a texture atlas, MSDF text from glyph outlines (CPU or compute pass), an instanced draw list, and windowing-agnostic input. Useful without the editor. |
 | [`wxsl-editor`](crates/wxsl-editor) | The visual node editor: pan/zoom canvas, node palette, live material preview, and the generated WXSL and WGSL. Draws itself with `wxsl-render`; no GUI toolkit. |
 | [`wxsl-stdlib`](crates/wxsl-stdlib) | The base node library: original shader functions written from scratch, plus the WXSL side of the shader ABI. |

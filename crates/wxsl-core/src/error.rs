@@ -155,6 +155,75 @@ pub enum GraphError {
         /// The second parameter's name and resolved type.
         b: (String, ValueType),
     },
+    /// A node's string-valued setting is empty, malformed, or a name the
+    /// generated module already uses. See [`crate::node::SettingDef`].
+    InvalidSetting {
+        /// The node carrying it.
+        node: NodeId,
+        /// The setting's name.
+        setting: String,
+        /// The value that was rejected.
+        value: String,
+        /// What was wrong with it.
+        reason: String,
+    },
+    /// An edge was aimed at an input that takes a pinned literal and
+    /// nothing else. See [`crate::node::Socket::constant`].
+    ConstantInput {
+        /// The socket that refused the edge.
+        socket: SocketRef,
+    },
+    /// A node pins a setting its definition does not declare.
+    UnknownSetting {
+        /// The node carrying it.
+        node: NodeId,
+        /// The setting's name.
+        setting: String,
+    },
+    /// Two nodes declare the same uniform parameter, texture or sampler at
+    /// different types. One name is one binding, so there is nothing to
+    /// emit: rename one, or give them the same type.
+    ConflictingDeclaration {
+        /// The declared name.
+        name: String,
+        /// The type one node gives it.
+        first: ValueType,
+        /// The type the other gives it.
+        second: ValueType,
+    },
+    /// A node reads the application's uniform block, but the graph declares
+    /// none. See [`crate::graph::Graph::set_user_block`].
+    NoUserBlock {
+        /// The reading node.
+        node: NodeId,
+    },
+    /// A node reads a field the graph's application block does not declare.
+    UnknownUserField {
+        /// The reading node.
+        node: NodeId,
+        /// The field it asked for.
+        field: String,
+        /// The fields there are.
+        declared: Vec<String>,
+    },
+    /// A node reading the application's block resolved to a different type
+    /// than the block declares for that field.
+    UserFieldTypeMismatch {
+        /// The reading node.
+        node: NodeId,
+        /// The field.
+        field: String,
+        /// The type the node resolved to.
+        resolved: ValueType,
+        /// The type the block declares.
+        declared: ValueType,
+    },
+    /// The graph's application-block declaration is not usable: a bad
+    /// name, a duplicate field, or a field of a resource type.
+    InvalidUserBlock {
+        /// What was wrong with it.
+        reason: String,
+    },
 }
 
 /// Whether a socket lookup was for an input or an output.
@@ -236,6 +305,60 @@ impl fmt::Display for GraphError {
                 f,
                 "macro `{name}` is declared with conflicting defaults ({first} and {second}); pin it on the graph to resolve"
             ),
+            GraphError::InvalidSetting {
+                node,
+                setting,
+                value,
+                reason,
+            } => write!(
+                f,
+                "node {node}'s `{setting}` setting is `{value}`, which {reason}"
+            ),
+            GraphError::ConstantInput { socket } => write!(
+                f,
+                "input {socket} takes a pinned value and cannot be connected"
+            ),
+            GraphError::UnknownSetting { node, setting } => write!(
+                f,
+                "node {node} pins a setting `{setting}` its definition does not declare"
+            ),
+            GraphError::ConflictingDeclaration {
+                name,
+                first,
+                second,
+            } => write!(
+                f,
+                "`{name}` is declared as both {first} and {second}; one name is one binding"
+            ),
+            GraphError::NoUserBlock { node } => write!(
+                f,
+                "node {node} reads the application's uniform block, but this graph declares none"
+            ),
+            GraphError::UnknownUserField {
+                node,
+                field,
+                declared,
+            } => write!(
+                f,
+                "node {node} reads `{field}`, which the application block does not declare (it has: {})",
+                if declared.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    declared.join(", ")
+                }
+            ),
+            GraphError::UserFieldTypeMismatch {
+                node,
+                field,
+                resolved,
+                declared,
+            } => write!(
+                f,
+                "node {node} reads `{field}` as {resolved}, but the application block declares it {declared}"
+            ),
+            GraphError::InvalidUserBlock { reason } => {
+                write!(f, "the application block declaration is unusable: {reason}")
+            }
             GraphError::InvalidMacroName { name } => {
                 write!(f, "macro name `{name}` is not a valid WXSL identifier")
             }
@@ -378,6 +501,23 @@ pub enum CodegenError {
         /// Where the value came from.
         socket: SocketRef,
     },
+    /// A declaring node names a parameter or field the computed interface
+    /// does not hold. Only reachable if codegen and
+    /// [`crate::graph::Graph::interface_of`] disagreed about what is
+    /// reachable, which is a bug in this crate rather than in the graph.
+    UndeclaredParam {
+        /// The reading node.
+        node: NodeId,
+        /// The name it asked for.
+        name: String,
+    },
+    /// A node reads the application's uniform block and the graph declares
+    /// none — reported by [`crate::graph::Graph::validate`] first, so this
+    /// is the same belt-and-braces case as above.
+    NoUserBlock {
+        /// The reading node.
+        node: NodeId,
+    },
 }
 
 impl fmt::Display for CodegenError {
@@ -414,6 +554,14 @@ impl fmt::Display for CodegenError {
             CodegenError::UnrepresentableValue { socket } => {
                 write!(f, "value for {socket} cannot be written as a WXSL literal")
             }
+            CodegenError::UndeclaredParam { node, name } => write!(
+                f,
+                "node {node} reads `{name}`, which this material's interface does not declare"
+            ),
+            CodegenError::NoUserBlock { node } => write!(
+                f,
+                "node {node} reads the application's uniform block, but this graph declares none"
+            ),
         }
     }
 }

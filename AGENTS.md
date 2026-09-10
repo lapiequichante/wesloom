@@ -131,6 +131,14 @@ facade crate's feature set, not about the workspace.
   really does hand a pass the previous frame's pixels. Skips (prints a
   note, passes) when no adapter is available, so don't read a pass as proof
   it ran.
+- `cargo test -p wxsl --test material_resources` — what a material
+  declares, on a real device: a parameter reaching the shader at the
+  offset `wxsl-core` computed (at **every** `ValueType`, which is the only
+  layout in the repo with no `#[repr(C)]` mirror to check it against), a
+  graph sampling a real texture, an application-supplied uniform reaching
+  a node, and — the acceptance test of the whole idea — a parameter
+  changing eight times without `cache_stats()` or `pipeline_count()`
+  moving. Skips with no adapter.
 - `cargo test -p wxsl --test scene` — the scene document: that it round
   trips through its JSON form, that a tag expression selects what a pass
   draws, and that a two-instance scene renders. Only the last needs a
@@ -208,6 +216,9 @@ facade crate's feature set, not about the workspace.
   complete example of the whole pipeline. `--dump-wesl` and `--dump-wgsl`
   show what a graph compiles to, `--list-nodes` and `--list-macros` what is
   available, and `--instances N` draws N copies from one instance buffer.
+  It also shows the application's half of ADR 0023: it reads what the
+  material's graph *declared* and supplies it by name — which is why it
+  keeps working against a `--graph` it has never seen.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred

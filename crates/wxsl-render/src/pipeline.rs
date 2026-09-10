@@ -227,6 +227,34 @@ pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
     graph
 }
 
+/// The bind group layouts a material's interface asks for, and the shape
+/// they came from.
+///
+/// Borrowed rather than owned because they live in
+/// [`crate::bindings::BindingLayouts`], which shares one layout between
+/// every material of the same shape.
+#[derive(Clone, Copy)]
+pub struct MaterialGroups<'a> {
+    /// `abi::GROUP_MATERIAL`, or `None` for a material declaring neither
+    /// a parameter nor a texture.
+    pub material: Option<&'a wgpu::BindGroupLayout>,
+    /// `abi::GROUP_USER`, or `None` for a material declaring no block.
+    pub user: Option<&'a wgpu::BindGroupLayout>,
+    /// [`wxsl_core::resources::MaterialInterface::signature`], which is
+    /// what the caches are keyed on.
+    pub signature: &'a str,
+}
+
+impl MaterialGroups<'_> {
+    /// A material that declares nothing at all — and what a pass with no
+    /// material behind it uses.
+    pub const NONE: MaterialGroups<'static> = MaterialGroups {
+        material: None,
+        user: None,
+        signature: "",
+    };
+}
+
 /// Identity of one `wgpu` pipeline.
 ///
 /// The variant alone is not enough any more: the same compiled shader is a
@@ -242,6 +270,12 @@ struct PipelineKey {
     /// effect with a G-buffer and one with a single image — and a pipeline
     /// built for one cannot be used with the other's bind group.
     pass_group: Vec<PassBinding>,
+    /// The shape of the material's own groups, from
+    /// [`wxsl_core::resources::MaterialInterface::signature`]. A *shape*
+    /// and never a value: two materials with the same parameters at
+    /// different settings share this pipeline, which is exactly what
+    /// makes a slider free.
+    material_group: String,
 }
 
 /// One `wgpu` pipeline per (variant, pass state, target formats).
@@ -250,8 +284,15 @@ struct PipelineKey {
 /// drawing the same material each pay one pipeline creation, once.
 pub struct PipelineCache {
     render: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    layouts: HashMap<Vec<PassBinding>, wgpu::PipelineLayout>,
+    layouts: HashMap<LayoutKey, wgpu::PipelineLayout>,
 }
+
+/// Which four bind group layouts a pipeline layout was built from.
+///
+/// Groups 1 and 2 are the material's, and both may be absent; group 3 is
+/// the pass's, described by its bindings' shapes. Group 0 is the frame's
+/// and is the same for every pipeline, so it is not part of the key.
+type LayoutKey = (Vec<PassBinding>, String);
 
 impl Default for PipelineCache {
     fn default() -> Self {
@@ -284,27 +325,33 @@ impl PipelineCache {
         self.layouts.clear();
     }
 
-    /// The pipeline layout for a pass with or without a pass group.
+    /// The pipeline layout for a draw: the frame group, whatever the
+    /// material declares, and the pass group if the pass reads anything.
     ///
-    /// Groups 1 (material) and 2 (user) are genuinely empty here: nothing
-    /// declares parameters until M3, and the user group is the
-    /// application's. `wgpu` takes `Option`s, so the holes are expressible
-    /// rather than needing filler layouts (ADR 0010).
+    /// `wgpu` takes `Option`s, so a hole is expressible rather than
+    /// needing a filler layout — which matters because a material that
+    /// declares no parameters really does leave group 1 empty, while a
+    /// pass that reads a G-buffer occupies group 3 above it (ADR 0010).
+    /// Trailing `None`s are trimmed, because a layout that stops at the
+    /// last group it uses is the same layout.
     fn layout(
         &mut self,
         device: &wgpu::Device,
         frame: &wgpu::BindGroupLayout,
+        material: &MaterialGroups<'_>,
         pass: Option<&wgpu::BindGroupLayout>,
         shape: &[PassBinding],
     ) -> &wgpu::PipelineLayout {
-        // Keyed on the pass group's *shape*: layouts with the same entries
-        // are interchangeable to `wgpu`, and layouts with different ones
-        // must not share a pipeline layout.
-        self.layouts.entry(shape.to_vec()).or_insert_with(|| {
-            let groups: Vec<Option<&wgpu::BindGroupLayout>> = match pass {
-                Some(pass) => vec![Some(frame), None, None, Some(pass)],
-                None => vec![Some(frame)],
-            };
+        // Keyed on *shapes*: layouts with the same entries are
+        // interchangeable to `wgpu`, and layouts with different ones must
+        // not share a pipeline layout.
+        let key = (shape.to_vec(), material.signature.to_string());
+        self.layouts.entry(key).or_insert_with(|| {
+            let mut groups: Vec<Option<&wgpu::BindGroupLayout>> =
+                vec![Some(frame), material.material, material.user, pass];
+            while matches!(groups.last(), Some(None)) {
+                groups.pop();
+            }
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("wxsl pass"),
                 bind_group_layouts: &groups,
@@ -324,6 +371,7 @@ impl PipelineCache {
         &mut self,
         device: &wgpu::Device,
         frame: &wgpu::BindGroupLayout,
+        material: &MaterialGroups<'_>,
         pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
         stage: MaterialStage,
@@ -334,6 +382,7 @@ impl PipelineCache {
         self.create(
             device,
             frame,
+            material,
             pass_layout,
             variant,
             state,
@@ -359,9 +408,13 @@ impl PipelineCache {
         targets: &[Option<wgpu::ColorTargetState>],
         pass_shape: &[PassBinding],
     ) -> &wgpu::RenderPipeline {
+        // No material, and therefore no material groups: by the time this
+        // pass runs the material has already been resolved into the
+        // G-buffer.
         self.create(
             device,
             frame,
+            &MaterialGroups::NONE,
             pass_layout,
             variant,
             state,
@@ -378,6 +431,7 @@ impl PipelineCache {
         &mut self,
         device: &wgpu::Device,
         frame: &wgpu::BindGroupLayout,
+        material: &MaterialGroups<'_>,
         pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
         state: PassState,
@@ -396,12 +450,15 @@ impl PipelineCache {
                 .map(|target| target.format)
                 .collect(),
             pass_group: pass_shape.to_vec(),
+            material_group: material.signature.to_string(),
         };
         if !self.render.contains_key(&key) {
             // Two statements rather than `entry().or_insert_with()`: the
             // layout cache is also `&mut self`, and the borrow checker is
             // right that it cannot be borrowed inside the closure.
-            let layout = self.layout(device, frame, pass_layout, pass_shape).clone();
+            let layout = self
+                .layout(device, frame, material, pass_layout, pass_shape)
+                .clone();
             let buffers: &[Option<wgpu::VertexBufferLayout>] = if vertex_buffers {
                 &[Some(Vertex::LAYOUT)]
             } else {

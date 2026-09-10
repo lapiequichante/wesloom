@@ -20,11 +20,17 @@
 //! ```
 //!
 //! A graph describes a *surface*, not a whole shader: [`codegen`] wraps it in
-//! the entry points and imports of the shader ABI ([`abi`]), emitting one WXSL
-//! module whose forward and deferred fragment entries are selected by
-//! conditional translation. The same graph therefore drives either render
-//! path with no path-specific authoring
-//! ([ADR 0005](../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md)).
+//! the entry points and imports of the shader ABI ([`abi`]), emitting one
+//! WXSL module per [`abi::MaterialStage`]. The same graph therefore drives
+//! every pipeline with no pipeline-specific authoring
+//! ([ADR 0005](../../docs/adr/0005-render-pipeline-abstraction-and-shader-switching.md),
+//! [ADR 0022](../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
+//!
+//! A graph also *declares what it needs from outside itself* — uniform
+//! parameters, textures, samplers, and a block the application supplies —
+//! and [`resources::MaterialInterface`] is what codegen emits and the
+//! renderer binds
+//! ([ADR 0023](../../docs/adr/0023-a-material-declares-its-resources.md)).
 //!
 //! # Example
 //!
@@ -69,6 +75,7 @@ pub mod error;
 pub mod graph;
 pub mod macros;
 pub mod node;
+pub mod resources;
 pub mod scene;
 pub mod wxsl;
 
@@ -76,4 +83,5 @@ pub use error::{CodegenError, GraphError, GraphErrors};
 pub use graph::{Edge, Graph, Node, NodeId, SocketRef};
 pub use macros::{MacroDef, MacroKind, MacroSet, MacroValue};
 pub use node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType, WxslFunction};
+pub use resources::{BufferLayout, FieldLayout, MaterialInterface, ResourceBinding, UserBlock};
 pub use scene::{Instance, MaterialEntry, MeshEntry, MeshSource, Scene, TagExpr, Tags};

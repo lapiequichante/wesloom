@@ -333,6 +333,14 @@ impl Theme {
             ValueType::Vec4 => Color::rgb(0.95, 0.55, 0.40),
             ValueType::Mat3 => Color::rgb(0.70, 0.60, 0.95),
             ValueType::Mat4 => Color::rgb(0.60, 0.50, 0.90),
+            // The resource types, kept together in one hue: a texture
+            // edge is a different *kind* of thing from a value edge — it
+            // carries a binding, not a number — and reading that at a
+            // glance matters more than telling 2D from cube, which the
+            // socket's label says anyway.
+            ValueType::Texture2d => Color::rgb(0.45, 0.90, 0.70),
+            ValueType::TextureCube => Color::rgb(0.35, 0.75, 0.60),
+            ValueType::Sampler => Color::rgb(0.60, 0.95, 0.80),
         }
     }
 
@@ -386,7 +394,12 @@ mod tests {
         // conversion, so two types sharing a colour would suggest a
         // connection the graph will refuse.
         let theme = Theme::default();
-        let colors: Vec<[f32; 4]> = ValueType::ALL
+        let types: Vec<ValueType> = ValueType::ALL
+            .iter()
+            .chain(ValueType::RESOURCES)
+            .copied()
+            .collect();
+        let colors: Vec<[f32; 4]> = types
             .iter()
             .map(|ty| theme.type_color(*ty).to_array())
             .collect();
@@ -394,11 +407,9 @@ mod tests {
             for (other_index, other) in colors.iter().enumerate() {
                 if index != other_index {
                     assert_ne!(
-                        color,
-                        other,
+                        color, other,
                         "{:?} and {:?} share a colour",
-                        ValueType::ALL[index],
-                        ValueType::ALL[other_index]
+                        types[index], types[other_index]
                     );
                 }
             }

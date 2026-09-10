@@ -33,6 +33,20 @@ use crate::wxsl::{stable_hash, write_f32, ModulePath, WxslIdent};
 /// actually moves between nodes. Sockets are matched by exact type — there is
 /// no implicit conversion, so a graph that compiles is a graph whose WXSL
 /// type-checks (`space.splat_vec3` and friends make conversions explicit).
+///
+/// # The resource types are here, but not in [`Self::ALL`]
+///
+/// A texture and a sampler are values in WGSL — handles, passed to
+/// `textureSample` and to functions — so an edge can carry one, and
+/// `sample.texture_2d` is an ordinary function node whose first two
+/// parameters happen to be a texture and a sampler. But they are not values
+/// anyone *types in*: there is no [`Value`] for a texture, no zero, no
+/// splat, and no arithmetic. So they live in this enum, because a socket's
+/// type is one enum everywhere in the repo — the editor, the graph typing,
+/// the serialized format — and a parallel socket kind would fork all three;
+/// and they are kept out of [`Self::ALL`], so nothing that iterates "every
+/// type a value can have" ever offers one
+/// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -55,10 +69,19 @@ pub enum ValueType {
     Mat3,
     /// WGSL `mat4x4f`.
     Mat4,
+    /// WGSL `texture_2d<f32>`. A resource, see the type's own docs.
+    Texture2d,
+    /// WGSL `texture_cube<f32>`. A resource, see the type's own docs.
+    TextureCube,
+    /// WGSL `sampler`. A resource, see the type's own docs.
+    Sampler,
 }
 
 impl ValueType {
-    /// Every type, in declaration order.
+    /// Every type a [`Value`] can have, in declaration order.
+    ///
+    /// The resource types are deliberately absent — see the type's own
+    /// docs. [`Self::RESOURCES`] is the other half.
     pub const ALL: &'static [ValueType] = &[
         ValueType::Bool,
         ValueType::I32,
@@ -69,6 +92,16 @@ impl ValueType {
         ValueType::Vec4,
         ValueType::Mat3,
         ValueType::Mat4,
+    ];
+
+    /// The types that name a bound resource rather than a value: textures
+    /// and samplers.
+    ///
+    /// Disjoint from [`Self::ALL`], and the two together are every variant.
+    pub const RESOURCES: &'static [ValueType] = &[
+        ValueType::Texture2d,
+        ValueType::TextureCube,
+        ValueType::Sampler,
     ];
 
     /// The float scalar and vector types, in increasing width.
@@ -116,13 +149,32 @@ impl ValueType {
             ValueType::Vec4 => "vec4f",
             ValueType::Mat3 => "mat3x3f",
             ValueType::Mat4 => "mat4x4f",
+            ValueType::Texture2d => "texture_2d<f32>",
+            ValueType::TextureCube => "texture_cube<f32>",
+            ValueType::Sampler => "sampler",
         }
+    }
+
+    /// Whether this type names a bound resource rather than a value:
+    /// a member of [`Self::RESOURCES`].
+    pub fn is_resource(&self) -> bool {
+        matches!(
+            self,
+            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler
+        )
     }
 
     /// The short suffix used where a node id does name a type
     /// (`convert.split.vec3f`, whose socket *count* is part of the type).
+    ///
+    /// The same as [`Self::wxsl_type`] except for the resource types, whose
+    /// spelling carries a `<f32>` that has no business in an identifier.
     pub fn suffix(&self) -> &'static str {
-        self.wxsl_type()
+        match self {
+            ValueType::Texture2d => "texture_2d",
+            ValueType::TextureCube => "texture_cube",
+            other => other.wxsl_type(),
+        }
     }
 
     /// Number of `f32` components for a float scalar/vector type.
@@ -163,6 +215,11 @@ impl ValueType {
     /// [`GenericParam::allowed`] lists, not here, so this stays one rule.
     /// See [`TypeRule`].
     pub fn componentwise(self, other: ValueType) -> Option<ValueType> {
+        // A texture plus a texture is not a texture, and the equality
+        // shortcut below would otherwise say it was.
+        if self.is_resource() || other.is_resource() {
+            return None;
+        }
         if self == other {
             return Some(self);
         }
@@ -197,9 +254,10 @@ impl ValueType {
         }
     }
 
-    /// The all-zero value of this type.
-    pub fn zero(&self) -> Value {
-        match self {
+    /// The all-zero value of this type, or `None` for a resource type,
+    /// which has no [`Value`] at all.
+    pub fn zero(&self) -> Option<Value> {
+        Some(match self {
             ValueType::Bool => Value::Bool(false),
             ValueType::I32 => Value::I32(0),
             ValueType::U32 => Value::U32(0),
@@ -209,7 +267,8 @@ impl ValueType {
             ValueType::Vec4 => Value::Vec4([0.0; 4]),
             ValueType::Mat3 => Value::Mat3([0.0; 9]),
             ValueType::Mat4 => Value::Mat4([0.0; 16]),
-        }
+            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+        })
     }
 
     /// This type built from the single scalar `value`: every component of a
@@ -218,8 +277,13 @@ impl ValueType {
     /// The diagonal is the only reading that makes sense for a matrix —
     /// `mat3x3f(v)` is not even WGSL, and a matrix of all `v` is not a
     /// useful value of anything, whereas `splat(1.0)` being the identity is
-    /// exactly the default a matrix socket wants. Returns `None` for the
-    /// types with no float components at all (`bool`, `i32`, `u32`).
+    /// exactly the default a matrix socket wants.
+    ///
+    /// `bool`, `i32` and `u32` take the obvious reading — nonzero, and the
+    /// truncated integer — so that one generic node can offer a default at
+    /// every type it allows, which is what `param.value` needs to be one
+    /// node rather than four. Only the resource types answer `None`: a
+    /// texture has no value to build.
     pub fn splat(&self, value: f32) -> Option<Value> {
         /// A square matrix with `value` on the diagonal, column-major.
         fn diagonal<const N: usize, const CELLS: usize>(value: f32) -> [f32; CELLS] {
@@ -237,7 +301,10 @@ impl ValueType {
             ValueType::Vec4 => Some(Value::Vec4([value; 4])),
             ValueType::Mat3 => Some(Value::Mat3(diagonal::<3, 9>(value))),
             ValueType::Mat4 => Some(Value::Mat4(diagonal::<4, 16>(value))),
-            ValueType::Bool | ValueType::I32 | ValueType::U32 => None,
+            ValueType::Bool => Some(Value::Bool(value != 0.0)),
+            ValueType::I32 => Some(Value::I32(value as i32)),
+            ValueType::U32 => Some(Value::U32(value.max(0.0) as u32)),
+            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => None,
         }
     }
 }
@@ -379,15 +446,16 @@ impl Value {
     /// diagonal, which does not try to preserve a rotation — retyping a
     /// matrix is rare, and pretending to keep a basis that no longer fits
     /// would be worse than plainly starting from a scaled identity. A value
-    /// with no float components at all converts to `ty`'s zero.
+    /// with no float components at all converts to `ty`'s zero, and a
+    /// resource type converts to nothing at all — there is no value of one.
     ///
     /// This is what keeps a pinned parameter meaningful when the socket it
     /// sits on changes type — picking `vec3f` on a `math.add` whose operands
     /// were `0.5` should leave them at `vec3f(0.5)`, not report a type
     /// mismatch. See [`crate::graph::Graph::set_generic`].
-    pub fn converted_to(self, ty: ValueType) -> Value {
+    pub fn converted_to(self, ty: ValueType) -> Option<Value> {
         if self.ty() == ty {
-            return self;
+            return Some(self);
         }
         let Some(components) = self.components() else {
             return ty.zero();
@@ -397,16 +465,17 @@ impl Value {
         };
         let last = *components.last().unwrap_or(&first);
         let at = |index: usize| *components.get(index).unwrap_or(&last);
-        match ty {
+        Some(match ty {
             ValueType::F32 => Value::F32(first),
             ValueType::Vec2 => Value::Vec2([at(0), at(1)]),
             ValueType::Vec3 => Value::Vec3([at(0), at(1), at(2)]),
             ValueType::Vec4 => Value::Vec4([at(0), at(1), at(2), at(3)]),
             // `splat` is the diagonal for a matrix, so this is `first` times
             // the identity.
-            ValueType::Mat3 | ValueType::Mat4 => ty.splat(first).unwrap_or_else(|| ty.zero()),
-            ValueType::Bool | ValueType::I32 | ValueType::U32 => ty.zero(),
-        }
+            ValueType::Mat3 | ValueType::Mat4 => return ty.splat(first).or_else(|| ty.zero()),
+            ValueType::Bool | ValueType::I32 | ValueType::U32 => return ty.zero(),
+            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+        })
     }
 
     /// This value as a WXSL expression, or `None` if any float component is
@@ -509,6 +578,20 @@ pub struct Socket {
     /// one. See [`Socket::combine`]. Mutually exclusive with
     /// [`Socket::generic`].
     pub combine: Option<Combined>,
+    /// Whether this input takes a pinned literal and nothing else: no port,
+    /// no edge, only the value the node instance carries.
+    ///
+    /// For an input that is not a value flowing *into* the node but a
+    /// property *of* it. `param.value`'s `value` socket is the parameter's
+    /// **default** — what the host initialises the uniform buffer with — so
+    /// wiring a computed expression into it could not mean anything: the
+    /// default is read once, on the CPU, before any shader runs.
+    ///
+    /// It is still a socket rather than a [`SettingDef`] because it is a
+    /// typed [`Value`] with an editor widget already built for it, and
+    /// because it is generic — the default of a `vec3f` parameter is a
+    /// `vec3f`. [`crate::graph::Graph::connect`] refuses an edge into one.
+    pub constant: bool,
 }
 
 impl Socket {
@@ -529,7 +612,16 @@ impl Socket {
             generic: None,
             splat_default: None,
             combine: None,
+            constant: false,
         }
+    }
+
+    /// Mark this input as taking a pinned literal and never an edge.
+    ///
+    /// See [`Socket::constant`] for when that is the right shape.
+    pub fn constant(mut self) -> Self {
+        self.constant = true;
+        self
     }
 
     /// Mark this input as skippable when nothing feeds it.
@@ -820,6 +912,95 @@ pub enum NodeBody {
     /// The terminal node: its inputs are the fields of the surface struct the
     /// material function returns. A graph has exactly one of these.
     SurfaceOutput,
+    /// Reads a **uniform parameter** of the material's own bind group: a
+    /// field of the one buffer `wxsl-core` lays out from every reachable
+    /// node of this kind.
+    ///
+    /// The setting named [`SETTING_NAME`] is the parameter's name, and the
+    /// input socket named [`SOCKET_VALUE`] is its default. Nothing else
+    /// distinguishes it from [`NodeBody::Expr`] with a `{value}` template
+    /// — which is exactly what a `const` node is, and exactly the
+    /// difference this body exists to draw: editing a `const` compiles a
+    /// new variant, editing a parameter writes bytes
+    /// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+    Param,
+    /// Declares a **texture or sampler** in the material's bind group and
+    /// hands out the binding.
+    ///
+    /// The setting named [`SETTING_NAME`] is the resource's name; the
+    /// node's single output socket's type — one of
+    /// [`ValueType::RESOURCES`] — is what kind of resource it is.
+    Resource,
+    /// Reads one field of the **application's** uniform block, in
+    /// `abi::GROUP_USER`.
+    ///
+    /// The setting named [`SETTING_FIELD`] names the field, and the graph's
+    /// own block declaration
+    /// ([`crate::graph::Graph::user_block`]) says what type it has. This is
+    /// the one body whose type comes from the *graph* rather than from the
+    /// definition or an edge, because the block is a property of the
+    /// document, not of the node kind.
+    UserRead,
+}
+
+/// Setting name every [`NodeBody::Param`] and [`NodeBody::Resource`] node
+/// carries: what the parameter or resource is called in the shader, and the
+/// name the host writes it by.
+pub const SETTING_NAME: &str = "name";
+/// Setting name every [`NodeBody::UserRead`] node carries: which field of
+/// the application's block it reads.
+pub const SETTING_FIELD: &str = "field";
+/// The input socket a [`NodeBody::Param`] node holds its default in.
+pub const SOCKET_VALUE: &str = "value";
+
+/// A string-valued property of a *node instance* that changes what the node
+/// compiles to.
+///
+/// Distinct from a [`Socket`], which carries a typed value along an edge,
+/// and from [`crate::graph::Node::label`], which is display metadata a
+/// reader chooses and codegen never sees (ADR 0019). A setting is neither:
+/// it is a name, and the name is the thing being declared. `param.value`'s
+/// `name` *is* the uniform's identity — rename it and the host writes a
+/// different field.
+///
+/// String-valued because every use of it so far is an identifier chosen by
+/// the author: a parameter name, a texture name, a field of the
+/// application's block, and (M4) a vertex attribute. Nothing here validates
+/// the string; [`crate::graph::Graph::validate`] does, because what makes a
+/// setting valid depends on the body reading it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingDef {
+    /// The setting's name, unique among the definition's settings.
+    pub name: WxslIdent,
+    /// Short label for the editor's field.
+    pub label: String,
+    /// One-line description.
+    pub doc: String,
+    /// Value used when the node instance pins none.
+    pub default: String,
+}
+
+impl SettingDef {
+    /// Declare a setting.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` is not a valid WXSL identifier. Definitions are
+    /// authored in Rust, so this is a programming error.
+    pub fn new(name: &str, label: impl Into<String>, doc: impl Into<String>) -> Self {
+        SettingDef {
+            name: WxslIdent::new(name).expect("setting name must be a valid WXSL identifier"),
+            label: label.into(),
+            doc: doc.into(),
+            default: String::new(),
+        }
+    }
+
+    /// Give the setting a value to start from.
+    pub fn with_default(mut self, default: impl Into<String>) -> Self {
+        self.default = default.into();
+        self
+    }
 }
 
 /// A named type parameter a [`NodeDefinition`] declares, constrained to a
@@ -898,6 +1079,9 @@ pub struct NodeDefinition {
     /// Extra `(module, item)` imports the body needs, beyond those implied by
     /// a [`NodeBody::Call`].
     pub imports: Vec<(ModulePath, WxslIdent)>,
+    /// String-valued properties a node *instance* of this kind carries. See
+    /// [`SettingDef`].
+    pub settings: Vec<SettingDef>,
     /// How the node emits WXSL.
     pub body: NodeBody,
 }
@@ -918,6 +1102,7 @@ impl NodeDefinition {
                 macros: Vec::new(),
                 generics: Vec::new(),
                 imports: Vec::new(),
+                settings: Vec::new(),
                 body: NodeBody::Expr(Vec::new()),
             },
         }
@@ -956,6 +1141,13 @@ impl NodeDefinition {
     /// Look up an output socket by name.
     pub fn output(&self, name: &str) -> Option<&Socket> {
         self.outputs.iter().find(|s| s.name.as_str() == name)
+    }
+
+    /// Look up a declared setting by name.
+    pub fn setting(&self, name: &str) -> Option<&SettingDef> {
+        self.settings
+            .iter()
+            .find(|setting| setting.name.as_str() == name)
     }
 
     /// Look up a declared generic parameter by name.
@@ -1080,6 +1272,23 @@ impl NodeDefinitionBuilder {
         self
     }
 
+    /// Declare a string-valued setting this node's instances carry. See
+    /// [`SettingDef`].
+    ///
+    /// # Panics
+    ///
+    /// Panics on a duplicate setting name.
+    pub fn setting(mut self, setting: SettingDef) -> Self {
+        assert!(
+            self.def.setting(setting.name.as_str()).is_none(),
+            "duplicate setting `{}` on `{}`",
+            setting.name,
+            self.def.id
+        );
+        self.def.settings.push(setting);
+        self
+    }
+
     /// Import `item` from `module` for the body's use.
     ///
     /// # Panics
@@ -1122,6 +1331,38 @@ impl NodeDefinitionBuilder {
     pub fn context_read(mut self, field: &str) -> NodeDefinition {
         self.def.body =
             NodeBody::ContextRead(WxslIdent::new(field).expect("invalid context field name"));
+        self.build()
+    }
+
+    /// Finish with a [`NodeBody::Param`], [`NodeBody::Resource`] or
+    /// [`NodeBody::UserRead`] body — the three that carry no payload of
+    /// their own, because everything they need is the node instance's
+    /// [`SettingDef`] value and its one output socket.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the body is one of those three (the others have a
+    /// finisher that fills their payload in), the definition has exactly
+    /// one output, or the required setting is not declared — all
+    /// programming errors in a definition, which is Rust.
+    pub fn declaration(mut self, body: NodeBody) -> NodeDefinition {
+        let setting = match body {
+            NodeBody::Param | NodeBody::Resource => SETTING_NAME,
+            NodeBody::UserRead => SETTING_FIELD,
+            other => panic!("`{other:?}` is not a declaration body"),
+        };
+        assert_eq!(
+            self.def.outputs.len(),
+            1,
+            "declaration node `{}` must have exactly one output",
+            self.def.id
+        );
+        assert!(
+            self.def.setting(setting).is_some(),
+            "declaration node `{}` must declare a `{setting}` setting",
+            self.def.id
+        );
+        self.def.body = body;
         self.build()
     }
 

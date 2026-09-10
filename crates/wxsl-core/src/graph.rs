@@ -21,9 +21,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use crate::abi;
 use crate::error::{Direction, GraphError, GraphErrors};
 use crate::macros::{MacroDef, MacroSet, MacroValue};
-use crate::node::{NodeDefinition, NodeRegistry, Socket, Value, ValueType};
+use crate::node::{self, NodeBody, NodeDefinition, NodeRegistry, Socket, Value, ValueType};
+use crate::resources::{BufferLayout, MaterialInterface, ResourceBinding, UserBlock};
+use crate::wxsl::WxslIdent;
 
 /// Identifier of a node within one graph.
 ///
@@ -101,6 +104,19 @@ pub struct Node {
         serde(default, skip_serializing_if = "BTreeMap::is_empty")
     )]
     pub generics: BTreeMap<String, ValueType>,
+    /// String-valued settings this instance pins, by setting name. A
+    /// setting the definition declares but this map does not hold falls
+    /// back to [`crate::node::SettingDef::default`] — read them through
+    /// [`Graph::setting`] rather than here.
+    ///
+    /// Unlike [`Node::label`], these *are* read by codegen: a
+    /// `param.value`'s `name` is the uniform's identity. See
+    /// [`crate::node::SettingDef`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "BTreeMap::is_empty")
+    )]
+    pub settings: BTreeMap<String, String>,
     /// Optional display name, overriding the definition's label.
     #[cfg_attr(
         feature = "serde",
@@ -136,6 +152,7 @@ impl Node {
             def: def.into(),
             params: BTreeMap::new(),
             generics: BTreeMap::new(),
+            settings: BTreeMap::new(),
             label: None,
             color: None,
             position: None,
@@ -160,6 +177,12 @@ impl Node {
         self
     }
 
+    /// Pin a string-valued setting. See [`crate::node::SettingDef`].
+    pub fn with_setting(mut self, setting: impl Into<String>, value: impl Into<String>) -> Self {
+        self.settings.insert(setting.into(), value.into());
+        self
+    }
+
     /// Give the node a display name.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -179,7 +202,68 @@ pub struct Graph {
     nodes: BTreeMap<NodeId, Node>,
     edges: Vec<Edge>,
     macros: MacroSet,
+    user_block: Option<UserBlockDecl>,
     next_id: u32,
+}
+
+/// The uniform block a graph declares it expects the *application* to
+/// supply, in `abi::GROUP_USER`.
+///
+/// A graph-level declaration rather than something inferred from the nodes
+/// that read it, and that is the whole point: the application already has a
+/// struct with a layout of its own, and a block inferred from the two
+/// fields this graph happens to read would put them at the wrong offsets.
+/// The graph states the block in full, `wxsl-core` lays it out, and the
+/// application binds a buffer matching what it is told
+/// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct UserBlockDecl {
+    /// The variable name the block is bound as, and what a reading node
+    /// names. Must be a valid WXSL identifier.
+    pub name: String,
+    /// Its fields, in declaration order — which is *not* the order they end
+    /// up in the buffer. See [`crate::resources::BufferLayout`].
+    pub fields: Vec<UserField>,
+}
+
+/// One field of a [`UserBlockDecl`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct UserField {
+    /// The field's name.
+    pub name: String,
+    /// Its type. A resource type is rejected by [`Graph::validate`]: this
+    /// is one uniform buffer, not a bind group the graph designs.
+    pub ty: ValueType,
+}
+
+impl UserField {
+    /// Declare a field.
+    pub fn new(name: impl Into<String>, ty: ValueType) -> Self {
+        UserField {
+            name: name.into(),
+            ty,
+        }
+    }
+}
+
+/// Why a declared name cannot be used, or `None` if it can.
+///
+/// The generated module owns two shapes of name: the handful in
+/// [`abi::RESERVED_NAMES`], and `n<id>_<socket>`, which is how every node
+/// output is bound. A texture called `n1_out` would shadow one.
+fn reserved_reason(name: &str) -> Option<String> {
+    if abi::RESERVED_NAMES.contains(&name) {
+        return Some(format!(
+            "is a name the generated module uses for itself (reserved: {})",
+            abi::RESERVED_NAMES.join(", ")
+        ));
+    }
+    let rest = name.strip_prefix('n')?;
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    (digits > 0 && rest[digits..].starts_with('_'))
+        .then(|| "looks like a generated node binding (`n<number>_<socket>`)".to_string())
 }
 
 /// A socket's effective type given a specific resolution map, rather than
@@ -211,6 +295,7 @@ impl Graph {
             nodes: BTreeMap::new(),
             edges: Vec::new(),
             macros: MacroSet::new(),
+            user_block: None,
             next_id: 1,
         }
     }
@@ -349,6 +434,193 @@ impl Graph {
         self.macros.unset(name)
     }
 
+    /// The block this graph expects the application to supply, if it
+    /// declares one. See [`UserBlockDecl`].
+    pub fn user_block(&self) -> Option<&UserBlockDecl> {
+        self.user_block.as_ref()
+    }
+
+    /// Declare the block the application must supply, replacing any
+    /// previous declaration.
+    pub fn set_user_block(&mut self, block: UserBlockDecl) {
+        self.user_block = Some(block);
+    }
+
+    /// Stop expecting a block from the application.
+    pub fn clear_user_block(&mut self) -> Option<UserBlockDecl> {
+        self.user_block.take()
+    }
+
+    /// The effective value of `node`'s setting `name`: what the instance
+    /// pinned, or the definition's default.
+    ///
+    /// `None` means the definition declares no such setting at all, which
+    /// is a different thing from a setting left empty.
+    pub fn setting<'a>(
+        &'a self,
+        registry: &'a NodeRegistry,
+        node: NodeId,
+        name: &str,
+    ) -> Option<&'a str> {
+        let instance = self.nodes.get(&node)?;
+        let declared = registry.get(&instance.def)?.setting(name)?;
+        Some(
+            instance
+                .settings
+                .get(name)
+                .map(String::as_str)
+                .unwrap_or(declared.default.as_str()),
+        )
+    }
+
+    /// Pin `node`'s setting `name`. Unlike [`Graph::setting`] this does not
+    /// check the definition declares it — [`Graph::validate`] reports a
+    /// setting that matches nothing.
+    pub fn set_setting(&mut self, node: NodeId, name: impl Into<String>, value: impl Into<String>) {
+        if let Some(instance) = self.nodes.get_mut(&node) {
+            instance.settings.insert(name.into(), value.into());
+        }
+    }
+
+    /// What this graph needs bound before it can draw: its uniform
+    /// parameters, its textures and samplers, and the block it expects the
+    /// application to supply.
+    ///
+    /// Computed over the nodes the surface output actually depends on, so
+    /// a parked branch declares nothing — the same reachability codegen
+    /// uses when it decides what to emit, and it has to be the same or the
+    /// bind group and the shader would disagree about what is bound.
+    ///
+    /// A graph with no output node, or more than one, has no interface:
+    /// [`crate::codegen::generate`] is where that is reported, and this
+    /// answers an empty interface rather than duplicating the error.
+    pub fn interface(&self, registry: &NodeRegistry) -> MaterialInterface {
+        let outputs = self.surface_outputs(registry);
+        let Some(&output) = outputs.first().filter(|_| outputs.len() == 1) else {
+            return MaterialInterface::default();
+        };
+        self.interface_of(registry, &self.dependencies_of(output))
+    }
+
+    /// [`Graph::interface`] over an already-computed reachable set — what
+    /// codegen calls, so the two cannot disagree about what "reachable"
+    /// meant.
+    pub fn interface_of(
+        &self,
+        registry: &NodeRegistry,
+        reachable: &BTreeSet<NodeId>,
+    ) -> MaterialInterface {
+        let mut params: Vec<(WxslIdent, ValueType)> = Vec::new();
+        let mut defaults: BTreeMap<String, Value> = BTreeMap::new();
+        let mut resources: Vec<(WxslIdent, ValueType)> = Vec::new();
+        let mut reads_user = false;
+
+        for &id in reachable {
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            let Some(def) = registry.get(&node.def) else {
+                continue;
+            };
+            match def.body {
+                NodeBody::Param => {
+                    let (Some(name), Some(ty)) = (
+                        self.declared_name(registry, id, node::SETTING_NAME),
+                        def.outputs
+                            .first()
+                            .and_then(|socket| self.effective_type(id, socket)),
+                    ) else {
+                        continue;
+                    };
+                    // The `value` socket is the parameter's starting
+                    // value: a pinned literal, never an edge (see
+                    // `Socket::constant`). First declaration wins, as it
+                    // does for the type.
+                    if !params.iter().any(|(existing, _)| *existing == name) {
+                        if let Some(value) = def
+                            .input(node::SOCKET_VALUE)
+                            .and_then(|socket| {
+                                node.params
+                                    .get(node::SOCKET_VALUE)
+                                    .copied()
+                                    .or_else(|| socket.default_for(ty))
+                            })
+                            .filter(|value| value.ty() == ty)
+                        {
+                            defaults.insert(name.as_str().to_string(), value);
+                        }
+                        params.push((name, ty));
+                    }
+                }
+                NodeBody::Resource => {
+                    let (Some(name), Some(socket)) = (
+                        self.declared_name(registry, id, node::SETTING_NAME),
+                        def.outputs.first(),
+                    ) else {
+                        continue;
+                    };
+                    if !resources.iter().any(|(existing, _)| *existing == name) {
+                        resources.push((name, socket.ty));
+                    }
+                }
+                NodeBody::UserRead => reads_user = true,
+                _ => {}
+            }
+        }
+
+        // Name order, so adding a texture cannot renumber the ones already
+        // there — a binding index that moves is a bind group that has to
+        // be rebuilt for no reason.
+        resources.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        let resources = resources
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, ty))| ResourceBinding {
+                name,
+                ty,
+                binding: abi::MATERIAL_RESOURCE_BINDING_BASE + index as u32,
+            })
+            .collect();
+
+        // Declared, not inferred: the whole block is bound whether the
+        // graph reads one field of it or all of them, because the
+        // application's buffer has the layout it has.
+        let user = reads_user
+            .then_some(self.user_block.as_ref())
+            .flatten()
+            .and_then(|decl| {
+                let name = WxslIdent::new(&decl.name)?;
+                let fields = decl
+                    .fields
+                    .iter()
+                    .filter_map(|field| Some((WxslIdent::new(&field.name)?, field.ty)));
+                Some(UserBlock {
+                    struct_name: UserBlock::struct_name_for(&name),
+                    name,
+                    layout: BufferLayout::uniform(fields),
+                })
+            });
+
+        MaterialInterface {
+            params: BufferLayout::uniform(params),
+            defaults,
+            resources,
+            user,
+        }
+    }
+
+    /// The identifier a declaring node's `setting` names, or `None` when it
+    /// is empty or not a usable WXSL name — both of which
+    /// [`Graph::validate`] reports, so this can stay quiet.
+    fn declared_name(
+        &self,
+        registry: &NodeRegistry,
+        node: NodeId,
+        setting: &str,
+    ) -> Option<WxslIdent> {
+        WxslIdent::new(self.setting(registry, node, setting)?.trim())
+    }
+
     /// Replace the whole pinned macro set.
     pub fn set_macros(&mut self, macros: MacroSet) {
         self.macros = macros;
@@ -397,6 +669,12 @@ impl Graph {
                 socket: to.clone(),
                 direction: Direction::Input,
             })?;
+        if to_socket.constant {
+            // Not a value flowing in but a property of the node: a
+            // `param.value`'s default is read on the CPU before any shader
+            // runs, so there is nothing an edge into it could mean.
+            return Err(GraphError::ConstantInput { socket: to });
+        }
         let expected = self.effective_type(to.node, to_socket);
 
         // The generic parameters this connection has to change for the two
@@ -709,7 +987,9 @@ impl Graph {
                 .copied();
             match pinned {
                 Some(value) if value.ty() != ty => {
-                    updates.push((name.to_string(), value.converted_to(ty)));
+                    if let Some(converted) = value.converted_to(ty) {
+                        updates.push((name.to_string(), converted));
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -717,8 +997,9 @@ impl Graph {
                         || socket.optional
                         || self.edge_into(&SocketRef::new(node, name)).is_some();
                     if !fed {
-                        let value = ty.splat(0.0).unwrap_or_else(|| ty.zero());
-                        updates.push((name.to_string(), value));
+                        if let Some(value) = ty.splat(0.0).or_else(|| ty.zero()) {
+                            updates.push((name.to_string(), value));
+                        }
                     }
                 }
             }
@@ -1289,6 +1570,8 @@ impl Graph {
             }
         }
 
+        self.check_declarations(registry, &mut errors);
+
         let mut connected_inputs: BTreeSet<SocketRef> = BTreeSet::new();
         for edge in &self.edges {
             self.check_edge(registry, edge, &mut connected_inputs, &mut errors);
@@ -1335,6 +1618,170 @@ impl Graph {
             Ok(())
         } else {
             Err(GraphErrors(errors))
+        }
+    }
+
+    /// Check everything a graph *declares* rather than computes: node
+    /// settings, the names they carry, and the application block.
+    ///
+    /// Over every node rather than only the reachable ones, like the rest
+    /// of validation — an unreachable node with a broken declaration is
+    /// still broken, and it will be reachable the moment it is wired up.
+    /// A freshly dropped declaring node is valid, because its setting
+    /// carries a usable default.
+    fn check_declarations(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
+        self.check_user_block(errors);
+        // One name is one binding, so two nodes naming the same parameter
+        // are the same parameter — which is a feature, as long as they
+        // agree about its type.
+        let mut declared: BTreeMap<String, ValueType> = BTreeMap::new();
+
+        for (id, instance) in self.nodes() {
+            let Some(def) = registry.get(&instance.def) else {
+                continue;
+            };
+            for name in instance.settings.keys() {
+                if def.setting(name).is_none() {
+                    errors.push(GraphError::UnknownSetting {
+                        node: id,
+                        setting: name.clone(),
+                    });
+                }
+            }
+            let setting_name = match def.body {
+                NodeBody::Param | NodeBody::Resource => node::SETTING_NAME,
+                NodeBody::UserRead => node::SETTING_FIELD,
+                _ => continue,
+            };
+            let raw = self
+                .setting(registry, id, setting_name)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let Some(name) = WxslIdent::new(&raw) else {
+                let reason = if raw.is_empty() {
+                    "is empty; a declaration has to be called something"
+                } else {
+                    "is not a valid WXSL identifier"
+                };
+                errors.push(GraphError::InvalidSetting {
+                    node: id,
+                    setting: setting_name.to_string(),
+                    value: raw,
+                    reason: reason.to_string(),
+                });
+                continue;
+            };
+            // A texture becomes a module-scope `var` of that exact name, so
+            // it can collide with what the generated module already uses.
+            // A parameter is a struct field and cannot, but rejecting both
+            // the same way is one rule to remember instead of two.
+            if let Some(reason) = reserved_reason(name.as_str()) {
+                errors.push(GraphError::InvalidSetting {
+                    node: id,
+                    setting: setting_name.to_string(),
+                    value: name.as_str().to_string(),
+                    reason,
+                });
+                continue;
+            }
+
+            let Some(socket) = def.outputs.first() else {
+                continue;
+            };
+            match def.body {
+                NodeBody::Param | NodeBody::Resource => {
+                    let Some(ty) = self.effective_type(id, socket) else {
+                        // An unresolved generic, already reported above.
+                        continue;
+                    };
+                    match declared.get(name.as_str()) {
+                        Some(&first) if first != ty => {
+                            errors.push(GraphError::ConflictingDeclaration {
+                                name: name.as_str().to_string(),
+                                first,
+                                second: ty,
+                            });
+                        }
+                        _ => {
+                            declared.insert(name.as_str().to_string(), ty);
+                        }
+                    }
+                }
+                NodeBody::UserRead => {
+                    let Some(block) = &self.user_block else {
+                        errors.push(GraphError::NoUserBlock { node: id });
+                        continue;
+                    };
+                    let Some(field) = block
+                        .fields
+                        .iter()
+                        .find(|field| field.name.trim() == name.as_str())
+                    else {
+                        errors.push(GraphError::UnknownUserField {
+                            node: id,
+                            field: name.as_str().to_string(),
+                            declared: block
+                                .fields
+                                .iter()
+                                .map(|field| field.name.clone())
+                                .collect(),
+                        });
+                        continue;
+                    };
+                    // The one socket whose type comes from the *document*
+                    // rather than from the definition or an edge, so it is
+                    // the one place a resolved generic can be wrong rather
+                    // than merely missing.
+                    if let Some(resolved) = self.effective_type(id, socket) {
+                        if resolved != field.ty {
+                            errors.push(GraphError::UserFieldTypeMismatch {
+                                node: id,
+                                field: name.as_str().to_string(),
+                                resolved,
+                                declared: field.ty,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The application block's own declaration, independent of whether any
+    /// node reads it: a graph that carries an unusable one should say so
+    /// when it is written, not when something first reads it.
+    fn check_user_block(&self, errors: &mut Vec<GraphError>) {
+        let Some(block) = &self.user_block else {
+            return;
+        };
+        let mut invalid = |reason: String| errors.push(GraphError::InvalidUserBlock { reason });
+        if WxslIdent::new(block.name.trim()).is_none() {
+            invalid(format!(
+                "`{}` is not a valid WXSL identifier for the block itself",
+                block.name
+            ));
+        }
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for field in &block.fields {
+            let name = field.name.trim();
+            if WxslIdent::new(name).is_none() {
+                invalid(format!("`{name}` is not a valid WXSL field name"));
+                continue;
+            }
+            if !seen.insert(name) {
+                invalid(format!("`{name}` is declared twice"));
+            }
+            if field.ty.is_resource() {
+                // The block is one uniform buffer. A texture in the
+                // application group is the application's business, and
+                // nothing here would know how to bind it.
+                invalid(format!(
+                    "`{name}` is {}, and a uniform block holds values rather than resources",
+                    field.ty
+                ));
+            }
         }
     }
 
@@ -1408,6 +1855,18 @@ impl Graph {
         }
         if !connected_inputs.insert(edge.to.clone()) {
             errors.push(GraphError::InputAlreadyConnected {
+                socket: edge.to.clone(),
+            });
+        }
+        // `Graph::connect` refuses these, so reaching one here means a
+        // hand-edited or older document.
+        let constant = self
+            .definition(registry, edge.to.node)
+            .ok()
+            .and_then(|def| def.input(&edge.to.socket))
+            .is_some_and(|socket| socket.constant);
+        if constant {
+            errors.push(GraphError::ConstantInput {
                 socket: edge.to.clone(),
             });
         }
@@ -1487,7 +1946,7 @@ mod wire {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{Edge, Graph, Node, NodeId};
+    use super::{Edge, Graph, Node, NodeId, UserBlockDecl};
     use crate::macros::MacroSet;
 
     #[derive(Serialize, Deserialize)]
@@ -1503,6 +1962,8 @@ mod wire {
         pub name: String,
         #[serde(default, skip_serializing_if = "MacroSet::is_empty")]
         pub macros: MacroSet,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub user_block: Option<UserBlockDecl>,
         #[serde(default)]
         pub nodes: Vec<WireNode>,
         #[serde(default)]
@@ -1514,6 +1975,7 @@ mod wire {
             WireGraph {
                 name: graph.name,
                 macros: graph.macros,
+                user_block: graph.user_block,
                 nodes: graph
                     .nodes
                     .into_iter()
@@ -1537,6 +1999,7 @@ mod wire {
                 nodes,
                 edges: wire.edges,
                 macros: wire.macros,
+                user_block: wire.user_block,
                 next_id,
             }
         }

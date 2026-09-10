@@ -1,6 +1,5 @@
 {
   "name": "pbr cube",
-
   "//": [
     "The node format. `macros` pins macro variables: WXSL_FBM_OCTAVES is a",
     "loop bound inside generative/fbm3.wesl and wxsl_fbm_ridged is an @if",
@@ -11,7 +10,7 @@
     "",
     "Node ids are stable and edges refer to them, so nodes can be added and",
     "removed without renumbering anything. `label` and `color` are this",
-    "node's own — every node is the same colour until one says otherwise, so",
+    "node's own \u2014 every node is the same colour until one says otherwise, so",
     "a colour marks what a part of the graph is *for* (the two nodes making",
     "the ember glow below are warm) rather than restating what kind of node",
     "it is. `params` are the values on inputs",
@@ -20,156 +19,664 @@
     "adapt to whatever they carry, e.g. `math.add` instead of a separate",
     "`math.add.f32`/`.vec3f`/... per type) has resolved to, keyed by the",
     "parameter's name (`T` where one type is shared by every socket).",
-    "The operators whose operands WGSL lets differ — `+`, `-`, `*`, `/`,",
+    "The operators whose operands WGSL lets differ \u2014 `+`, `-`, `*`, `/`,",
     "`%` all spread a scalar over a vector's components, and `*` also",
-    "multiplies a matrix by a vector — declare two parameters, `A` and `B`,",
+    "multiplies a matrix by a vector \u2014 declare two parameters, `A` and `B`,",
     "resolved separately, with the output derived from both; those nodes",
     "pin both (see ADR 0018).",
     "`wxsl_core::graph::Graph::connect` resolves all of this automatically",
-    "as a graph is *built* — but a file like this one is loaded as a whole,",
+    "as a graph is *built* \u2014 but a file like this one is loaded as a whole,",
     "edges and all, never through `connect`, so every generic node spells",
     "its resolution out explicitly instead of leaving it to be inferred",
-    "from its edges."
+    "from its edges.",
+    "",
+    "`settings` are string-valued properties of a node instance that change",
+    "what it compiles to rather than how it looks: a `param.value`'s `name`",
+    "is the uniform's identity, and a `texture.*` node's is what the host",
+    "binds it by. A `param` is a field of the material's uniform buffer, so",
+    "the host changes `tint` with a buffer write and no recompile \u2014 unlike",
+    "the `const.value` above it, which is inlined and costs a new variant",
+    "(ADR 0023)."
   ],
-
   "macros": {
-    "WXSL_FBM_OCTAVES": { "int": 5 },
-    "wxsl_fbm_ridged": { "flag": false },
-    "wxsl_tonemap": { "flag": true },
-    "wxsl_debug_normals": { "flag": false }
+    "WXSL_FBM_OCTAVES": {
+      "int": 5
+    },
+    "wxsl_fbm_ridged": {
+      "flag": false
+    },
+    "wxsl_tonemap": {
+      "flag": true
+    },
+    "wxsl_debug_normals": {
+      "flag": false
+    }
   },
-
   "nodes": [
     {
       "id": 1,
       "def": "input.world_position",
       "label": "surface point",
-      "position": [0.0, 0.0]
+      "position": [
+        0.0,
+        0.0
+      ]
     },
     {
       "id": 2,
       "def": "math.multiply",
-      "generics": { "A": "vec3", "B": "vec3" },
+      "generics": {
+        "A": "vec3",
+        "B": "vec3"
+      },
       "label": "noise scale",
-      "params": { "b": { "vec3": [3.0, 3.0, 3.0] } },
-      "position": [260.0, 0.0]
+      "params": {
+        "b": {
+          "vec3": [
+            3.0,
+            3.0,
+            3.0
+          ]
+        }
+      },
+      "position": [
+        260.0,
+        0.0
+      ]
     },
     {
       "id": 3,
       "def": "generative.fbm3",
       "label": "surface detail",
-      "params": { "lacunarity": { "f32": 2.1 }, "gain": { "f32": 0.55 } },
-      "position": [520.0, 0.0]
+      "params": {
+        "lacunarity": {
+          "f32": 2.1
+        },
+        "gain": {
+          "f32": 0.55
+        }
+      },
+      "position": [
+        520.0,
+        0.0
+      ]
     },
     {
       "id": 4,
       "def": "math.remap",
-      "generics": { "T": "f32" },
+      "generics": {
+        "T": "f32"
+      },
       "label": "roughness range",
       "params": {
-        "in_min": { "f32": 0.0 },
-        "in_max": { "f32": 1.0 },
-        "out_min": { "f32": 0.07 },
-        "out_max": { "f32": 0.55 }
+        "in_min": {
+          "f32": 0.0
+        },
+        "in_max": {
+          "f32": 1.0
+        },
+        "out_min": {
+          "f32": 0.07
+        },
+        "out_max": {
+          "f32": 0.55
+        }
       },
-      "position": [780.0, 0.0]
+      "position": [
+        780.0,
+        0.0
+      ]
     },
     {
       "id": 5,
       "def": "const.value",
-      "generics": { "T": "vec3" },
+      "generics": {
+        "T": "vec3"
+      },
       "label": "albedo (sRGB)",
-      "params": { "value": { "vec3": [0.95, 0.36, 0.18] } },
-      "position": [0.0, 74.0]
+      "params": {
+        "value": {
+          "vec3": [
+            0.95,
+            0.36,
+            0.18
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        74.0
+      ]
     },
     {
       "id": 6,
       "def": "color.srgb_to_linear",
       "label": "to linear light",
-      "position": [260.0, 118.0]
+      "position": [
+        260.0,
+        118.0
+      ]
     },
     {
       "id": 7,
       "def": "math.step",
-      "generics": { "T": "f32" },
+      "generics": {
+        "T": "f32"
+      },
       "label": "metal patches",
-      "params": { "edge": { "f32": 0.62 } },
-      "position": [780.0, 184.0]
+      "params": {
+        "edge": {
+          "f32": 0.62
+        }
+      },
+      "position": [
+        780.0,
+        184.0
+      ]
     },
     {
       "id": 8,
       "def": "math.multiply",
-      "generics": { "A": "f32", "B": "f32" },
+      "generics": {
+        "A": "f32",
+        "B": "f32"
+      },
       "label": "metallic",
-      "params": { "b": { "f32": 0.9 } },
-      "position": [1040.0, 0.0]
+      "params": {
+        "b": {
+          "f32": 0.9
+        }
+      },
+      "position": [
+        1040.0,
+        0.0
+      ]
     },
     {
       "id": 9,
       "def": "input.time",
-      "position": [0.0, 170.0]
+      "position": [
+        0.0,
+        170.0
+      ]
     },
     {
       "id": 10,
       "def": "animation.pulse",
       "label": "slow breath",
-      "params": { "frequency": { "f32": 0.22 }, "phase": { "f32": 0.0 } },
-      "position": [260.0, 214.0]
+      "params": {
+        "frequency": {
+          "f32": 0.22
+        },
+        "phase": {
+          "f32": 0.0
+        }
+      },
+      "position": [
+        260.0,
+        214.0
+      ]
     },
     {
       "id": 11,
       "def": "convert.splat",
-      "generics": { "T": "vec3" },
-      "position": [520.0, 140.0]
+      "generics": {
+        "T": "vec3"
+      },
+      "position": [
+        520.0,
+        140.0
+      ]
     },
     {
       "id": 12,
       "def": "const.value",
-      "generics": { "T": "vec3" },
+      "generics": {
+        "T": "vec3"
+      },
       "label": "ember colour",
-      "color": [0.46, 0.26, 0.16],
-      "params": { "value": { "vec3": [0.07, 0.018, 0.005] } },
-      "position": [0.0, 244.0]
+      "color": [
+        0.46,
+        0.26,
+        0.16
+      ],
+      "params": {
+        "value": {
+          "vec3": [
+            0.07,
+            0.018,
+            0.005
+          ]
+        }
+      },
+      "position": [
+        0.0,
+        244.0
+      ]
     },
     {
       "id": 13,
       "def": "math.multiply",
-      "generics": { "A": "vec3", "B": "vec3" },
+      "generics": {
+        "A": "vec3",
+        "B": "vec3"
+      },
       "label": "emissive",
-      "color": [0.46, 0.26, 0.16],
-      "position": [780.0, 442.0]
+      "color": [
+        0.46,
+        0.26,
+        0.16
+      ],
+      "position": [
+        780.0,
+        442.0
+      ]
     },
     {
       "id": 14,
       "def": "math.smootherstep",
-      "generics": { "T": "f32" },
+      "generics": {
+        "T": "f32"
+      },
       "label": "crevice occlusion",
-      "params": { "edge0": { "f32": 0.05 }, "edge1": { "f32": 0.75 } },
-      "position": [780.0, 302.0]
+      "params": {
+        "edge0": {
+          "f32": 0.05
+        },
+        "edge1": {
+          "f32": 0.75
+        }
+      },
+      "position": [
+        780.0,
+        302.0
+      ]
     },
     {
       "id": 15,
       "def": "output.surface",
-      "position": [1300.0, 0.0]
+      "position": [
+        1300.0,
+        0.0
+      ]
+    },
+    {
+      "id": 16,
+      "def": "texture.texture_2d",
+      "label": "surface map",
+      "settings": {
+        "name": "albedo"
+      },
+      "position": [
+        0.0,
+        330.0
+      ]
+    },
+    {
+      "id": 17,
+      "def": "texture.sampler",
+      "settings": {
+        "name": "linear"
+      },
+      "position": [
+        0.0,
+        430.0
+      ]
+    },
+    {
+      "id": 18,
+      "def": "input.uv",
+      "position": [
+        0.0,
+        530.0
+      ]
+    },
+    {
+      "id": 19,
+      "def": "sample.texture_2d",
+      "label": "read the map",
+      "position": [
+        260.0,
+        400.0
+      ]
+    },
+    {
+      "id": 20,
+      "def": "convert.split.vec4f",
+      "position": [
+        520.0,
+        400.0
+      ]
+    },
+    {
+      "id": 21,
+      "def": "convert.combine.vec3f",
+      "position": [
+        780.0,
+        560.0
+      ]
+    },
+    {
+      "id": 23,
+      "def": "param.value",
+      "label": "tint (live)",
+      "settings": {
+        "name": "tint"
+      },
+      "generics": {
+        "T": "vec3"
+      },
+      "params": {
+        "value": {
+          "vec3": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "position": [
+        780.0,
+        760.0
+      ]
+    },
+    {
+      "id": 22,
+      "def": "math.multiply",
+      "label": "albedo x map",
+      "generics": {
+        "A": "vec3",
+        "B": "vec3"
+      },
+      "position": [
+        1040.0,
+        560.0
+      ]
+    },
+    {
+      "id": 24,
+      "def": "math.multiply",
+      "label": "tinted",
+      "generics": {
+        "A": "vec3",
+        "B": "vec3"
+      },
+      "position": [
+        1300.0,
+        560.0
+      ]
     }
   ],
-
   "edges": [
-    { "from": { "node": 1, "socket": "out" }, "to": { "node": 2, "socket": "a" } },
-    { "from": { "node": 2, "socket": "out" }, "to": { "node": 3, "socket": "p" } },
-    { "from": { "node": 3, "socket": "out" }, "to": { "node": 4, "socket": "value" } },
-    { "from": { "node": 3, "socket": "out" }, "to": { "node": 7, "socket": "x" } },
-    { "from": { "node": 3, "socket": "out" }, "to": { "node": 14, "socket": "x" } },
-    { "from": { "node": 5, "socket": "out" }, "to": { "node": 6, "socket": "color" } },
-    { "from": { "node": 7, "socket": "out" }, "to": { "node": 8, "socket": "a" } },
-    { "from": { "node": 9, "socket": "out" }, "to": { "node": 10, "socket": "time" } },
-    { "from": { "node": 10, "socket": "out" }, "to": { "node": 11, "socket": "value" } },
-    { "from": { "node": 11, "socket": "out" }, "to": { "node": 13, "socket": "a" } },
-    { "from": { "node": 12, "socket": "out" }, "to": { "node": 13, "socket": "b" } },
-    { "from": { "node": 6, "socket": "out" }, "to": { "node": 15, "socket": "base_color" } },
-    { "from": { "node": 8, "socket": "out" }, "to": { "node": 15, "socket": "metallic" } },
-    { "from": { "node": 4, "socket": "out" }, "to": { "node": 15, "socket": "roughness" } },
-    { "from": { "node": 13, "socket": "out" }, "to": { "node": 15, "socket": "emissive" } },
-    { "from": { "node": 14, "socket": "out" }, "to": { "node": 15, "socket": "occlusion" } }
+    {
+      "from": {
+        "node": 1,
+        "socket": "out"
+      },
+      "to": {
+        "node": 2,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 2,
+        "socket": "out"
+      },
+      "to": {
+        "node": 3,
+        "socket": "p"
+      }
+    },
+    {
+      "from": {
+        "node": 3,
+        "socket": "out"
+      },
+      "to": {
+        "node": 4,
+        "socket": "value"
+      }
+    },
+    {
+      "from": {
+        "node": 3,
+        "socket": "out"
+      },
+      "to": {
+        "node": 7,
+        "socket": "x"
+      }
+    },
+    {
+      "from": {
+        "node": 3,
+        "socket": "out"
+      },
+      "to": {
+        "node": 14,
+        "socket": "x"
+      }
+    },
+    {
+      "from": {
+        "node": 5,
+        "socket": "out"
+      },
+      "to": {
+        "node": 6,
+        "socket": "color"
+      }
+    },
+    {
+      "from": {
+        "node": 7,
+        "socket": "out"
+      },
+      "to": {
+        "node": 8,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 9,
+        "socket": "out"
+      },
+      "to": {
+        "node": 10,
+        "socket": "time"
+      }
+    },
+    {
+      "from": {
+        "node": 10,
+        "socket": "out"
+      },
+      "to": {
+        "node": 11,
+        "socket": "value"
+      }
+    },
+    {
+      "from": {
+        "node": 11,
+        "socket": "out"
+      },
+      "to": {
+        "node": 13,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 12,
+        "socket": "out"
+      },
+      "to": {
+        "node": 13,
+        "socket": "b"
+      }
+    },
+    {
+      "from": {
+        "node": 8,
+        "socket": "out"
+      },
+      "to": {
+        "node": 15,
+        "socket": "metallic"
+      }
+    },
+    {
+      "from": {
+        "node": 4,
+        "socket": "out"
+      },
+      "to": {
+        "node": 15,
+        "socket": "roughness"
+      }
+    },
+    {
+      "from": {
+        "node": 13,
+        "socket": "out"
+      },
+      "to": {
+        "node": 15,
+        "socket": "emissive"
+      }
+    },
+    {
+      "from": {
+        "node": 14,
+        "socket": "out"
+      },
+      "to": {
+        "node": 15,
+        "socket": "occlusion"
+      }
+    },
+    {
+      "from": {
+        "node": 16,
+        "socket": "out"
+      },
+      "to": {
+        "node": 19,
+        "socket": "tex"
+      }
+    },
+    {
+      "from": {
+        "node": 17,
+        "socket": "out"
+      },
+      "to": {
+        "node": 19,
+        "socket": "samp"
+      }
+    },
+    {
+      "from": {
+        "node": 18,
+        "socket": "out"
+      },
+      "to": {
+        "node": 19,
+        "socket": "uv"
+      }
+    },
+    {
+      "from": {
+        "node": 19,
+        "socket": "out"
+      },
+      "to": {
+        "node": 20,
+        "socket": "v"
+      }
+    },
+    {
+      "from": {
+        "node": 20,
+        "socket": "x"
+      },
+      "to": {
+        "node": 21,
+        "socket": "x"
+      }
+    },
+    {
+      "from": {
+        "node": 20,
+        "socket": "y"
+      },
+      "to": {
+        "node": 21,
+        "socket": "y"
+      }
+    },
+    {
+      "from": {
+        "node": 20,
+        "socket": "z"
+      },
+      "to": {
+        "node": 21,
+        "socket": "z"
+      }
+    },
+    {
+      "from": {
+        "node": 6,
+        "socket": "out"
+      },
+      "to": {
+        "node": 22,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 21,
+        "socket": "out"
+      },
+      "to": {
+        "node": 22,
+        "socket": "b"
+      }
+    },
+    {
+      "from": {
+        "node": 22,
+        "socket": "out"
+      },
+      "to": {
+        "node": 24,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 23,
+        "socket": "out"
+      },
+      "to": {
+        "node": 24,
+        "socket": "b"
+      }
+    },
+    {
+      "from": {
+        "node": 24,
+        "socket": "out"
+      },
+      "to": {
+        "node": 15,
+        "socket": "base_color"
+      }
+    }
   ]
 }

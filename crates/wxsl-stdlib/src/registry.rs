@@ -46,7 +46,8 @@
 use wxsl_core::abi;
 use wxsl_core::macros::{MacroDef, MacroValue};
 use wxsl_core::node::{
-    GenericParam, NodeDefinition, NodeRegistry, Socket, TypeRule, Value, ValueType, WxslFunction,
+    self, GenericParam, NodeBody, NodeDefinition, NodeRegistry, SettingDef, Socket, TypeRule,
+    Value, ValueType, WxslFunction,
 };
 
 /// Every node definition in the library, including the ABI's input and
@@ -55,6 +56,7 @@ pub fn all_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();
     defs.extend(abi_nodes());
     defs.extend(constant_nodes());
+    defs.extend(declaration_nodes());
     defs.extend(math_nodes());
     defs.extend(vector_nodes());
     defs.extend(convert_nodes());
@@ -736,6 +738,25 @@ pub fn convert_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();
 
     defs.push(
+        // The only node that consumes an integer or a boolean and
+        // produces a number, and therefore the only way one reaches the
+        // surface at all. It earns its place now that `param.value` can
+        // be an `i32` count or a `bool` toggle the host flips without a
+        // recompile: without it those are values with nowhere to go.
+        NodeDefinition::builder("convert.to_float", "To float")
+            .doc(
+                "Convert a boolean or an integer to `f32`. `false` is 0 \
+                 and `true` is 1.",
+            )
+            .generic_param(param(
+                "T",
+                &[ValueType::Bool, ValueType::I32, ValueType::U32],
+            ))
+            .input(generic_socket("value").with_doc("The value to convert."))
+            .output(out(ValueType::F32))
+            .expr("f32({value})"),
+    );
+    defs.push(
         NodeDefinition::builder("convert.splat", "Splat")
             .category("convert")
             .doc("Copy one scalar into every component.")
@@ -892,11 +913,122 @@ pub fn constant_nodes() -> Vec<NodeDefinition> {
     ]
 }
 
+/// Every type a host-shared value can have, ordered for a "pick a type"
+/// control on a parameter.
+///
+/// [`ValueType::ALL`]'s own order starts at `bool`, and the first allowed
+/// type is what a freshly placed node resolves to
+/// ([`NodeDefinition::default_generics`]) — so a parameter dropped on the
+/// canvas would be a boolean, which is not what anybody reaches for a
+/// parameter to be. The arithmetic types come first here and the rest
+/// follow; the *set* is the same.
+fn parameter_types() -> Vec<ValueType> {
+    let mut types = ValueType::operands();
+    types.extend([ValueType::Bool, ValueType::I32, ValueType::U32]);
+    types
+}
+
+/// What a material declares it needs from outside itself: uniform
+/// parameters, textures, samplers, and the application's own block.
+///
+/// The counterpart to [`constant_nodes`], and the difference is the whole
+/// point. A `const` is inlined into the generated WXSL, so editing one
+/// compiles a new shader variant; a `param` is a field of the material's
+/// uniform buffer, so editing one writes four bytes and the frame after it
+/// draws the same pipeline. A slider that does not recompile is what this
+/// buys ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+///
+/// Each of these carries a **setting** — a string the node instance holds —
+/// naming the thing it declares. Two nodes naming the same parameter *are*
+/// the same parameter, which is how one slider drives two places without a
+/// wire crossing the canvas.
+pub fn declaration_nodes() -> Vec<NodeDefinition> {
+    let named = |doc: &str, default: &str| {
+        SettingDef::new(node::SETTING_NAME, "name", doc).with_default(default)
+    };
+    vec![
+        NodeDefinition::builder("param.value", "Parameter")
+            .category("param")
+            .doc(
+                "A value the host can change without recompiling: a field \
+                 of this material's uniform buffer. Unlike a constant, \
+                 editing it costs a buffer write rather than a new shader \
+                 variant. The `value` socket is its starting value, and \
+                 two parameters with the same name are one parameter.",
+            )
+            .setting(named(
+                "The name the host writes this parameter by, and the field \
+                 name in the generated struct.",
+                "amount",
+            ))
+            // Every type, not just the arithmetic ones: an `i32` count or a
+            // `bool` toggle is exactly the sort of knob that should not
+            // cost a recompile, and `ValueType::splat` gives all of them a
+            // default to start from.
+            .generic_param(param("T", &parameter_types()))
+            .input(generic_splat("value", 0.0).constant())
+            .output(generic_socket("out"))
+            .declaration(NodeBody::Param),
+        NodeDefinition::builder("texture.texture_2d", "Texture 2D")
+            .category("texture")
+            .doc(
+                "A 2D texture the application binds by name. Wire it into \
+                 a sampling node together with a sampler.",
+            )
+            .setting(named(
+                "The name the application binds this texture by.",
+                "albedo",
+            ))
+            .output(out(ValueType::Texture2d))
+            .declaration(NodeBody::Resource),
+        NodeDefinition::builder("texture.texture_cube", "Texture cube")
+            .category("texture")
+            .doc("A cube texture the application binds by name.")
+            .setting(named(
+                "The name the application binds this texture by.",
+                "environment",
+            ))
+            .output(out(ValueType::TextureCube))
+            .declaration(NodeBody::Resource),
+        NodeDefinition::builder("texture.sampler", "Sampler")
+            .category("texture")
+            .doc(
+                "How a texture is filtered and wrapped, bound by the \
+                 application. One sampler serves every texture read \
+                 through it.",
+            )
+            .setting(named(
+                "The name the application binds this sampler by.",
+                "linear",
+            ))
+            .output(out(ValueType::Sampler))
+            .declaration(NodeBody::Resource),
+        NodeDefinition::builder("input.user", "Application value")
+            .category("input")
+            .doc(
+                "One field of the uniform block this graph expects the \
+                 application to supply. The graph declares the block's \
+                 fields; wxsl never knows what is in it, only its shape.",
+            )
+            .setting(
+                SettingDef::new(
+                    node::SETTING_FIELD,
+                    "field",
+                    "Which field of the application block to read.",
+                )
+                .with_default("value"),
+            )
+            .generic_param(param("T", &parameter_types()))
+            .output(generic_socket("out"))
+            .declaration(NodeBody::UserRead),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shaders;
-    use wxsl_core::graph::{Graph, Node};
+    use wxsl_core::graph::{Graph, Node, UserBlockDecl, UserField};
     use wxsl_core::node::NodeBody;
 
     #[test]
@@ -1082,6 +1214,14 @@ mod tests {
         // `GenericParam::allowed` in this file.
         let registry = registry();
         let mut graph = Graph::new("defaults");
+        // `input.user` reads a block the *document* declares, so a graph
+        // that holds one has to declare one. Its default field, at its
+        // default type.
+        graph.set_user_block(UserBlockDecl {
+            name: "app".to_string(),
+            fields: vec![UserField::new("value", ValueType::F32)],
+        });
+        let mut resource_inputs = 0;
         for def in registry.iter() {
             if def.is_surface_output() {
                 continue;
@@ -1096,12 +1236,35 @@ mod tests {
                     def.default_generics()
                 );
             }
+            resource_inputs += def
+                .inputs
+                .iter()
+                .filter(|socket| socket.ty.is_resource())
+                .count();
         }
         // Every one of them is complete on its own: no unresolved
-        // parameter, no unfed input, nothing to report.
-        graph
-            .validate(&registry)
-            .expect("a freshly placed node of every kind is valid");
+        // parameter, nothing to report — except that a texture or sampler
+        // input has no default and cannot have one. There is no literal
+        // texture to type in, so "connect something" is the only way to
+        // feed it, and `MissingInput` saying so is correct rather than a
+        // gap in the defaults.
+        let errors = match graph.validate(&registry) {
+            Ok(()) => Vec::new(),
+            Err(errors) => errors.0,
+        };
+        assert!(resource_inputs > 0, "no resource sockets left to except");
+        assert_eq!(
+            errors.len(),
+            resource_inputs,
+            "a freshly placed node of every kind is valid apart from its \
+             resource inputs: {errors:?}"
+        );
+        for error in &errors {
+            assert!(
+                matches!(error, wxsl_core::GraphError::MissingInput { .. }),
+                "{error:?}"
+            );
+        }
     }
 
     /// Every function node came from a `.wxsl` file, so this is the set

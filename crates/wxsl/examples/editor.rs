@@ -171,7 +171,7 @@ fn screenshot(
     );
     config.msdf_backend = options.msdf;
     config.atlas_size = options.atlas;
-    let mut editor = Editor::new(&gpu.device, config)?;
+    let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
     editor.handle_event(UiEvent::Resized {
         size: Vec2::new(width as f32, height as f32),
         scale: 1.0,
@@ -527,7 +527,7 @@ impl App {
         config.atlas_size = self.options.atlas;
         config.scale = scale;
 
-        let mut editor = Editor::new(&gpu.device, config)?;
+        let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
         let size = window.inner_size();
         // The editor learns the viewport from events, so it needs the first
         // one before it can lay anything out.

@@ -22,6 +22,7 @@ use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
 use wxsl_core::macros::MacroSet;
 use wxsl_core::node::NodeRegistry;
+use wxsl_core::resources::MaterialInterface;
 
 use crate::error::RenderError;
 
@@ -33,6 +34,13 @@ pub struct Material {
     /// One generated module per stage, indexed by
     /// [`MaterialStage::index`].
     stages: Vec<GeneratedShader>,
+    /// [`MaterialInterface::signature`], built once.
+    ///
+    /// Every draw needs it — it is what the bind-group-layout and
+    /// pipeline caches are keyed on — and rebuilding a string per draw
+    /// per frame is an allocation for something that cannot change while
+    /// the material exists.
+    signature: String,
 }
 
 impl Material {
@@ -63,6 +71,7 @@ impl Material {
         }
         Ok(Material {
             name: graph.name().to_string(),
+            signature: stages[0].interface.signature(),
             stages,
         })
     }
@@ -73,6 +82,26 @@ impl Material {
         // `MaterialStage::ALL` and a stage is an index into the same table,
         // so the two cannot drift apart.
         &self.stages[stage.index()]
+    }
+
+    /// What must be bound before this material can draw: its uniform
+    /// parameters, its textures and samplers, and the block it expects
+    /// the application to supply.
+    ///
+    /// The same for every stage, and a test says so — a stage changes
+    /// which entry point is emitted, never what the graph declares. That
+    /// stops being true when M5 partitions the graph per stage, at which
+    /// point this becomes per-stage and the pipeline layouts follow it.
+    pub fn interface(&self) -> &MaterialInterface {
+        &self.stages[0].interface
+    }
+
+    /// The shape of what this material declares, as the bind-group and
+    /// pipeline caches key on it. A *shape*, never a value: two materials
+    /// with the same parameters at different settings share it, which is
+    /// what makes changing a parameter free.
+    pub fn signature(&self) -> &str {
+        &self.signature
     }
 
     /// The macro values this material was compiled with.
@@ -150,6 +179,25 @@ mod tests {
         assert!(!material
             .wxsl(MaterialStage::DEPTH_ONLY)
             .contains("@fragment"));
+    }
+
+    #[test]
+    fn every_stage_declares_the_same_interface() {
+        // A stage picks an entry point, not a set of bindings, so all
+        // three modules of one material are bound the same way — which is
+        // what lets one `MaterialBindings` serve a depth prepass and the
+        // shading pass after it. M5 is where this stops holding.
+        let registry = registry();
+        let mut graph = Graph::new("interface");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+        let material = Material::from_graph(&graph, &registry).unwrap();
+        for stage in MaterialStage::ALL {
+            assert_eq!(
+                material.shader(*stage).interface,
+                *material.interface(),
+                "{stage} declares a different interface"
+            );
+        }
     }
 
     #[test]

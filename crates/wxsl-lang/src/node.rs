@@ -32,7 +32,8 @@
 //!
 //! * exactly one `fn`, and it is not an entry point;
 //! * every type in its signature is one the graph can carry
-//!   ([`ValueType`]) or one of its own type parameters;
+//!   ([`ValueType`], including the texture and sampler types) or one of
+//!   its own type parameters;
 //! * every type parameter is bounded, because an unbounded one has no
 //!   allowed set to offer;
 //! * the leading comment block has a label line and a doc paragraph.
@@ -348,6 +349,15 @@ impl Derivation<'_> {
         span: Span,
     ) -> Result<Socket, Diagnostics> {
         let ty = socket.ty;
+        if generic.is_none() && ty.is_resource() {
+            return Err(self.error(
+                format!(
+                    "a `{}` parameter is a binding, not a value, so it cannot have a default",
+                    ty.wxsl_type()
+                ),
+                span,
+            ));
+        }
         match text {
             "true" | "false" => {
                 if generic.is_some() || ty != ValueType::Bool {
@@ -434,6 +444,12 @@ impl Derivation<'_> {
         };
         let found = ValueType::ALL
             .iter()
+            // The resource types are not in `ALL` — nothing offers a
+            // texture where a value is meant — but a signature is entitled
+            // to name one: `sample.texture_2d` is an ordinary function node
+            // whose first two parameters are a texture and a sampler
+            // ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+            .chain(ValueType::RESOURCES)
             .copied()
             .find(|candidate| candidate.wxsl_type() == spelling)
             .or(long_form);

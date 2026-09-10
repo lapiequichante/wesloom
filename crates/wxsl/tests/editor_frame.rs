@@ -85,7 +85,7 @@ fn editor(gpu: &GpuContext, backend: MsdfBackend) -> Option<(Editor, OffscreenTa
     // Small enough to keep the test quick, large enough that the panels are
     // not degenerate.
     let (width, height) = (1280, 800);
-    let mut editor = Editor::new(&gpu.device, config).expect("the editor starts");
+    let mut editor = Editor::new(&gpu.device, &gpu.queue, config).expect("the editor starts");
     editor.handle_event(UiEvent::Resized {
         size: Vec2::new(width as f32, height as f32),
         scale: 1.0,

@@ -18,9 +18,11 @@ use std::path::{Path, PathBuf};
 
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::scene::{MeshSource, Scene, SceneError, Tags};
+use wxsl_render::bindings::MaterialBindings;
 use wxsl_render::draw::{DrawItem, DrawList};
 use wxsl_render::material::Material;
 use wxsl_render::mesh::Mesh;
+use wxsl_render::renderer::Renderer;
 use wxsl_render::RenderError;
 use wxsl_render::{glam, wgpu};
 
@@ -32,6 +34,9 @@ use wxsl_render::{glam, wgpu};
 pub struct SceneResources {
     meshes: Vec<Mesh>,
     materials: Vec<Material>,
+    /// One per material, once [`SceneResources::bind`] has run. Empty
+    /// before that, and a material declaring nothing never needs one.
+    bindings: Vec<MaterialBindings>,
     instances: Vec<ResolvedInstance>,
 }
 
@@ -90,6 +95,7 @@ impl SceneResources {
         Ok(SceneResources {
             meshes,
             materials,
+            bindings: Vec::new(),
             instances,
         })
     }
@@ -99,14 +105,61 @@ impl SceneResources {
         self.instances
             .iter()
             .map(|instance| {
-                DrawItem::new(
+                let mut item = DrawItem::new(
                     &self.meshes[instance.mesh],
                     &self.materials[instance.material],
                 )
                 .with_transform(instance.transform)
-                .with_tags(&instance.tags)
+                .with_tags(&instance.tags);
+                if let Some(bindings) = self.bindings.get(instance.material) {
+                    item = item.with_bindings(bindings);
+                }
+                item
             })
             .collect()
+    }
+
+    /// Give every material somewhere to put its parameters, textures and
+    /// samplers, at the values its graph declared.
+    ///
+    /// Separate from [`SceneResources::load`] because it is the one step
+    /// that needs a [`Renderer`]: a bind group needs a layout, and the
+    /// layouts are shared per interface shape by the renderer that will
+    /// draw with them.
+    ///
+    /// Also separate from [`SceneResources::upload`], because a scene
+    /// document has no way to name an image yet: a material that declares
+    /// a texture is finished by the application, through
+    /// [`SceneResources::bindings_mut`], in between the two calls.
+    pub fn create_bindings(&mut self, device: &wgpu::Device, renderer: &mut Renderer) {
+        self.bindings = self
+            .materials
+            .iter()
+            .map(|material| renderer.material_bindings(device, material))
+            .collect();
+    }
+
+    /// Push every material's parameters and resources to the GPU.
+    ///
+    /// Cheap when nothing changed, so it is safe every frame. A texture
+    /// the graph declared and nobody bound is reported here, naming the
+    /// material and the texture, rather than drawn as black.
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), LoadError> {
+        for (index, bindings) in self.bindings.iter_mut().enumerate() {
+            bindings
+                .upload(device, queue)
+                .map_err(|error| LoadError::Bindings {
+                    material: self.materials[index].name.clone(),
+                    error,
+                })?;
+        }
+        Ok(())
+    }
+
+    /// One material's bind group, for setting a parameter or supplying a
+    /// texture. `None` before [`SceneResources::create_bindings`] has run.
+    pub fn bindings_mut(&mut self, material: usize) -> Option<&mut MaterialBindings> {
+        self.bindings.get_mut(material)
     }
 
     /// The uploaded meshes, in document order.
@@ -193,6 +246,14 @@ pub enum LoadError {
         /// What the compiler said.
         error: RenderError,
     },
+    /// A material's bind group could not be finished — almost always a
+    /// texture the scene document has no way to name yet.
+    Bindings {
+        /// Which material.
+        material: String,
+        /// What was missing.
+        error: RenderError,
+    },
     /// Something else the renderer refused, such as a file it cannot read.
     Render(RenderError),
 }
@@ -210,6 +271,9 @@ impl core::fmt::Display for LoadError {
             LoadError::Material { material, error } => {
                 write!(f, "cannot compile material `{material}`: {error}")
             }
+            LoadError::Bindings { material, error } => {
+                write!(f, "cannot bind material `{material}`: {error}")
+            }
             LoadError::Render(error) => write!(f, "{error}"),
         }
     }
@@ -218,7 +282,9 @@ impl core::fmt::Display for LoadError {
 impl std::error::Error for LoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            LoadError::Material { error, .. } | LoadError::Render(error) => Some(error),
+            LoadError::Material { error, .. }
+            | LoadError::Bindings { error, .. }
+            | LoadError::Render(error) => Some(error),
             LoadError::Invalid(_) => None,
         }
     }

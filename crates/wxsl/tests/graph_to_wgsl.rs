@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use wxsl::core::abi;
 use wxsl::core::abi::MaterialStage;
 use wxsl::core::codegen;
-use wxsl::core::graph::{Graph, Node, NodeId};
+use wxsl::core::graph::{Graph, Node, NodeId, UserBlockDecl, UserField};
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
 use wxsl::render::material::Material;
@@ -258,17 +258,43 @@ fn graph_using(
     assignment: &BTreeMap<String, ValueType>,
 ) -> Option<Graph> {
     let mut graph = Graph::new(format!("coverage: {}.{socket}", def.id));
+    // Declared once for every graph, whether or not this node reads it:
+    // `input.user`'s type comes from the document, so a graph that holds
+    // one has to say what the block looks like.
+    graph.set_user_block(UserBlockDecl {
+        name: "app".to_string(),
+        fields: ValueType::ALL
+            .iter()
+            .map(|ty| UserField::new(format!("value_{}", ty.suffix()), *ty))
+            .collect(),
+    });
     let node = graph.add(Node::new(def.id.clone()));
     for (param, &ty) in assignment {
         graph.set_generic(registry, node, param, ty).ok()?;
     }
+    if matches!(def.body, NodeBody::UserRead) {
+        let ty = graph.effective_type(node, def.outputs.first()?)?;
+        graph.set_setting(node, "field", format!("value_{}", ty.suffix()));
+    }
     // A generic input has no *fixed* default (see `Socket::generic`), only
     // possibly a scalar to spread over the type just resolved; anything
     // still unfed gets a pinned value of whatever it turned out to be.
+    // A texture or sampler input has no value to pin at all, so it gets a
+    // declaring node wired into it — which is the only way to feed one.
     for input in &def.inputs {
         let ty = graph.effective_type(node, input)?;
+        if ty.is_resource() {
+            let source = graph.add_node(declaring_node(ty)?);
+            graph
+                .wire(registry, (source, "out"), (node, input.name.as_str()))
+                .ok()?;
+            continue;
+        }
         if input.default_for(ty).is_none() {
-            let value = ty.splat(1.0).unwrap_or_else(|| ty.zero());
+            let value = ty
+                .splat(1.0)
+                .or_else(|| ty.zero())
+                .expect("every value type has a splat or a zero");
             graph.set_param(node, input.name.as_str(), value);
         }
     }
@@ -321,8 +347,30 @@ fn graph_using(
                 (split, "x".to_string(), "roughness")
             }
         }
-        // No node in the library produces these yet.
-        ValueType::I32 | ValueType::U32 => return None,
+        ValueType::I32 | ValueType::U32 => {
+            let to_float = graph.add_node("convert.to_float");
+            graph
+                .wire(registry, (node, socket), (to_float, "value"))
+                .ok()?;
+            (to_float, "out".to_string(), "roughness")
+        }
+        // A texture reaches the surface through the node that samples
+        // one, with a sampler declared alongside it.
+        ValueType::Texture2d => {
+            let sampler = graph.add_node("texture.sampler");
+            let sample = graph.add_node("sample.texture_2d");
+            graph.wire(registry, (node, socket), (sample, "tex")).ok()?;
+            graph
+                .wire(registry, (sampler, "out"), (sample, "samp"))
+                .ok()?;
+            let split = graph.add_node("convert.split.vec4f");
+            graph.wire(registry, (sample, "out"), (split, "v")).ok()?;
+            (split, "x".to_string(), "roughness")
+        }
+        // Nothing in the library samples a cube map yet, and a sampler on
+        // its own reaches nothing: both are covered as *inputs* of
+        // `sample.texture_2d` above rather than as outputs here.
+        ValueType::TextureCube | ValueType::Sampler => return None,
     };
     graph
         .wire(registry, (source, source_socket.as_str()), (surface, field))
@@ -330,10 +378,23 @@ fn graph_using(
     Some(graph)
 }
 
+/// The node that declares a resource of type `ty`, for feeding a socket
+/// that takes one. There is no literal texture to pin, so this is the
+/// only way.
+fn declaring_node(ty: ValueType) -> Option<&'static str> {
+    match ty {
+        ValueType::Texture2d => Some("texture.texture_2d"),
+        ValueType::TextureCube => Some("texture.texture_cube"),
+        ValueType::Sampler => Some("texture.sampler"),
+        _ => None,
+    }
+}
+
 #[test]
 fn every_node_in_the_library_compiles_for_every_stage() {
     let registry = wxsl::stdlib::registry();
     let mut checked = 0usize;
+    let mut checked_resource_inputs = 0usize;
     let mut skipped: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
 
@@ -385,6 +446,9 @@ fn every_node_in_the_library_compiles_for_every_stage() {
                                 );
                             }
                             checked += 1;
+                            if def.inputs.iter().any(|input| input.ty.is_resource()) {
+                                checked_resource_inputs += 1;
+                            }
                         }
                         Err(diagnostic) => {
                             failures.push(format!("{label} on the {stage} stage:\n{diagnostic}"))
@@ -405,8 +469,18 @@ fn every_node_in_the_library_compiles_for_every_stage() {
     // Guard against the test silently covering nothing.
     assert!(checked > 400, "only {checked} compilations ran");
     assert!(
-        skipped.iter().all(|s| s.starts_with("input.")),
+        skipped
+            .iter()
+            .all(|s| s.starts_with("input.") || s.starts_with("texture.")),
         "unexpected skips: {skipped:?}"
+    );
+    // A cube texture and a sampler are skipped as *outputs* — nothing in
+    // the library consumes a cube map yet — but both are covered as
+    // inputs of `sample.texture_2d`, so the resource types are not
+    // silently untested.
+    assert!(
+        checked_resource_inputs > 0,
+        "no node with a texture or sampler input was compiled"
     );
 }
 
