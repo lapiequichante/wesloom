@@ -7,6 +7,7 @@
 //! like `render_cube.rs`.
 
 use wxsl::core::graph::Graph;
+use wxsl::core::node::Value;
 use wxsl::core::scene::{
     Instance, MaterialEntry, MeshEntry, MeshSource, Scene, SceneError, TagExpr, Tags,
 };
@@ -174,6 +175,17 @@ fn a_scene_document_renders() {
     resources
         .upload(&gpu.device, &gpu.queue)
         .expect("everything is bound now");
+
+    // And the same again for what the *geometry* owes: the document
+    // names a material that declares a per-instance tint, and a
+    // per-instance value is precisely the thing a document with one
+    // material and many instances cannot hold (ADR 0024).
+    for index in 0..resources.instance_count() {
+        resources
+            .instance_attributes_mut(index)
+            .expect("in range")
+            .set("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
+    }
 
     let draws = resources.draw_list();
     assert_eq!(draws.len(), 2);

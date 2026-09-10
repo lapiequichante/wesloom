@@ -15,140 +15,15 @@
 //! `srgb(emissive)` and nothing else, so a pixel is a readable answer
 //! rather than a lighting result to eyeball.
 
-use glam::{Mat4, Vec3};
 use wxsl::core::abi;
-use wxsl::core::graph::{Graph, Node, NodeId, UserBlockDecl, UserField};
-use wxsl::core::macros::{MacroSet, MacroValue};
+use wxsl::core::graph::{Graph, Node, UserBlockDecl, UserField};
 use wxsl::core::node::{NodeRegistry, Value, ValueType};
-use wxsl::render::gpu::{GpuContext, OffscreenTarget};
-use wxsl::render::material::Material;
-use wxsl::render::{
-    Camera, DrawItem, Environment, MaterialBindings, RenderRequest, Renderer, TargetConfig,
-};
+use wxsl::render::gpu::GpuContext;
+use wxsl::render::wgpu;
+use wxsl::render::{DrawItem, RenderRequest};
 
-const SIZE: u32 = 64;
-
-/// A GPU context, or `None` when this machine has no usable adapter.
-fn gpu() -> Option<GpuContext> {
-    match pollster::block_on(GpuContext::headless()) {
-        Ok(context) => Some(context),
-        Err(error) => {
-            eprintln!("skipping GPU test: {error}");
-            None
-        }
-    }
-}
-
-/// No lights, no ambient: the surface's emissive is the whole image.
-fn unlit() -> Environment {
-    Environment {
-        camera: Camera {
-            eye: Vec3::new(0.0, 0.0, 3.0),
-            aspect: 1.0,
-            ..Camera::default()
-        },
-        lights: Vec::new(),
-        ambient_sky: Vec3::ZERO,
-        ambient_ground: Vec3::ZERO,
-        exposure: 1.0,
-        time: 0.0,
-    }
-}
-
-fn no_tonemap() -> MacroSet {
-    let mut macros = MacroSet::new();
-    macros.set(abi::FEATURE_TONEMAP, MacroValue::Flag(false));
-    macros
-}
-
-/// Everything one of these tests needs on the GPU, once.
-struct Harness {
-    gpu: GpuContext,
-    target: OffscreenTarget,
-    renderer: Renderer,
-    mesh: wxsl::render::Mesh,
-    registry: NodeRegistry,
-}
-
-impl Harness {
-    fn new(gpu: GpuContext) -> Self {
-        let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
-        let renderer = Renderer::new(
-            &gpu.device,
-            wxsl::stdlib_library(),
-            TargetConfig::new(SIZE, SIZE, target.format()),
-        )
-        .expect("the stdlib library satisfies the ABI");
-        // A plane facing the camera: every pixel of it is the same
-        // surface, so one sample answers for the whole material.
-        let mesh = wxsl::render::Mesh::plane(&gpu.device, 2.0);
-        Harness {
-            gpu,
-            target,
-            renderer,
-            mesh,
-            registry: wxsl::stdlib::registry(),
-        }
-    }
-
-    fn material(&self, graph: &Graph) -> Material {
-        Material::from_graph_with_macros(graph, &self.registry, &no_tonemap())
-            .expect("the graph compiles")
-    }
-
-    fn bindings(&mut self, material: &Material) -> MaterialBindings {
-        self.renderer.material_bindings(&self.gpu.device, material)
-    }
-
-    /// Draw one plane with this material and read the centre pixel.
-    fn shade(
-        &mut self,
-        material: &Material,
-        bindings: Option<&MaterialBindings>,
-        user: Option<&wgpu::BindGroup>,
-    ) -> [u8; 4] {
-        // Lying flat by default, so stand it up to face the camera.
-        let mut item = DrawItem::new(&self.mesh, material)
-            .with_transform(Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2));
-        if let Some(bindings) = bindings {
-            item = item.with_bindings(bindings);
-        }
-        if let Some(user) = user {
-            item = item.with_user(user);
-        }
-        let draws = wxsl::render::single_draw(item);
-        self.renderer
-            .render(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &RenderRequest {
-                    view: self.target.view(),
-                    environment: &unlit(),
-                    draws: &draws,
-                },
-            )
-            .expect("the frame renders");
-        self.gpu.wait();
-        let image = self.target.read_rgba8(&self.gpu.device, &self.gpu.queue);
-        let index = (((SIZE / 2) * SIZE + SIZE / 2) * 4) as usize;
-        image[index..index + 4].try_into().expect("in bounds")
-    }
-}
-
-/// `srgb(value)` as the shader's `linear_to_srgb` computes it, so a test
-/// can say what colour it expects in linear terms.
-fn srgb(value: f32) -> u8 {
-    let encoded = if value <= 0.0031308 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-fn close(actual: u8, expected: u8) -> bool {
-    actual.abs_diff(expected) <= 3
-}
+mod probe;
+use probe::{close, declare_as_parameter, gpu, probe_graph, probe_values, srgb, unlit, Harness};
 
 // ---------------------------------------------------------------------
 // Uniform parameters
@@ -251,216 +126,6 @@ fn changing_a_parameter_costs_a_buffer_write_and_not_a_variant() {
 // The computed layout, at every type
 // ---------------------------------------------------------------------
 
-/// A graph that answers "did `probe` arrive intact?" as a white or black
-/// surface.
-///
-/// The two halves that have to agree are the offsets `wxsl-core` computed
-/// and the offsets WGSL's own layout rules give the generated struct. They
-/// are checked here the only way that is really convincing: on the GPU,
-/// against a literal the compiler inlined.
-///
-/// Every graph also carries a second `f32` parameter, so no probe is alone
-/// in its buffer — which is where the interesting failure lives. `vec3f`
-/// occupies 12 bytes and aligns to 16, so a scalar beside one is either at
-/// 12 or at 16 and only one of those is right.
-fn probe_graph(registry: &NodeRegistry, ty: ValueType, probe: Value) -> Graph {
-    let mut graph = Graph::new(format!("probe {ty}"));
-    let node = graph.add(
-        Node::new("param.value")
-            .with_setting("name", "probe")
-            .with_param("value", probe),
-    );
-    graph
-        .set_generic(registry, node, "T", ty)
-        .expect("every value type is allowed");
-    graph.set_param(node, "value", probe);
-
-    // Reduce the probe to one `f32` that is zero when it arrived intact.
-    let (measured, expected): (NodeId, Value) = match ty {
-        ValueType::Bool | ValueType::I32 | ValueType::U32 => {
-            let to_float = graph.add_node("convert.to_float");
-            graph
-                .wire(registry, (node, "out"), (to_float, "value"))
-                .expect("an integer converts");
-            let as_f32 = match probe {
-                Value::Bool(flag) => f32::from(u8::from(flag)),
-                Value::I32(number) => number as f32,
-                Value::U32(number) => number as f32,
-                _ => unreachable!("matched on the type above"),
-            };
-            (to_float, Value::F32(as_f32))
-        }
-        ValueType::Mat3 | ValueType::Mat4 => {
-            // A matrix reaches a comparable value through the one node
-            // that consumes one: times a vector of ones, which is the
-            // row sums, which changes if any cell moved.
-            let vector = if ty == ValueType::Mat3 {
-                ValueType::Vec3
-            } else {
-                ValueType::Vec4
-            };
-            let transform = graph.add_node("vector.transform");
-            graph
-                .set_generic(registry, transform, "M", ty)
-                .expect("a matrix");
-            graph
-                .set_generic(registry, transform, "V", vector)
-                .expect("its vector");
-            let ones = vector.splat(1.0).expect("a float vector");
-            graph.set_param(transform, "v", ones);
-            graph
-                .wire(registry, (node, "out"), (transform, "m"))
-                .expect("a matrix into transform");
-            let cells = probe.components().expect("a matrix has components");
-            let width = if ty == ValueType::Mat3 { 3 } else { 4 };
-            let sums: Vec<f32> = (0..width)
-                .map(|row| (0..width).map(|col| cells[col * width + row]).sum())
-                .collect();
-            let expected = match vector {
-                ValueType::Vec3 => Value::Vec3(sums.try_into().expect("three")),
-                _ => Value::Vec4(sums.try_into().expect("four")),
-            };
-            (transform, expected)
-        }
-        _ => (node, probe),
-    };
-
-    let difference = graph.add_node("math.subtract");
-    let reduced_ty = expected.ty();
-    graph
-        .set_generic(registry, difference, "A", reduced_ty)
-        .expect("allowed");
-    graph
-        .set_generic(registry, difference, "B", reduced_ty)
-        .expect("allowed");
-    graph
-        .wire(
-            registry,
-            (measured, output_of(registry, &graph, measured)),
-            (difference, "a"),
-        )
-        .expect("the measured value");
-    graph.set_param(difference, "b", expected);
-
-    // `|x|` for a scalar, `length` for a vector: both answer "how far".
-    let error = if reduced_ty == ValueType::F32 {
-        let absolute = graph.add_node("math.absolute");
-        graph
-            .set_generic(registry, absolute, "T", ValueType::F32)
-            .expect("allowed");
-        graph
-            .wire(registry, (difference, "out"), (absolute, "a"))
-            .expect("f32");
-        (absolute, "out")
-    } else {
-        let length = graph.add_node("vector.length");
-        graph
-            .set_generic(registry, length, "T", reduced_ty)
-            .expect("allowed");
-        graph
-            .wire(registry, (difference, "out"), (length, "v"))
-            .expect("a vector");
-        (length, "out")
-    };
-
-    // The second parameter, so the probe is never alone in the buffer.
-    let pad = graph.add(
-        Node::new("param.value")
-            .with_setting("name", "pad")
-            .with_param("value", Value::F32(0.75)),
-    );
-    graph
-        .set_generic(registry, pad, "T", ValueType::F32)
-        .expect("allowed");
-    graph.set_param(pad, "value", Value::F32(0.75));
-    let pad_difference = graph.add_node("math.subtract");
-    graph
-        .set_generic(registry, pad_difference, "A", ValueType::F32)
-        .expect("allowed");
-    graph
-        .set_generic(registry, pad_difference, "B", ValueType::F32)
-        .expect("allowed");
-    graph
-        .wire(registry, (pad, "out"), (pad_difference, "a"))
-        .expect("f32");
-    graph.set_param(pad_difference, "b", Value::F32(0.75));
-    let pad_error = graph.add_node("math.absolute");
-    graph
-        .set_generic(registry, pad_error, "T", ValueType::F32)
-        .expect("allowed");
-    graph
-        .wire(registry, (pad_difference, "out"), (pad_error, "a"))
-        .expect("f32");
-
-    let total = graph.add_node("math.add");
-    graph
-        .set_generic(registry, total, "A", ValueType::F32)
-        .expect("allowed");
-    graph
-        .set_generic(registry, total, "B", ValueType::F32)
-        .expect("allowed");
-    graph
-        .wire(registry, (error.0, error.1), (total, "a"))
-        .expect("f32");
-    graph
-        .wire(registry, (pad_error, "out"), (total, "b"))
-        .expect("f32");
-
-    let within = graph.add_node("compare.less");
-    graph
-        .wire(registry, (total, "out"), (within, "a"))
-        .expect("f32");
-    graph.set_param(within, "b", Value::F32(1e-3));
-
-    let select = graph.add_node("logic.select");
-    graph
-        .set_generic(registry, select, "T", ValueType::Vec3)
-        .expect("allowed");
-    graph.set_param(select, "if_true", Value::Vec3([1.0, 1.0, 1.0]));
-    graph.set_param(select, "if_false", Value::Vec3([0.0, 0.0, 0.0]));
-    graph
-        .wire(registry, (within, "out"), (select, "condition"))
-        .expect("a bool");
-
-    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
-    graph
-        .wire(registry, (select, "out"), (output, "emissive"))
-        .expect("vec3f into emissive");
-    graph
-}
-
-/// The output socket a node in the probe chain answers on.
-fn output_of(registry: &NodeRegistry, graph: &Graph, node: NodeId) -> &'static str {
-    let def = graph.definition(registry, node).expect("in the graph");
-    match def.id.as_str() {
-        "vector.transform" => "out",
-        "convert.to_float" => "out",
-        _ => "out",
-    }
-}
-
-/// A distinctive value of every type, chosen so a byte read from the wrong
-/// offset is a different number rather than a coincidence.
-fn probe_values() -> Vec<(ValueType, Value)> {
-    vec![
-        (ValueType::Bool, Value::Bool(true)),
-        (ValueType::I32, Value::I32(-13)),
-        (ValueType::U32, Value::U32(29)),
-        (ValueType::F32, Value::F32(0.375)),
-        (ValueType::Vec2, Value::Vec2([1.25, -2.5])),
-        (ValueType::Vec3, Value::Vec3([3.5, -4.25, 5.125])),
-        (ValueType::Vec4, Value::Vec4([6.5, -7.25, 8.125, 9.0])),
-        (
-            ValueType::Mat3,
-            Value::Mat3([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5]),
-        ),
-        (
-            ValueType::Mat4,
-            Value::Mat4(core::array::from_fn(|index| index as f32 * 0.5 - 3.0)),
-        ),
-    ]
-}
-
 #[test]
 fn every_parameter_type_arrives_where_the_computed_layout_says() {
     // The layouts elsewhere in this repo are two halves — a `#[repr(C)]`
@@ -471,7 +136,7 @@ fn every_parameter_type_arrives_where_the_computed_layout_says() {
     let Some(gpu) = gpu() else { return };
     let mut harness = Harness::new(gpu);
     for (ty, value) in probe_values() {
-        let graph = probe_graph(&harness.registry, ty, value);
+        let graph = probe_graph(&harness.registry, ty, value, &declare_as_parameter);
         let material = harness.material(&graph);
         let mut bindings = harness.bindings(&material);
         bindings
@@ -497,7 +162,7 @@ fn a_parameter_set_after_the_fact_arrives_at_every_type() {
     for (ty, value) in probe_values() {
         // Built with a *wrong* value, then corrected through `set`.
         let wrong = ty.splat(0.0).expect("every value type splats");
-        let graph = probe_graph(&harness.registry, ty, wrong);
+        let graph = probe_graph(&harness.registry, ty, wrong, &declare_as_parameter);
         let material = harness.material(&graph);
         let mut bindings = harness.bindings(&material);
         bindings.set("probe", value).expect("declared");

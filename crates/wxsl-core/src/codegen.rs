@@ -12,20 +12,26 @@
 //!    self-contained (ADR 0011). Flag macros are not
 //!    imported: they are bound as WXSL conditional-translation features by
 //!    the caller ([`GeneratedShader::macros`]).
-//! 3. **Declarations** — the material's own bind group and the block it
-//!    expects from the application: a uniform struct whose fields and
-//!    offsets `wxsl-core` computed
-//!    ([`crate::resources::MaterialInterface`]), and one `var` per
-//!    declared texture and sampler. A graph does not only compute; it says
-//!    what must be bound before it can run
-//!    ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+//! 3. **Declarations** — the material's own bind group, the block it
+//!    expects from the application, and what it requires of the geometry:
+//!    a uniform struct whose fields and offsets `wxsl-core` computed
+//!    ([`crate::resources::MaterialInterface`]), one `var` per declared
+//!    texture and sampler, and — when the graph declares per-instance
+//!    attributes — a *widened* view of the frame's instance row. A graph
+//!    does not only compute; it says what must be bound before it can run
+//!    ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md))
+//!    and what the geometry must carry
+//!    ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 //! 4. **The material function** — one `let` per node output, in dependency
 //!    order, ending in the [`crate::abi::SURFACE_STRUCT`] the graph produces.
 //! 5. **Entry points** — a vertex entry, shared by every stage, and the one
 //!    fragment entry [`CodegenOptions::stage`] calls for: a colour, a
 //!    G-buffer, or none at all. One module *per stage* is what
 //!    [ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)
-//!    asks for — the graph author writes no stage-specific nodes.
+//!    asks for — the graph author writes no stage-specific nodes. A
+//!    material declaring no attributes emits exactly the two lines it
+//!    always did; one that declares some emits wider IO structs beside
+//!    the ABI's, never instead of them.
 //!
 //! Only the nodes the output node actually depends on are emitted, so a
 //! half-finished branch parked on the editor canvas costs nothing — and
@@ -40,7 +46,7 @@ use crate::error::{CodegenError, GraphError, GraphErrors};
 use crate::graph::{Graph, NodeId, SocketRef};
 use crate::macros::{MacroSet, MacroValue};
 use crate::node::{self, FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value};
-use crate::resources::MaterialInterface;
+use crate::resources::{GeometryInterface, MaterialInterface};
 use crate::wxsl::{stable_hash, ModulePath, WxslIdent};
 
 /// Module path the generated material module is mounted at.
@@ -517,6 +523,44 @@ impl Emitter<'_> {
                 self.bindings
                     .insert(SocketRef::new(node, socket.name.as_str()), expr);
             }
+            NodeBody::AttributeRead => {
+                let socket =
+                    def.outputs
+                        .first()
+                        .ok_or_else(|| CodegenError::OutputArityMismatch {
+                            def: def.id.clone(),
+                            outputs: 0,
+                            exprs: 1,
+                        })?;
+                let name = self.declared_name(node, node::SETTING_NAME)?;
+                let geometry = &self.interface.geometry;
+                // Which backing a name has is the *declaration's* business
+                // and not the node's, so this is where the two frequencies
+                // stop being different: a per-vertex value was
+                // interpolated into `attrs`, a per-instance one is a field
+                // of the row the flat index points at.
+                let expr = if geometry.vertex_attribute(name.as_str()).is_some() {
+                    Some(format!("{}.{name}", abi::MATERIAL_ATTRIBUTES_VAR))
+                } else {
+                    geometry.instance().field(name.as_str()).and_then(|_| {
+                        geometry.instance().read_expr(
+                            &format!(
+                                "{}[{}.{}]",
+                                abi::MATERIAL_INSTANCE_VAR,
+                                abi::MATERIAL_ATTRIBUTES_VAR,
+                                abi::INSTANCE_INDEX_FIELD,
+                            ),
+                            name.as_str(),
+                        )
+                    })
+                };
+                let expr = expr.ok_or_else(|| CodegenError::UndeclaredAttribute {
+                    node,
+                    name: name.clone(),
+                })?;
+                self.bindings
+                    .insert(SocketRef::new(node, socket.name.as_str()), expr);
+            }
             NodeBody::SurfaceOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
@@ -677,9 +721,21 @@ impl Emitter<'_> {
 
         write_declarations(&mut out, &interface);
 
+        // The material function takes what the geometry supplied as a
+        // second argument, and only when there is any: a graph that
+        // declares nothing generates the signature it always did.
+        let attributes = if interface.geometry.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {}: {}",
+                abi::MATERIAL_ATTRIBUTES_VAR,
+                abi::MATERIAL_ATTRIBUTES_STRUCT
+            )
+        };
         let _ = write!(
             out,
-            "\nfn {}(ctx: {}) -> {} {{\n",
+            "\nfn {}(ctx: {}{attributes}) -> {} {{\n",
             options.material_fn,
             abi::CONTEXT_STRUCT,
             abi::SURFACE_STRUCT
@@ -697,7 +753,7 @@ impl Emitter<'_> {
         out.push_str("    return surface;\n}\n");
 
         if options.emit_entry_points {
-            write_entry_points(&mut out, options);
+            write_entry_points(&mut out, options, &interface);
         }
         out
     }
@@ -711,7 +767,10 @@ impl Emitter<'_> {
 /// that WGSL's own rules put every field exactly where the layout says.
 /// Two statements of the same offsets would be two places to disagree.
 fn write_declarations(out: &mut String, interface: &MaterialInterface) {
-    if interface.material_group_is_empty() && interface.user.is_none() {
+    if interface.material_group_is_empty()
+        && interface.user.is_none()
+        && interface.geometry.is_empty()
+    {
         return;
     }
     out.push('\n');
@@ -747,6 +806,123 @@ fn write_declarations(out: &mut String, interface: &MaterialInterface) {
             user.struct_name,
         );
     }
+    write_geometry_declarations(out, &interface.geometry);
+}
+
+/// Emit what the geometry supplies: the struct the material function
+/// receives it in, and — when the graph declares per-instance attributes —
+/// a *second, wider* view of the frame's instance buffer.
+///
+/// The attribute array is beside the transform array rather than inside
+/// it. Widening the transform row was the obvious shape and it is wrong:
+/// the vertex stage reads that array at the ABI's stride through
+/// `transform_vertex`, so a row that grew would be read at the wrong
+/// offsets by hand-written code that cannot know it grew. Two arrays,
+/// one instance index, and neither has to know the other's width
+/// (ADR 0024).
+fn write_geometry_declarations(out: &mut String, geometry: &GeometryInterface) {
+    if geometry.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "struct {} {{", abi::MATERIAL_ATTRIBUTES_STRUCT);
+    if geometry.instance_index_location().is_some() {
+        let _ = writeln!(out, "    {}: u32,", abi::INSTANCE_INDEX_FIELD);
+    }
+    for attribute in geometry.vertex() {
+        let _ = writeln!(out, "    {}: {},", attribute.name, attribute.ty.wxsl_type());
+    }
+    out.push_str("}\n");
+
+    if geometry.instance_index_location().is_some() {
+        out.push_str(
+            &geometry
+                .instance()
+                .wgsl_struct(abi::MATERIAL_INSTANCE_STRUCT),
+        );
+        let _ = writeln!(
+            out,
+            "@group({}) @binding({}) var<storage, read> {}: array<{}>;",
+            abi::GROUP_FRAME,
+            abi::BINDING_INSTANCE_ATTRIBUTES,
+            abi::MATERIAL_INSTANCE_VAR,
+            abi::MATERIAL_INSTANCE_STRUCT,
+        );
+    }
+}
+
+/// The extra `@location` lines shared by the extended vertex output and
+/// the fragment's second parameter, written once so the two cannot drift.
+fn extra_varyings(geometry: &GeometryInterface) -> String {
+    let mut out = String::new();
+    if let Some(location) = geometry.instance_index_location() {
+        // Flat, and it has to be: WGSL will not interpolate an integer,
+        // and an interpolated instance index is a row somewhere between
+        // two objects.
+        let _ = writeln!(
+            out,
+            "    @location({location}) @interpolate(flat) {}: u32,",
+            abi::INSTANCE_INDEX_FIELD,
+        );
+    }
+    for attribute in geometry.vertex() {
+        let _ = writeln!(
+            out,
+            "    @location({}) {}: {},",
+            attribute.varying,
+            attribute.name,
+            attribute.ty.wxsl_type(),
+        );
+    }
+    out
+}
+
+/// The IO structs a material with declared attributes needs, beside the
+/// ABI's own.
+fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
+    if geometry.is_empty() {
+        return;
+    }
+    out.push('\n');
+    if !geometry.vertex().is_empty() {
+        let _ = writeln!(out, "struct {} {{", abi::MATERIAL_VERTEX_IN_STRUCT);
+        for attribute in geometry.vertex() {
+            let _ = writeln!(
+                out,
+                "    @location({}) {}: {},",
+                attribute.location,
+                attribute.name,
+                attribute.ty.wxsl_type(),
+            );
+        }
+        out.push_str("}\n");
+    }
+    // An entry point returns one value, so this is the one struct that
+    // cannot be split into "the ABI's half" and "the material's half". Its
+    // base half is written from `abi::VERTEX_OUT_FIELDS`, which is also
+    // what `vertex.wxsl` declares — the table is the agreement.
+    let _ = writeln!(out, "struct {} {{", abi::MATERIAL_VERTEX_OUT_STRUCT);
+    let _ = writeln!(
+        out,
+        "    @builtin(position) {}: vec4f,",
+        abi::CLIP_POSITION_FIELD
+    );
+    for (location, field) in abi::VERTEX_OUT_FIELDS.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "    @location({location}) {}: {},",
+            field.name,
+            field.ty.wxsl_type()
+        );
+    }
+    out.push_str(&extra_varyings(geometry));
+    out.push_str("}\n");
+
+    // The fragment side takes two parameters instead, so the ABI's own
+    // `VertexOut` still arrives unchanged and `surface_context` needs no
+    // widening at all.
+    let _ = writeln!(out, "struct {} {{", abi::MATERIAL_VARYINGS_STRUCT);
+    out.push_str(&extra_varyings(geometry));
+    out.push_str("}\n");
 }
 
 /// Emit the vertex entry, and the fragment entry this stage calls for.
@@ -755,36 +931,112 @@ fn write_declarations(out: &mut String, interface: &MaterialInterface) {
 /// the fragment stage does with the surface, never in how geometry is
 /// transformed — so a stage with no fragment entry is a complete,
 /// depth-writing shader on its own.
-fn write_entry_points(out: &mut String, options: &CodegenOptions) {
-    let _ = write!(
-        out,
-        "
+fn write_entry_points(out: &mut String, options: &CodegenOptions, interface: &MaterialInterface) {
+    let geometry = &interface.geometry;
+    write_geometry_io(out, geometry);
+    if geometry.is_empty() {
+        let _ = write!(
+            out,
+            "
 @vertex
 fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
     return {transform}(input);
 }}
 ",
-        vertex = options.vertex_entry,
-        vertex_in = abi::VERTEX_IN_STRUCT,
-        vertex_out = abi::VERTEX_OUT_STRUCT,
-        transform = abi::TRANSFORM_VERTEX_FN,
-    );
+            vertex = options.vertex_entry,
+            vertex_in = abi::VERTEX_IN_STRUCT,
+            vertex_out = abi::VERTEX_OUT_STRUCT,
+            transform = abi::TRANSFORM_VERTEX_FN,
+        );
+    } else {
+        let extra_param = if geometry.vertex().is_empty() {
+            String::new()
+        } else {
+            format!(", extra: {}", abi::MATERIAL_VERTEX_IN_STRUCT)
+        };
+        let _ = write!(
+            out,
+            "
+@vertex
+fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
+    let base = {transform}(input);
+    var out: {vertex_out};
+",
+            vertex = options.vertex_entry,
+            vertex_in = abi::VERTEX_IN_STRUCT,
+            vertex_out = abi::MATERIAL_VERTEX_OUT_STRUCT,
+            transform = abi::TRANSFORM_VERTEX_FN,
+        );
+        let _ = writeln!(
+            out,
+            "    out.{field} = base.{field};",
+            field = abi::CLIP_POSITION_FIELD
+        );
+        for field in abi::VERTEX_OUT_FIELDS {
+            let _ = writeln!(out, "    out.{name} = base.{name};", name = field.name);
+        }
+        if geometry.instance_index_location().is_some() {
+            let _ = writeln!(
+                out,
+                "    out.{} = input.instance;",
+                abi::INSTANCE_INDEX_FIELD
+            );
+        }
+        for attribute in geometry.vertex() {
+            let _ = writeln!(out, "    out.{name} = extra.{name};", name = attribute.name);
+        }
+        out.push_str("    return out;\n}\n");
+    }
 
     let stage = options.stage;
     let Some(fragment) = stage.fragment_entry() else {
         return;
     };
+    // Unpacking the extras into a plain struct, rather than handing the
+    // IO struct itself to the material function: the material function is
+    // ordinary code, and an entry-point IO type is not the shape to make
+    // it depend on.
+    let (params, unpack, args) = if geometry.is_empty() {
+        (String::new(), String::new(), String::new())
+    } else {
+        let mut unpack = format!(
+            "    var {var}: {ty};\n",
+            var = abi::MATERIAL_ATTRIBUTES_VAR,
+            ty = abi::MATERIAL_ATTRIBUTES_STRUCT,
+        );
+        if geometry.instance_index_location().is_some() {
+            let _ = writeln!(
+                unpack,
+                "    {var}.{field} = extra.{field};",
+                var = abi::MATERIAL_ATTRIBUTES_VAR,
+                field = abi::INSTANCE_INDEX_FIELD,
+            );
+        }
+        for attribute in geometry.vertex() {
+            let _ = writeln!(
+                unpack,
+                "    {var}.{name} = extra.{name};",
+                var = abi::MATERIAL_ATTRIBUTES_VAR,
+                name = attribute.name,
+            );
+        }
+        (
+            format!(", extra: {}", abi::MATERIAL_VARYINGS_STRUCT),
+            unpack,
+            format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
+        )
+    };
     let body = match stage.output() {
         abi::StageOutput::Color => format!(
-            "-> @location(0) vec4f {{\n    let ctx = {context}(vertex);\n    \
-             return {shade}({material}(ctx), ctx);\n}}\n",
+            "-> @location(0) vec4f {{\n    let ctx = {context}(vertex);\n{unpack}    \
+             return {shade}({material}(ctx{args}), ctx);\n}}\n",
             context = abi::SURFACE_CONTEXT_FN,
             shade = abi::SHADE_SURFACE_FN,
             material = options.material_fn,
         ),
         abi::StageOutput::GBuffer => format!(
-            "-> {gbuffer} {{\n    let ctx = {context}(vertex);\n    \
-             return {pack}({material}(ctx));\n}}\n",
+            "-> {gbuffer} {{\n    let ctx = {context}(vertex);\n{unpack}    \
+             return {pack}({material}(ctx{args}));\n}}\n",
             gbuffer = abi::GBUFFER_STRUCT,
             context = abi::SURFACE_CONTEXT_FN,
             material = options.material_fn,
@@ -797,7 +1049,7 @@ fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
     };
     let _ = write!(
         out,
-        "\n@fragment\nfn {fragment}(vertex: {vertex_out}) {body}",
+        "\n@fragment\nfn {fragment}(vertex: {vertex_out}{params}) {body}",
         vertex_out = abi::VERTEX_OUT_STRUCT,
     );
 }

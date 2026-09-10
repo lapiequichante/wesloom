@@ -39,12 +39,17 @@
 //!
 //! A struct's alignment is the largest of its members', rounded up to 16 in
 //! the uniform address space; its size is the end of its last member
-//! rounded up to that alignment.
+//! rounded up to that alignment. The *storage* address space is the same
+//! table without that round-up, which is the only difference between
+//! [`BufferLayout::uniform`] and [`BufferLayout::storage`] — and the whole
+//! change the widened instance row needed
+//! ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 
 use core::fmt;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::abi;
 use crate::node::{Value, ValueType};
 use crate::wxsl::WxslIdent;
 
@@ -129,46 +134,38 @@ impl BufferLayout {
     /// keeps this function total.
     pub fn uniform(fields: impl IntoIterator<Item = (WxslIdent, ValueType)>) -> Self {
         let mut entries: Vec<(WxslIdent, ValueType)> = fields.into_iter().collect();
-        entries.sort_by(|(a_name, a_ty), (b_name, b_ty)| {
-            // Widest alignment first, so nothing is padded that need not
-            // be; then by name, so the order is a property of the
-            // declarations rather than of the order they were walked in.
-            b_ty.buffer_align()
-                .cmp(&a_ty.buffer_align())
-                .then_with(|| a_name.as_str().cmp(b_name.as_str()))
-        });
+        sort_by_alignment(&mut entries);
         entries.dedup_by(|(a, _), (b, _)| a == b);
-
-        let mut laid_out = Vec::with_capacity(entries.len());
-        let mut offset = 0u32;
-        let mut align = 0u32;
-        for (name, ty) in entries {
-            let (Some(field_align), Some(size)) = (ty.buffer_align(), ty.buffer_size()) else {
-                // A resource is not a buffer field. It reaches here only
-                // from a caller that ignored `ValueType::is_resource`.
-                continue;
-            };
-            offset = round_up(field_align, offset);
-            laid_out.push(FieldLayout {
-                name,
-                ty,
-                offset,
-                size,
-            });
-            offset += size;
-            align = align.max(field_align);
-        }
-        if laid_out.is_empty() {
-            return BufferLayout::default();
-        }
         // A struct in the uniform address space aligns to at least 16, and
         // `wgpu` wants the binding size to be a multiple of 16 too.
-        let align = align.max(16);
-        BufferLayout {
-            fields: laid_out,
-            size: round_up(align, offset),
-            align,
-        }
+        lay_out(entries, 16)
+    }
+
+    /// Lay `prefix` out first, in the order given, then `fields` under
+    /// WGSL's **storage** address space rules.
+    ///
+    /// Two differences from [`BufferLayout::uniform`], and only two.
+    /// A storage struct's alignment is the largest of its members' and is
+    /// *not* rounded up to 16. And `prefix` keeps its declaration order
+    /// ahead of everything else, because it is ABI: the widened instance
+    /// row begins with the model and normal matrices whatever a material
+    /// appends, and a declared attribute that happened to sort in front of
+    /// `model` would move the transform out from under the vertex stage
+    /// that reads it through the narrow struct.
+    pub fn storage(
+        prefix: impl IntoIterator<Item = (WxslIdent, ValueType)>,
+        fields: impl IntoIterator<Item = (WxslIdent, ValueType)>,
+    ) -> Self {
+        let prefix: Vec<(WxslIdent, ValueType)> = prefix.into_iter().collect();
+        let mut rest: Vec<(WxslIdent, ValueType)> = fields
+            .into_iter()
+            .filter(|(name, _)| !prefix.iter().any(|(taken, _)| taken == name))
+            .collect();
+        sort_by_alignment(&mut rest);
+        let mut entries = prefix;
+        entries.extend(rest);
+        entries.dedup_by(|(a, _), (b, _)| a == b);
+        lay_out(entries, 0)
     }
 
     /// The fields, in layout order.
@@ -361,6 +358,52 @@ impl BufferLayout {
     }
 }
 
+/// Widest alignment first, then by name.
+///
+/// Deterministic, so two runs over the same graph produce the same offsets
+/// and the same variant key, and tight, so the `f32`-then-`vec3f` case
+/// costs nothing rather than wasting 12 bytes.
+fn sort_by_alignment(entries: &mut [(WxslIdent, ValueType)]) {
+    entries.sort_by(|(a_name, a_ty), (b_name, b_ty)| {
+        b_ty.buffer_align()
+            .cmp(&a_ty.buffer_align())
+            .then_with(|| a_name.as_str().cmp(b_name.as_str()))
+    });
+}
+
+/// Assign offsets to `entries` in the order given, with the struct's
+/// alignment at least `min_align`.
+fn lay_out(entries: Vec<(WxslIdent, ValueType)>, min_align: u32) -> BufferLayout {
+    let mut laid_out = Vec::with_capacity(entries.len());
+    let mut offset = 0u32;
+    let mut align = 0u32;
+    for (name, ty) in entries {
+        let (Some(field_align), Some(size)) = (ty.buffer_align(), ty.buffer_size()) else {
+            // A resource is not a buffer field. It reaches here only from
+            // a caller that ignored `ValueType::is_resource`.
+            continue;
+        };
+        offset = round_up(field_align, offset);
+        laid_out.push(FieldLayout {
+            name,
+            ty,
+            offset,
+            size,
+        });
+        offset += size;
+        align = align.max(field_align);
+    }
+    if laid_out.is_empty() {
+        return BufferLayout::default();
+    }
+    let align = align.max(min_align);
+    BufferLayout {
+        fields: laid_out,
+        size: round_up(align, offset),
+        align,
+    }
+}
+
 /// A texture or a sampler the material declares, and where it is bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceBinding {
@@ -396,6 +439,165 @@ impl UserBlock {
     }
 }
 
+/// One per-vertex attribute a material declares, and every number that
+/// follows from it.
+///
+/// Three of them, because a declared attribute lands in three places: a
+/// `@location` in the vertex entry's second parameter, a vertex buffer
+/// slot the mesh's stream is bound at, and a `@location` in the extended
+/// varyings that carry it to the fragment stage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VertexAttributeBinding {
+    /// The name the graph gave it, which is also the name of the mesh
+    /// stream that must supply it.
+    pub name: WxslIdent,
+    /// Its type. Never a resource, never a matrix, never an integer:
+    /// `Graph::validate` has already had its say.
+    pub ty: ValueType,
+    /// `@location` in `abi::MATERIAL_VERTEX_IN_STRUCT`, numbered upwards
+    /// from `abi::VERTEX_IN_FIELDS.len()`.
+    pub location: u32,
+    /// Which vertex buffer slot the mesh's stream is bound at. Slot 0 is
+    /// the base interleaved vertex, so these start at 1.
+    pub slot: u32,
+    /// `@location` in `abi::MATERIAL_VERTEX_OUT_STRUCT` and
+    /// `abi::MATERIAL_VARYINGS_STRUCT`.
+    pub varying: u32,
+}
+
+/// What a material requires of the *geometry* it is drawn on: per-vertex
+/// streams the mesh must carry, and per-instance fields the draw must
+/// supply.
+///
+/// The mirror image of [`MaterialInterface`]'s other three declarations. A
+/// uniform parameter is something the material owns and fills; an
+/// attribute is something it *requires*, exactly as the application's block
+/// is — so it gets the same declare-then-validate shape, and a mesh that
+/// cannot supply one is a named error rather than a frame that looks wrong
+/// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GeometryInterface {
+    vertex: Vec<VertexAttributeBinding>,
+    instance: BufferLayout,
+    instance_index_location: Option<u32>,
+}
+
+impl GeometryInterface {
+    /// Number the declared attributes.
+    ///
+    /// Both sets are taken in name order, not declaration order: a
+    /// location that moved because somebody reordered a list is a
+    /// repipeline and a re-upload for no visible change.
+    pub fn new(
+        vertex: impl IntoIterator<Item = (WxslIdent, ValueType)>,
+        instance: impl IntoIterator<Item = (WxslIdent, ValueType)>,
+    ) -> Self {
+        let instance = BufferLayout::storage([], instance);
+
+        // The index first, so adding one more per-vertex attribute never
+        // moves it — and it is the varying every instance attribute
+        // shares, so it is the one worth pinning.
+        let base_varying = abi::VERTEX_OUT_FIELDS.len() as u32;
+        let instance_index_location = (!instance.is_empty()).then_some(base_varying);
+        let first_extra = base_varying + u32::from(instance_index_location.is_some());
+
+        let mut declared: Vec<(WxslIdent, ValueType)> = vertex.into_iter().collect();
+        declared.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        declared.dedup_by(|(a, _), (b, _)| a == b);
+        let vertex = declared
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, ty))| VertexAttributeBinding {
+                name,
+                ty,
+                location: abi::VERTEX_IN_FIELDS.len() as u32 + index as u32,
+                slot: 1 + index as u32,
+                varying: first_extra + index as u32,
+            })
+            .collect();
+
+        GeometryInterface {
+            vertex,
+            instance,
+            instance_index_location,
+        }
+    }
+
+    /// The per-vertex attributes, in location order.
+    pub fn vertex(&self) -> &[VertexAttributeBinding] {
+        &self.vertex
+    }
+
+    /// Look one up by name.
+    pub fn vertex_attribute(&self, name: &str) -> Option<&VertexAttributeBinding> {
+        self.vertex.iter().find(|entry| entry.name.as_str() == name)
+    }
+
+    /// One row of the declared per-instance attributes, at
+    /// `abi::BINDING_INSTANCE_ATTRIBUTES`. Empty when the graph declares
+    /// none, and then there is no buffer.
+    ///
+    /// Not the transform: that is `abi::INSTANCE_BASE_FIELDS` at
+    /// `abi::BINDING_INSTANCES`, ABI-fixed and mirrored in Rust. Two
+    /// arrays indexed by the same instance index, so neither has to know
+    /// the other's stride.
+    pub fn instance(&self) -> &BufferLayout {
+        &self.instance
+    }
+
+    /// The declared per-instance attributes, in layout order.
+    pub fn instance_attributes(&self) -> &[FieldLayout] {
+        self.instance.fields()
+    }
+
+    /// `@location` the flat instance index travels at, or `None` when
+    /// nothing needs it.
+    pub fn instance_index_location(&self) -> Option<u32> {
+        self.instance_index_location
+    }
+
+    /// Whether the material declares nothing at all, and so wants exactly
+    /// the geometry every material has always wanted.
+    pub fn is_empty(&self) -> bool {
+        self.vertex.is_empty() && self.instance.is_empty()
+    }
+
+    /// How many of `abi::MAX_VARYING_LOCATIONS` this material spends.
+    ///
+    /// The accountant: base varyings, the instance index if it travels,
+    /// and one per declared per-vertex attribute. Reported rather than
+    /// discovered, so overrunning the budget is a named error and not a
+    /// shader-compiler complaint about location 16.
+    pub fn varyings_used(&self) -> usize {
+        abi::VERTEX_OUT_FIELDS.len()
+            + usize::from(self.instance_index_location.is_some())
+            + self.vertex.len()
+    }
+
+    /// A stable description of the shape, for a cache key.
+    pub fn signature(&self) -> String {
+        let mut out = String::new();
+        for attribute in &self.vertex {
+            let _ = write!(
+                out,
+                "{}:{}@{};",
+                attribute.name, attribute.ty, attribute.location
+            );
+        }
+        out.push('/');
+        out.push_str(&self.instance.signature());
+        out
+    }
+}
+
+impl Default for GeometryInterface {
+    /// The base geometry: no declared attributes, and an instance row that
+    /// is exactly `abi::INSTANCE_BASE_FIELDS`.
+    fn default() -> Self {
+        GeometryInterface::new([], [])
+    }
+}
+
 /// Everything a material needs bound before it can draw.
 ///
 /// Computed from the *reachable* part of the graph, so a half-finished
@@ -423,6 +625,14 @@ pub struct MaterialInterface {
     pub resources: Vec<ResourceBinding>,
     /// The block the application supplies, if the graph declares one.
     pub user: Option<UserBlock>,
+    /// What the material requires of the geometry it is drawn on.
+    ///
+    /// Unlike the three above it, this is not a bind group: it is a vertex
+    /// buffer layout and a storage-buffer stride. It sits here anyway
+    /// because it is the same kind of statement — "this will not draw
+    /// until you supply that" — and because a caller that has the
+    /// interface should not need a second call to find out.
+    pub geometry: GeometryInterface,
 }
 
 impl MaterialInterface {
@@ -455,6 +665,11 @@ impl MaterialInterface {
         out.push(']');
         if let Some(user) = &self.user {
             let _ = write!(out, "user[{}:{}]", user.name, user.layout.signature());
+        }
+        // Not a bind group, but a pipeline *is* built per vertex layout,
+        // so it belongs in the same key rather than in one of its own.
+        if !self.geometry.is_empty() {
+            let _ = write!(out, "geom[{}]", self.geometry.signature());
         }
         out
     }
@@ -521,6 +736,125 @@ fn round_up(align: u32, value: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_storage_address_space_does_not_round_a_struct_up_to_sixteen() {
+        // The one difference between the two address spaces, and the
+        // whole change the second customer of this code needed. A uniform
+        // block of one `f32` is 16 bytes because WGSL says so; a storage
+        // row of one `f32` is 4, and a row that claimed 16 would put every
+        // instance after the first at the wrong offset.
+        let one = |name: &str, ty| vec![(WxslIdent::new(name).expect("valid"), ty)];
+        let uniform = BufferLayout::uniform(one("amount", ValueType::F32));
+        let storage = BufferLayout::storage([], one("amount", ValueType::F32));
+        assert_eq!(uniform.size(), 16);
+        assert_eq!(storage.size(), 4);
+        assert_eq!(storage.align(), 4);
+        assert_eq!(storage.field("amount").expect("declared").offset, 0);
+    }
+
+    #[test]
+    fn a_storage_prefix_keeps_its_place_whatever_sorts_in_front_of_it() {
+        // The prefix is ABI and the rest is sorted, so a field whose name
+        // sorts before the prefix's must not overtake it.
+        let ident = |name: &str| WxslIdent::new(name).expect("valid");
+        let layout = BufferLayout::storage(
+            [(ident("model"), ValueType::Mat4)],
+            [
+                (ident("aaa"), ValueType::Mat4),
+                (ident("zzz"), ValueType::F32),
+            ],
+        );
+        let names: Vec<&str> = layout
+            .fields()
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, ["model", "aaa", "zzz"]);
+        assert_eq!(layout.field("model").expect("declared").offset, 0);
+    }
+
+    #[test]
+    fn declaring_nothing_is_the_geometry_every_material_always_had() {
+        let geometry = GeometryInterface::default();
+        assert!(geometry.is_empty());
+        assert!(geometry.vertex().is_empty());
+        // No attribute row at all, so nothing to upload and nothing to
+        // pass down: a material that asks nothing of its geometry costs
+        // nothing.
+        assert!(geometry.instance().is_empty());
+        assert_eq!(geometry.instance_index_location(), None);
+        assert_eq!(geometry.varyings_used(), abi::VERTEX_OUT_FIELDS.len());
+    }
+
+    #[test]
+    fn the_instance_index_travels_once_however_many_attributes() {
+        // The reason the *index* goes down the pipe rather than the
+        // values: one inter-stage location covers any number of them.
+        let ident = |name: &str| WxslIdent::new(name).expect("valid");
+        let one = GeometryInterface::new([], [(ident("tint"), ValueType::Vec3)]);
+        let many = GeometryInterface::new(
+            [],
+            [
+                (ident("tint"), ValueType::Vec3),
+                (ident("age"), ValueType::F32),
+                (ident("phase"), ValueType::Vec2),
+            ],
+        );
+        assert_eq!(one.varyings_used(), many.varyings_used());
+        assert_eq!(one.varyings_used(), abi::VERTEX_OUT_FIELDS.len() + 1);
+        assert_eq!(
+            many.instance_index_location(),
+            Some(abi::VERTEX_OUT_FIELDS.len() as u32)
+        );
+    }
+
+    #[test]
+    fn a_vertex_attribute_is_numbered_in_three_places_at_once() {
+        // A location in the vertex entry, a buffer slot to bind at, and a
+        // location in the varyings — three numbers that have to agree
+        // between codegen, the pipeline and the mesh, so they are decided
+        // once here.
+        let ident = |name: &str| WxslIdent::new(name).expect("valid");
+        let geometry = GeometryInterface::new(
+            [
+                (ident("weight"), ValueType::F32),
+                (ident("color"), ValueType::Vec4),
+            ],
+            [(ident("tint"), ValueType::Vec3)],
+        );
+        // Name order, not declaration order: reordering the list must not
+        // renumber anything.
+        let color = geometry.vertex_attribute("color").expect("declared");
+        let weight = geometry.vertex_attribute("weight").expect("declared");
+        assert_eq!(color.location, abi::VERTEX_IN_FIELDS.len() as u32);
+        assert_eq!(color.slot, 1);
+        assert_eq!(weight.location, color.location + 1);
+        assert_eq!(weight.slot, 2);
+        // The index is pinned in front of them, so adding a per-vertex
+        // attribute never moves it.
+        assert_eq!(
+            geometry.instance_index_location(),
+            Some(abi::VERTEX_OUT_FIELDS.len() as u32)
+        );
+        assert_eq!(color.varying, abi::VERTEX_OUT_FIELDS.len() as u32 + 1);
+    }
+
+    #[test]
+    fn what_the_geometry_wants_is_part_of_the_shape_a_pipeline_is_built_for() {
+        // Not a bind group, but a vertex buffer layout — so two materials
+        // that differ only there must not share a pipeline.
+        let ident = |name: &str| WxslIdent::new(name).expect("valid");
+        let plain = MaterialInterface::default();
+        let declaring = MaterialInterface {
+            geometry: GeometryInterface::new([(ident("color"), ValueType::Vec3)], []),
+            ..MaterialInterface::default()
+        };
+        assert_ne!(plain.signature(), declaring.signature());
+        // And declaring nothing leaves the signature exactly as it was
+        // before there was such a thing as a declared attribute.
+        assert!(!plain.signature().contains("geom"));
+    }
+
     use super::*;
 
     fn ident(name: &str) -> WxslIdent {

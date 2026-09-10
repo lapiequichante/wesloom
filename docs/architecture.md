@@ -293,6 +293,18 @@ point of all of it:
   application hands back a `BindGroup`. `wgpu` checks that they agree, so
   there is no validation of ours to keep in sync.
 
+A fourth thing it can ask for does not come in through a bind group at
+all:
+
+* **Attributes the geometry supplies** (`Graph::attributes`, read by
+  `input.attribute`). Per vertex, and the mesh must carry a stream of that
+  name; or per instance, and the draw must supply a value. Which of the
+  two is part of the *declaration* and not of the reading node, so moving
+  an attribute between them rewires nothing. A mesh or a draw that cannot
+  supply one is an error naming the material, the attribute and the mesh
+  — reported while the frame is compiled, before a pass is opened.
+  [ADR 0024](adr/0024-a-material-declares-the-geometry-it-requires.md).
+
 Each declaring node carries a **setting** — a string the node instance
 holds that names the thing it declares. A setting is not a label: renaming
 a `param.value` renames the uniform.
@@ -304,9 +316,24 @@ fields are whatever the graph declared.
 uniform rules — a `vec3f` aligns to 16 and occupies 12, a `mat3x3f` is
 three columns each padded to 16 — and it is the *only* thing that knows
 them: the shader's struct is generated from it, and the host writes
-through it. `crates/wxsl/tests/material_resources.rs` checks the result on
-a GPU at every type, which is what replaces the mirror test everything
-else here gets.
+through it. It has two customers: the parameter buffer, and the row of
+declared per-instance attributes, which differs only in that the storage
+address space does not round a struct's alignment up to 16.
+`crates/wxsl/tests/material_resources.rs` and `material_geometry.rs` run
+one probe graph over both, on a GPU, at every type — which is what
+replaces the mirror test everything else here gets.
+
+**Where a declared attribute lands.** A per-vertex one is a vertex buffer
+of its own at slot 1 and up, matched to the mesh's stream *by name*; four
+of them is the budget, because WebGPU guarantees eight slots and the base
+vertex takes one. A per-instance one is a row of a second storage array in
+the frame group, beside the transform array rather than inside it: the
+transform array is ABI and the hand-written vertex stage reads it at that
+stride, so widening it would move every field out from under code that
+cannot know it moved. Both arrays are indexed by the same
+`@builtin(instance_index)` — which WGSL offers in the vertex stage only,
+so one `@interpolate(flat) u32` varying carries it down and the fragment
+stage re-indexes. One location, however many attributes.
 
 ## Macro variables
 

@@ -19,6 +19,14 @@
 //! * **Indices**, when absent, are generated as `0..vertex_count`.
 //! * Only triangles. A points or lines primitive is skipped rather than
 //!   reinterpreted.
+//! * **`COLOR_0` and `TEXCOORD_1`** come across as *named streams*
+//!   ([`COLOR_ATTRIBUTE`], [`UV1_ATTRIBUTE`]) rather than as fields of
+//!   [`Vertex`]. They are what a material *may* declare and most do not,
+//!   which is exactly the shape a declared per-vertex attribute has
+//!   ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+//!   Nothing else is: joints and weights want a skinning stage that does
+//!   not exist yet, and inventing a name for every semantic a file might
+//!   carry is a vocabulary nobody agreed to.
 //!
 //! Node transforms *are* applied: a glTF mesh is authored in its node's
 //! space, and a file whose parts land on top of each other is not an
@@ -27,7 +35,13 @@
 use glam::{Mat4, Vec2, Vec3};
 
 use crate::error::RenderError;
-use crate::mesh::{MeshData, Vertex};
+use crate::mesh::{AttributeValues, MeshData, Vertex};
+
+/// Name a glTF `COLOR_0` stream is imported under, and therefore the name
+/// a graph declares to read it.
+pub const COLOR_ATTRIBUTE: &str = "color";
+/// Name a glTF `TEXCOORD_1` stream is imported under.
+pub const UV1_ATTRIBUTE: &str = "uv1";
 
 /// Read every triangle primitive of a glTF or GLB file, in depth-first node
 /// order, each in world space.
@@ -144,7 +158,27 @@ fn read_primitive(
             uv: uvs.get(index).copied().unwrap_or(Vec2::ZERO).to_array(),
         })
         .collect();
-    Some(MeshData::new(vertices, indices))
+    let mut data = MeshData::new(vertices, indices);
+
+    // Always `vec4f`, whatever the file stored: glTF allows RGB or RGBA at
+    // three precisions, `into_rgba_f32` normalizes all six, and a material
+    // that declared `color` should not have to have been authored against
+    // one particular exporter.
+    if let Some(colors) = reader.read_colors(0) {
+        let values: Vec<[f32; 4]> = colors.into_rgba_f32().collect();
+        if values.len() == positions.len() {
+            data.attributes
+                .insert(COLOR_ATTRIBUTE.to_string(), AttributeValues::Vec4(values));
+        }
+    }
+    if let Some(coords) = reader.read_tex_coords(1) {
+        let values: Vec<[f32; 2]> = coords.into_f32().collect();
+        if values.len() == positions.len() {
+            data.attributes
+                .insert(UV1_ATTRIBUTE.to_string(), AttributeValues::Vec2(values));
+        }
+    }
+    Some(data)
 }
 
 /// Face normals accumulated onto their vertices, then normalized.

@@ -10,7 +10,7 @@
     "",
     "Node ids are stable and edges refer to them, so nodes can be added and",
     "removed without renumbering anything. `label` and `color` are this",
-    "node's own \u2014 every node is the same colour until one says otherwise, so",
+    "node's own — every node is the same colour until one says otherwise, so",
     "a colour marks what a part of the graph is *for* (the two nodes making",
     "the ember glow below are warm) rather than restating what kind of node",
     "it is. `params` are the values on inputs",
@@ -19,13 +19,13 @@
     "adapt to whatever they carry, e.g. `math.add` instead of a separate",
     "`math.add.f32`/`.vec3f`/... per type) has resolved to, keyed by the",
     "parameter's name (`T` where one type is shared by every socket).",
-    "The operators whose operands WGSL lets differ \u2014 `+`, `-`, `*`, `/`,",
+    "The operators whose operands WGSL lets differ — `+`, `-`, `*`, `/`,",
     "`%` all spread a scalar over a vector's components, and `*` also",
-    "multiplies a matrix by a vector \u2014 declare two parameters, `A` and `B`,",
+    "multiplies a matrix by a vector — declare two parameters, `A` and `B`,",
     "resolved separately, with the output derived from both; those nodes",
     "pin both (see ADR 0018).",
     "`wxsl_core::graph::Graph::connect` resolves all of this automatically",
-    "as a graph is *built* \u2014 but a file like this one is loaded as a whole,",
+    "as a graph is *built* — but a file like this one is loaded as a whole,",
     "edges and all, never through `connect`, so every generic node spells",
     "its resolution out explicitly instead of leaving it to be inferred",
     "from its edges.",
@@ -34,7 +34,7 @@
     "what it compiles to rather than how it looks: a `param.value`'s `name`",
     "is the uniform's identity, and a `texture.*` node's is what the host",
     "binds it by. A `param` is a field of the material's uniform buffer, so",
-    "the host changes `tint` with a buffer write and no recompile \u2014 unlike",
+    "the host changes `tint` with a buffer write and no recompile — unlike",
     "the `const.value` above it, which is inlined and costs a new variant",
     "(ADR 0023)."
   ],
@@ -405,6 +405,26 @@
         1300.0,
         560.0
       ]
+    },
+    {
+      "id": 25,
+      "def": "input.attribute",
+      "settings": {
+        "name": "instance_tint"
+      },
+      "generics": {
+        "T": "vec3"
+      },
+      "label": "per-instance tint"
+    },
+    {
+      "id": 26,
+      "def": "math.multiply",
+      "generics": {
+        "A": "vec3",
+        "B": "vec3"
+      },
+      "label": "x instance"
     }
   ],
   "edges": [
@@ -674,9 +694,36 @@
         "socket": "out"
       },
       "to": {
+        "node": 26,
+        "socket": "a"
+      }
+    },
+    {
+      "from": {
+        "node": 25,
+        "socket": "out"
+      },
+      "to": {
+        "node": 26,
+        "socket": "b"
+      }
+    },
+    {
+      "from": {
+        "node": 26,
+        "socket": "out"
+      },
+      "to": {
         "node": 15,
         "socket": "base_color"
       }
+    }
+  ],
+  "attributes": [
+    {
+      "name": "instance_tint",
+      "ty": "vec3",
+      "frequency": "instance"
     }
   ]
 }

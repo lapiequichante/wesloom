@@ -12,9 +12,9 @@ use std::collections::BTreeMap;
 use wxsl::core::abi;
 use wxsl::core::abi::MaterialStage;
 use wxsl::core::codegen;
-use wxsl::core::graph::{Graph, Node, NodeId, UserBlockDecl, UserField};
+use wxsl::core::graph::{AttributeDecl, Graph, Node, NodeId, UserBlockDecl, UserField};
 use wxsl::core::macros::{MacroSet, MacroValue};
-use wxsl::core::node::{NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
+use wxsl::core::node::{self, NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 
@@ -275,6 +275,18 @@ fn graph_using(
     if matches!(def.body, NodeBody::UserRead) {
         let ty = graph.effective_type(node, def.outputs.first()?)?;
         graph.set_setting(node, "field", format!("value_{}", ty.suffix()));
+    }
+    // Same again for `input.attribute`, whose type also comes from the
+    // document — and which the *frequency* also comes from, so this
+    // covers both backings across the type set. Per-instance, because a
+    // vertex buffer cannot carry every type and this loop wants them all;
+    // the per-vertex half is covered on hardware in
+    // `material_geometry.rs`.
+    if matches!(def.body, NodeBody::AttributeRead) {
+        let ty = graph.effective_type(node, def.outputs.first()?)?;
+        let name = format!("value_{}", ty.suffix());
+        graph.declare_attribute(AttributeDecl::instance(&name, ty));
+        graph.set_setting(node, node::SETTING_NAME, name);
     }
     // A generic input has no *fixed* default (see `Socket::generic`), only
     // possibly a scalar to spread over the type just resolved; anything

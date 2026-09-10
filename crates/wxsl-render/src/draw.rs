@@ -12,13 +12,63 @@
 //! by file, and resolving a file is an I/O decision an engine makes rather
 //! than a renderer.
 
+use std::collections::BTreeMap;
+
 use glam::Mat4;
+use wxsl_core::node::Value;
 use wxsl_core::scene::{TagExpr, Tags};
 
 use crate::bindings::MaterialBindings;
-use crate::environment::InstanceTransform;
+use crate::environment::{InstanceRows, InstanceTransform};
+use crate::error::RenderError;
 use crate::material::Material;
 use crate::mesh::Mesh;
+
+/// The per-instance attributes one draw supplies, by name.
+///
+/// The other half of a declared per-instance attribute: the graph says
+/// what it needs and at what type, and this is where the value for *this
+/// object* comes from. It sits beside the transform because that is
+/// exactly what it is — one more field of the same row
+/// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InstanceAttributes {
+    values: BTreeMap<String, Value>,
+}
+
+impl InstanceAttributes {
+    /// Nothing supplied — what a draw of a material declaring none uses.
+    pub const EMPTY: &'static InstanceAttributes = &InstanceAttributes {
+        values: BTreeMap::new(),
+    };
+
+    /// An empty set.
+    pub fn new() -> Self {
+        InstanceAttributes::default()
+    }
+
+    /// Supply `name`.
+    pub fn set(&mut self, name: impl Into<String>, value: Value) -> &mut Self {
+        self.values.insert(name.into(), value);
+        self
+    }
+
+    /// Supply `name`, by value, for building one inline.
+    pub fn with(mut self, name: impl Into<String>, value: Value) -> Self {
+        self.values.insert(name.into(), value);
+        self
+    }
+
+    /// What was supplied for `name`.
+    pub fn get(&self, name: &str) -> Option<Value> {
+        self.values.get(name).copied()
+    }
+
+    /// Whether nothing was supplied.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
 
 /// One thing to draw.
 ///
@@ -55,6 +105,11 @@ pub struct DrawItem<'a> {
     /// to keep in sync
     /// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
     pub user: Option<&'a wgpu::BindGroup>,
+    /// The per-instance attributes this draw supplies.
+    ///
+    /// Required whenever the material declares one, and checked when the
+    /// frame is compiled rather than read as zeroes.
+    pub attributes: &'a InstanceAttributes,
 }
 
 impl<'a> DrawItem<'a> {
@@ -67,6 +122,7 @@ impl<'a> DrawItem<'a> {
             tags: Tags::EMPTY,
             bindings: None,
             user: None,
+            attributes: InstanceAttributes::EMPTY,
         }
     }
 
@@ -96,7 +152,14 @@ impl<'a> DrawItem<'a> {
         self
     }
 
-    /// The row this draw contributes to the frame's instance buffer.
+    /// Supply the per-instance attributes the material declares.
+    pub fn with_attributes(mut self, attributes: &'a InstanceAttributes) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    /// The transform half of the row this draw contributes to the frame's
+    /// instance buffer.
     pub fn instance(&self) -> InstanceTransform {
         InstanceTransform::new(self.transform)
     }
@@ -155,6 +218,54 @@ impl<'a> DrawList<'a> {
     /// Every draw's transform, in instance-buffer order.
     pub fn transforms(&self) -> Vec<InstanceTransform> {
         self.items.iter().map(DrawItem::instance).collect()
+    }
+
+    /// Every draw's declared per-instance attributes, grouped by the row
+    /// shape its material asked for.
+    ///
+    /// The transform is not in here: that array is ABI and
+    /// [`DrawList::transforms`] builds it. What is here is written
+    /// *through the computed layout*, never as a `#[repr(C)]` memcpy,
+    /// because there is no Rust struct to memcpy from.
+    ///
+    /// A draw that does not supply an attribute its material declares is
+    /// an error here, before a pass is opened, naming the material, the
+    /// attribute and the draw.
+    pub fn instance_rows(&self) -> Result<InstanceRows, RenderError> {
+        let mut rows = InstanceRows::new();
+        if self.items.is_empty() {
+            return Ok(rows);
+        }
+        for item in &self.items {
+            rows.reserve(item.material.instance_layout(), self.items.len());
+        }
+        for (index, item) in self.items.iter().enumerate() {
+            let layout = item.material.instance_layout().clone();
+            if layout.is_empty() {
+                continue;
+            }
+            let Some(row) = rows.row_mut(&layout, index) else {
+                continue;
+            };
+            for field in item.material.instance_attributes() {
+                let name = field.name.as_str();
+                let Some(value) = item.attributes.get(name) else {
+                    return Err(RenderError::MissingInstanceAttribute {
+                        material: item.material.name.clone(),
+                        attribute: name.to_string(),
+                        draw: index,
+                    });
+                };
+                layout.write(row, name, value).map_err(|error| {
+                    RenderError::InstanceAttributeType {
+                        material: item.material.name.clone(),
+                        attribute: name.to_string(),
+                        reason: error.to_string(),
+                    }
+                })?;
+            }
+        }
+        Ok(rows)
     }
 }
 

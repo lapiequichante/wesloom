@@ -30,6 +30,13 @@ nodes.
   layout is computed from the graph rather than written twice, because
   there is no fixed struct to mirror
   ([ADR 0023](docs/adr/0023-a-material-declares-its-resources.md)).
+- Materials that **declare what they require of their geometry** too: a
+  per-vertex stream the mesh must carry — a second UV set, a vertex
+  colour, a wind weight — or a per-instance value the draw supplies, read
+  by the same node either way. A mesh that cannot supply one is an error
+  naming the material, the attribute and the mesh, rather than a frame
+  that looks wrong
+  ([ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 - A built-in library of granular base nodes (math, color, lighting, SDFs,
   noise, …), in the spirit of libraries like [LYGIA](https://lygia.xyz) but
   written entirely from scratch — see
@@ -102,6 +109,12 @@ The same graph samples a texture the example generates and multiplies in a
 the material's uniform buffer, so the compile count printed beside it does
 not move. That is the difference between a `param` node and the `const`
 one row above it in the same graph.
+
+It also multiplies in a **per-instance** tint, which the graph declares
+and the draw supplies, so `--instances 6` is six differently coloured
+cubes out of one draw list, one material and one bind group — the tints
+are rows of a storage buffer the fragment stage indexes, not anything
+rebound per object.
 
 ```text
         forward pipeline                      deferred pipeline

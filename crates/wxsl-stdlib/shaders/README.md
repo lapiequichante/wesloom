@@ -73,7 +73,7 @@ contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by
 
 | # | Slot | Declared in | Holds |
 |---|---|---|---|
-| 0 | `frame` | `bindings.wxsl` | Camera, scene, the instance transform storage buffer |
+| 0 | `frame` | `bindings.wxsl`, and *generated* at binding 3 | Camera, scene, the instance transform storage buffer, and a second array of whatever per-instance attributes a material declares |
 | 1 | `material` | *generated* | A graph's uniform parameters, textures and samplers |
 | 2 | `user` | *generated* | The application's slot. A graph may declare the block it expects there; nothing in this crate binds it |
 | 3 | `pass` | `lighting_pass.wxsl` | G-buffer, and future shadow/IBL resources |
@@ -82,6 +82,15 @@ Groups 1 and 2 say *generated* because they have no fixed layout: a
 material's graph decides them, and `wxsl_core::resources` computes the
 result ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
 There is nothing to write here for either.
+
+Binding 3 of the frame group is the same story in the middle of a group
+that is otherwise fixed: the transform array at binding 2 stays exactly
+what `Instance` in `bindings.wxsl` says, and a material's own per-instance
+attributes are a *separate* array at binding 3, indexed by the same
+`@builtin(instance_index)`
+([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+Widening `Instance` would give binding 2 two strides, and
+`transform_vertex` reads it at this one. Do not add fields to it.
 
 Nothing in this crate may bind `@group(2)`, and only pass plumbing may bind
 `@group(3)`: a library function must compile for every material stage, and group

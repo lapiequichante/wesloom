@@ -133,12 +133,23 @@ facade crate's feature set, not about the workspace.
   it ran.
 - `cargo test -p wxsl --test material_resources` — what a material
   declares, on a real device: a parameter reaching the shader at the
-  offset `wxsl-core` computed (at **every** `ValueType`, which is the only
-  layout in the repo with no `#[repr(C)]` mirror to check it against), a
-  graph sampling a real texture, an application-supplied uniform reaching
-  a node, and — the acceptance test of the whole idea — a parameter
-  changing eight times without `cache_stats()` or `pipeline_count()`
-  moving. Skips with no adapter.
+  offset `wxsl-core` computed (at **every** `ValueType`), a graph sampling
+  a real texture, an application-supplied uniform reaching a node, and —
+  the acceptance test of the whole idea — a parameter changing eight times
+  without `cache_stats()` or `pipeline_count()` moving. Skips with no
+  adapter.
+- `cargo test -p wxsl --test material_geometry` — what a material requires
+  of its *geometry*, also on a real device: a declared per-vertex stream
+  arriving interpolated, a thousand instances each reading their own row
+  in the fragment stage, a mesh that cannot supply a stream reported by
+  name, and a glTF file's `COLOR_0` driving a graph. Skips with no
+  adapter.
+- The two share `crates/wxsl/tests/probe/mod.rs`, and that is the point:
+  the computed uniform layout and the computed instance row are the only
+  host-shared layouts in the repo with no `#[repr(C)]` mirror to check
+  them against, so they get by test what the mirrors get by construction —
+  and it should be the *same* test. Anything that changes
+  `wxsl_core::resources` should be run against both.
 - `cargo test -p wxsl --test scene` — the scene document: that it round
   trips through its JSON form, that a tag expression selects what a pass
   draws, and that a two-instance scene renders. Only the last needs a
@@ -215,7 +226,10 @@ facade crate's feature set, not about the workspace.
 - `crates/wxsl/examples/pbr_cube.rs` — the demo, and the shortest
   complete example of the whole pipeline. `--dump-wesl` and `--dump-wgsl`
   show what a graph compiles to, `--list-nodes` and `--list-macros` what is
-  available, and `--instances N` draws N copies from one instance buffer.
+  available, and `--instances N` draws N copies from one instance buffer,
+  each reading its own tint out of it — the per-instance half of ADR 0024,
+  and the reason one copy is white: white is the identity for the multiply
+  the graph does with it, so the default image is unchanged.
   It also shows the application's half of ADR 0023: it reads what the
   material's graph *declared* and supplies it by name — which is why it
   keeps working against a `--graph` it has never seen.

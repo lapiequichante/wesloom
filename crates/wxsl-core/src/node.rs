@@ -941,6 +941,20 @@ pub enum NodeBody {
     /// definition or an edge, because the block is a property of the
     /// document, not of the node kind.
     UserRead,
+    /// Reads one **attribute the geometry supplies**: a per-vertex stream
+    /// the mesh carries, or a per-instance field the draw supplies.
+    ///
+    /// The setting named [`SETTING_NAME`] says which, and the graph's own
+    /// declaration ([`crate::graph::Graph::attributes`]) says what type it
+    /// has and at what frequency. One node kind carrying a name, rather
+    /// than a generated node kind per attribute: the registry is global
+    /// and shared, and a per-graph registry is a much larger thing to own
+    /// than a validated string
+    /// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+    ///
+    /// Which frequency a name has is *not* on the node, so moving an
+    /// attribute from per-vertex to per-instance rewires nothing.
+    AttributeRead,
 }
 
 /// Setting name every [`NodeBody::Param`] and [`NodeBody::Resource`] node
@@ -1334,20 +1348,21 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
-    /// Finish with a [`NodeBody::Param`], [`NodeBody::Resource`] or
-    /// [`NodeBody::UserRead`] body — the three that carry no payload of
-    /// their own, because everything they need is the node instance's
-    /// [`SettingDef`] value and its one output socket.
+    /// Finish with a [`NodeBody::Param`], [`NodeBody::Resource`],
+    /// [`NodeBody::UserRead`] or [`NodeBody::AttributeRead`] body — the
+    /// four that carry no payload of their own, because everything they
+    /// need is the node instance's [`SettingDef`] value and its one output
+    /// socket.
     ///
     /// # Panics
     ///
-    /// Panics unless the body is one of those three (the others have a
+    /// Panics unless the body is one of those four (the others have a
     /// finisher that fills their payload in), the definition has exactly
     /// one output, or the required setting is not declared — all
     /// programming errors in a definition, which is Rust.
     pub fn declaration(mut self, body: NodeBody) -> NodeDefinition {
         let setting = match body {
-            NodeBody::Param | NodeBody::Resource => SETTING_NAME,
+            NodeBody::Param | NodeBody::Resource | NodeBody::AttributeRead => SETTING_NAME,
             NodeBody::UserRead => SETTING_FIELD,
             other => panic!("`{other:?}` is not a declaration body"),
         };

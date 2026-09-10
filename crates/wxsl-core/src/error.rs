@@ -224,6 +224,35 @@ pub enum GraphError {
         /// What was wrong with it.
         reason: String,
     },
+    /// A node reads an attribute the graph does not declare. See
+    /// [`crate::graph::Graph::declare_attribute`].
+    UnknownAttribute {
+        /// The reading node.
+        node: NodeId,
+        /// The attribute it asked for.
+        attribute: String,
+        /// The attributes there are.
+        declared: Vec<String>,
+    },
+    /// A node reading a declared attribute resolved to a different type
+    /// than the declaration gives it.
+    AttributeTypeMismatch {
+        /// The reading node.
+        node: NodeId,
+        /// The attribute.
+        attribute: String,
+        /// The type the node resolved to.
+        resolved: ValueType,
+        /// The type the graph declares.
+        declared: ValueType,
+    },
+    /// The graph's attribute declarations are not usable: a bad name, a
+    /// duplicate, a type no vertex buffer can carry, or more of them than
+    /// the vertex-slot or inter-stage budget allows.
+    InvalidAttribute {
+        /// What was wrong with them.
+        reason: String,
+    },
 }
 
 /// Whether a socket lookup was for an input or an output.
@@ -358,6 +387,31 @@ impl fmt::Display for GraphError {
             ),
             GraphError::InvalidUserBlock { reason } => {
                 write!(f, "the application block declaration is unusable: {reason}")
+            }
+            GraphError::UnknownAttribute {
+                node,
+                attribute,
+                declared,
+            } => write!(
+                f,
+                "node {node} reads the attribute `{attribute}`, which this graph does not declare (it declares: {})",
+                if declared.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    declared.join(", ")
+                }
+            ),
+            GraphError::AttributeTypeMismatch {
+                node,
+                attribute,
+                resolved,
+                declared,
+            } => write!(
+                f,
+                "node {node} reads the attribute `{attribute}` as {resolved}, but this graph declares it {declared}"
+            ),
+            GraphError::InvalidAttribute { reason } => {
+                write!(f, "the attribute declarations are unusable: {reason}")
             }
             GraphError::InvalidMacroName { name } => {
                 write!(f, "macro name `{name}` is not a valid WXSL identifier")
@@ -511,6 +565,14 @@ pub enum CodegenError {
         /// The name it asked for.
         name: String,
     },
+    /// A node reads an attribute that is not in the computed geometry
+    /// interface. Only reachable if codegen ran on an unvalidated graph.
+    UndeclaredAttribute {
+        /// The reading node.
+        node: NodeId,
+        /// The attribute it asked for.
+        name: String,
+    },
     /// A node reads the application's uniform block and the graph declares
     /// none — reported by [`crate::graph::Graph::validate`] first, so this
     /// is the same belt-and-braces case as above.
@@ -557,6 +619,10 @@ impl fmt::Display for CodegenError {
             CodegenError::UndeclaredParam { node, name } => write!(
                 f,
                 "node {node} reads `{name}`, which this material's interface does not declare"
+            ),
+            CodegenError::UndeclaredAttribute { node, name } => write!(
+                f,
+                "node {node} reads the attribute `{name}`, which this graph does not declare"
             ),
             CodegenError::NoUserBlock { node } => write!(
                 f,

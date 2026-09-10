@@ -1021,6 +1021,27 @@ pub fn declaration_nodes() -> Vec<NodeDefinition> {
             .generic_param(param("T", &parameter_types()))
             .output(generic_socket("out"))
             .declaration(NodeBody::UserRead),
+        NodeDefinition::builder("input.attribute", "Geometry attribute")
+            .category("input")
+            .doc(
+                "One attribute the geometry supplies: a per-vertex stream \
+                 the mesh carries, or a per-instance value the draw does. \
+                 The graph declares the attribute and its type; whether it \
+                 arrives per vertex or per instance is part of that \
+                 declaration and not of this node, so moving it from one \
+                 to the other rewires nothing.",
+            )
+            .setting(
+                SettingDef::new(
+                    node::SETTING_NAME,
+                    "name",
+                    "Which declared attribute to read.",
+                )
+                .with_default("color"),
+            )
+            .generic_param(param("T", &parameter_types()))
+            .output(generic_socket("out"))
+            .declaration(NodeBody::AttributeRead),
     ]
 }
 
@@ -1028,7 +1049,7 @@ pub fn declaration_nodes() -> Vec<NodeDefinition> {
 mod tests {
     use super::*;
     use crate::shaders;
-    use wxsl_core::graph::{Graph, Node, UserBlockDecl, UserField};
+    use wxsl_core::graph::{AttributeDecl, Graph, Node, UserBlockDecl, UserField};
     use wxsl_core::node::NodeBody;
 
     #[test]
@@ -1221,6 +1242,11 @@ mod tests {
             name: "app".to_string(),
             fields: vec![UserField::new("value", ValueType::F32)],
         });
+        // And `input.attribute` reads one the graph declares, for the
+        // same reason. Per-vertex, because that is the frequency a
+        // freshly placed node is most likely to want and the narrower of
+        // the two in what it accepts.
+        graph.declare_attribute(AttributeDecl::vertex("color", parameter_types()[0]));
         let mut resource_inputs = 0;
         for def in registry.iter() {
             if def.is_surface_output() {

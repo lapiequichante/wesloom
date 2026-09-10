@@ -13,9 +13,12 @@
 //! scalar rather than relying on the compiler to insert it. A test checks the
 //! sizes, which is the part that silently corrupts every frame when it drifts.
 
+use std::collections::BTreeMap;
+
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wxsl_core::abi;
+use wxsl_core::resources::BufferLayout;
 
 /// Maximum lights the scene uniform carries.
 ///
@@ -287,6 +290,104 @@ impl Default for InstanceTransform {
 /// storage buffer is that the count is not part of the layout.
 const INITIAL_INSTANCE_CAPACITY: usize = 64;
 
+/// The declared per-instance attributes of one frame, grouped by the row
+/// shape they are in.
+///
+/// One frame, and possibly more than one shape: what a material declares
+/// is a row of its own design, so two materials in the same draw list can
+/// want two different strides (ADR 0024). Each shape gets a buffer at
+/// `abi::BINDING_INSTANCE_ATTRIBUTES` and a frame bind group of its own,
+/// differing from the base only there. The *transforms* are not in here
+/// at all: that array is ABI, one shape, one upload, for the whole frame.
+///
+/// Every buffer is as long as the whole draw list, and a draw writes at
+/// its *global* index. Dense per-shape packing would save memory in a
+/// frame that mixes shapes, and it would cost the property that makes the
+/// indirect path work unchanged: `@builtin(instance_index)` is the draw's
+/// index in the list, and an indirect buffer the application wrote holds
+/// those same indices. One shape — which is every frame this repo draws —
+/// wastes nothing at all.
+#[derive(Clone, Debug, Default)]
+pub struct InstanceRows {
+    rows: BTreeMap<String, InstanceRowSet>,
+}
+
+/// One shape's worth of [`InstanceRows`].
+#[derive(Clone, Debug)]
+pub struct InstanceRowSet {
+    layout: BufferLayout,
+    bytes: Vec<u8>,
+}
+
+impl InstanceRowSet {
+    /// The layout every row in this set has.
+    pub fn layout(&self) -> &BufferLayout {
+        &self.layout
+    }
+
+    /// The rows, packed.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// How many rows.
+    pub fn len(&self) -> usize {
+        if self.layout.size() == 0 {
+            return 0;
+        }
+        self.bytes.len() / self.layout.size() as usize
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl InstanceRows {
+    /// Nothing to draw.
+    pub fn new() -> Self {
+        InstanceRows::default()
+    }
+
+    /// Reserve `count` zeroed rows of `layout`, if that shape has none yet.
+    ///
+    /// A layout with no fields reserves nothing: a material that declares
+    /// no per-instance attributes reads no attribute array, so there is
+    /// no buffer for it to be given.
+    pub fn reserve(&mut self, layout: &BufferLayout, count: usize) {
+        if layout.is_empty() {
+            return;
+        }
+        self.rows
+            .entry(layout.signature())
+            .or_insert_with(|| InstanceRowSet {
+                layout: layout.clone(),
+                bytes: vec![0; count * layout.size() as usize],
+            });
+    }
+
+    /// The mutable bytes of row `index` in `layout`'s set.
+    ///
+    /// `None` when the shape was never reserved or the index is past its
+    /// end, both of which are the caller having miscounted.
+    pub fn row_mut(&mut self, layout: &BufferLayout, index: usize) -> Option<&mut [u8]> {
+        let set = self.rows.get_mut(&layout.signature())?;
+        let stride = set.layout.size() as usize;
+        set.bytes.get_mut(index * stride..(index + 1) * stride)
+    }
+
+    /// Every shape, by [`BufferLayout::signature`].
+    pub fn sets(&self) -> impl Iterator<Item = (&str, &InstanceRowSet)> {
+        self.rows.iter().map(|(key, set)| (key.as_str(), set))
+    }
+
+    /// Whether nothing was reserved at all.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
 /// The buffers and bind group for the frame group ([`abi::GROUP_FRAME`]).
 ///
 /// One instance is shared by every pass in a frame: the bindings are the
@@ -309,7 +410,20 @@ pub struct FrameBindings {
     scene: wgpu::Buffer,
     instances: wgpu::Buffer,
     capacity: usize,
+    /// One buffer and bind group per *declared attribute* row shape,
+    /// keyed by [`BufferLayout::signature`]. The empty shape — a material
+    /// declaring none — is always present and is what a pass with no
+    /// material behind it binds.
+    groups: BTreeMap<String, InstanceGroup>,
     layout: wgpu::BindGroupLayout,
+}
+
+/// One attribute row shape's buffer and frame bind group.
+struct InstanceGroup {
+    buffer: wgpu::Buffer,
+    /// In rows, not bytes.
+    capacity: usize,
+    stride: usize,
     bind_group: wgpu::BindGroup,
 }
 
@@ -327,7 +441,12 @@ impl FrameBindings {
         let camera = uniform("wxsl camera", size_of::<CameraUniform>() as u64);
         let scene = uniform("wxsl scene", size_of::<SceneUniform>() as u64);
         let capacity = INITIAL_INSTANCE_CAPACITY;
-        let instances = instance_buffer(device, capacity);
+        let instances = instance_buffer(
+            device,
+            "wxsl instances",
+            size_of::<InstanceTransform>(),
+            capacity,
+        );
 
         let buffer = |binding: u32, storage: bool| wgpu::BindGroupLayoutEntry {
             binding,
@@ -349,23 +468,104 @@ impl FrameBindings {
                 buffer(abi::BINDING_CAMERA, false),
                 buffer(abi::BINDING_SCENE, false),
                 buffer(abi::BINDING_INSTANCES, true),
+                // Always here, whether or not the material being drawn
+                // declares anything: a frame group whose shape changed
+                // per material would invalidate every pipeline layout
+                // built against it.
+                buffer(abi::BINDING_INSTANCE_ATTRIBUTES, true),
             ],
         });
-        let bind_group = frame_bind_group(device, &layout, &camera, &scene, &instances);
-
-        FrameBindings {
+        let mut bindings = FrameBindings {
             camera,
             scene,
             instances,
             capacity,
+            groups: BTreeMap::new(),
             layout,
-            bind_group,
-        }
+        };
+        // The shape a material declaring nothing wants: no attributes at
+        // all, and a one-row placeholder to fill the binding with.
+        bindings.ensure(device, BASE_SHAPE, 0, 1);
+        bindings
     }
 
     /// How many instances fit without reallocating.
     pub fn instance_capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// How many distinct *declared* attribute row shapes are held.
+    ///
+    /// Zero for a frame whose materials declare no per-instance
+    /// attributes: the placeholder every such material binds is not a
+    /// shape anybody asked for.
+    pub fn instance_shapes(&self) -> usize {
+        self.groups.keys().filter(|key| *key != BASE_SHAPE).count()
+    }
+
+    /// Create or grow one shape's buffer, rebuilding its bind group when
+    /// the buffer moves.
+    fn ensure(&mut self, device: &wgpu::Device, key: &str, stride: usize, rows: usize) {
+        let grown = match self.groups.get(key) {
+            Some(group) if group.capacity >= rows && group.stride == stride => return,
+            // Double until it fits, so a scene that grows by one object
+            // per frame does not reallocate every frame.
+            Some(group) => {
+                let mut capacity = group.capacity.max(1);
+                while capacity < rows {
+                    capacity *= 2;
+                }
+                capacity
+            }
+            None => rows.max(INITIAL_INSTANCE_CAPACITY),
+        };
+        let buffer = instance_buffer(device, "wxsl instance attributes", stride, grown);
+        let bind_group = frame_bind_group(
+            device,
+            &self.layout,
+            &self.camera,
+            &self.scene,
+            &self.instances,
+            &buffer,
+        );
+        self.groups.insert(
+            key.to_string(),
+            InstanceGroup {
+                buffer,
+                capacity: grown,
+                stride,
+                bind_group,
+            },
+        );
+    }
+
+    /// Grow the transform array and rebuild every bind group that points
+    /// at it.
+    fn grow_instances(&mut self, device: &wgpu::Device, rows: usize) {
+        if rows <= self.capacity {
+            return;
+        }
+        let mut capacity = self.capacity.max(1);
+        while capacity < rows {
+            capacity *= 2;
+        }
+        self.capacity = capacity;
+        self.instances = instance_buffer(
+            device,
+            "wxsl instances",
+            size_of::<InstanceTransform>(),
+            capacity,
+        );
+        for group in self.groups.values_mut() {
+            group.bind_group = frame_bind_group(
+                device,
+                &self.layout,
+                &self.camera,
+                &self.scene,
+                &self.instances,
+                &group.buffer,
+            );
+        }
     }
 
     /// Upload `environment` and every instance transform of the frame.
@@ -379,6 +579,7 @@ impl FrameBindings {
         queue: &wgpu::Queue,
         environment: &Environment,
         transforms: &[InstanceTransform],
+        rows: &InstanceRows,
     ) {
         queue.write_buffer(
             &self.camera,
@@ -387,56 +588,82 @@ impl FrameBindings {
         );
         queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&environment.uniform()));
 
-        if transforms.len() > self.capacity {
-            // Double until it fits, so a scene that grows by one object per
-            // frame does not reallocate every frame.
-            let mut capacity = self.capacity.max(1);
-            while capacity < transforms.len() {
-                capacity *= 2;
-            }
-            self.capacity = capacity;
-            self.instances = instance_buffer(device, capacity);
-            self.bind_group = frame_bind_group(
-                device,
-                &self.layout,
-                &self.camera,
-                &self.scene,
-                &self.instances,
-            );
-        }
+        self.grow_instances(device, transforms.len());
         if !transforms.is_empty() {
             queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(transforms));
+        }
+
+        for (key, set) in rows.sets() {
+            self.ensure(device, key, set.layout().size() as usize, set.len());
+            if set.is_empty() {
+                continue;
+            }
+            let Some(group) = self.groups.get(key) else {
+                continue;
+            };
+            queue.write_buffer(&group.buffer, 0, set.bytes());
         }
     }
 
     /// The bind group layout, for building pipeline layouts.
+    ///
+    /// One layout for every shape: the instance binding declares no
+    /// minimum size, so a wider row is the same layout with a longer
+    /// buffer behind it.
     pub fn layout(&self) -> &wgpu::BindGroupLayout {
         &self.layout
     }
 
-    /// The bind group to set at [`abi::GROUP_FRAME`].
+    /// The bind group to set at [`abi::GROUP_FRAME`] for a material whose
+    /// declared per-instance attributes have shape `signature`.
+    ///
+    /// Falls back to the empty shape, which is right for a pass with no
+    /// material behind it and harmless for one whose rows were never
+    /// uploaded — such a draw has nothing to read.
+    pub fn instance_group(&self, signature: &str) -> &wgpu::BindGroup {
+        self.groups
+            .get(signature)
+            .or_else(|| self.groups.get(BASE_SHAPE))
+            .map(|group| &group.bind_group)
+            .expect("the empty attribute shape is created up front")
+    }
+
+    /// The bind group for a material that declares no per-instance
+    /// attributes.
     pub fn bind_group(&self) -> &wgpu::BindGroup {
-        &self.bind_group
+        self.instance_group(BASE_SHAPE)
     }
 }
 
-fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+/// [`BufferLayout::signature`] of a layout with no fields — what a
+/// material declaring no per-instance attributes asks for.
+const BASE_SHAPE: &str = "";
+
+fn instance_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    stride: usize,
+    capacity: usize,
+) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("wxsl instances"),
+        label: Some(label),
         // Never zero: a zero-sized binding is a validation error, and an
-        // empty frame is a perfectly ordinary thing for an editor to draw.
-        size: (capacity.max(1) * size_of::<InstanceTransform>()) as u64,
+        // empty frame — or a material that declares no attributes — is a
+        // perfectly ordinary thing for an editor to draw.
+        size: (capacity.max(1) * stride.max(4)) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn frame_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     camera: &wgpu::Buffer,
     scene: &wgpu::Buffer,
     instances: &wgpu::Buffer,
+    attributes: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("wxsl frame bindings"),
@@ -454,6 +681,10 @@ fn frame_bind_group(
                 binding: abi::BINDING_INSTANCES,
                 resource: instances.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: abi::BINDING_INSTANCE_ATTRIBUTES,
+                resource: attributes.as_entire_binding(),
+            },
         ],
     })
 }
@@ -461,6 +692,57 @@ fn frame_bind_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wxsl_core::node::ValueType;
+    use wxsl_core::wxsl::WxslIdent;
+
+    #[test]
+    fn the_instance_row_mirrors_the_abi_table_field_for_field() {
+        // The one host-shared layout M4 deliberately did *not* compute:
+        // the transform array stays ABI, with a `#[repr(C)]` mirror and
+        // this test, because `transform_vertex` reads it at that stride
+        // and a widened row would move every field out from under it. A
+        // material's own per-instance attributes are a separate array
+        // (ADR 0024).
+        let layout = BufferLayout::storage(
+            abi::INSTANCE_BASE_FIELDS
+                .iter()
+                .map(|field| (WxslIdent::new(field.name).expect("valid"), field.ty)),
+            [],
+        );
+        assert_eq!(layout.size() as usize, size_of::<InstanceTransform>());
+        assert_eq!(
+            layout.field("model").expect("declared").offset as usize,
+            core::mem::offset_of!(InstanceTransform, model)
+        );
+        assert_eq!(
+            layout.field("normal_matrix").expect("declared").offset as usize,
+            core::mem::offset_of!(InstanceTransform, normal_matrix)
+        );
+    }
+
+    #[test]
+    fn an_attribute_row_shape_gets_a_buffer_and_the_empty_one_a_placeholder() {
+        // Two shapes in one frame is the case the frame group has to
+        // survive: the buffers differ, the layout does not, so every
+        // pipeline built against it stays valid.
+        let rows = InstanceRows::new();
+        assert!(rows.is_empty());
+        let mut rows = rows;
+        rows.reserve(&BufferLayout::default(), 4);
+        assert!(rows.is_empty(), "an empty row shape needs no buffer");
+        let layout = BufferLayout::storage(
+            [],
+            [(WxslIdent::new("tint").expect("valid"), ValueType::Vec3)],
+        );
+        rows.reserve(&layout, 4);
+        assert_eq!(rows.sets().count(), 1);
+        let set = rows.sets().next().expect("one shape").1;
+        assert_eq!(set.len(), 4);
+        // 16, not 12: an array element's stride is its size rounded up
+        // to its alignment, and a `vec3f` aligns to 16. Getting that
+        // wrong is every instance after the first reading the one before.
+        assert_eq!(set.layout().size(), 16);
+    }
 
     #[test]
     fn uniform_layouts_match_wgsl_alignment_rules() {

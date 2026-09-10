@@ -42,11 +42,20 @@ changes it with a buffer write and no recompile. The counterpart to a
 it changes. See
 [ADR 0023](adr/0023-a-material-declares-its-resources.md).
 
-**Interface** — what a material needs bound before it can draw: its
-parameters and their computed offsets, its textures and samplers, and the
-block it expects the application to supply
+**Interface** — what a material needs before it can draw: its parameters
+and their computed offsets, its textures and samplers, the block it
+expects the application to supply, and what it requires of its geometry
 (`wxsl_core::resources::MaterialInterface`). Computed from the graph, and
-the single source both the generated WGSL and the bind groups come from.
+the single source the generated WGSL, the bind groups and the vertex
+layout all come from.
+
+**Attribute** — a value the *geometry* supplies, declared by the graph and
+read by `input.attribute`: per **vertex**, from a stream the mesh must
+carry under that name, or per **instance**, from a value the draw must
+supply. The frequency belongs to the declaration and not to the reading
+node, so moving one between the two rewires nothing. Distinct from a
+*parameter*, which the material owns and fills itself. See
+[ADR 0024](adr/0024-a-material-declares-the-geometry-it-requires.md).
 
 **Setting** — a string-valued property of a *node instance* that changes
 what it compiles to, such as the name of the parameter a `param.value`

@@ -47,6 +47,160 @@ pub const TRANSFORM_VERTEX_FN: &str = "transform_vertex";
 /// Builds a [`CONTEXT_STRUCT`] from a [`VERTEX_OUT_STRUCT`].
 pub const SURFACE_CONTEXT_FN: &str = "surface_context";
 
+/// Struct a generated module declares for the *declared* per-vertex
+/// attributes, taken as the vertex entry's **second** parameter.
+///
+/// A second parameter rather than a wider [`VERTEX_IN_STRUCT`], which is
+/// the whole reason the base vertex format stays fixed ABI text: WGSL lets
+/// an entry point take several IO parameters, so what a material adds sits
+/// beside what the ABI fixed instead of replacing it (ADR 0024).
+pub const MATERIAL_VERTEX_IN_STRUCT: &str = "MaterialVertexIn";
+/// Struct a generated module declares as its vertex entry's *return* when
+/// it has anything to pass down beyond [`VERTEX_OUT_FIELDS`].
+///
+/// An entry point returns one value, so this one cannot be split: it
+/// repeats the base varyings, at the same locations, and adds the extras
+/// above them. [`VERTEX_OUT_FIELDS`] is the table both halves are written
+/// from.
+pub const MATERIAL_VERTEX_OUT_STRUCT: &str = "MaterialVertexOut";
+/// Struct holding only the *extra* varyings, taken as the fragment entry's
+/// second parameter beside a plain [`VERTEX_OUT_STRUCT`].
+///
+/// This is the trick that keeps [`SURFACE_CONTEXT_FN`] unchanged: the
+/// fragment stage still receives the ABI's own struct, and the material's
+/// additions arrive alongside it.
+pub const MATERIAL_VARYINGS_STRUCT: &str = "MaterialVaryings";
+/// Plain (non-IO) struct handed to the material function as its second
+/// argument, holding what the geometry supplied.
+pub const MATERIAL_ATTRIBUTES_STRUCT: &str = "MaterialAttributes";
+/// Parameter name the material function receives a
+/// [`MATERIAL_ATTRIBUTES_STRUCT`] under.
+pub const MATERIAL_ATTRIBUTES_VAR: &str = "attrs";
+/// Field of [`MATERIAL_ATTRIBUTES_STRUCT`] and [`MATERIAL_VARYINGS_STRUCT`]
+/// carrying `@builtin(instance_index)` down to the fragment stage.
+///
+/// WGSL offers that builtin in the vertex stage only, so a fragment that
+/// wants per-instance data has to be *told* which instance it is. One
+/// `@interpolate(flat) u32` covers every declared instance attribute
+/// however many there are, which is why the index travels rather than the
+/// values.
+pub const INSTANCE_INDEX_FIELD: &str = "wxsl_instance";
+/// Struct a generated module declares for one instance's *declared*
+/// attributes — the per-instance half of what a material requires of its
+/// geometry.
+pub const MATERIAL_INSTANCE_STRUCT: &str = "MaterialInstance";
+/// Variable the declared per-instance attributes are bound as, at
+/// [`BINDING_INSTANCE_ATTRIBUTES`] of [`GROUP_FRAME`].
+///
+/// Indexed by the same `@builtin(instance_index)` [`BINDING_INSTANCES`]
+/// is, so the two arrays are one row apiece for the same object and
+/// neither has to know the other's width (ADR 0024).
+pub const MATERIAL_INSTANCE_VAR: &str = "wxsl_instance_attributes";
+
+/// One `@location` of an entry-point IO struct fixed by the ABI.
+///
+/// The index in the table is the location, so a row inserted in the middle
+/// renumbers the rest — which is what a table is for. `wxsl-render`'s
+/// `mesh` module and `shaders/wxsl/vertex.wxsl` are the other two views,
+/// and `wxsl-stdlib` has a test that the third agrees with this one.
+pub struct VertexField {
+    /// Field name in the WXSL struct.
+    pub name: &'static str,
+    /// Field type.
+    pub ty: ValueType,
+}
+
+/// Every `@location` of [`VERTEX_IN_STRUCT`], in location order.
+///
+/// A material's own declared per-vertex attributes are numbered from
+/// `VERTEX_IN_FIELDS.len()` upwards.
+pub const VERTEX_IN_FIELDS: &[VertexField] = &[
+    VertexField {
+        name: "position",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "normal",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "tangent",
+        ty: ValueType::Vec4,
+    },
+    VertexField {
+        name: "uv",
+        ty: ValueType::Vec2,
+    },
+];
+
+/// Every `@location` of [`VERTEX_OUT_STRUCT`], in location order.
+///
+/// `@builtin(position)` is not in the table: it has no location and it is
+/// always first. Codegen writes [`MATERIAL_VERTEX_OUT_STRUCT`] from this,
+/// so the extended struct's base half cannot drift from the ABI's.
+pub const VERTEX_OUT_FIELDS: &[VertexField] = &[
+    VertexField {
+        name: "world_position",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "world_normal",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "world_tangent",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "world_bitangent",
+        ty: ValueType::Vec3,
+    },
+    VertexField {
+        name: "uv",
+        ty: ValueType::Vec2,
+    },
+];
+
+/// Field of [`VERTEX_OUT_STRUCT`] carrying `@builtin(position)`.
+pub const CLIP_POSITION_FIELD: &str = "clip_position";
+
+/// What one row of [`BINDING_INSTANCES`] holds, in buffer order.
+///
+/// Fixed ABI, and it stays fixed: `wxsl_render::environment::
+/// InstanceTransform` is its `#[repr(C)]` mirror, `Instance` in
+/// `bindings.wxsl` is its WGSL half, and [`TRANSFORM_VERTEX_FN`] reads
+/// the row through that. A material's own per-instance attributes are a
+/// *separate* array at [`BINDING_INSTANCE_ATTRIBUTES`] rather than fields
+/// appended here, because a wider row would give this array two strides
+/// and the vertex stage reads it at this one (ADR 0024).
+pub const INSTANCE_BASE_FIELDS: &[VertexField] = &[
+    VertexField {
+        name: "model",
+        ty: ValueType::Mat4,
+    },
+    VertexField {
+        name: "normal_matrix",
+        ty: ValueType::Mat4,
+    },
+];
+
+/// How many `@location` slots an inter-stage interface has.
+///
+/// WebGPU guarantees 16. [`VERTEX_OUT_FIELDS`] spends five of them, the
+/// instance index one more when a material reads per-instance data, and
+/// every declared per-vertex attribute one each. One accountant, so a
+/// material that overruns the budget is told which line item did it
+/// rather than discovering it as a shader-compiler error.
+pub const MAX_VARYING_LOCATIONS: usize = 16;
+
+/// How many per-vertex attributes a material may declare.
+///
+/// Each is its own vertex buffer (ADR 0024), and WebGPU guarantees eight
+/// slots with the base stream taking one. Four rather than seven, so that
+/// a mesh may carry a couple of streams no material asked for without the
+/// budget being an accident of what happens to be bound.
+pub const MAX_VERTEX_ATTRIBUTES: usize = 4;
+
 /// Shades a surface to a final `vec4f` colour
 /// ([`MaterialStage::FORWARD_LIT`]).
 pub const SHADE_SURFACE_FN: &str = "shade_surface";
@@ -174,6 +328,9 @@ pub const MATERIAL_PARAMS_VAR: &str = "material";
 /// [`crate::error::GraphError::InvalidSetting`] also rejects) or imported
 /// under a mangled name.
 pub const RESERVED_NAMES: &[&str] = &[
+    MATERIAL_ATTRIBUTES_VAR,
+    MATERIAL_INSTANCE_VAR,
+    INSTANCE_INDEX_FIELD,
     MATERIAL_PARAMS_VAR,
     MATERIAL_PARAMS_STRUCT,
     "ctx",
@@ -187,6 +344,21 @@ pub const RESERVED_NAMES: &[&str] = &[
 /// row with `@builtin(instance_index)`. This supersedes ADR 0010's
 /// per-object dynamic offset (ADR 0021).
 pub const BINDING_INSTANCES: u32 = 2;
+
+/// [`GROUP_FRAME`] binding of the per-instance attributes a material
+/// declares.
+///
+/// Beside [`BINDING_INSTANCES`] rather than inside it, and indexed by the
+/// same `@builtin(instance_index)`. The transform array's stride is ABI
+/// and the attribute array's is whatever the graph declared, so keeping
+/// them apart is what lets one be hand-written and the other computed
+/// without either having to know the other's width.
+///
+/// Always in the frame group's layout, even for a material that declares
+/// none: an unused binding costs nothing, and a layout that changed shape
+/// per material would invalidate every pipeline in the cache
+/// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+pub const BINDING_INSTANCE_ATTRIBUTES: u32 = 3;
 
 /// How much precision a G-buffer target needs.
 ///

@@ -20,10 +20,11 @@ use core::fmt;
 use std::collections::HashMap;
 
 use wxsl_core::abi::{self, GBufferPrecision, MaterialStage};
+use wxsl_core::resources::VertexAttributeBinding;
 use wxsl_core::scene::TagExpr;
 
 use crate::graph::{PassBinding, RenderGraph};
-use crate::mesh::Vertex;
+use crate::mesh::{AttributeValues, Vertex};
 use crate::pass::{
     Attachment, DepthAttachment, DrawSource, PassDesc, PassState, Read, ResourceDesc, ResourceId,
     ScreenShader, DEPTH_FORMAT,
@@ -235,6 +236,11 @@ pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
 /// every material of the same shape.
 #[derive(Clone, Copy)]
 pub struct MaterialGroups<'a> {
+    /// The per-vertex streams the material declares, which decide the
+    /// pipeline's vertex buffer layout. Empty for a material that
+    /// declares none, and then the layout is exactly `Vertex::LAYOUT` and
+    /// nothing else.
+    pub vertex: &'a [VertexAttributeBinding],
     /// `abi::GROUP_MATERIAL`, or `None` for a material declaring neither
     /// a parameter nor a texture.
     pub material: Option<&'a wgpu::BindGroupLayout>,
@@ -249,6 +255,7 @@ impl MaterialGroups<'_> {
     /// A material that declares nothing at all — and what a pass with no
     /// material behind it uses.
     pub const NONE: MaterialGroups<'static> = MaterialGroups {
+        vertex: &[],
         material: None,
         user: None,
         signature: "",
@@ -459,11 +466,33 @@ impl PipelineCache {
             let layout = self
                 .layout(device, frame, material, pass_layout, pass_shape)
                 .clone();
-            let buffers: &[Option<wgpu::VertexBufferLayout>] = if vertex_buffers {
-                &[Some(Vertex::LAYOUT)]
-            } else {
-                &[]
-            };
+            // One buffer per declared attribute, at the slot the
+            // interface numbered it — not a widened interleaved struct,
+            // so a mesh can serve a material that wants colours and one
+            // that does not without re-uploading its positions.
+            let attributes: Vec<[wgpu::VertexAttribute; 1]> = material
+                .vertex
+                .iter()
+                .filter_map(|attribute| {
+                    Some([wgpu::VertexAttribute {
+                        format: AttributeValues::format(attribute.ty)?,
+                        offset: 0,
+                        shader_location: attribute.location,
+                    }])
+                })
+                .collect();
+            let mut layouts: Vec<Option<wgpu::VertexBufferLayout>> = Vec::new();
+            if vertex_buffers {
+                layouts.push(Some(Vertex::LAYOUT));
+                for (attribute, entry) in material.vertex.iter().zip(&attributes) {
+                    layouts.push(Some(wgpu::VertexBufferLayout {
+                        array_stride: u64::from(attribute.ty.buffer_size().unwrap_or(4)),
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: entry,
+                    }));
+                }
+            }
+            let buffers: &[Option<wgpu::VertexBufferLayout>] = &layouts;
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&variant.label),
                 layout: Some(&layout),

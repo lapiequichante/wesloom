@@ -16,13 +16,14 @@
 use glam::{Mat4, Vec3};
 use wxsl_core::graph::Graph;
 use wxsl_core::macros::MacroSet;
-use wxsl_core::node::NodeRegistry;
+use wxsl_core::node::{NodeRegistry, ValueType};
 use wxsl_render::gpu::OffscreenTarget;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
 use wxsl_render::{
-    Camera, DrawItem, Environment, Light, Material, MaterialBindings, Mesh, MeshKind, RenderError,
-    RenderRequest, Renderer, ShaderLibrary, StockPipeline, SwapProgress, TargetConfig,
+    AttributeValues, Camera, DrawItem, Environment, InstanceAttributes, Light, Material,
+    MaterialBindings, Mesh, MeshKind, RenderError, RenderRequest, Renderer, ShaderLibrary,
+    StockPipeline, SwapProgress, TargetConfig,
 };
 
 use crate::highlight::{self, Run};
@@ -67,6 +68,12 @@ pub struct Preview {
     /// The material's own bind group, rebuilt whenever the graph changes
     /// what it declares.
     bindings: Option<MaterialBindings>,
+    /// A value for every per-instance attribute the material declares.
+    ///
+    /// Stand-ins, like [`Preview::placeholder`]: the editor is not the
+    /// application, and a material that cannot be drawn cannot be
+    /// previewed.
+    attributes: InstanceAttributes,
     /// A zero-filled stand-in for the block the graph expects the
     /// *application* to supply. The editor is not that application, so
     /// there is nothing truer it could bind — and binding nothing would
@@ -126,6 +133,7 @@ impl Preview {
             mesh_kind: MeshKind::default(),
             material: None,
             bindings: None,
+            attributes: InstanceAttributes::new(),
             user: None,
             placeholder: placeholder_texture(device, queue),
             placeholder_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
@@ -236,6 +244,69 @@ impl Preview {
         if kind != self.mesh_kind {
             self.mesh = Mesh::from_kind(device, kind);
             self.mesh_kind = kind;
+            self.restream(device);
+        }
+    }
+
+    /// Give the preview mesh a stand-in stream for every per-vertex
+    /// attribute the current material declares.
+    ///
+    /// A gradient along each axis rather than a constant, so an author
+    /// wiring one up sees *something varying* and can tell the attribute
+    /// arrived from the geometry rather than from a default. The same
+    /// reasoning as the magenta checker: a visible placeholder beats a
+    /// black surface, and it stays a placeholder until a mesh with real
+    /// streams can be loaded (ADR 0024).
+    fn restream(&mut self, device: &wgpu::Device) {
+        let Some(material) = self.material.as_ref() else {
+            return;
+        };
+        let data = wxsl_render::mesh::MeshData::from_kind(self.mesh_kind);
+        let extent = data
+            .vertices
+            .iter()
+            .fold(0.0_f32, |widest, vertex| {
+                widest.max(vertex.position.iter().fold(0.0_f32, |a, c| a.max(c.abs())))
+            })
+            .max(f32::EPSILON);
+        for attribute in material.vertex_attributes() {
+            let along = |index: usize| {
+                let position = data.vertices[index].position;
+                core::array::from_fn::<f32, 4, _>(|axis| {
+                    (position[axis.min(2)] / extent + 1.0) * 0.5
+                })
+            };
+            let values = match attribute.ty {
+                ValueType::F32 => AttributeValues::F32(
+                    (0..data.vertices.len())
+                        .map(|index| along(index)[0])
+                        .collect(),
+                ),
+                ValueType::Vec2 => AttributeValues::Vec2(
+                    (0..data.vertices.len())
+                        .map(|index| [along(index)[0], along(index)[1]])
+                        .collect(),
+                ),
+                ValueType::Vec4 => AttributeValues::Vec4(
+                    (0..data.vertices.len())
+                        .map(|index| {
+                            let v = along(index);
+                            [v[0], v[1], v[2], 1.0]
+                        })
+                        .collect(),
+                ),
+                _ => AttributeValues::Vec3(
+                    (0..data.vertices.len())
+                        .map(|index| {
+                            let v = along(index);
+                            [v[0], v[1], v[2]]
+                        })
+                        .collect(),
+                ),
+            };
+            let _ = self
+                .mesh
+                .set_attribute(device, attribute.name.as_str(), &values);
         }
     }
 
@@ -268,6 +339,9 @@ impl Preview {
                 self.wxsl_highlight = highlight::highlight(&self.wxsl);
                 self.rebind(device, &material);
                 self.material = Some(material);
+                // After the material is in place: the streams to invent
+                // are the ones it declares.
+                self.restream(device);
                 self.status = PreviewStatus::Ok;
                 self.refresh_wgsl(device);
             }
@@ -289,14 +363,26 @@ impl Preview {
         for resource in &material.interface().resources {
             let name = resource.name.as_str();
             let bound = match resource.ty {
-                wxsl_core::node::ValueType::Sampler => {
-                    bindings.set_sampler(name, &self.placeholder_sampler)
-                }
+                ValueType::Sampler => bindings.set_sampler(name, &self.placeholder_sampler),
                 _ => bindings.set_texture(name, &self.placeholder),
             };
             debug_assert!(bound.is_ok(), "the interface named this resource");
         }
         self.bindings = Some(bindings);
+
+        // Per-instance attributes get one, not zero. The editor draws a
+        // single object, so there is no *per*-instance variation to
+        // show, and the honest-looking choice — zero — is black, which
+        // multiplied into a base colour is a preview that went dark for
+        // a reason the author cannot see. One is the identity for the
+        // multiply these are nearly always used for, so the preview
+        // shows the material and not the placeholder.
+        self.attributes = InstanceAttributes::new();
+        for field in material.instance_attributes() {
+            if let Some(value) = field.ty.splat(1.0).or_else(|| field.ty.zero()) {
+                self.attributes.set(field.name.as_str(), value);
+            }
+        }
 
         self.user = material.interface().user.as_ref().map(|block| {
             // Zeroed: the editor is not the application, so the honest
@@ -379,7 +465,9 @@ impl Preview {
         }
         let environment = preview_environment(time);
         let model = Mat4::from_rotation_y(self.angle) * Mat4::from_rotation_x(self.angle * 0.35);
-        let mut item = DrawItem::new(&self.mesh, material).with_transform(model);
+        let mut item = DrawItem::new(&self.mesh, material)
+            .with_transform(model)
+            .with_attributes(&self.attributes);
         if let Some(bindings) = self.bindings.as_ref() {
             item = item.with_bindings(bindings);
         }

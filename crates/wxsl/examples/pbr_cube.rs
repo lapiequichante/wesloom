@@ -47,13 +47,13 @@ use wxsl::core::abi::{self, MaterialStage};
 use wxsl::core::codegen;
 use wxsl::core::graph::Graph;
 use wxsl::core::macros::{MacroSet, MacroValue};
-use wxsl::core::node::NodeRegistry;
+use wxsl::core::node::{NodeRegistry, Value};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 use wxsl::render::{
-    Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderRequest, Renderer, StockPipeline,
-    TargetConfig,
+    Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh, RenderRequest,
+    Renderer, StockPipeline, TargetConfig,
 };
 
 /// The graph used when `--graph` is not given.
@@ -465,7 +465,42 @@ fn interface_summary(material: &Material) -> String {
     if let Some(user) = &interface.user {
         parts.push(format!("{} (application)", user.name));
     }
+    parts.extend(
+        interface
+            .geometry
+            .instance_attributes()
+            .iter()
+            .map(|field| format!("{}: {} (per instance)", field.name, field.ty)),
+    );
+    parts.extend(
+        interface
+            .geometry
+            .vertex()
+            .iter()
+            .map(|entry| format!("{}: {} (per vertex)", entry.name, entry.ty)),
+    );
     parts.join(", ")
+}
+
+/// A distinct tint for each copy of the cube, as a hue sweep.
+///
+/// One copy gets white, which is the identity for the multiply the graph
+/// does with it — so the default image is exactly what it was before the
+/// graph read a per-instance attribute, and `--instances 6` is six
+/// different cubes out of one draw list, one material and one bind group.
+fn instance_tints(count: u32) -> Vec<InstanceAttributes> {
+    let count = count.max(1);
+    (0..count)
+        .map(|index| {
+            let tint = if count == 1 {
+                Vec3::ONE
+            } else {
+                let hue = index as f32 / count as f32 * std::f32::consts::TAU;
+                Vec3::new(hue.cos(), (hue + 2.09).cos(), (hue + 4.19).cos()) * 0.4 + 0.6
+            };
+            InstanceAttributes::new().with("instance_tint", Value::Vec3(tint.to_array()))
+        })
+        .collect()
 }
 
 fn cube_transform(time: f32) -> Mat4 {
@@ -482,6 +517,7 @@ fn cube_draws<'a>(
     mesh: &'a Mesh,
     material: &'a Material,
     bindings: &'a wxsl::render::MaterialBindings,
+    tints: &'a [InstanceAttributes],
     count: u32,
     time: f32,
 ) -> DrawList<'a> {
@@ -491,11 +527,17 @@ fn cube_draws<'a>(
             let offset = index as f32 - (count.max(1) - 1) as f32 * 0.5;
             let place = Mat4::from_translation(Vec3::new(offset * 2.4, 0.0, 0.0));
             // Every copy shares one bind group: the parameters and the
-            // texture are the material's, and only the transform is the
-            // instance's.
-            DrawItem::new(mesh, material)
+            // texture are the *material's*. What differs per copy is the
+            // transform and the tint, and both are rows of storage
+            // buffers in the frame group rather than anything rebound
+            // (ADR 0024).
+            let mut item = DrawItem::new(mesh, material)
                 .with_transform(place * spin)
-                .with_bindings(bindings)
+                .with_bindings(bindings);
+            if let Some(tint) = tints.get(index as usize) {
+                item = item.with_attributes(tint);
+            }
+            item
         })
         .collect()
 }
@@ -538,7 +580,8 @@ fn run_headless(
     )?;
     // A fixed time, so two runs produce identical images.
     let environment = demo_environment(width as f32 / height as f32, 1.0);
-    let draws = cube_draws(&mesh, material, &bindings, options.instances, 0.6);
+    let tints = instance_tints(options.instances);
+    let draws = cube_draws(&mesh, material, &bindings, &tints, options.instances, 0.6);
 
     std::fs::create_dir_all(&options.out_dir)?;
     let mut images = Vec::new();
@@ -652,6 +695,10 @@ struct State {
     /// What the material's graph declared it needs. Rebuilt whenever the
     /// material is, because a graph edit can change what it declares.
     bindings: wxsl::render::MaterialBindings,
+    /// One per copy of the cube: what the *geometry* owes the material,
+    /// as against what the material owns. Fixed for the run, because
+    /// `--instances` is.
+    tints: Vec<InstanceAttributes>,
     texture: wgpu::TextureView,
     sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
@@ -852,6 +899,7 @@ impl App {
             &state.mesh,
             &self.material,
             &state.bindings,
+            &state.tints,
             self.options.instances,
             time,
         );
@@ -998,6 +1046,7 @@ impl App {
             renderer,
             mesh,
             bindings,
+            tints: instance_tints(self.options.instances),
             texture,
             sampler,
             format,

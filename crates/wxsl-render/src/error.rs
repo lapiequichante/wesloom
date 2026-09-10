@@ -93,6 +93,66 @@ pub enum RenderError {
         /// Which group is missing, by its `abi::BIND_GROUPS` name.
         group: &'static str,
     },
+    /// A per-vertex stream is not as long as the mesh it was given to.
+    VertexStreamLength {
+        /// The mesh's label.
+        mesh: String,
+        /// The stream's name.
+        attribute: String,
+        /// How many values were supplied.
+        supplied: usize,
+        /// How many vertices the mesh has.
+        vertices: usize,
+    },
+    /// A material declares a per-vertex attribute the mesh it is drawn on
+    /// does not carry.
+    ///
+    /// Reported when the frame is compiled, before any pass is opened, so
+    /// it names the material, the attribute and the mesh rather than
+    /// arriving as a `wgpu` complaint about vertex buffer 4 — or, worse,
+    /// as a frame that merely looks wrong.
+    MissingVertexAttribute {
+        /// The material that declares it.
+        material: String,
+        /// The attribute's name.
+        attribute: String,
+        /// The mesh's label.
+        mesh: String,
+        /// What the mesh does carry.
+        available: Vec<String>,
+    },
+    /// A mesh carries the declared attribute under a different type.
+    VertexAttributeType {
+        /// The material that declares it.
+        material: String,
+        /// The attribute's name.
+        attribute: String,
+        /// The mesh's label.
+        mesh: String,
+        /// The type the mesh supplies.
+        supplied: wxsl_core::node::ValueType,
+        /// The type the graph declares.
+        declared: wxsl_core::node::ValueType,
+    },
+    /// A material declares a per-instance attribute the draw does not
+    /// supply. See `DrawItem::with_attributes`.
+    MissingInstanceAttribute {
+        /// The material that declares it.
+        material: String,
+        /// The attribute's name.
+        attribute: String,
+        /// Which draw, by its index in the list.
+        draw: usize,
+    },
+    /// A draw supplies a per-instance attribute at the wrong type.
+    InstanceAttributeType {
+        /// The material that declares it.
+        material: String,
+        /// The attribute's name.
+        attribute: String,
+        /// What `wxsl-core`'s layout objected to.
+        reason: String,
+    },
     /// A pass wants a resource the graph does not own and nobody supplied a
     /// view for. Every imported resource — the frame's target above all —
     /// has to be handed to [`crate::graph::RenderGraph::record`].
@@ -162,6 +222,58 @@ impl fmt::Display for RenderError {
             RenderError::MaterialParameter { name, reason } => {
                 write!(f, "cannot set parameter `{name}`: {reason}")
             }
+            RenderError::VertexStreamLength {
+                mesh,
+                attribute,
+                supplied,
+                vertices,
+            } => write!(
+                f,
+                "stream `{attribute}` has {supplied} values and mesh `{mesh}` has {vertices} vertices"
+            ),
+            RenderError::MissingVertexAttribute {
+                material,
+                attribute,
+                mesh,
+                available,
+            } => write!(
+                f,
+                "material `{material}` requires the per-vertex attribute `{attribute}`, \
+                 which mesh `{mesh}` does not carry (it carries: {})",
+                if available.is_empty() {
+                    "nothing beyond the base vertex".to_string()
+                } else {
+                    available.join(", ")
+                }
+            ),
+            RenderError::VertexAttributeType {
+                material,
+                attribute,
+                mesh,
+                supplied,
+                declared,
+            } => write!(
+                f,
+                "material `{material}` declares `{attribute}` as {declared}, and mesh \
+                 `{mesh}` supplies it as {supplied}"
+            ),
+            RenderError::MissingInstanceAttribute {
+                material,
+                attribute,
+                draw,
+            } => write!(
+                f,
+                "material `{material}` requires the per-instance attribute `{attribute}`, \
+                 which draw {draw} does not supply"
+            ),
+            RenderError::InstanceAttributeType {
+                material,
+                attribute,
+                reason,
+            } => write!(
+                f,
+                "material `{material}`'s per-instance attribute `{attribute}`: {reason}"
+            ),
             RenderError::UndeclaredMaterialResource { name } => write!(
                 f,
                 "this material declares no texture or sampler called `{name}`"

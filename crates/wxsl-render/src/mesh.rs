@@ -1,14 +1,30 @@
-//! Geometry: the vertex format the shader ABI's vertex stage expects, and the
-//! primitives to draw with it.
+//! Geometry: the vertex format the shader ABI's vertex stage expects, the
+//! extra streams a material may ask for on top of it, and the primitives to
+//! draw with it.
 //!
-//! [`Vertex::LAYOUT`] and `VertexIn` in `shaders/wxsl/vertex.wxsl` are the
-//! two halves of one contract — the `@location` numbers must line up, so the
-//! two are edited together.
+//! [`Vertex::LAYOUT`], `abi::VERTEX_IN_FIELDS` and `VertexIn` in
+//! `shaders/wxsl/vertex.wxsl` are three halves of one contract — the
+//! `@location` numbers must line up, and `wxsl-stdlib` has the test that
+//! keeps them lined up.
+//!
+//! # Declared attributes are streams of their own
+//!
+//! The base four never change. What a material *declares* arrives as one
+//! extra vertex buffer per attribute, bound at slot 1 and up and named
+//! rather than numbered, because a glTF file hands its accessors over
+//! separately anyway and because a mesh can then serve a material that
+//! wants colours and one that does not without re-uploading its positions
+//! ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 
 use core::ops::Range;
+use std::collections::BTreeMap;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use wxsl_core::node::ValueType;
+use wxsl_core::resources::VertexAttributeBinding;
+
+use crate::error::RenderError;
 
 /// One vertex: position, shading basis, texture coordinates.
 ///
@@ -27,6 +43,79 @@ pub struct Vertex {
     pub tangent: [f32; 4],
     /// Texture coordinates.
     pub uv: [f32; 2],
+}
+
+/// One declared per-vertex stream's values, on the CPU.
+///
+/// Only float shapes, and that is the whole set a vertex buffer usefully
+/// carries: `wgpu::VertexFormat` has integer entries too, but an integer
+/// vertex attribute needs a flat-interpolation discipline all the way down
+/// to the fragment stage, and geometry does not actually produce them.
+/// `Graph::validate` rejects the rest with the same reason.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttributeValues {
+    /// One `f32` per vertex.
+    F32(Vec<f32>),
+    /// One `vec2f` per vertex.
+    Vec2(Vec<[f32; 2]>),
+    /// One `vec3f` per vertex.
+    Vec3(Vec<[f32; 3]>),
+    /// One `vec4f` per vertex — glTF's `COLOR_0`, among others.
+    Vec4(Vec<[f32; 4]>),
+}
+
+impl AttributeValues {
+    /// The graph type this stream supplies.
+    pub fn ty(&self) -> ValueType {
+        match self {
+            AttributeValues::F32(_) => ValueType::F32,
+            AttributeValues::Vec2(_) => ValueType::Vec2,
+            AttributeValues::Vec3(_) => ValueType::Vec3,
+            AttributeValues::Vec4(_) => ValueType::Vec4,
+        }
+    }
+
+    /// The `wgpu` format for [`AttributeValues::ty`].
+    pub fn format(ty: ValueType) -> Option<wgpu::VertexFormat> {
+        Some(match ty {
+            ValueType::F32 => wgpu::VertexFormat::Float32,
+            ValueType::Vec2 => wgpu::VertexFormat::Float32x2,
+            ValueType::Vec3 => wgpu::VertexFormat::Float32x3,
+            ValueType::Vec4 => wgpu::VertexFormat::Float32x4,
+            _ => return None,
+        })
+    }
+
+    /// How many vertices it covers.
+    pub fn len(&self) -> usize {
+        match self {
+            AttributeValues::F32(values) => values.len(),
+            AttributeValues::Vec2(values) => values.len(),
+            AttributeValues::Vec3(values) => values.len(),
+            AttributeValues::Vec4(values) => values.len(),
+        }
+    }
+
+    /// Whether it covers no vertices.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The values as bytes, ready to upload.
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            AttributeValues::F32(values) => bytemuck::cast_slice(values),
+            AttributeValues::Vec2(values) => bytemuck::cast_slice(values),
+            AttributeValues::Vec3(values) => bytemuck::cast_slice(values),
+            AttributeValues::Vec4(values) => bytemuck::cast_slice(values),
+        }
+    }
+}
+
+/// One declared per-vertex stream on the GPU.
+struct VertexStream {
+    buffer: wgpu::Buffer,
+    ty: ValueType,
 }
 
 impl Vertex {
@@ -54,12 +143,44 @@ pub struct MeshData {
     pub vertices: Vec<Vertex>,
     /// Triangle indices, three per triangle.
     pub indices: Vec<u32>,
+    /// Extra per-vertex streams, by name, each as long as
+    /// [`MeshData::vertices`].
+    ///
+    /// What a material's declared per-vertex attribute is matched against,
+    /// by name. A mesh may carry streams no material asks for; it may not
+    /// be drawn with a material asking for one it lacks.
+    pub attributes: BTreeMap<String, AttributeValues>,
 }
 
 impl MeshData {
     /// The geometry, as a pair.
     pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
-        MeshData { vertices, indices }
+        MeshData {
+            vertices,
+            indices,
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    /// Add a named per-vertex stream.
+    pub fn with_attribute(mut self, name: impl Into<String>, values: AttributeValues) -> Self {
+        self.attributes.insert(name.into(), values);
+        self
+    }
+
+    /// The geometry for `kind`, at a size that fits the demo camera.
+    ///
+    /// On the CPU, so a caller that wants to *add* a stream to a stock
+    /// primitive — the editor's preview does, for want of a mesh with
+    /// real ones — has the vertices to build it from.
+    pub fn from_kind(kind: MeshKind) -> Self {
+        let (vertices, indices) = match kind {
+            MeshKind::Cube => cube_geometry(1.6),
+            MeshKind::Sphere => sphere_geometry(1.0, 48, 32),
+            MeshKind::Plane => plane_geometry(2.4, 32),
+            MeshKind::Torus => torus_geometry(0.9, 0.35, 64, 24),
+        };
+        MeshData::new(vertices, indices)
     }
 
     /// How many triangles.
@@ -69,8 +190,57 @@ impl MeshData {
 
     /// Append `other`, shifting its indices — how an importer merges every
     /// primitive of a file into one mesh.
+    ///
+    /// A named stream survives the merge only if *both* sides carry it.
+    /// There is no value that would be right to invent for the vertices
+    /// of a primitive that has no colours, and a stream half-filled with
+    /// an invented one is worse than no stream: the material would draw,
+    /// and half of it would be wrong.
     pub fn extend(&mut self, other: &MeshData) {
         let base = self.vertices.len() as u32;
+        // Merging into nothing is not a merge: an importer starts with an
+        // empty `MeshData` and extends it once per primitive, and every
+        // stream would be dropped on the first step.
+        if self.vertices.is_empty() && self.attributes.is_empty() {
+            self.attributes = other.attributes.clone();
+            self.vertices.extend_from_slice(&other.vertices);
+            self.indices.extend_from_slice(&other.indices);
+            return;
+        }
+        let dropped: Vec<String> = self
+            .attributes
+            .keys()
+            .filter(|name| !other.attributes.contains_key(*name))
+            .cloned()
+            .collect();
+        for name in dropped {
+            self.attributes.remove(&name);
+        }
+        for (name, values) in &self.attributes.clone() {
+            let Some(extra) = other.attributes.get(name) else {
+                continue;
+            };
+            let merged = match (values, extra) {
+                (AttributeValues::F32(a), AttributeValues::F32(b)) => {
+                    AttributeValues::F32([a.as_slice(), b.as_slice()].concat())
+                }
+                (AttributeValues::Vec2(a), AttributeValues::Vec2(b)) => {
+                    AttributeValues::Vec2([a.as_slice(), b.as_slice()].concat())
+                }
+                (AttributeValues::Vec3(a), AttributeValues::Vec3(b)) => {
+                    AttributeValues::Vec3([a.as_slice(), b.as_slice()].concat())
+                }
+                (AttributeValues::Vec4(a), AttributeValues::Vec4(b)) => {
+                    AttributeValues::Vec4([a.as_slice(), b.as_slice()].concat())
+                }
+                // Two primitives calling the same name two different
+                // types is a file that cannot be merged into one stream.
+                _ => continue,
+            };
+            self.attributes.insert(name.clone(), merged);
+        }
+        self.attributes
+            .retain(|_, values| values.len() == self.vertices.len() + other.vertices.len());
         self.vertices.extend_from_slice(&other.vertices);
         self.indices
             .extend(other.indices.iter().map(|index| index + base));
@@ -79,9 +249,12 @@ impl MeshData {
 
 /// An indexed triangle mesh on the GPU.
 pub struct Mesh {
+    label: String,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    vertex_count: u32,
+    streams: BTreeMap<String, VertexStream>,
 }
 
 impl Mesh {
@@ -93,6 +266,7 @@ impl Mesh {
     pub fn new(device: &wgpu::Device, label: &str, vertices: &[Vertex], indices: &[u32]) -> Self {
         use wgpu::util::DeviceExt as _;
         Mesh {
+            label: label.to_string(),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{label} vertices")),
                 contents: bytemuck::cast_slice(vertices),
@@ -104,12 +278,125 @@ impl Mesh {
                 usage: wgpu::BufferUsages::INDEX,
             }),
             index_count: indices.len() as u32,
+            vertex_count: vertices.len() as u32,
+            streams: BTreeMap::new(),
         }
     }
 
-    /// Upload CPU geometry as a mesh.
+    /// Upload CPU geometry as a mesh, streams and all.
+    ///
+    /// A stream of the wrong length is dropped rather than uploaded: it
+    /// would index past its own buffer for some vertex, which reads as
+    /// zero on one backend and as a validation error on another.
     pub fn upload(device: &wgpu::Device, label: &str, data: &MeshData) -> Self {
-        Mesh::new(device, label, &data.vertices, &data.indices)
+        let mut mesh = Mesh::new(device, label, &data.vertices, &data.indices);
+        for (name, values) in &data.attributes {
+            let _ = mesh.set_attribute(device, name, values);
+        }
+        mesh
+    }
+
+    /// The mesh's label, as it appears in an error naming it.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Upload one named per-vertex stream, replacing any of that name.
+    ///
+    /// Errors when the stream is not exactly as long as the mesh, which is
+    /// the one thing that cannot be caught later: a vertex buffer shorter
+    /// than the draw reads off the end of it.
+    pub fn set_attribute(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        values: &AttributeValues,
+    ) -> Result<(), RenderError> {
+        use wgpu::util::DeviceExt as _;
+        if values.len() as u32 != self.vertex_count {
+            return Err(RenderError::VertexStreamLength {
+                mesh: self.label.clone(),
+                attribute: name.to_string(),
+                supplied: values.len(),
+                vertices: self.vertex_count as usize,
+            });
+        }
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} {name}", self.label)),
+            contents: values.bytes(),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.streams.insert(
+            name.to_string(),
+            VertexStream {
+                buffer,
+                ty: values.ty(),
+            },
+        );
+        Ok(())
+    }
+
+    /// The type of the named stream, or `None` if the mesh has none.
+    pub fn attribute_type(&self, name: &str) -> Option<ValueType> {
+        self.streams.get(name).map(|stream| stream.ty)
+    }
+
+    /// Every named stream this mesh carries, in name order.
+    pub fn attribute_names(&self) -> impl Iterator<Item = &str> {
+        self.streams.keys().map(String::as_str)
+    }
+
+    /// Whether this mesh can supply every attribute in `declared`.
+    ///
+    /// Checked when the frame is compiled, before a pass is opened, so a
+    /// mismatch is an error naming the material, the attribute and the
+    /// mesh — never a `wgpu` complaint about vertex buffer 4.
+    pub fn check_attributes(
+        &self,
+        material: &str,
+        declared: &[VertexAttributeBinding],
+    ) -> Result<(), RenderError> {
+        for attribute in declared {
+            let name = attribute.name.as_str();
+            match self.attribute_type(name) {
+                None => {
+                    return Err(RenderError::MissingVertexAttribute {
+                        material: material.to_string(),
+                        attribute: name.to_string(),
+                        mesh: self.label.clone(),
+                        available: self.attribute_names().map(str::to_string).collect(),
+                    })
+                }
+                Some(ty) if ty != attribute.ty => {
+                    return Err(RenderError::VertexAttributeType {
+                        material: material.to_string(),
+                        attribute: name.to_string(),
+                        mesh: self.label.clone(),
+                        supplied: ty,
+                        declared: attribute.ty,
+                    })
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind the streams `declared` asks for, at the slots it names.
+    ///
+    /// Call [`Mesh::check_attributes`] first: a missing stream is silently
+    /// skipped here, because a half-recorded pass is worse than a draw
+    /// `wgpu` will reject.
+    pub fn bind_attributes(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        declared: &[VertexAttributeBinding],
+    ) {
+        for attribute in declared {
+            if let Some(stream) = self.streams.get(attribute.name.as_str()) {
+                pass.set_vertex_buffer(attribute.slot, stream.buffer.slice(..));
+            }
+        }
     }
 
     /// A cube of edge length `size`, centred on the origin.
@@ -153,12 +440,7 @@ impl Mesh {
 
     /// The mesh for `kind`, at a size that fits the demo camera.
     pub fn from_kind(device: &wgpu::Device, kind: MeshKind) -> Self {
-        match kind {
-            MeshKind::Cube => Mesh::cube(device, 1.6),
-            MeshKind::Sphere => Mesh::sphere(device, 1.0),
-            MeshKind::Plane => Mesh::plane(device, 2.4),
-            MeshKind::Torus => Mesh::torus(device, 0.9, 0.35),
-        }
+        Mesh::upload(device, kind.name(), &MeshData::from_kind(kind))
     }
 
     /// Number of indices, i.e. `triangles * 3`.

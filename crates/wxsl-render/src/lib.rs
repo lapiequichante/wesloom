@@ -79,14 +79,16 @@ pub use glam;
 pub use wgpu;
 
 pub use bindings::{BindingLayouts, MaterialBindings};
-pub use draw::{DrawItem, DrawList};
-pub use environment::{Camera, Environment, FrameBindings, InstanceTransform, Light};
+pub use draw::{DrawItem, DrawList, InstanceAttributes};
+pub use environment::{
+    Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,
+};
 pub use error::RenderError;
 pub use gpu::{DeviceCaps, GpuContext, OffscreenTarget};
 pub use graph::{PassBinding, RenderGraph, ResourcePool, Schedule};
 pub use library::ShaderLibrary;
 pub use material::Material;
-pub use mesh::{Mesh, MeshData, MeshKind, Vertex};
+pub use mesh::{AttributeValues, Mesh, MeshData, MeshKind, Vertex};
 pub use pass::{
     Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, PassState, Read, ResourceDesc,
     ResourceId,

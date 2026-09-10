@@ -399,6 +399,13 @@ impl Renderer {
         self.pipelines.len()
     }
 
+    /// The frame group's buffers, for a caller that wants to know what a
+    /// frame cost: how many instance row shapes it carried, and how many
+    /// rows fit before the next reallocation.
+    pub fn frame_bindings(&self) -> &FrameBindings {
+        &self.bindings
+    }
+
     /// Every stage the active pass list draws with, in pass order.
     pub fn stages(&self) -> Vec<MaterialStage> {
         let mut stages = Vec::new();
@@ -498,11 +505,16 @@ impl Renderer {
         self.poll_swap(device)?;
         let plan = self.compile_frame(device, request.draws)?;
 
+        // One row per draw, in every shape the frame's materials asked
+        // for — and the place a draw that forgot a declared per-instance
+        // attribute is told so, before a pass is opened.
+        let rows = request.draws.instance_rows()?;
         self.bindings.update(
             device,
             queue,
             request.environment,
             &request.draws.transforms(),
+            &rows,
         );
         self.pool.configure(device, &self.schedule, self.target);
 
@@ -569,6 +581,15 @@ impl Renderer {
                     let mut variants = Vec::with_capacity(selected.len());
                     for instance in selected {
                         let item = &draws.items()[instance as usize];
+                        // Before anything is recorded: a mesh that cannot
+                        // supply what the material declares is an error
+                        // naming all three, not a `wgpu` complaint about
+                        // vertex buffer 4 and not a frame that draws
+                        // whatever was left bound at that slot.
+                        item.mesh.check_attributes(
+                            &item.material.name,
+                            item.material.vertex_attributes(),
+                        )?;
                         let variant =
                             self.variants
                                 .material(device, &self.library, item.material, *stage)?;
@@ -632,13 +653,24 @@ fn record_pass(
             if let Some(group) = pass.pass_bind_group.as_ref() {
                 render.set_bind_group(abi::GROUP_PASS, group, &[]);
             }
+            // Group 0 is bound once above and rebound only when the
+            // instance row *shape* changes, which for a frame whose
+            // materials declare the same per-instance attributes — the
+            // usual frame, and every frame with none — is never.
+            let mut bound_shape: Option<&str> = None;
             for (instance, variant) in entries {
                 let item = &draws.items()[*instance as usize];
+                let shape = item.material.instance_signature();
+                if bound_shape != Some(shape) {
+                    render.set_bind_group(abi::GROUP_FRAME, bindings.instance_group(shape), &[]);
+                    bound_shape = Some(shape);
+                }
                 let groups = layouts.layouts(device, item.material.interface());
                 let pipeline = pipelines.geometry(
                     device,
                     bindings.layout(),
                     &MaterialGroups {
+                        vertex: item.material.vertex_attributes(),
                         material: groups.material.as_ref(),
                         user: groups.user.as_ref(),
                         signature: item.material.signature(),
@@ -671,6 +703,8 @@ fn record_pass(
                     })?;
                     render.set_bind_group(abi::GROUP_USER, group, &[]);
                 }
+                item.mesh
+                    .bind_attributes(render, item.material.vertex_attributes());
                 match source {
                     DrawSource::Scene(_) => {
                         item.mesh.draw_instances(render, *instance..*instance + 1);

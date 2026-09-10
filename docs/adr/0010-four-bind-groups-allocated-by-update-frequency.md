@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md)
+Status: Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md)
 
 ## Context
 
@@ -127,3 +127,18 @@ application can check its layout before `wgpu` validation does.
   graph-level rather than per node, because the application's buffer has
   the layout it has and a block inferred from the fields one graph happens
   to read would put them at the wrong offsets.
+
+- **Amended by [0024](0024-a-material-declares-the-geometry-it-requires.md):**
+  the frame group gained binding 3, a second read-only storage array
+  holding whatever per-instance attributes a material declares. Beside the
+  transform array rather than inside it, because that array is ABI and is
+  read at the ABI's stride by hand-written code that cannot know a
+  material widened it; both are indexed by the same
+  `@builtin(instance_index)`. The binding is in the layout whether or not
+  the material being drawn declares anything, so the frame group's
+  *shape* is still fixed and every pipeline layout built against it stays
+  valid — only the buffer behind it varies, one per row shape in the
+  frame. This is the group's first binding whose contents a *material*
+  decides, which is a small dent in "allocated by update frequency": it
+  changes per frame like its neighbours, but what is in it changes per
+  material.

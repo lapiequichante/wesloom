@@ -72,10 +72,12 @@ fn render(
     let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
     let environment = test_environment();
     let bindings = demo_bindings(gpu, &mut renderer, &material);
+    let attributes = demo_attributes();
     let draws = wxsl::render::single_draw(
         DrawItem::new(&mesh, &material)
             .with_transform(Mat4::from_rotation_y(0.6))
-            .with_bindings(&bindings),
+            .with_bindings(&bindings)
+            .with_attributes(&attributes),
     );
 
     let mut images = Vec::new();
@@ -96,6 +98,20 @@ fn render(
         images.push(target.read_rgba8(&gpu.device, &gpu.queue));
     }
     (images, renderer)
+}
+
+/// The per-instance attributes the demo material declares, at values
+/// that change nothing.
+///
+/// White, like the texture below and for the same reason: the demo graph
+/// multiplies its albedo by a per-instance tint (ADR 0024), and one is
+/// the identity — so every image in this file is what it was before the
+/// graph learned to read one.
+fn demo_attributes() -> wxsl::render::InstanceAttributes {
+    wxsl::render::InstanceAttributes::new().with(
+        "instance_tint",
+        wxsl::core::node::Value::Vec3([1.0, 1.0, 1.0]),
+    )
 }
 
 /// The demo material's bind group, with a plain white texture in it.
@@ -297,10 +313,12 @@ fn a_macro_change_compiles_a_new_variant() {
         macros.set("WXSL_FBM_OCTAVES", MacroValue::Int(octaves));
         let material = Material::from_graph_with_macros(&graph, &registry, &macros).unwrap();
         let bindings = demo_bindings(&gpu, &mut renderer, &material);
+        let attributes = demo_attributes();
         let draws = wxsl::render::single_draw(
             DrawItem::new(&mesh, &material)
                 .with_transform(Mat4::from_rotation_y(0.6))
-                .with_bindings(&bindings),
+                .with_bindings(&bindings)
+                .with_attributes(&attributes),
         );
         renderer
             .render(
@@ -353,10 +371,12 @@ fn a_requested_pipeline_swap_never_shows_a_frame_of_the_new_one_early() {
     let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
     let environment = test_environment();
     let bindings = demo_bindings(&gpu, &mut renderer, &material);
+    let attributes = demo_attributes();
     let draws = wxsl::render::single_draw(
         DrawItem::new(&mesh, &material)
             .with_transform(Mat4::from_rotation_y(0.6))
-            .with_bindings(&bindings),
+            .with_bindings(&bindings)
+            .with_attributes(&attributes),
     );
     let frame = |renderer: &mut Renderer| {
         renderer
@@ -507,13 +527,16 @@ fn every_instance_lands_where_its_own_transform_puts_it() {
     };
 
     let bindings = demo_bindings(&gpu, &mut renderer, &material);
+    let attributes = demo_attributes();
     let draws: wxsl::render::DrawList<'_> = [
         DrawItem::new(&mesh, &material)
             .with_transform(Mat4::from_translation(Vec3::new(-1.4, 0.0, 0.0)))
-            .with_bindings(&bindings),
+            .with_bindings(&bindings)
+            .with_attributes(&attributes),
         DrawItem::new(&mesh, &material)
             .with_transform(Mat4::from_translation(Vec3::new(1.4, 0.0, 0.0)))
-            .with_bindings(&bindings),
+            .with_bindings(&bindings)
+            .with_attributes(&attributes),
     ]
     .into_iter()
     .collect();

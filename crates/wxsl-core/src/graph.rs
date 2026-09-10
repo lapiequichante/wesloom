@@ -25,7 +25,9 @@ use crate::abi;
 use crate::error::{Direction, GraphError, GraphErrors};
 use crate::macros::{MacroDef, MacroSet, MacroValue};
 use crate::node::{self, NodeBody, NodeDefinition, NodeRegistry, Socket, Value, ValueType};
-use crate::resources::{BufferLayout, MaterialInterface, ResourceBinding, UserBlock};
+use crate::resources::{
+    BufferLayout, GeometryInterface, MaterialInterface, ResourceBinding, UserBlock,
+};
 use crate::wxsl::WxslIdent;
 
 /// Identifier of a node within one graph.
@@ -203,7 +205,113 @@ pub struct Graph {
     edges: Vec<Edge>,
     macros: MacroSet,
     user_block: Option<UserBlockDecl>,
+    attributes: Vec<AttributeDecl>,
     next_id: u32,
+}
+
+/// How often an attribute's value changes: once per vertex, or once per
+/// drawn instance.
+///
+/// The frequency decides the *backing* — a vertex buffer or a row of the
+/// instance storage buffer — and nothing else. It is a property of the
+/// declaration rather than of the node that reads one, so moving an
+/// attribute from one to the other rewires no graph
+/// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum AttributeFrequency {
+    /// One value per vertex, from a vertex buffer of its own.
+    #[default]
+    Vertex,
+    /// One value per instance, from a field appended to the frame's
+    /// instance storage buffer.
+    Instance,
+}
+
+impl AttributeFrequency {
+    /// Every frequency, for a UI offering a choice.
+    pub const ALL: &'static [AttributeFrequency] =
+        &[AttributeFrequency::Vertex, AttributeFrequency::Instance];
+
+    /// The name used in the serialized graph and in the editor.
+    pub fn name(self) -> &'static str {
+        match self {
+            AttributeFrequency::Vertex => "vertex",
+            AttributeFrequency::Instance => "instance",
+        }
+    }
+
+    /// Parse a frequency from its [`AttributeFrequency::name`].
+    pub fn parse(text: &str) -> Option<Self> {
+        AttributeFrequency::ALL
+            .iter()
+            .copied()
+            .find(|frequency| frequency.name().eq_ignore_ascii_case(text.trim()))
+    }
+}
+
+impl core::fmt::Display for AttributeFrequency {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.pad(self.name())
+    }
+}
+
+/// One attribute a graph declares it requires of the geometry it is drawn
+/// on.
+///
+/// A graph-level declaration, like [`UserBlockDecl`] and for the same
+/// reason: it is a *requirement on somebody else*, so it has to be
+/// readable without walking the nodes, and it has to stay stated even
+/// while the branch that reads it is half-wired.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AttributeDecl {
+    /// Its name: what a reading node names, what a mesh's stream is called,
+    /// and the field name in the instance row. A valid WXSL identifier.
+    pub name: String,
+    /// Its type.
+    pub ty: ValueType,
+    /// Whether it comes per vertex or per instance.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub frequency: AttributeFrequency,
+}
+
+impl AttributeDecl {
+    /// A per-vertex attribute.
+    pub fn vertex(name: impl Into<String>, ty: ValueType) -> Self {
+        AttributeDecl {
+            name: name.into(),
+            ty,
+            frequency: AttributeFrequency::Vertex,
+        }
+    }
+
+    /// A per-instance attribute.
+    pub fn instance(name: impl Into<String>, ty: ValueType) -> Self {
+        AttributeDecl {
+            name: name.into(),
+            ty,
+            frequency: AttributeFrequency::Instance,
+        }
+    }
+}
+
+/// Why `ty` cannot be a per-vertex attribute, or `None` if it can.
+///
+/// Narrower than what a buffer can hold, because a vertex buffer is not a
+/// buffer the shader indexes: `wgpu::VertexFormat` has float, integer and
+/// normalized entries but no matrix, and an integer vertex attribute needs
+/// a `@interpolate(flat)` discipline of its own. Floats and float vectors
+/// are what geometry actually carries.
+fn vertex_attribute_reason(ty: ValueType) -> Option<String> {
+    match ty {
+        ValueType::F32 | ValueType::Vec2 | ValueType::Vec3 | ValueType::Vec4 => None,
+        other => Some(format!(
+            "{other} cannot be a vertex buffer format; a per-vertex attribute is \
+             `f32`, `vec2f`, `vec3f` or `vec4f`",
+        )),
+    }
 }
 
 /// The uniform block a graph declares it expects the *application* to
@@ -296,6 +404,7 @@ impl Graph {
             edges: Vec::new(),
             macros: MacroSet::new(),
             user_block: None,
+            attributes: Vec::new(),
             next_id: 1,
         }
     }
@@ -473,6 +582,51 @@ impl Graph {
         )
     }
 
+    /// What this graph requires of the geometry it is drawn on.
+    ///
+    /// Declared here rather than inferred from the `input.attribute` nodes
+    /// that read them, for the reason [`UserBlockDecl`] is: the
+    /// declaration is a *contract with the geometry*, and a contract that
+    /// appeared and vanished as a branch was wired up would be no contract
+    /// at all. It is also what says whether a name is per-vertex or per-
+    /// instance, which the reading node deliberately does not.
+    pub fn attributes(&self) -> &[AttributeDecl] {
+        &self.attributes
+    }
+
+    /// Look one up by name.
+    pub fn attribute(&self, name: &str) -> Option<&AttributeDecl> {
+        let name = name.trim();
+        self.attributes.iter().find(|decl| decl.name.trim() == name)
+    }
+
+    /// Declare an attribute, replacing any declaration of the same name.
+    pub fn declare_attribute(&mut self, decl: AttributeDecl) {
+        let name = decl.name.trim().to_string();
+        self.attributes.retain(|held| held.name.trim() != name);
+        self.attributes.push(decl);
+    }
+
+    /// Undeclare `name`, returning what was there.
+    ///
+    /// A node still reading it becomes invalid, which is
+    /// [`GraphError::UnknownAttribute`] and exactly the report wanted:
+    /// removing a declaration should say what it broke rather than
+    /// silently deleting the nodes.
+    pub fn remove_attribute(&mut self, name: &str) -> Option<AttributeDecl> {
+        let name = name.trim();
+        let index = self
+            .attributes
+            .iter()
+            .position(|decl| decl.name.trim() == name)?;
+        Some(self.attributes.remove(index))
+    }
+
+    /// Replace the whole declared set.
+    pub fn set_attributes(&mut self, attributes: Vec<AttributeDecl>) {
+        self.attributes = attributes;
+    }
+
     /// Pin `node`'s setting `name`. Unlike [`Graph::setting`] this does not
     /// check the definition declares it — [`Graph::validate`] reports a
     /// setting that matches nothing.
@@ -582,6 +736,17 @@ impl Graph {
             })
             .collect();
 
+        // Declared, not inferred, and *not* narrowed to what is
+        // reachable either — unlike a parameter. The instance buffer is
+        // uploaded once for the whole frame and serves every stage, so a
+        // stride that depended on which nodes a stage happens to reach
+        // would be a different buffer per pass. Narrowing per stage is
+        // M5's partitioning, with a general mechanism.
+        let geometry = GeometryInterface::new(
+            self.declared_attributes(AttributeFrequency::Vertex),
+            self.declared_attributes(AttributeFrequency::Instance),
+        );
+
         // Declared, not inferred: the whole block is bound whether the
         // graph reads one field of it or all of them, because the
         // application's buffer has the layout it has.
@@ -606,7 +771,19 @@ impl Graph {
             defaults,
             resources,
             user,
+            geometry,
         }
+    }
+
+    /// The declared attributes of one frequency, as the layout computer
+    /// wants them. Malformed names are skipped; `Graph::validate` reports
+    /// them.
+    fn declared_attributes(&self, frequency: AttributeFrequency) -> Vec<(WxslIdent, ValueType)> {
+        self.attributes
+            .iter()
+            .filter(|decl| decl.frequency == frequency)
+            .filter_map(|decl| Some((WxslIdent::new(decl.name.trim())?, decl.ty)))
+            .collect()
     }
 
     /// The identifier a declaring node's `setting` names, or `None` when it
@@ -1631,6 +1808,7 @@ impl Graph {
     /// carries a usable default.
     fn check_declarations(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
         self.check_user_block(errors);
+        self.check_attributes(errors);
         // One name is one binding, so two nodes naming the same parameter
         // are the same parameter — which is a feature, as long as they
         // agree about its type.
@@ -1649,7 +1827,9 @@ impl Graph {
                 }
             }
             let setting_name = match def.body {
-                NodeBody::Param | NodeBody::Resource => node::SETTING_NAME,
+                NodeBody::Param | NodeBody::Resource | NodeBody::AttributeRead => {
+                    node::SETTING_NAME
+                }
                 NodeBody::UserRead => node::SETTING_FIELD,
                 _ => continue,
             };
@@ -1744,8 +1924,117 @@ impl Graph {
                         }
                     }
                 }
+                NodeBody::AttributeRead => {
+                    let Some(decl) = self.attribute(name.as_str()) else {
+                        errors.push(GraphError::UnknownAttribute {
+                            node: id,
+                            attribute: name.as_str().to_string(),
+                            declared: self
+                                .attributes
+                                .iter()
+                                .map(|decl| decl.name.clone())
+                                .collect(),
+                        });
+                        continue;
+                    };
+                    // Like a user-block field, and unlike a parameter:
+                    // the type is the *document's*, so a resolved generic
+                    // here can be wrong rather than merely missing.
+                    if let Some(resolved) = self.effective_type(id, socket) {
+                        if resolved != decl.ty {
+                            errors.push(GraphError::AttributeTypeMismatch {
+                                node: id,
+                                attribute: name.as_str().to_string(),
+                                resolved,
+                                declared: decl.ty,
+                            });
+                        }
+                    }
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// The declared attribute set, independent of whether anything reads
+    /// it — and the one accountant for the inter-stage location budget.
+    ///
+    /// Everything here is checked against a *limit* rather than against
+    /// another declaration, which is what makes it worth doing in one
+    /// place: a graph that overruns the varying budget or the vertex
+    /// buffer budget should be told which limit and by how much, not
+    /// discover it as a shader-compiler error about location 16.
+    fn check_attributes(&self, errors: &mut Vec<GraphError>) {
+        let mut invalid = |reason: String| errors.push(GraphError::InvalidAttribute { reason });
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut per_vertex = 0usize;
+        for decl in &self.attributes {
+            let name = decl.name.trim();
+            let Some(ident) = WxslIdent::new(name) else {
+                invalid(format!("`{name}` is not a valid WXSL attribute name"));
+                continue;
+            };
+            if !seen.insert(name) {
+                invalid(format!("`{name}` is declared twice"));
+            }
+            if let Some(reason) = reserved_reason(ident.as_str()) {
+                invalid(format!("`{name}` {reason}"));
+            }
+            if abi::INSTANCE_BASE_FIELDS
+                .iter()
+                .any(|base| base.name == name)
+            {
+                invalid(format!(
+                    "`{name}` is a field every instance row already has, \
+                     and the transform lives there",
+                ));
+            }
+            match decl.frequency {
+                AttributeFrequency::Vertex => {
+                    per_vertex += 1;
+                    if let Some(reason) = vertex_attribute_reason(decl.ty) {
+                        invalid(format!("`{name}`: {reason}"));
+                    }
+                }
+                AttributeFrequency::Instance => {
+                    if decl.ty.is_resource() {
+                        invalid(format!(
+                            "`{name}` is {}, and an instance row holds values \
+                             rather than resources",
+                            decl.ty
+                        ));
+                    }
+                }
+            }
+        }
+        if per_vertex > abi::MAX_VERTEX_ATTRIBUTES {
+            invalid(format!(
+                "{per_vertex} per-vertex attributes declared, and the budget is \
+                 {} — each is a vertex buffer slot of its own",
+                abi::MAX_VERTEX_ATTRIBUTES,
+            ));
+        }
+        // The accountant: the base varyings, the instance index if
+        // anything needs it, and one per declared per-vertex attribute.
+        let geometry = GeometryInterface::new(
+            self.declared_attributes(AttributeFrequency::Vertex),
+            self.declared_attributes(AttributeFrequency::Instance),
+        );
+        let used = geometry.varyings_used();
+        if used > abi::MAX_VARYING_LOCATIONS {
+            invalid(format!(
+                "{used} inter-stage locations used, and there are {}: \
+                 {} for the shading basis{}, and {} declared per-vertex \
+                 attribute(s)",
+                abi::MAX_VARYING_LOCATIONS,
+                abi::VERTEX_OUT_FIELDS.len(),
+                if geometry.instance_index_location().is_some() {
+                    " plus one for the instance index"
+                } else {
+                    ""
+                },
+                geometry.vertex().len(),
+            ));
         }
     }
 
@@ -1946,7 +2235,7 @@ mod wire {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{Edge, Graph, Node, NodeId, UserBlockDecl};
+    use super::{AttributeDecl, Edge, Graph, Node, NodeId, UserBlockDecl};
     use crate::macros::MacroSet;
 
     #[derive(Serialize, Deserialize)]
@@ -1964,6 +2253,8 @@ mod wire {
         pub macros: MacroSet,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub user_block: Option<UserBlockDecl>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub attributes: Vec<AttributeDecl>,
         #[serde(default)]
         pub nodes: Vec<WireNode>,
         #[serde(default)]
@@ -1976,6 +2267,7 @@ mod wire {
                 name: graph.name,
                 macros: graph.macros,
                 user_block: graph.user_block,
+                attributes: graph.attributes,
                 nodes: graph
                     .nodes
                     .into_iter()
@@ -2000,6 +2292,7 @@ mod wire {
                 edges: wire.edges,
                 macros: wire.macros,
                 user_block: wire.user_block,
+                attributes: wire.attributes,
                 next_id,
             }
         }
@@ -2014,6 +2307,121 @@ mod wire {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A registry with one node reading a declared attribute.
+    fn attribute_registry() -> NodeRegistry {
+        let mut registry = NodeRegistry::new();
+        registry.register(
+            NodeDefinition::builder("input.attribute", "Attribute")
+                .setting(crate::node::SettingDef::new(
+                    node::SETTING_NAME,
+                    "name",
+                    "Which attribute.",
+                ))
+                .generic_param(crate::node::GenericParam::new("T", ValueType::ALL.to_vec()))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .declaration(NodeBody::AttributeRead),
+        );
+        registry
+    }
+
+    #[test]
+    fn reading_an_attribute_the_graph_does_not_declare_is_reported() {
+        let registry = attribute_registry();
+        let mut graph = Graph::new("undeclared");
+        let node = graph.add(Node::new("input.attribute").with_setting("name", "color"));
+        graph
+            .set_generic(&registry, node, "T", ValueType::Vec3)
+            .expect("allowed");
+        let errors = graph.validate(&registry).expect_err("undeclared");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::UnknownAttribute { .. })),
+            "{errors:?}"
+        );
+
+        // And declaring it — at the same type — is all it takes.
+        graph.declare_attribute(AttributeDecl::vertex("color", ValueType::Vec3));
+        graph.validate(&registry).expect("declared now");
+
+        // At a different type it is a mismatch, not a silent
+        // reinterpretation: the type comes from the document, so this is
+        // one of the few places a resolved generic can be *wrong*.
+        graph.declare_attribute(AttributeDecl::vertex("color", ValueType::Vec2));
+        let errors = graph.validate(&registry).expect_err("mistyped");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::AttributeTypeMismatch { .. })),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_per_vertex_attribute_of_a_type_no_vertex_buffer_carries_is_reported() {
+        let registry = attribute_registry();
+        let mut graph = Graph::new("integers");
+        // Fine per instance — a storage buffer holds anything — and not
+        // fine per vertex, where `wgpu::VertexFormat` decides.
+        graph.declare_attribute(AttributeDecl::instance("count", ValueType::U32));
+        graph
+            .validate(&registry)
+            .expect("a storage row holds a u32");
+        graph.declare_attribute(AttributeDecl::vertex("count", ValueType::U32));
+        let errors = graph.validate(&registry).expect_err("not a vertex format");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::InvalidAttribute { .. })),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn overrunning_a_budget_says_which_budget_and_by_how_much() {
+        // The accountant. Both limits are counted in one place, so a
+        // graph that overruns either is told rather than discovering it
+        // as a shader-compiler error about location 16.
+        let registry = attribute_registry();
+        let mut graph = Graph::new("greedy");
+        for index in 0..abi::MAX_VERTEX_ATTRIBUTES + 1 {
+            graph.declare_attribute(AttributeDecl::vertex(
+                format!("stream_{index}"),
+                ValueType::Vec2,
+            ));
+        }
+        let errors = graph.validate(&registry).expect_err("over the slot budget");
+        let reported: Vec<String> = errors.0.iter().map(|error| error.to_string()).collect();
+        assert!(
+            reported
+                .iter()
+                .any(|text| text.contains("per-vertex attributes declared")),
+            "{reported:?}"
+        );
+    }
+
+    #[test]
+    fn an_attribute_cannot_take_a_name_the_instance_row_already_uses() {
+        let registry = attribute_registry();
+        let mut graph = Graph::new("shadowing");
+        graph.declare_attribute(AttributeDecl::instance(
+            abi::INSTANCE_BASE_FIELDS[0].name,
+            ValueType::Mat4,
+        ));
+        let errors = graph.validate(&registry).expect_err("that name is taken");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::InvalidAttribute { .. })),
+            "{errors:?}"
+        );
+    }
+
     use crate::node::TypeRule;
     use crate::node::{Socket, ValueType};
 

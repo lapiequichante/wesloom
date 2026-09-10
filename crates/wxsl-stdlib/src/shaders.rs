@@ -137,6 +137,98 @@ mod tests {
         assert!(missing.is_empty(), "unlisted shader files: {missing:?}");
     }
 
+    /// The `name: type` members of `struct` in `module`, in order, with
+    /// attributes and comments stripped.
+    fn struct_fields(module: &str, name: &str) -> Vec<(String, String)> {
+        let source = MODULES
+            .iter()
+            .find(|(path, _)| *path == module)
+            .map(|(_, source)| *source)
+            .unwrap_or_else(|| panic!("`{module}` is in the table"));
+        let start = source
+            .find(&format!("struct {name} {{"))
+            .unwrap_or_else(|| panic!("`{module}` declares `struct {name}`"));
+        let body = &source[start..];
+        let end = body.find('}').expect("the struct is closed");
+        body[..end]
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let line = line.split("//").next().unwrap_or("").trim();
+                // Attributes come first and are not part of the layout
+                // agreement; the location *order* is, and that is the
+                // order of the lines.
+                let line = line.rsplit('>').next().unwrap_or(line);
+                let line = match line.rfind(')') {
+                    Some(at) => &line[at + 1..],
+                    None => line,
+                };
+                let (field, ty) = line.trim().trim_end_matches(',').split_once(':')?;
+                Some((field.trim().to_string(), ty.trim().to_string()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shipped_vertex_structs_are_what_the_abi_tables_say() {
+        // Three views of one layout: these tables, the `.wxsl` below, and
+        // `wxsl_render::mesh`. Codegen writes the *extended* IO structs
+        // from the tables (ADR 0024), so a `.wxsl` that drifted would put
+        // a material's declared attribute at a location the base half had
+        // already taken — and nothing else would notice.
+        let vertex_in = struct_fields(abi::VERTEX_MODULE, abi::VERTEX_IN_STRUCT);
+        for (index, field) in abi::VERTEX_IN_FIELDS.iter().enumerate() {
+            assert_eq!(
+                vertex_in
+                    .get(index)
+                    .map(|(name, ty)| (name.as_str(), ty.as_str())),
+                Some((field.name, field.ty.wxsl_type())),
+                "`{}` field {index} is not `{}`",
+                abi::VERTEX_IN_STRUCT,
+                field.name,
+            );
+        }
+        // One more than the table: `@builtin(instance_index)`, which has
+        // no location and so is not one.
+        assert_eq!(vertex_in.len(), abi::VERTEX_IN_FIELDS.len() + 1);
+
+        let vertex_out = struct_fields(abi::VERTEX_MODULE, abi::VERTEX_OUT_STRUCT);
+        assert_eq!(
+            vertex_out.first().map(|(name, _)| name.as_str()),
+            Some(abi::CLIP_POSITION_FIELD),
+            "`{}` starts with the clip position",
+            abi::VERTEX_OUT_STRUCT,
+        );
+        let located: Vec<(String, String)> = vertex_out.into_iter().skip(1).collect();
+        assert_eq!(located.len(), abi::VERTEX_OUT_FIELDS.len());
+        for (index, field) in abi::VERTEX_OUT_FIELDS.iter().enumerate() {
+            assert_eq!(
+                (located[index].0.as_str(), located[index].1.as_str()),
+                (field.name, field.ty.wxsl_type()),
+                "`{}` location {index} is not `{}`",
+                abi::VERTEX_OUT_STRUCT,
+                field.name,
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_instance_row_starts_with_the_abi_prefix() {
+        // The vertex stage reads the row through this narrow struct while
+        // a material's generated module may read a wider one at the same
+        // binding. The two only agree because the prefix is pinned, so
+        // this is the test that keeps a declared attribute from sliding
+        // in front of the model matrix.
+        let fields = struct_fields("package::wxsl::bindings", "Instance");
+        assert_eq!(fields.len(), abi::INSTANCE_BASE_FIELDS.len());
+        for (index, field) in abi::INSTANCE_BASE_FIELDS.iter().enumerate() {
+            assert_eq!(
+                (fields[index].0.as_str(), fields[index].1.as_str()),
+                (field.name, field.ty.wxsl_type()),
+            );
+        }
+    }
+
     /// Every `@group(N)` a module declares, as `(module path, N)`.
     fn declared_groups() -> Vec<(&'static str, u32)> {
         let mut found = Vec::new();

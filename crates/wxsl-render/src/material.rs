@@ -22,7 +22,7 @@ use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
 use wxsl_core::macros::MacroSet;
 use wxsl_core::node::NodeRegistry;
-use wxsl_core::resources::MaterialInterface;
+use wxsl_core::resources::{BufferLayout, FieldLayout, MaterialInterface, VertexAttributeBinding};
 
 use crate::error::RenderError;
 
@@ -41,6 +41,12 @@ pub struct Material {
     /// per frame is an allocation for something that cannot change while
     /// the material exists.
     signature: String,
+    /// `interface().geometry.instance().signature()`, built once.
+    ///
+    /// Consulted per draw per pass — it is what the frame's instance
+    /// buffers are grouped by — and, like [`Material::signature`], it
+    /// cannot change while the material exists.
+    instance_signature: String,
 }
 
 impl Material {
@@ -72,6 +78,7 @@ impl Material {
         Ok(Material {
             name: graph.name().to_string(),
             signature: stages[0].interface.signature(),
+            instance_signature: stages[0].interface.geometry.instance().signature(),
             stages,
         })
     }
@@ -94,6 +101,32 @@ impl Material {
     /// point this becomes per-stage and the pipeline layouts follow it.
     pub fn interface(&self) -> &MaterialInterface {
         &self.stages[0].interface
+    }
+
+    /// Which instance row shape this material reads, as
+    /// [`BufferLayout::signature`].
+    pub fn instance_signature(&self) -> &str {
+        &self.instance_signature
+    }
+
+    /// The layout of one row of the instance buffer this material reads:
+    /// the ABI's transform prefix, then whatever per-instance attributes
+    /// the graph declared.
+    ///
+    /// Never empty — every instance has a transform — so this is also the
+    /// stride, and the key the frame's instance buffers are grouped by.
+    pub fn instance_layout(&self) -> &BufferLayout {
+        self.interface().geometry.instance()
+    }
+
+    /// Just the declared part of that row.
+    pub fn instance_attributes(&self) -> &[FieldLayout] {
+        self.interface().geometry.instance_attributes()
+    }
+
+    /// The per-vertex streams the mesh this is drawn on must carry.
+    pub fn vertex_attributes(&self) -> &[VertexAttributeBinding] {
+        self.interface().geometry.vertex()
     }
 
     /// The shape of what this material declares, as the bind-group and

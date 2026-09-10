@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md)
+Status: Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md)
 
 ## Context
 
@@ -150,3 +150,23 @@ The graph also gained *declarations*: textures and samplers in group 1,
 and the block it expects the application to supply in group 2. Neither is
 part of the fixed vocabulary this ADR names, because neither is fixed. See
 [0023](0023-a-material-declares-its-resources.md).
+
+## Amendment (ADR 0024)
+
+`VertexIn` and `VertexOut` are still fixed ABI text and still say exactly
+what this ADR's tables say — but they are no longer the *whole* vertex
+interface. A material may declare per-vertex attributes of its own, and
+codegen emits a second IO struct beside each of the ABI's rather than
+widening either: WGSL lets an entry point take several IO parameters, so
+what a material adds sits next to what this ADR fixed. The one exception
+is the vertex entry's *return*, which must be a single struct, so
+`abi::VERTEX_OUT_FIELDS` becomes a table the generated struct's base half
+is written from — the same "one declaration, several views, one test"
+shape this ADR already uses for the context and surface structs.
+
+The mirroring rule takes a second deliberate exception, for the same
+reason as ADR 0023's: the row of declared per-instance attributes has no
+`#[repr(C)]` struct to mirror, because the graph decides its fields. The
+instance *transform* row is untouched and keeps both its mirror and its
+test. See
+[0024](0024-a-material-declares-the-geometry-it-requires.md).

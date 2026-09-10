@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::scene::{MeshSource, Scene, SceneError, Tags};
 use wxsl_render::bindings::MaterialBindings;
-use wxsl_render::draw::{DrawItem, DrawList};
+use wxsl_render::draw::{DrawItem, DrawList, InstanceAttributes};
 use wxsl_render::material::Material;
 use wxsl_render::mesh::Mesh;
 use wxsl_render::renderer::Renderer;
@@ -37,6 +37,12 @@ pub struct SceneResources {
     /// One per material, once [`SceneResources::bind`] has run. Empty
     /// before that, and a material declaring nothing never needs one.
     bindings: Vec<MaterialBindings>,
+    /// One per *instance*, not per material: what the draw supplies for
+    /// the per-instance attributes its material declares. A scene
+    /// document has no way to name these, so they start empty and the
+    /// application fills them in — the same gap
+    /// [`SceneResources::create_bindings`] leaves for textures.
+    attributes: Vec<InstanceAttributes>,
     instances: Vec<ResolvedInstance>,
 }
 
@@ -81,7 +87,7 @@ impl SceneResources {
             );
         }
 
-        let instances = scene
+        let instances: Vec<ResolvedInstance> = scene
             .instances
             .iter()
             .map(|instance| ResolvedInstance {
@@ -96,6 +102,7 @@ impl SceneResources {
             meshes,
             materials,
             bindings: Vec::new(),
+            attributes: vec![InstanceAttributes::new(); instances.len()],
             instances,
         })
     }
@@ -104,7 +111,8 @@ impl SceneResources {
     pub fn draw_list(&self) -> DrawList<'_> {
         self.instances
             .iter()
-            .map(|instance| {
+            .enumerate()
+            .map(|(index, instance)| {
                 let mut item = DrawItem::new(
                     &self.meshes[instance.mesh],
                     &self.materials[instance.material],
@@ -114,9 +122,30 @@ impl SceneResources {
                 if let Some(bindings) = self.bindings.get(instance.material) {
                     item = item.with_bindings(bindings);
                 }
+                if let Some(attributes) = self.attributes.get(index) {
+                    item = item.with_attributes(attributes);
+                }
                 item
             })
             .collect()
+    }
+
+    /// The per-instance attributes instance `index` supplies, to fill in.
+    ///
+    /// A scene document names meshes, materials and transforms; it has no
+    /// vocabulary for "this cube's tint". So a material that declares a
+    /// per-instance attribute leaves a hole here, and the application is
+    /// what fills it — which is also the only way a *per-instance* value
+    /// could work, since the document has one material and many
+    /// instances
+    /// ([ADR 0024](../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+    pub fn instance_attributes_mut(&mut self, index: usize) -> Option<&mut InstanceAttributes> {
+        self.attributes.get_mut(index)
+    }
+
+    /// How many instances there are, so a caller can fill every one.
+    pub fn instance_count(&self) -> usize {
+        self.instances.len()
     }
 
     /// Give every material somewhere to put its parameters, textures and

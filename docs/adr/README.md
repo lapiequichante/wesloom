@@ -22,9 +22,9 @@ is signal, don't delete it.
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
-| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md) |
+| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md) |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
-| [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md) |
+| [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md) |
 | [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
 | [0012](0012-monomorphize-templates-on-the-flat-module.md) | Monomorphize templates on the flat module, with shallow inference | Accepted |
 | [0013](0013-the-editor-draws-itself-with-wxsl-render.md) | The editor draws itself with `wxsl-render` | Accepted |
@@ -38,6 +38,7 @@ is signal, don't delete it.
 | [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md) |
 | [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted |
 | [0023](0023-a-material-declares-its-resources.md) | A material declares its resources: uniforms, textures, and the application's slot | Accepted |
+| [0024](0024-a-material-declares-the-geometry-it-requires.md) | A material declares the vertex and instance attributes it requires | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is
