@@ -9,7 +9,7 @@
 //! switches over the id its G-buffer channel carries, and the two only
 //! agree if both halves name the same models.
 
-use glam::{Mat4, Vec3, Vec4Swizzles};
+use glam::{Mat4, Vec3};
 use wxsl::core::abi;
 use wxsl::core::graph::{Graph, Node};
 use wxsl::core::lighting::{LightingSet, DEFAULT_MODELS, DEFAULT_MODEL_ID};
@@ -17,9 +17,7 @@ use wxsl::core::node::{NodeRegistry, Value};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::{Material, MaterialOptions};
 use wxsl::render::pipeline::StockPipeline;
-use wxsl::render::{
-    Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderRequest, Renderer, TargetConfig,
-};
+use wxsl::render::{Camera, DrawItem, DrawList, Environment, Light, Mesh, Renderer, TargetConfig};
 
 mod probe;
 use probe::{gpu, SIZE};
@@ -61,60 +59,6 @@ fn lit() -> Environment {
         time: 0.0,
         previous_time: 0.0,
     }
-}
-
-/// Where a world point lands in the image.
-fn pixel_of(world: Vec3) -> (u32, u32) {
-    let clip = camera().view_proj() * world.extend(1.0);
-    let ndc = clip.xyz() / clip.w;
-    let x = ((ndc.x * 0.5 + 0.5) * SIZE as f32).round();
-    let y = ((0.5 - ndc.y * 0.5) * SIZE as f32).round();
-    ((x as u32).min(SIZE - 1), (y as u32).min(SIZE - 1))
-}
-
-/// The image's RGB at a world point, as `f32` thirds so an assertion reads
-/// as a colour difference rather than a channel coincidence.
-fn color_at(image: &[u8], world: Vec3) -> [f32; 3] {
-    let (x, y) = pixel_of(world);
-    let index = ((y * SIZE + x) * 4) as usize;
-    [
-        image[index] as f32,
-        image[index + 1] as f32,
-        image[index + 2] as f32,
-    ]
-}
-
-fn gap(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let mut worst = 0.0f32;
-    for channel in 0..3 {
-        worst = worst.max((a[channel] - b[channel]).abs());
-    }
-    worst
-}
-
-/// The worst channel difference anywhere in a small patch around a world
-/// point.
-///
-/// The models are compared on their specular *lobes*, and a lobe is a
-/// curve, not a number: two lobes that agree at the highlight's peak
-/// disagree on its shoulders, so the honest sample is a patch.
-fn patch_gap(a: &[u8], b: &[u8], world: Vec3) -> f32 {
-    let (cx, cy) = pixel_of(world);
-    let mut worst = 0.0f32;
-    for dy in -6i32..=6 {
-        for dx in -6i32..=6 {
-            let (x, y) = (
-                (cx as i32 + dx).clamp(0, SIZE as i32 - 1) as u32,
-                (cy as i32 + dy).clamp(0, SIZE as i32 - 1) as u32,
-            );
-            let index = ((y * SIZE + x) * 4) as usize;
-            for channel in 0..3 {
-                let difference = (a[index + channel] as f32 - b[index + channel] as f32).abs();
-                worst = worst.max(difference);
-            }
-        }
-    }
-    worst
 }
 
 /// A surface that differs from the default only in roughness, so the
@@ -186,19 +130,8 @@ impl Scene {
             })
             .collect();
         let draws: DrawList<'_> = items.into_iter().collect();
-        self.renderer
-            .render(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &RenderRequest {
-                    view: self.target.view(),
-                    environment: &lit(),
-                    draws: &draws,
-                },
-            )
-            .expect("the frame renders");
-        self.gpu.wait();
-        self.target.read_rgba8(&self.gpu.device, &self.gpu.queue)
+        probe::render_list_in(&self.gpu, &mut self.renderer, &self.target, &draws, &lit())
+            .expect("the frame renders")
     }
 }
 
@@ -236,11 +169,11 @@ fn three_models_shade_three_objects_through_one_deferred_pass() {
 
     let centers: Vec<Vec3> = SLOTS.iter().map(|x| Vec3::new(*x, 0.0, 0.0)).collect();
     for (index, name) in ["lambert", "phong", "pbr"].into_iter().enumerate() {
-        let d = color_at(&mixed, centers[index]);
-        let f = color_at(&mixed_forward, centers[index]);
+        let d = probe::color_at(&mixed, camera(), centers[index]);
+        let f = probe::color_at(&mixed_forward, camera(), centers[index]);
         println!("{name}: deferred {d:?} forward {f:?}");
         assert!(
-            gap(d, f) <= 4.0,
+            probe::gap(d, f) <= 4.0,
             "{name}: forward and deferred disagree at its slot: {f:?} vs {d:?}"
         );
     }
@@ -250,7 +183,7 @@ fn three_models_shade_three_objects_through_one_deferred_pass() {
     // curve, which is where the comparison looks — the same pixel of two
     // one-model frames, worst channel.
     for (a, b) in [(0, 1), (1, 2), (0, 2)] {
-        let difference = patch_gap(&deferred[a], &deferred[b], centers[a]);
+        let difference = probe::patch_gap(&deferred[a], &deferred[b], camera(), centers[a], 6);
         println!("gap {a}-{b}: {difference}");
         assert!(
             difference > 8.0,
@@ -301,10 +234,10 @@ fn the_dispatch_channel_changes_no_pbr_pixel() {
     let one_model = single.render(&[&material, &material, &material]);
     let every_model = full.render(&[&full_material, &full_material, &full_material]);
     for x in SLOTS {
-        let a = color_at(&one_model, Vec3::new(x, 0.0, 0.0));
-        let b = color_at(&every_model, Vec3::new(x, 0.0, 0.0));
+        let a = probe::color_at(&one_model, camera(), Vec3::new(x, 0.0, 0.0));
+        let b = probe::color_at(&every_model, camera(), Vec3::new(x, 0.0, 0.0));
         assert!(
-            gap(a, b) <= 2.0,
+            probe::gap(a, b) <= 2.0,
             "the id channel changed the pixel at x = {x}: {a:?} vs {b:?}"
         );
     }
@@ -340,7 +273,7 @@ fn the_clearcoat_model_uses_the_extra_target_it_asks_for() {
     // coat's second lobe, fed by the target the model asked for.
     let without = scene.render(&[&pbr, &pbr, &pbr]);
     let with = scene.render(&[&clearcoat, &clearcoat, &clearcoat]);
-    let difference = patch_gap(&without, &with, Vec3::new(0.0, 0.0, 0.0));
+    let difference = probe::patch_gap(&without, &with, camera(), Vec3::new(0.0, 0.0, 0.0), 6);
     println!("clearcoat gap: {difference}");
     assert!(
         difference > 8.0,
@@ -389,18 +322,14 @@ fn a_frame_mismatched_with_the_renderers_set_is_reported_by_name() {
 
     let items = vec![DrawItem::new(&scene.quad, &stranger)];
     let draws: DrawList<'_> = items.into_iter().collect();
-    let error = scene
-        .renderer
-        .render(
-            &scene.gpu.device,
-            &scene.gpu.queue,
-            &RenderRequest {
-                view: scene.target.view(),
-                environment: &lit(),
-                draws: &draws,
-            },
-        )
-        .expect_err("the sets disagree");
+    let error = probe::render_list_in(
+        &scene.gpu,
+        &mut scene.renderer,
+        &scene.target,
+        &draws,
+        &lit(),
+    )
+    .expect_err("the sets disagree");
     let message = error.to_string();
     assert!(message.contains("models="), "{message}");
     assert!(message.contains(&stranger.name), "{message}");

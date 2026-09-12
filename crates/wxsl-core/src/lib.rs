@@ -78,6 +78,8 @@ pub mod macros;
 pub mod node;
 pub mod resources;
 pub mod scene;
+pub mod stages;
+pub mod template;
 pub mod wxsl;
 
 pub use error::{CodegenError, GraphError, GraphErrors};

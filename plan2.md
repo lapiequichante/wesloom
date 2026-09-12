@@ -10,10 +10,18 @@ editor, and chaining them** — so it deliberately overlaps plan.md's
 section 4 ("The pipeline graph, as nodes") and M7, and should be read as
 the accelerated, debt-first route to them.
 
-Status: proposal. Nothing here is decided; each numbered item becomes an
-ADR when it lands. The architecture behind P2–P5 — where each layer
+Status: P6, P2, P1 and P9 have landed — ADRs 0029, 0030, 0031 and 0032.
+The rest is proposal; each numbered item becomes an ADR when it lands. The architecture behind P2–P5 — where each layer
 lives, what it holds, and what it costs — is written out in
 [plan2-architecture.md](plan2-architecture.md).
+
+This file also absorbs [request.md](request.md), the statement of the
+destination: a programmable, data-oriented rendering framework rather
+than a material editor, with shader graphs, render graphs, passes and
+resources as separated concepts. Its closing paragraph asks for an
+honest review of where the current design prevents that model — that
+review is *"request.md against the current design"* below, and it is
+what added P9–P12 to the proposal list.
 
 ## Why M6 was slow — an honest breakdown
 
@@ -52,11 +60,75 @@ redeclarations, escaping mistakes) for a structural reason worth naming:
 decision** — ADR 0020, "the file is the truth". The node system learned
 this; the ABI half of the shader stack has not.
 
+## request.md against the current design
+
+request.md describes the destination and asks where today's design
+blocks it. Read against the code, the answer is: **most of the
+architecture already exists under other names, four things genuinely
+block it, and one ask deserves a reasoned no-for-now.** The one fear
+named explicitly — "add special cases for forward/deferred rendering"
+— is the one already answered: the material graph produces one
+`Surface output` with semantic optional channels (`SURFACE_FIELDS`:
+base_color, metallic, roughness, normal, emissive, occlusion, alpha),
+no graph contains `if forward`, the same subgraph compiles for every
+stage (ADR 0022/0025), and the G-buffer pack is generated per lighting
+set (ADR 0028) while forward generates none.
+
+What already exists, mapped:
+
+| request.md asks | What exists | Still owed |
+|---|---|---|
+| Shader graph ≠ render graph | Already two types: `wxsl_core::graph::Graph` (values, the canvas) and `wxsl_render::RenderGraph` (passes, resources, schedule). They meet only in codegen and `PassDesc`. | Authoring the second as data — P3 |
+| MaterialOutput decoupled from the G-buffer | It is: one surface terminal, semantic channels, per-stage compilation, generated pack | Material-declared channels — P12 |
+| Render graph derives dependencies and resource lifetimes | `RenderGraph::schedule` is pure and device-free; transient aliasing; `Persistence::Persistent { history }` rings are the history resources; `Read::previous`; imports | Passes as data — P3; policies — P10 |
+| Compute passes are first-class | `PassKind::Compute` with entry, workgroups, reads/writes, recorded as a real compute pass | Shader graphs driving compute — the third graph domain, with M7 |
+| A pass describes inputs/outputs/state | `PassDesc { kind, view, color, depth, state, reads, writes }` is that struct; `reads` become the pass bind group automatically | Who authors it — P3; self-description — P4 |
+| Vertex position, discard, MTR, no manual varyings | `Vertex output` (object-space displacement, shared into shadows), `Discard`, the multi-target G-buffer stage | Explicit stage control — P9 |
+| Lighting as a graph, post chains, arbitrary pre/post passes | The lighting-model registry entry was built as the seam for graph-authored models (ADR 0028) | Not gaps — P3/P4 and M7, already proposed |
+| Validation before WGSL, errors naming the graph | Graph-level typing and cycles at edit time; M6's checks name sets and signatures | Port-level errors as the standard — P3's compiler |
+
+The four real gaps:
+
+1. **Stage membership is wiring, not analysis.** A node's stage is
+   decided by what it feeds: the vertex stage is reachable only through
+   the `Vertex output` and `Interpolant output` terminals, and every
+   cross-stage value is hand-declared — name the interpolant, wire the
+   vertex side, read it back with `input.attribute`. request.md's
+   Auto/Vertex/Fragment model with automatic varyings is a new compiler
+   analysis. It is an evolution, not a rewrite: `context_read` vs
+   `vertex_context_read` already is a per-node stage-eligibility rule,
+   and the interpolant mechanism is exactly the node pair the analysis
+   would synthesize. **P9.**
+2. **Passes have no execution policy.** Every pass records every frame,
+   so "runs once and produces a persistent texture" (the BRDF LUT) is
+   inexpressible — every part of it exists except the *once*. **P10.**
+3. **Graph resources are textures only.** `ResourceDesc` is
+   texture-shaped; the buffers a frame uses (draw queue, uniforms) are
+   implicit ABI infrastructure the scheduler cannot see, so
+   request.md's storage-buffer and uniform resources cannot participate
+   in dependency reasoning. **P11.**
+4. **The IR: a position, not a gap.** request.md asks for an
+   intermediate representation between the graphs and WGSL and for
+   nodes decoupled from shader strings. Today `NodeBody::Expr`/`Call`
+   emit WXSL text and `wxsl-lang` is the backend — the text *is* the
+   IR. The honest position: a backend-independent instruction IR
+   (naga-shaped) is a milestone-scale rewrite of node codegen whose
+   benefit needs a second backend to exist, and every analysis
+   request.md wants (stages, resources, channels) is *simpler* run on
+   the graph before emission than on an instruction stream. So: the
+   analyses land at graph level (P9, P11, P12), text stays the emit
+   format, and a real IR waits for a second backend that needs it.
+   This is the one request.md ask this plan deliberately does not take
+   literally.
+
 ## Proposals
 
 Ordered by (payoff ÷ cost). P1 and P2 are quick wins that pay for the
 rest; P3+P4 are the pipeline abstraction; P5 is its UI; P6 is the
-developer-experience floor.
+developer-experience floor; P8 is cross-author interop; P9–P12 are
+what reconciling request.md added — the stage analysis, execution
+policies, buffer resources and semantic channels the current design
+genuinely lacks.
 
 ### P1 — Shader text lives in files; generators fill holes
 
@@ -203,6 +275,81 @@ Detailed in [plan2-architecture.md](plan2-architecture.md)'s "Will it
 interop?" section. Small — days — and it is what turns "data-oriented"
 into "interoperable".
 
+### P9 — Stage analysis: the stage cut becomes computed, not wired
+
+request.md's sharpest ask, and the core-data-model refactor worth doing
+before the pipeline document freezes the node vocabulary. Today the
+stage is decided by wiring; the proposal makes it a compiler analysis:
+
+* A per-node stage setting — `Auto` by default, with explicit
+  `Vertex`/`Fragment` constraints where the author wants them (compute
+  kernels are their own graph domain, not a stage of a surface graph).
+  `Auto` means *earliest stage that can produce me and satisfies every
+  consumer*: shared nodes are evaluated once, in the earliest valid
+  stage.
+* The analysis partitions the value graph per stage and synthesizes the
+  cut: interpolant declarations, the vertex-side write and the
+  fragment-side read become generated instances of the interpolant
+  mechanism M4/M5 built — the same output the user produces by hand
+  today, minus the labour. The 16-location budget and the error that
+  reports running out stay; they just fire against the analysis now.
+* Moving a node between stages becomes a setting change, and the editor
+  shows the computed stage per node — the graph is the stage
+  visualization. The seeds already exist: `context_read` vs
+  `vertex_context_read` is a per-node eligibility rule, `Vertex output`
+  a forced-vertex consumer.
+* Errors name ports: "`noise` runs in the vertex stage; `albedo`
+  consumes it in the fragment stage" — request.md's validation bar.
+
+Cost: medium — the analysis plus its tests, not a rewrite. The
+varyings machinery, the location budget and the shadow-pass vertex
+sharing all exist and stay. ~3–5 days. **Order matters: before P3**, so
+the pipeline document is authored against the final node model instead
+of acquiring special cases for the old one.
+
+### P10 — Execution policies
+
+request.md's Once / Per frame / On resize / On demand. `PassDesc` grows
+a policy; the renderer's frame loop grows the dirty tracking to honour
+it. The proof case is the BRDF LUT: a compute effect writing a
+`Persistent` resource with policy `Once` — expressible today in every
+part except the *once*. The interaction to get right is invalidation: a
+pass that never re-runs but whose target was resized must re-run, so
+`On resize` is really "re-run when my inputs' shapes change". The
+document node exposes the policy as a setting, so P3's vocabulary gains
+one row rather than a concept. ~2–3 days.
+
+### P11 — Buffers and storage as graph resources
+
+`ResourceDesc` is texture-shaped, and the buffers a frame uses (the
+draw queue, the frame group's uniforms) are implicit ABI infrastructure
+the scheduler cannot see. request.md's resource list — storage buffer,
+storage texture, uniform data — wants them *declared*, so dependency
+reasoning covers them the way it covers attachments. `PassDesc::writes`
+already names non-attachment writes; what is missing is the descriptor
+side (a buffer kind beside the texture fields, or a sibling
+`BufferDesc`), allocation that is not an image, and pass-group binding
+for storage buffers — the pass group's builder is the only part of bind
+generation that has to learn anything. Scheduler-side a buffer is a
+resource whose aliasing rule is "never" at first, refinable later.
+~3–5 days, deliberately after P3 so the document vocabulary models it
+once.
+
+### P12 — Semantic channels
+
+request.md's G-buffer section: channels with semantics and types,
+derived from what materials and lighting actually require, rather than
+anonymous slots. ADR 0028 already built the load-bearing half —
+per-model targets carry names, precisions and pack functions, the
+layout is computed, the budget check is real. What is missing is a
+*second source* of channel requests: a material feature (subsurface)
+asking for a channel without going through a lighting model. The
+refactor is small — channel requests become a collected list with a
+source tag instead of "the lighting set's extras" — but its first
+consumer does not exist yet, so it lands with the first material
+feature that needs it: the same rule P7 states for material
+configuration, and for the same reason.
+
 ### P7 — Consolidate per-material configuration
 
 `CodegenOptions.lighting`, `MaterialOptions.lighting` and the scene
@@ -218,12 +365,18 @@ second knob arrives rather than speculatively now.
 1. **P6** (a day-class change, pays immediately), then **P2**, then
    **P1** — all three are refactors with tests as the observable end
    state, and none block the others.
-2. **P3** (pipeline documents + presets), landing with forward/deferred
+2. **P9** (stage analysis) — the core-data-model refactor request.md
+   asks for by name ("refactor the core data model now"), done before
+   the pipeline document freezes the node vocabulary.
+3. **P3** (pipeline documents + presets), landing with forward/deferred
    as the first two presets and a pure compile-to-`RenderGraph` function
    under test.
-3. **P4** (effects), landing with the lighting pass as the first
+4. **P4** (effects), landing with the lighting pass as the first
    migrated effect and bloom as the proof (this *is* M7's spine).
-4. **P5** (the canvas), once P3/P4 give it something honest to show.
+5. **P10** (execution policies) and **P11** (buffer resources) — small
+   extensions once the document model exists to carry them; **P12**
+   waits for its first material feature.
+6. **P5** (the canvas), once P3/P4 give it something honest to show.
 
 This order turns plan.md's M7 (screen domain, postprocess) and its
 section 4 (the pipeline graph) into the same stretch of work, executed on
@@ -242,5 +395,13 @@ Carried over unchanged, because they are what kept M6 honest:
   `RenderGraph`, and everything checkable is still checked there.
 * Generation stays *logic in Rust, text in files*: a generator that owns
   more than its holes has taken text that belongs in a template.
+* Analyses run on the graph, never on generated text: the stage cut,
+  resource requirements and channel layouts are computed before
+  emission, and emission is the last step. The WXSL text is the emit
+  format, not the analysis substrate — an instruction IR waits for a
+  second backend that needs one.
+* New document fields default to today's behaviour — `Auto` stages,
+  per-frame policies, transient resources — so every graph that exists
+  compiles unchanged.
 * Every proposal here lands with an ADR and a runnable demo, like the
   milestones it accelerates.

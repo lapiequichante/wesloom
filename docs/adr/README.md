@@ -39,10 +39,14 @@ is signal, don't delete it.
 | [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md) |
 | [0023](0023-a-material-declares-its-resources.md) | A material declares its resources: uniforms, textures, and the application's slot | Accepted |
 | [0024](0024-a-material-declares-the-geometry-it-requires.md) | A material declares the vertex and instance attributes it requires | Accepted, amended by [0027](0027-a-graph-computes-its-own-interpolants.md) |
-| [0025](0025-a-material-graph-spans-shader-stages.md) | A material graph spans shader stages, and compiles per pass stage | Accepted, amended by [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0027](0027-a-graph-computes-its-own-interpolants.md) |
+| [0025](0025-a-material-graph-spans-shader-stages.md) | A material graph spans shader stages, and compiles per pass stage | Accepted, amended by [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0027](0027-a-graph-computes-its-own-interpolants.md), [0032](0032-stage-analysis-computes-the-cut-between-stages.md) |
 | [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md) | Shadows: a view per light, a lookup in the shading function, and two flags on the material | Accepted |
-| [0027](0027-a-graph-computes-its-own-interpolants.md) | A graph computes its own interpolants | Accepted |
-| [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) | Lighting models dispatched by a G-buffer id, with a composable G-buffer layout | Accepted |
+| [0027](0027-a-graph-computes-its-own-interpolants.md) | A graph computes its own interpolants | Accepted, amended by [0032](0032-stage-analysis-computes-the-cut-between-stages.md) |
+| [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) | Lighting models dispatched by a G-buffer id, with a composable G-buffer layout | Accepted, amended by [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) |
+| [0029](0029-a-corpus-gate-and-error-scopes-for-generated-shaders.md) | A corpus gate for generated shaders, error scopes in GPU tests, and the budget numbers from the spec table | Accepted |
+| [0030](0030-a-pipeline-config-instead-of-threaded-parameters.md) | One `PipelineConfig` instead of parameters threaded by hand | Accepted |
+| [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) | Shader text lives in template files; generators fill holes | Accepted |
+| [0032](0032-stage-analysis-computes-the-cut-between-stages.md) | Stage analysis computes the cut between stages | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

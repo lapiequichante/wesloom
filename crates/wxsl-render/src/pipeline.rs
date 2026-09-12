@@ -75,11 +75,41 @@ impl StockPipeline {
         matches!(self, StockPipeline::Deferred)
     }
 
-    /// This pipeline's pass list, at `target`, under `lighting`.
-    pub fn graph(&self, target: TargetConfig, lighting: &LightingSet) -> RenderGraph {
+    /// This pipeline's pass list, under `config`.
+    pub fn graph(&self, config: &PipelineConfig) -> RenderGraph {
         match self {
-            StockPipeline::Forward => forward_graph(target),
-            StockPipeline::Deferred => deferred_graph(target, lighting),
+            StockPipeline::Forward => forward_graph(config.target),
+            StockPipeline::Deferred => deferred_graph(config.target, &config.lighting),
+        }
+    }
+}
+
+/// Every knob a stock pipeline varies by, in one value.
+///
+/// Before this existed, each knob was threaded by hand through
+/// `StockPipeline::graph`, `Renderer::new`, `rebuild`, `set_pipeline`,
+/// `set_lighting`, the variant cache keys and the tests — seven sites per
+/// concept, which is what made adding one a milestone-shaped event. Now a
+/// knob is a field here, the pass list reads it, and everything
+/// downstream derives from the same struct. `deferred_graph` and
+/// `forward_graph` stay as free functions taking what they take: they are
+/// the *reference* pass lists, and the preset-parity tests want them
+/// callable without a config (plan2 P2).
+#[derive(Clone, Debug)]
+pub struct PipelineConfig {
+    /// Size, format and clear colour of the final target.
+    pub target: TargetConfig,
+    /// The lighting models enabled for the deferred path, which decide the
+    /// G-buffer's shape.
+    pub lighting: LightingSet,
+}
+
+impl PipelineConfig {
+    /// A config for `target` with the default lighting set.
+    pub fn new(target: TargetConfig) -> Self {
+        PipelineConfig {
+            target,
+            lighting: LightingSet::default(),
         }
     }
 }
@@ -639,6 +669,11 @@ mod tests {
         LightingSet::default()
     }
 
+    /// The config every stock pass list is built under here.
+    fn default_config(target: TargetConfig) -> PipelineConfig {
+        PipelineConfig::new(target)
+    }
+
     #[test]
     fn the_gbuffer_formats_come_from_the_abi_table() {
         let formats = gbuffer_formats(&default_lighting());
@@ -710,7 +745,7 @@ mod tests {
     #[test]
     fn every_pipeline_fills_one_shadow_slice_per_light_from_that_lights_view() {
         for pipeline in StockPipeline::ALL {
-            let graph = pipeline.graph(config(), &default_lighting());
+            let graph = pipeline.graph(&default_config(config()));
             let maps = graph.shadow_maps().expect("shadow maps are declared");
             let desc = graph.resource_desc(maps).expect("declared resource");
             assert_eq!(desc.dimension, Dimension::D2Array);
@@ -788,11 +823,58 @@ mod tests {
             for (width, height) in [(1, 1), (64, 64), (3840, 2160)] {
                 let target = TargetConfig::new(width, height, wgpu::TextureFormat::Rgba8Unorm);
                 pipeline
-                    .graph(target, &default_lighting())
+                    .graph(&PipelineConfig {
+                        lighting: default_lighting(),
+                        target,
+                    })
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));
             }
         }
+    }
+
+    /// The budget arithmetic, checked against the spec's own cost table —
+    /// the one place a guess has already been wrong once.
+    ///
+    /// WebGPU's `maxColorAttachmentBytesPerSample` accumulates per
+    /// attachment: round the running total up to the attachment's
+    /// alignment, then add its cost. The costs are not the bit depths: a
+    /// four-channel target costs 8 whatever its format, a pair 4, a scalar
+    /// byte. `Rgba16Float` and `Rg16Float` align to 2; `Rgba8Unorm` and
+    /// `R8Unorm` align to 1. Nothing here is guessed: each number is the
+    /// spec table's, and the totals below pin the arithmetic.
+    #[test]
+    fn the_gbuffer_budget_follows_the_spec_cost_table() {
+        fn model(name: &str) -> wxsl_core::lighting::LightingModel {
+            *wxsl_core::lighting::DEFAULT_MODELS
+                .iter()
+                .find(|model| model.name == name)
+                .expect("a shipped model")
+        }
+        fn cost(set: LightingSet) -> u32 {
+            gbuffer_bytes_per_sample(&set)
+        }
+
+        // The base three targets: 8 + 8 + 8 = 24, and everything a set
+        // requests is measured against exactly that remainder.
+        assert_eq!(cost(LightingSet::default()), 24);
+        assert_eq!(cost(LightingSet::single(model("pbr"))), 24);
+        // + the scalar id (1, align 1) = 25; + the clearcoat pair (4,
+        // align 2, so 25 rounds to 26 first) = 30. The round-up is the
+        // part that was once guessed wrong: the naive sum says 29.
+        assert_eq!(cost(wxsl_core::lighting::default_set().unwrap()), 30);
+        assert_eq!(
+            cost(LightingSet::new([model("lambert"), model("clearcoat")]).unwrap()),
+            30
+        );
+        // A set with the id channel and nothing else: 25.
+        assert_eq!(
+            cost(LightingSet::new([model("pbr"), model("phong")]).unwrap()),
+            25
+        );
+        // Every shipped set fits, with room to spare.
+        assert!(cost(wxsl_core::lighting::default_set().unwrap()) <= MAX_GBUFFER_BYTES_PER_SAMPLE);
+        assert_eq!(MAX_GBUFFER_BYTES_PER_SAMPLE, 32, "the spec's floor");
     }
 
     #[test]
@@ -813,7 +895,7 @@ mod tests {
         // ship so a new stage cannot be wired into a pass that cannot hold
         // its output.
         for pipeline in StockPipeline::ALL {
-            let graph = pipeline.graph(config(), &default_lighting());
+            let graph = pipeline.graph(&default_config(config()));
             for pass in graph.passes() {
                 if let PassKind::Geometry { stage, .. } = &pass.kind {
                     assert_eq!(

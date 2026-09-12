@@ -1,0 +1,4 @@
+@macro const wxsl_debug_normals: bool = false;
+@macro const wxsl_tonemap: bool = true;
+@macro const wxsl_receive_shadows: bool = true;
+

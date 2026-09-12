@@ -1,0 +1,52 @@
+@if(wxsl_debug_normals)
+fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}) -> vec4f {
+    return vec4f(normalize(surface.normal) * 0.5 + vec3f(0.5), 1.0);
+}
+
+@if(!wxsl_debug_normals)
+fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+${EXTRA_DECL}    var lit = vec3f(0.0);
+    let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
+    for (var index = 0u; index < light_count; index = index + 1u) {
+        let light = sample_light(index, ctx.world_position);
+        // Declared unconditionally and overwritten under the flag,
+        // because a `let` inside an `@if` is removed along with it.
+        var shadow = 1.0;
+        @if(wxsl_receive_shadows)
+        shadow = ${SHADOW_FN}(
+            index,
+            ctx.world_position,
+            normal,
+            saturate(dot(normal, light.direction)),
+        );
+        lit = lit
+            + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS})
+            * shadow;
+    }
+
+    // Ambient stands in for everything the light loop cannot see,
+    // so it is what ambient occlusion attenuates.
+    lit = lit
+        + ambient_environment(
+            normal,
+            view_direction,
+            surface.base_color,
+            surface.metallic,
+            surface.roughness,
+            scene.ambient_sky,
+            scene.ambient_ground,
+        )
+        * saturate(surface.occlusion);
+    lit = lit + surface.emissive;
+
+    var color = lit * scene.exposure;
+    @if(wxsl_tonemap)
+    color = tonemap_filmic(color);
+
+    // The render targets are plain (non-`Srgb`) formats so that the
+    // forward path and the deferred lighting pass encode identically,
+    // which means encoding here rather than leaving it to the GPU.
+    return vec4f(linear_to_srgb(color), saturate(surface.alpha));
+}

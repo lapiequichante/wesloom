@@ -572,6 +572,31 @@ impl GeometryInterface {
             .find(|entry| entry.name.as_str() == name)
     }
 
+    /// Add one synthesized interpolant — a stage cut stage analysis
+    /// decided to spend (`crate::stages`, plan2 P9) — at the next
+    /// location. Answers `false` without touching anything when the
+    /// inter-stage budget has no room for it, so the caller can fall back
+    /// to computing the value in both stages.
+    pub fn add_computed(&mut self, name: WxslIdent, ty: ValueType) -> bool {
+        if self.varyings_used() + 1 > abi::MAX_VARYING_LOCATIONS {
+            return false;
+        }
+        // After everything else, for the reason `new` numbers this way:
+        // a synthesized interpolant must never move a declared one's
+        // location, because that is a repipeline for no visible change.
+        let varying = self
+            .computed
+            .last()
+            .map(|last| last.varying + 1)
+            .unwrap_or_else(|| {
+                abi::VERTEX_OUT_FIELDS.len() as u32
+                    + u32::from(self.instance_index_location.is_some())
+                    + self.vertex.len() as u32
+            });
+        self.computed.push(VaryingBinding { name, ty, varying });
+        true
+    }
+
     /// The per-vertex attributes, in location order.
     pub fn vertex(&self) -> &[VertexAttributeBinding] {
         &self.vertex

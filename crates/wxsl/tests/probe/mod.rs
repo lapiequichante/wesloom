@@ -174,6 +174,12 @@ pub fn render_list(
 ///
 /// What a test that is about the *environment* rather than the material
 /// needs: the frame clock, where the eye is, what is casting.
+///
+/// The whole frame runs inside a validation error scope (plan2 P6): a
+/// pipeline or shader module that fails validation used to surface as a
+/// `wgpu` panic with the message half-swallowed, minutes away from the
+/// change that caused it. Inside the scope it becomes this panic, with the
+/// driver's full text, attributed to the frame that caused it.
 pub fn render_list_in(
     gpu: &GpuContext,
     renderer: &mut Renderer,
@@ -181,7 +187,8 @@ pub fn render_list_in(
     draws: &wxsl::render::DrawList<'_>,
     environment: &Environment,
 ) -> Result<Vec<u8>, wxsl::render::RenderError> {
-    renderer.render(
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = renderer.render(
         &gpu.device,
         &gpu.queue,
         &RenderRequest {
@@ -189,9 +196,20 @@ pub fn render_list_in(
             environment,
             draws,
         },
-    )?;
+    );
     gpu.wait();
-    Ok(target.read_rgba8(&gpu.device, &gpu.queue))
+    let validation = pollster::block_on(scope.pop());
+    let image = match (result, validation) {
+        (Ok(()), None) => target.read_rgba8(&gpu.device, &gpu.queue),
+        (Ok(()), Some(error)) => {
+            panic!("the frame presented, but wgpu reported a validation error: {error}")
+        }
+        (Err(render), Some(error)) => {
+            panic!("the frame failed: {render}\nand wgpu reported: {error}")
+        }
+        (Err(render), None) => return Err(render),
+    };
+    Ok(image)
 }
 
 /// One pixel of a [`render_list`] image.
@@ -213,6 +231,66 @@ pub fn srgb(value: f32) -> u8 {
 
 pub fn close(actual: u8, expected: u8) -> bool {
     actual.abs_diff(expected) <= 3
+}
+
+/// Where a world point lands in the target's image.
+///
+/// The acceptance tests describe *surfaces in the world* — a quad centre,
+/// a highlight's peak — and sample the image there, rather than hardcoding
+/// pixel coordinates that move with every camera change.
+pub fn pixel_of(camera: Camera, world: Vec3) -> (u32, u32) {
+    use glam::Vec4Swizzles;
+    let clip = camera.view_proj() * world.extend(1.0);
+    let ndc = clip.xyz() / clip.w;
+    let x = ((ndc.x * 0.5 + 0.5) * SIZE as f32).round();
+    let y = ((0.5 - ndc.y * 0.5) * SIZE as f32).round();
+    ((x as u32).min(SIZE - 1), (y as u32).min(SIZE - 1))
+}
+
+/// The image's RGB at a world point, as `f32` thirds so an assertion reads
+/// as a colour difference rather than a channel coincidence.
+pub fn color_at(image: &[u8], camera: Camera, world: Vec3) -> [f32; 3] {
+    let (x, y) = pixel_of(camera, world);
+    let index = ((y * SIZE + x) * 4) as usize;
+    [
+        image[index] as f32,
+        image[index + 1] as f32,
+        image[index + 2] as f32,
+    ]
+}
+
+/// The worst channel difference between two images, at one point.
+pub fn gap(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let mut worst = 0.0f32;
+    for channel in 0..3 {
+        worst = worst.max((a[channel] - b[channel]).abs());
+    }
+    worst
+}
+
+/// The worst channel difference anywhere in a small patch of the image
+/// around a world point.
+///
+/// The default for comparing *shading*, which is a curve and not a number:
+/// two specular lobes that agree at the highlight's peak disagree on its
+/// shoulders, so the honest sample is a patch. Radius is in pixels.
+pub fn patch_gap(a: &[u8], b: &[u8], camera: Camera, world: Vec3, radius: i32) -> f32 {
+    let (cx, cy) = pixel_of(camera, world);
+    let mut worst = 0.0f32;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let (x, y) = (
+                (cx as i32 + dx).clamp(0, SIZE as i32 - 1) as u32,
+                (cy as i32 + dy).clamp(0, SIZE as i32 - 1) as u32,
+            );
+            let index = ((y * SIZE + x) * 4) as usize;
+            for channel in 0..3 {
+                let difference = (a[index + channel] as f32 - b[index + channel] as f32).abs();
+                worst = worst.max(difference);
+            }
+        }
+    }
+    worst
 }
 /// A graph that answers "did `probe` arrive intact?" as a white or black
 /// surface.

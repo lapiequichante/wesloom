@@ -318,10 +318,22 @@ Several terminals, not one.
 
 Codegen partitions the graph by reachability **from each terminal
 separately**, and emits one function per partition: `wxsl_vertex`,
-`wxsl_discard`, `wxsl_material`. A node feeding two terminals is compiled
-into both — two `let` bindings in two functions, which is what a shader
-compiler's common-subexpression pass is for, and cheaper than the
-alternative of spending an inter-stage location on it.
+`wxsl_discard`, `wxsl_material`. Where each node *runs* is decided first,
+by stage analysis ([ADR 0032](adr/0032-stage-analysis-computes-the-cut-between-stages.md)):
+every node defaults to `Auto` — the earliest stage that can produce it and
+satisfy every consumer — so a node both stages read is computed once, per
+vertex, and the fragment side reads a *synthesized* interpolant the
+analysis declared (named `autoN`, from the same location budget as a
+hand-wired one). A node can pin `Vertex` or `Fragment` to override that;
+what cannot ride an interpolant is computed in both stages, as below.
+
+A node feeding two terminals used to be compiled into both unconditionally
+— two `let` bindings in two functions, on the grounds that a shader
+compiler's common-subexpression pass is cheaper than an inter-stage
+location ([ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md)).
+The analysis keeps that as the fallback for un-interpolable types and
+spent budgets, and as the explicit `Fragment` choice, but the default is
+now to share through the stage boundary rather than always pay twice.
 
 **A stage compiles only the partitions it needs.** A pass that writes no
 colour — a depth prepass, a shadow pass — wants the vertex offset and the
@@ -336,9 +348,12 @@ The vertex side reads a `VertexContext`, which is a *superset* of the
 `SurfaceContext` the fragment side reads: same field names, same types,
 computed before any displacement. So `input.uv` is one node that works in
 either stage, and the only vertex-only inputs are the two object-space
-ones — reading those from the fragment side is a named error rather than
-a compile failure. The mirror mistake is named too: a computed
-interpolant read from the vertex stage, which is the stage computing it.
+ones. Those are what stage analysis is for: an object-space read the
+fragment stage wants is computed per vertex and interpolated down. The
+named errors remain for the decisions that cannot be honoured — an
+object-space node *pinned* to the fragment stage, a computed interpolant
+read in the stage that computes it
+([ADR 0032](adr/0032-stage-analysis-computes-the-cut-between-stages.md)).
 
 ## What a material declares
 

@@ -47,7 +47,7 @@ use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedul
 use crate::library::ShaderLibrary;
 use crate::material::Material;
 use crate::pass::{DrawSource, PassKind, PassView, ScreenShader};
-use crate::pipeline::{MaterialGroups, PipelineCache, StockPipeline, TargetConfig};
+use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::variants::{
     CacheStats, LightingRequest, MaterialRequest, ShaderVariant, ShaderVariants,
@@ -84,12 +84,11 @@ pub struct Renderer {
     /// else's is left alone.
     stock: Option<StockPipeline>,
     swap: Option<PipelineSwap>,
-    target: TargetConfig,
-    /// The lighting models enabled for the deferred path. The default is
-    /// the library's default model in a set of one — the shape the G-buffer
-    /// and the lighting pass had before models existed — and
-    /// [`Renderer::set_lighting`] widens it.
-    lighting: LightingSet,
+    /// Every knob the stock pass list varies by, in one place: size,
+    /// format, clear colour, lighting set. Mutated by `set_lighting`,
+    /// `set_pipeline` and `resize`, read by `rebuild`
+    /// ([plan2 P2](../../../plan2.md)).
+    config: PipelineConfig,
 }
 
 impl Renderer {
@@ -106,8 +105,8 @@ impl Renderer {
     ) -> Result<Self, RenderError> {
         library.check_abi()?;
         let stock = StockPipeline::default();
-        let lighting = LightingSet::default();
-        let graph = stock.graph(target, &lighting);
+        let config = PipelineConfig::new(target);
+        let graph = stock.graph(&config);
         let schedule = graph.schedule()?;
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
@@ -122,8 +121,7 @@ impl Renderer {
             schedule,
             stock: Some(stock),
             swap: None,
-            target,
-            lighting,
+            config,
         })
     }
 
@@ -163,14 +161,14 @@ impl Renderer {
                 ),
             });
         }
-        self.lighting = set;
+        self.config.lighting = set;
         self.rebuild();
         Ok(())
     }
 
     /// The lighting models currently enabled.
     pub fn lighting(&self) -> &LightingSet {
-        &self.lighting
+        &self.config.lighting
     }
 
     /// The stock pipeline in use, or `None` when an application supplied
@@ -213,7 +211,7 @@ impl Renderer {
 
     fn rebuild(&mut self) {
         let Some(stock) = self.stock else { return };
-        self.graph = stock.graph(self.target, &self.lighting);
+        self.graph = stock.graph(&self.config);
         self.schedule = self
             .graph
             .schedule()
@@ -236,7 +234,7 @@ impl Renderer {
         pipeline: StockPipeline,
         materials: &[&Material],
     ) -> Result<(), RenderError> {
-        let graph = pipeline.graph(self.target, &self.lighting);
+        let graph = pipeline.graph(&self.config);
         self.request_graph_inner(graph, Some(pipeline), materials)
     }
 
@@ -311,7 +309,7 @@ impl Renderer {
                         push(
                             Request::Lighting(LightingRequest::new(
                                 material.macros(),
-                                &self.lighting,
+                                &self.config.lighting,
                             )),
                             &mut seen,
                             &mut requests,
@@ -420,18 +418,19 @@ impl Renderer {
 
     /// The current target size and format.
     pub fn target(&self) -> TargetConfig {
-        self.target
+        self.config.target
     }
 
     /// Resize the render targets.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.target = TargetConfig {
+        self.config.target = TargetConfig {
             width: width.max(1),
             height: height.max(1),
-            ..self.target
+            ..self.config.target
         };
         self.rebuild();
-        self.pool.configure(device, &self.schedule, self.target);
+        self.pool
+            .configure(device, &self.schedule, self.config.target);
     }
 
     /// The shader library imports are resolved against.
@@ -516,7 +515,7 @@ impl Renderer {
                         device,
                         &self.library,
                         material.macros(),
-                        &self.lighting,
+                        &self.config.lighting,
                     )?;
                 }
                 PassKind::Compute { .. } => {}
@@ -577,7 +576,8 @@ impl Renderer {
             &request.draws.transforms(),
             &rows,
         );
-        self.pool.configure(device, &self.schedule, self.target);
+        self.pool
+            .configure(device, &self.schedule, self.config.target);
         // After the pool, because this is the one resource read from
         // outside the pass list: the frame group binds it, so the renderer
         // is what carries the view across (`abi::BINDING_SHADOW_MAPS`).
@@ -694,13 +694,13 @@ impl Renderer {
                         // `wgpu` complaint about a fragment target count
                         // with no mention of either set. Caught here, by
                         // name, before anything is recorded.
-                        if item.material.lighting().set() != &self.lighting {
+                        if item.material.lighting().set() != &self.config.lighting {
                             return Err(RenderError::Lighting {
                                 material: item.material.name.clone(),
                                 error: format!(
                                     "compiled against lighting set {}, but the renderer                                      enables {}",
                                     item.material.lighting().set().signature(),
-                                    self.lighting.signature()
+                                    self.config.lighting.signature()
                                 ),
                             });
                         }
@@ -731,7 +731,7 @@ impl Renderer {
                         device,
                         &self.library,
                         &macros,
-                        &self.lighting,
+                        &self.config.lighting,
                     )?;
                     plan.screen.insert(index, variant);
                 }

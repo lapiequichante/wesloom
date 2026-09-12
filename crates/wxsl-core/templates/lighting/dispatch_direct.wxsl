@@ -1,0 +1,5 @@
+// One call to this material's model: it is known at generation time.
+fn ${DISPATCH_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}, light: LightSample, extra: vec4f) -> vec3f {
+    return ${FUNCTION}(surface, ctx, light, extra);
+}
+

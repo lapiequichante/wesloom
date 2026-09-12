@@ -493,6 +493,20 @@ pub fn shade_surface(dispatch: &Dispatch) -> GeneratedLighting {
     shade_surface_with(dispatch, true)
 }
 
+/// The `${NAME}`-holed templates the generators fill, embedded at compile
+/// time and kept under `templates/lighting/` for the ADR 0020 reason: the
+/// light loop, the ambient and the pass's plumbing are shader text a
+/// shader author may want to read, diff and edit as shader, and none of it
+/// can be a shipped module because it names things no fixed module can.
+/// The generator owns the logic — which models, which targets, which ids —
+/// and one table of hole → text per template
+/// ([`crate::template`], plan2 P1).
+const MACROS_TEMPLATE: &str = include_str!("../templates/lighting/macros.wxsl");
+const DISPATCH_DIRECT_TEMPLATE: &str = include_str!("../templates/lighting/dispatch_direct.wxsl");
+const DISPATCH_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/dispatch_switch.wxsl");
+const SHADE_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/shade_surface.wxsl");
+const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lighting_pass.wxsl");
+
 /// [`shade_surface`], with the macro declarations omitted.
 ///
 /// A generated *material* module declares every macro in effect itself, so
@@ -526,9 +540,7 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
         "// ---------------------------------------------------------------------------\n\n",
     );
     if declare_macros {
-        out.push_str("@macro const wxsl_debug_normals: bool = false;\n");
-        out.push_str("@macro const wxsl_tonemap: bool = true;\n");
-        out.push_str("@macro const wxsl_receive_shadows: bool = true;\n\n");
+        out.push_str(&crate::template::fill(MACROS_TEMPLATE, &[]));
     }
 
     let (shading_params, dispatch_args, extra_decl) = match dispatch {
@@ -543,23 +555,19 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
                 }
                 None => "vec4f(0.0)".to_string(),
             };
-            let _ = writeln!(
-                out,
-                "// One call to this material's model: it is known at generation time.\n\
-                 fn {dispatch}(surface: {surface}, ctx: {ctx}, light: LightSample, extra: vec4f) -> vec3f {{\n    \
-                 return {function}(surface, ctx, light, extra);\n}}\n",
-                dispatch = abi::LIGHTING_DISPATCH_FN,
-                surface = abi::SURFACE_STRUCT,
-                ctx = abi::CONTEXT_STRUCT,
-                function = model.function,
-            );
+            out.push_str(&crate::template::fill(
+                DISPATCH_DIRECT_TEMPLATE,
+                &[
+                    ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
+                    ("SURFACE", abi::SURFACE_STRUCT),
+                    ("CONTEXT", abi::CONTEXT_STRUCT),
+                    ("FUNCTION", model.function),
+                ],
+            ));
             (
                 String::new(),
                 ", model_extra".to_string(),
-                format!(
-                    "    let model_extra = {extra};
-"
-                ),
+                format!("    let model_extra = {extra};\n"),
             )
         }
         Dispatch::Switch(set) => {
@@ -569,35 +577,20 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
             // The models' view of the G-buffer: one field per requested
             // target, and nothing else — no id, no base targets. Empty
             // when no model asked for one, which WGSL permits.
-            out.push_str("// What the models read back out of the G-buffer: one field per\n");
-            out.push_str("// requested target. The dispatch arm for a model reads its own;\n");
-            out.push_str("// the others are ignored.\n");
-            out.push_str("struct ModelExtras {\n");
+            let mut fields = String::new();
             for extra in set.extras() {
                 let _ = writeln!(
-                    out,
-                    "    {}: {ty},",
+                    fields,
+                    "    {}: {},",
                     extra.target.field,
-                    ty = extra.target.precision.field_type(),
+                    extra.target.precision.field_type(),
                 );
             }
-            out.push_str("}\n\n");
-            out.push_str("// Dispatch over every enabled model; an id the set did not\n");
-            out.push_str("// enable shades black, which is preferable to shading with the\n");
-            out.push_str("// wrong one — ids come from this set's own packing, so reaching\n");
-            out.push_str("// the arm means the G-buffer and the set disagree.\n");
-            let _ = write!(
-                out,
-                "fn {dispatch}(surface: {surface}, ctx: {ctx}, light: LightSample, extras: ModelExtras, model_id: u32) -> vec3f {{\n    \
-                 switch model_id {{\n",
-                dispatch = abi::LIGHTING_DISPATCH_FN,
-                surface = abi::SURFACE_STRUCT,
-                ctx = abi::CONTEXT_STRUCT,
-            );
+            // A narrower target is widened back to the vec4f the model
+            // contract hands over.
+            let mut arms = String::new();
             for model in set.models() {
                 let extra = match model.extra {
-                    // A narrower target widened back to the vec4f the
-                    // model contract hands over.
                     Some(extra) => match extra.target.precision.channels() {
                         1 => format!("vec4f(extras.{}, 0.0, 0.0, 0.0)", extra.target.field),
                         2 => format!("vec4f(extras.{}, 0.0, 0.0)", extra.target.field),
@@ -606,14 +599,22 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
                     None => "vec4f(0.0)".to_string(),
                 };
                 let _ = writeln!(
-                    out,
+                    arms,
                     "        case {id}u: {{ return {function}(surface, ctx, light, {extra}); }}",
                     id = model.id,
                     function = model.function,
                 );
             }
-            out.push_str("        default: { return vec3f(0.0); }\n");
-            out.push_str("    }\n}\n\n");
+            out.push_str(&crate::template::fill(
+                DISPATCH_SWITCH_TEMPLATE,
+                &[
+                    ("MODEL_EXTRAS_FIELDS", &fields),
+                    ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
+                    ("SURFACE", abi::SURFACE_STRUCT),
+                    ("CONTEXT", abi::CONTEXT_STRUCT),
+                    ("SWITCH_ARMS", &arms),
+                ],
+            ));
             (
                 // The shading function receives the extras as they came
                 // off the G-buffer; there is nothing to compute.
@@ -624,63 +625,19 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
         }
     };
 
-    let _ = write!(
-        out,
-        "@if(wxsl_debug_normals)\n\
-         fn {shade}(surface: {surface}, ctx: {ctx}) -> vec4f {{\n    \
-             return vec4f(normalize(surface.normal) * 0.5 + vec3f(0.5), 1.0);\n}}\n\n\
-         @if(!wxsl_debug_normals)\n\
-         fn {shade}(surface: {surface}, ctx: {ctx}{shading_params}) -> vec4f {{\n    \
-             let normal = normalize(surface.normal);\n    \
-             let view_direction = normalize(ctx.view_direction);\n{extra_decl}\
-             var lit = vec3f(0.0);\n    \
-             let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);\n    \
-             for (var index = 0u; index < light_count; index = index + 1u) {{\n        \
-                 let light = sample_light(index, ctx.world_position);\n        \
-                 // Declared unconditionally and overwritten under the flag,\n        \
-                 // because a `let` inside an `@if` is removed along with it.\n        \
-                 var shadow = 1.0;\n        \
-                 @if(wxsl_receive_shadows)\n        \
-                 shadow = {shadow_factor}(\n            \
-                     index,\n            \
-                     ctx.world_position,\n            \
-                     normal,\n            \
-                     saturate(dot(normal, light.direction)),\n        \
-                 );\n        \
-                 lit = lit\n            \
-                     + {dispatch}(surface, ctx, light{dispatch_args})\n            \
-                     * shadow;\n    \
-             }}\n\n    \
-             // Ambient stands in for everything the light loop cannot see,\n    \
-             // so it is what ambient occlusion attenuates.\n    \
-             lit = lit\n        \
-                 + ambient_environment(\n            \
-                     normal,\n            \
-                     view_direction,\n            \
-                     surface.base_color,\n            \
-                     surface.metallic,\n            \
-                     surface.roughness,\n            \
-                     scene.ambient_sky,\n            \
-                     scene.ambient_ground,\n        \
-                 )\n            \
-                 * saturate(surface.occlusion);\n    \
-             lit = lit + surface.emissive;\n\n    \
-             var color = lit * scene.exposure;\n    \
-             @if(wxsl_tonemap)\n    \
-             color = tonemap_filmic(color);\n\n    \
-             // The render targets are plain (non-`Srgb`) formats so that the\n    \
-             // forward path and the deferred lighting pass encode identically,\n    \
-             // which means encoding here rather than leaving it to the GPU.\n    \
-             return vec4f(linear_to_srgb(color), saturate(surface.alpha));\n}}\n",
-        shade = abi::SHADE_SURFACE_FN,
-        surface = abi::SURFACE_STRUCT,
-        ctx = abi::CONTEXT_STRUCT,
-        shading_params = shading_params,
-        extra_decl = extra_decl,
-        shadow_factor = abi::SHADOW_FACTOR_FN,
-        dispatch = abi::LIGHTING_DISPATCH_FN,
-        dispatch_args = dispatch_args,
-    );
+    out.push_str(&crate::template::fill(
+        SHADE_SURFACE_TEMPLATE,
+        &[
+            ("SHADE_FN", abi::SHADE_SURFACE_FN),
+            ("SURFACE", abi::SURFACE_STRUCT),
+            ("CONTEXT", abi::CONTEXT_STRUCT),
+            ("SHADING_PARAMS", &shading_params),
+            ("EXTRA_DECL", &extra_decl),
+            ("SHADOW_FN", abi::SHADOW_FACTOR_FN),
+            ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
+            ("DISPATCH_ARGS", &dispatch_args),
+        ],
+    ));
 
     GeneratedLighting {
         source: out,
@@ -798,7 +755,10 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
     let shading = shade_surface(&dispatch);
 
     let mut out = String::with_capacity(4096);
-    out.push_str("// The deferred lighting pass, generated by `wxsl_core::lighting`\n");
+    out.push_str(
+        "// The deferred lighting pass, generated by `wxsl_core::lighting`
+",
+    );
     out.push_str("// from the enabled models (");
     let names = set
         .models()
@@ -807,160 +767,142 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let _ = writeln!(out, "{names}).");
-    out.push_str("// Do not edit: change the set or a model module instead.\n\n");
+    out.push_str(
+        "// Do not edit: change the set or a model module instead.
 
-    out.push_str("import package::wxsl::bindings::{camera, scene};\n");
-    out.push_str("import package::space::tangent_basis::tangent_basis;\n");
+",
+    );
+
+    out.push_str(
+        "import package::wxsl::bindings::{camera, scene};
+",
+    );
+    out.push_str(
+        "import package::space::tangent_basis::tangent_basis;
+",
+    );
     for (module, item) in &shading.imports {
         let _ = writeln!(out, "import {module}::{item};");
     }
 
     // One binding per target, in layout order, then depth — the same order
     // `wxsl-render` declared the pass's reads in.
+    let mut bindings = String::new();
     for (binding, target) in layout.iter().enumerate() {
         let _ = writeln!(
-            out,
+            bindings,
             "@group(3) @binding({binding}) var gbuffer_{field}: texture_2d<f32>;",
             binding = binding,
             field = target.field,
         );
     }
-    let _ = writeln!(
-        out,
-        "@group(3) @binding({depth_binding}) var gbuffer_depth: texture_depth_2d;",
-        depth_binding = layout.len(),
-    );
-    out.push('\n');
-
-    let _ = writeln!(
-        out,
-        "// A fullscreen triangle covering the viewport, from three vertices and no\n\
-         // vertex buffer: (-1,-1), (3,-1), (-1,3).\n\
-         @vertex\n\
-         fn {vertex_entry}(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {{\n    \
-             let x = f32(i32(index & 1u) * 4 - 1);\n    \
-             let y = f32(i32(index >> 1u) * 4 - 1);\n    \
-             return vec4f(x, y, 0.0, 1.0);\n}}\n",
-        vertex_entry = abi::LIGHTING_PASS_VERTEX_ENTRY,
-    );
 
     // What the texels come back as: the surface, plus whatever the models
     // asked for. One struct rather than out-params, because the dispatch's
     // arms read different subsets of it.
-    let mut unpacked = String::from("struct UnpackedGBuffer {\n    surface: Surface,\n");
+    let mut unpacked = String::from(
+        "struct UnpackedGBuffer {
+    surface: Surface,
+",
+    );
     if set.dispatches() {
-        unpacked.push_str("    model_id: u32,\n");
+        unpacked.push_str(
+            "    model_id: u32,
+",
+        );
     }
     for extra in set.extras() {
         let _ = writeln!(
             unpacked,
-            "    {}: {ty},",
+            "    {}: {},",
             extra.target.field,
-            ty = extra.target.precision.field_type(),
+            extra.target.precision.field_type(),
         );
     }
-    unpacked.push_str("}\n\n");
-    out.push_str(&unpacked);
+    unpacked.push_str(
+        "}
 
-    let _ = write!(out, "fn {unpack}(", unpack = abi::UNPACK_GBUFFER_FN,);
+",
+    );
+
     let params = layout
         .iter()
-        .map(|target| format!("{}: {ty}", target.field, ty = target.precision.field_type(),))
+        .map(|target| format!("{}: {}", target.field, target.precision.field_type()))
         .collect::<Vec<_>>()
         .join(", ");
-    out.push_str(&params);
-    out.push_str(") -> UnpackedGBuffer {\n    var out: UnpackedGBuffer;\n");
-    // The base unpacking, exactly as `deferred.wxsl` wrote it. `alpha`
-    // comes back as 1: the G-buffer is opaque by construction.
-    out.push_str("    out.surface.base_color = base_color.rgb;\n");
-    out.push_str("    out.surface.metallic = base_color.a;\n");
-    out.push_str("    out.surface.normal = normalize(normal.xyz);\n");
-    out.push_str("    out.surface.roughness = normal.a;\n");
-    out.push_str("    out.surface.emissive = emissive.rgb;\n");
-    out.push_str("    out.surface.occlusion = emissive.a;\n");
-    out.push_str("    out.surface.alpha = 1.0;\n");
-    if set.dispatches() {
-        // Half-float integers are exact up to 2048, so the round trip
-        // through the target costs nothing (see `MODEL_ID_TARGET`).
+
+    // The id line exists only when the set dispatches. Half-float
+    // integers are exact well past 255, so the round trip through a
+    // normalized target costs nothing (see `MODEL_ID_TARGET`).
+    let model_id_line = if set.dispatches() {
+        let mut line = String::new();
         let _ = writeln!(
-            out,
-            "    out.model_id = u32(round(lighting * {scale}));",
-            scale = MODEL_ID_SCALE,
+            line,
+            "    out.model_id = u32(round(lighting * {}));",
+            MODEL_ID_SCALE
         );
-    }
+        line
+    } else {
+        String::new()
+    };
+
+    // One passthrough per requested target.
+    let mut extras_unpack = String::new();
     for extra in set.extras() {
         let _ = writeln!(
-            out,
+            extras_unpack,
             "    out.{field} = {field};",
             field = extra.target.field,
         );
     }
-    out.push_str("    return out;\n}\n\n");
 
-    out.push_str(&shading.source);
-    out.push('\n');
+    // `textureLoad` always answers with a vec4; the unpack's parameter
+    // takes the channels the target actually has.
+    let loads = layout
+        .iter()
+        .map(|target| {
+            let load = format!("textureLoad(gbuffer_{}, coord, 0)", target.field);
+            match target.precision.channels() {
+                1 => format!("{load}.x"),
+                2 => format!("{load}.xy"),
+                _ => load,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let shade_args = if switch_shape {
+        format!(
+            "unpacked.surface, ctx, ModelExtras({}), unpacked.model_id",
+            set.extras()
+                .iter()
+                .map(|extra| format!("unpacked.{}", extra.target.field))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        "unpacked.surface, ctx".to_string()
+    };
 
-    let _ = write!(
-        out,
-        "@fragment\n\
-         fn {fragment_entry}(@builtin(position) position: vec4f) -> @location(0) vec4f {{\n    \
-             let coord = vec2i(position.xy);\n    \
-             let depth = textureLoad(gbuffer_depth, coord, 0);\n    \
-             // Nothing was drawn here: leave the clear colour alone.\n    \
-             if depth >= 1.0 {{\n        \
-                 discard;\n    \
-             }}\n\n    \
-             let size = vec2f(textureDimensions(gbuffer_{first_field}));\n    \
-             let uv = position.xy / size;\n    \
-             // Framebuffer coordinates are y-down, clip space is y-up.\n    \
-             let ndc = vec3f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);\n    \
-             let world = camera.inverse_view_proj * vec4f(ndc, 1.0);\n    \
-             let world_position = world.xyz / world.w;\n\n    \
-             let unpacked = {unpack}({loads});\n\n    \
-             // The G-buffer carries no tangent frame, so one is synthesized\n    \
-             // around the stored normal, so that the context is well-formed\n    \
-             // rather than full of zeroes.\n    \
-             let basis = tangent_basis(unpacked.surface.normal);\n    \
-             var ctx: SurfaceContext;\n    \
-             ctx.world_position = world_position;\n    \
-             ctx.world_normal = unpacked.surface.normal;\n    \
-             ctx.world_tangent = basis[0];\n    \
-             ctx.world_bitangent = basis[1];\n    \
-             ctx.view_direction = normalize(camera.position - world_position);\n    \
-             ctx.uv = uv;\n    \
-             ctx.time = scene.time;\n\n    \
-             return {shade}({shading_args});\n}}\n",
-        fragment_entry = abi::LIGHTING_PASS_FRAGMENT_ENTRY,
-        first_field = layout[0].field,
-        unpack = abi::UNPACK_GBUFFER_FN,
-        loads = layout
-            .iter()
-            .map(|target| {
-                // `textureLoad` always answers with a vec4; the unpack's
-                // parameter takes the channels the target actually has.
-                let load = format!("textureLoad(gbuffer_{}, coord, 0)", target.field);
-                match target.precision.channels() {
-                    1 => format!("{load}.x"),
-                    2 => format!("{load}.xy"),
-                    _ => load,
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-        shade = abi::SHADE_SURFACE_FN,
-        shading_args = if switch_shape {
-            format!(
-                "unpacked.surface, ctx, ModelExtras({}), unpacked.model_id",
-                set.extras()
-                    .iter()
-                    .map(|extra| format!("unpacked.{}", extra.target.field))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            "unpacked.surface, ctx".to_string()
-        },
-    );
+    let depth_binding = layout.len().to_string();
+    out.push_str(&crate::template::fill(
+        LIGHTING_PASS_TEMPLATE,
+        &[
+            ("GBUFFER_BINDINGS", bindings.as_str()),
+            ("DEPTH_BINDING", depth_binding.as_str()),
+            ("VERTEX_ENTRY", abi::LIGHTING_PASS_VERTEX_ENTRY),
+            ("UNPACKED_STRUCT", unpacked.as_str()),
+            ("UNPACK_FN", abi::UNPACK_GBUFFER_FN),
+            ("UNPACK_PARAMS", params.as_str()),
+            ("MODEL_ID_LINE", model_id_line.as_str()),
+            ("EXTRAS_UNPACK", extras_unpack.as_str()),
+            ("SHADING", shading.source.as_str()),
+            ("FRAGMENT_ENTRY", abi::LIGHTING_PASS_FRAGMENT_ENTRY),
+            ("FIRST_TARGET", layout[0].field),
+            ("UNPACK_CALL", loads.as_str()),
+            ("SHADE_FN", abi::SHADE_SURFACE_FN),
+            ("SHADE_ARGS", shade_args.as_str()),
+        ],
+    ));
     out
 }
 

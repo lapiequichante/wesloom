@@ -1,0 +1,16 @@
+// What the models read back out of the G-buffer: one field per
+// requested target. The dispatch arm for a model reads its own;
+// the others are ignored.
+struct ModelExtras {
+${MODEL_EXTRAS_FIELDS}}
+
+// Dispatch over every enabled model; an id the set did not
+// enable shades black, which is preferable to shading with the
+// wrong one — ids come from this set's own packing, so reaching
+// the arm means the G-buffer and the set disagree.
+fn ${DISPATCH_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}, light: LightSample, extras: ModelExtras, model_id: u32) -> vec3f {
+    switch model_id {
+${SWITCH_ARMS}        default: { return vec3f(0.0); }
+    }
+}
+

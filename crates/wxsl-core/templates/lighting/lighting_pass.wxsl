@@ -1,0 +1,58 @@
+${GBUFFER_BINDINGS}@group(3) @binding(${DEPTH_BINDING}) var gbuffer_depth: texture_depth_2d;
+
+// A fullscreen triangle covering the viewport, from three vertices and no
+// vertex buffer: (-1,-1), (3,-1), (-1,3).
+@vertex
+fn ${VERTEX_ENTRY}(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+${UNPACKED_STRUCT}fn ${UNPACK_FN}(${UNPACK_PARAMS}) -> UnpackedGBuffer {
+    var out: UnpackedGBuffer;
+    out.surface.base_color = base_color.rgb;
+    out.surface.metallic = base_color.a;
+    out.surface.normal = normalize(normal.xyz);
+    out.surface.roughness = normal.a;
+    out.surface.emissive = emissive.rgb;
+    out.surface.occlusion = emissive.a;
+    // `alpha` comes back as 1: the G-buffer is opaque by construction.
+    out.surface.alpha = 1.0;
+${MODEL_ID_LINE}${EXTRAS_UNPACK}    return out;
+}
+
+${SHADING}
+@fragment
+fn ${FRAGMENT_ENTRY}(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let coord = vec2i(position.xy);
+    let depth = textureLoad(gbuffer_depth, coord, 0);
+    // Nothing was drawn here: leave the clear colour alone.
+    if depth >= 1.0 {
+        discard;
+    }
+
+    let size = vec2f(textureDimensions(gbuffer_${FIRST_TARGET}));
+    let uv = position.xy / size;
+    // Framebuffer coordinates are y-down, clip space is y-up.
+    let ndc = vec3f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
+    let world = camera.inverse_view_proj * vec4f(ndc, 1.0);
+    let world_position = world.xyz / world.w;
+
+    let unpacked = ${UNPACK_FN}(${UNPACK_CALL});
+
+    // The G-buffer carries no tangent frame, so one is synthesized
+    // around the stored normal, so that the context is well-formed
+    // rather than full of zeroes.
+    let basis = tangent_basis(unpacked.surface.normal);
+    var ctx: SurfaceContext;
+    ctx.world_position = world_position;
+    ctx.world_normal = unpacked.surface.normal;
+    ctx.world_tangent = basis[0];
+    ctx.world_bitangent = basis[1];
+    ctx.view_direction = normalize(camera.position - world_position);
+    ctx.uv = uv;
+    ctx.time = scene.time;
+
+    return ${SHADE_FN}(${SHADE_ARGS});
+}

@@ -93,7 +93,7 @@ pub use pass::{
     Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, PassState, Read, ResourceDesc,
     ResourceId,
 };
-pub use pipeline::{PipelineCache, StockPipeline, TargetConfig};
+pub use pipeline::{PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 pub use renderer::{single_draw, RenderRequest, Renderer};
 pub use swap::SwapProgress;
 pub use variants::{ShaderVariant, ShaderVariants};

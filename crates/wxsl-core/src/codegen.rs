@@ -195,10 +195,33 @@ pub fn generate(
     macros.overlay(&graph.effective_macros(registry)?);
     macros.overlay(&options.override_macros);
 
+    // Where every node runs, and where the stages hand values over
+    // ([`crate::stages`], plan2 P9). An empty plan — no node shared
+    // across the stage boundary — generates exactly what per-terminal
+    // compilation always did.
+    let plan = crate::stages::analyze(graph, registry, &outputs).map_err(CodegenError::Invalid)?;
+
     // Over the *reachable* set, not the whole graph: a parked branch
-    // declares no uniform, exactly as it emits no code. Over all three
-    // terminals, not one stage's: see `Graph::reachable_from`.
-    let interface = graph.interface_of(registry, &graph.reachable_from(&outputs));
+    // declares no uniform, exactly as it emits no code. Over all
+    // terminals, not one stage's: see `Graph::reachable_from`. The cut
+    // subtrees are reachable too — the vertex stage compiles them — and
+    // what they read must be bound exactly as if a hand-wired
+    // interpolant's subgraph had declared it, because that is what a cut
+    // is.
+    let mut reachable = graph.reachable_from(&outputs);
+    for socket in plan.cuts.keys() {
+        reachable.extend(graph.dependencies_of(socket.node));
+    }
+    let mut interface = graph.interface_of(registry, &reachable);
+    // The synthesized interpolants join the declared ones in the same
+    // accountant; the analysis already spent within its budget, and this
+    // is the same arithmetic keeping the plan and the struct honest.
+    for (socket, (name, ty)) in &plan.cuts {
+        assert!(
+            interface.geometry.add_computed(name.clone(), *ty),
+            "stage analysis cut `{socket}` but the inter-stage budget is spent"
+        );
+    }
     let stage = options.stage;
     let mut emitter = Emitter {
         graph,
@@ -222,7 +245,7 @@ pub fn generate(
         None => None,
     };
     let discard = match outputs.discard {
-        Some(node) => Some(emitter.emit_partition(node, ShaderStage::Fragment)?),
+        Some(node) => Some(emitter.emit_fragment_partition(node, &plan.cuts)?),
         None => None,
     };
     // One partition per computed interpolant, each a vertex-stage root of
@@ -236,10 +259,18 @@ pub fn generate(
     // what makes this a saving in the vertex stage rather than a
     // different pipeline layout.
     let has_fragment = stage.needs_surface() || outputs.discard.is_some();
-    let mut varyings = Vec::with_capacity(outputs.varyings.len());
+    let mut varyings = Vec::with_capacity(outputs.varyings.len() + plan.cuts.len());
     if has_fragment {
         for (name, node) in &outputs.varyings {
             let part = emitter.emit_partition(*node, ShaderStage::Vertex)?;
+            varyings.push((name.clone(), part));
+        }
+        // The stage cuts, each a vertex-stage partition of its own —
+        // exactly what a hand-wired interpolant is, minus the hand
+        // wiring. The fragment side reads them as `attrs.<name>`, which
+        // is why the fragment partitions below stop at cut nodes.
+        for (socket, (name, _)) in &plan.cuts {
+            let part = emitter.emit_cut(socket)?;
             varyings.push((name.clone(), part));
         }
     }
@@ -247,7 +278,7 @@ pub fn generate(
     // pass wants the vertex offset and the alpha test, and nothing else.
     let surface = stage
         .needs_surface()
-        .then(|| emitter.emit_partition(outputs.surface, ShaderStage::Fragment))
+        .then(|| emitter.emit_fragment_partition(outputs.surface, &plan.cuts))
         .transpose()?;
 
     emitter.request_abi_imports(vertex.is_some(), surface.is_some(), !varyings.is_empty());
@@ -369,6 +400,82 @@ impl Emitter<'_> {
         Ok(Partition {
             body: core::mem::take(&mut self.body),
             inputs,
+        })
+    }
+
+    /// A fragment-stage partition: like [`Emitter::emit_partition`], but
+    /// a node the stage analysis assigned to the vertex stage is a *cut*
+    /// — the walk stops there, and its sockets read the synthesized
+    /// interpolants the vertex side writes (`attrs.<name>`). This is the
+    /// whole mechanism: a cut is an interpolant with no author.
+    fn emit_fragment_partition(
+        &mut self,
+        terminal: NodeId,
+        cuts: &std::collections::BTreeMap<
+            SocketRef,
+            (crate::wxsl::WxslIdent, crate::node::ValueType),
+        >,
+    ) -> Result<Partition, CodegenError> {
+        let stops: std::collections::BTreeSet<NodeId> =
+            cuts.keys().map(|socket| socket.node).collect();
+        let needed = self.graph.dependencies_stopping_at(terminal, &stops);
+        let order = self
+            .graph
+            .topological_order(Some(&needed))
+            .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
+        self.stage = ShaderStage::Fragment;
+        self.bindings.clear();
+        self.body.clear();
+        // The cuts are leaves as far as this partition is concerned, so
+        // their expressions are the interpolant reads, bound before
+        // anything that consumes them is emitted.
+        for (socket, (name, _)) in cuts {
+            self.bindings.insert(
+                socket.clone(),
+                format!("{}.{}", abi::MATERIAL_ATTRIBUTES_VAR, name),
+            );
+        }
+        for node in &order {
+            if *node == terminal || stops.contains(node) {
+                continue;
+            }
+            self.emit_node(*node)?;
+        }
+        let inputs = self.emit_terminal(terminal)?;
+        Ok(Partition {
+            body: core::mem::take(&mut self.body),
+            inputs,
+        })
+    }
+
+    /// One cut, as a vertex-stage partition of its own — the same shape a
+    /// hand-wired `output.varying` compiles into, rooted at the node the
+    /// analysis chose instead of at a terminal. The partition "returns"
+    /// the cut socket's emitted expression, carried in
+    /// `inputs` under the varying socket's name so `finish` reads it the
+    /// same way it reads a manual interpolant's.
+    fn emit_cut(&mut self, socket: &SocketRef) -> Result<Partition, CodegenError> {
+        let needed = self.graph.dependencies_of(socket.node);
+        let order = self
+            .graph
+            .topological_order(Some(&needed))
+            .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
+        self.stage = ShaderStage::Vertex;
+        self.bindings.clear();
+        self.body.clear();
+        for node in &order {
+            if *node == socket.node {
+                continue;
+            }
+            self.emit_node(*node)?;
+        }
+        self.emit_node(socket.node)?;
+        let expr = self.bindings.get(socket).cloned().ok_or_else(|| {
+            CodegenError::Invalid(GraphErrors(vec![GraphError::UnknownNode(socket.node)]))
+        })?;
+        Ok(Partition {
+            body: core::mem::take(&mut self.body),
+            inputs: vec![(abi::SOCKET_VARYING.to_string(), expr)],
         })
     }
 
@@ -1547,6 +1654,79 @@ mod tests {
 
     fn generate_default(graph: &Graph, registry: &NodeRegistry) -> GeneratedShader {
         generate(graph, registry, &CodegenOptions::default()).expect("codegen succeeds")
+    }
+
+    /// A value both stages read: computed per vertex, handed to the
+    /// fragment stage as a synthesized interpolant — the whole of plan2
+    /// P9 in one graph.
+    #[test]
+    fn a_shared_node_is_computed_in_the_vertex_stage_and_interpolated_down() {
+        let mut registry = NodeRegistry::new();
+        registry.register(abi::surface_output_def());
+        registry.register(abi::vertex_output_def());
+        registry.register_all(abi::context_node_defs());
+        registry.register_all([NodeDefinition::builder("test.vec3", "Vec3")
+            .input(Socket::new("a", ValueType::F32).with_splat_default(0.5))
+            .output(Socket::new("out", ValueType::Vec3))
+            .expr("vec3f({a})")]);
+        let mut graph = Graph::new("cut");
+        let value = graph.add(Node::new("test.vec3"));
+        let surface = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        let vertex = graph.add(Node::new(abi::VERTEX_OUTPUT_ID));
+        graph
+            .wire(&registry, (value, "out"), (surface, "base_color"))
+            .expect("vec3 into base_color");
+        graph
+            .wire(
+                &registry,
+                (value, "out"),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .expect("vec3 into the offset");
+
+        let shader = generate_default(&graph, &registry);
+        // The cut is a real interpolant: declared on the interface,
+        // computed by a vertex-stage function of its own, written by the
+        // vertex entry, and read by the material function through the
+        // attributes struct.
+        assert!(
+            shader
+                .source
+                .contains("fn wxsl_varying_auto0(vtx: VertexContext"),
+            "{})",
+            shader.source
+        );
+        assert!(
+            shader
+                .source
+                .contains("out.auto0 = wxsl_varying_auto0(vtx, attrs);"),
+            "{}",
+            shader.source
+        );
+        assert!(shader.source.contains("attrs.auto0"), "{}", shader.source);
+        // And the fragment partition stops at the cut: the shared node's
+        // expression appears once, in the vertex function, not again in
+        // the material function.
+        // The material function assigns the surface field straight from
+        // the interpolant read — it does not re-evaluate the node.
+        assert!(
+            shader.source.contains("surface.base_color = attrs.auto0;"),
+            "{}",
+            shader.source
+        );
+
+        // A stage with no fragment program computes no cut — there is
+        // nothing to hand the value to.
+        let options = CodegenOptions {
+            stage: abi::MaterialStage::DEPTH_ONLY,
+            ..CodegenOptions::default()
+        };
+        let depth = generate(&graph, &registry, &options).expect("depth compiles");
+        assert!(
+            !depth.source.contains("wxsl_varying_auto0"),
+            "the depth module should not compute the cut:\n{}",
+            depth.source
+        );
     }
 
     #[test]

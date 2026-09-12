@@ -145,6 +145,44 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub position: Option<[f32; 2]>,
+    /// The stage constraint the author pinned on this node, or [`StageConstraint::Auto`] —
+    /// the default, and the reason the field usually serializes to
+    /// nothing. Read by stage analysis
+    /// ([`crate::stages`], plan2 P9), not by the editor's layout code.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "StageConstraint::is_auto")
+    )]
+    pub stage: StageConstraint,
+}
+
+/// How firmly an author has said which shader stage a node runs in.
+///
+/// The default is [`StageConstraint::Auto`]: stage analysis decides, and
+/// computes shared nodes once, in the vertex stage, handing them to the
+/// fragment side as synthesized interpolants. A constraint is the author
+/// overriding that — most often `Fragment`, to pin the old behaviour of
+/// duplicating a shared subtree into the fragment stage instead of paying
+/// an interpolant for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum StageConstraint {
+    /// The analysis decides, from what the node reads and what consumes it.
+    #[default]
+    Auto,
+    /// Compute in the vertex stage. If only fragment consumers read the
+    /// node, its value rides a synthesized interpolant down.
+    Vertex,
+    /// Compute in the fragment stage. A vertex terminal that still needs
+    /// the node makes the vertex stage compute its own copy.
+    Fragment,
+}
+
+impl StageConstraint {
+    /// Whether this is [`StageConstraint::Auto`] — the serde skip test.
+    pub fn is_auto(&self) -> bool {
+        *self == StageConstraint::Auto
+    }
 }
 
 impl Node {
@@ -158,12 +196,19 @@ impl Node {
             label: None,
             color: None,
             position: None,
+            stage: StageConstraint::Auto,
         }
     }
 
     /// Pin `value` on the input named `socket`.
     pub fn with_param(mut self, socket: impl Into<String>, value: Value) -> Self {
         self.params.insert(socket.into(), value);
+        self
+    }
+
+    /// Constrain which shader stage this node compiles into.
+    pub fn with_stage(mut self, stage: StageConstraint) -> Self {
+        self.stage = stage;
         self
     }
 
@@ -692,6 +737,22 @@ impl Graph {
         }
     }
 
+    /// Constrain which shader stage `node` compiles into. The analysis
+    /// that reads it is [`crate::stages::analyze`].
+    pub fn set_stage(&mut self, node: NodeId, stage: StageConstraint) {
+        if let Some(instance) = self.nodes.get_mut(&node) {
+            instance.stage = stage;
+        }
+    }
+
+    /// The stage constraint `node` carries.
+    pub fn stage(&self, node: NodeId) -> StageConstraint {
+        self.nodes
+            .get(&node)
+            .map(|instance| instance.stage)
+            .unwrap_or_default()
+    }
+
     /// What this graph needs bound before it can draw: its uniform
     /// parameters, its textures and samplers, and the block it expects the
     /// application to supply.
@@ -853,7 +914,10 @@ impl Graph {
     /// The declared attributes of one frequency, as the layout computer
     /// wants them. Malformed names are skipped; `Graph::validate` reports
     /// them.
-    fn declared_attributes(&self, frequency: AttributeFrequency) -> Vec<(WxslIdent, ValueType)> {
+    pub(crate) fn declared_attributes(
+        &self,
+        frequency: AttributeFrequency,
+    ) -> Vec<(WxslIdent, ValueType)> {
         self.attributes
             .iter()
             .filter(|decl| decl.frequency == frequency)
@@ -1619,6 +1683,31 @@ impl Graph {
         seen
     }
 
+    /// [`Graph::dependencies_of`], except the walk does not descend
+    /// through a node in `stops` — a value the *other* stage computes and
+    /// hands over, so its own inputs are none of this partition's
+    /// business. `stops` themselves are in the set; their inputs are not.
+    pub(crate) fn dependencies_stopping_at(
+        &self,
+        root: NodeId,
+        stops: &BTreeSet<NodeId>,
+    ) -> BTreeSet<NodeId> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if stops.contains(&node) && node != root {
+                continue;
+            }
+            for edge in self.edges_into(node) {
+                stack.push(edge.from.node);
+            }
+        }
+        seen
+    }
+
     /// Nodes in dependency order: every node appears after the nodes feeding
     /// it. Restricted to `subset` when given.
     ///
@@ -2109,69 +2198,26 @@ impl Graph {
         }
         self.check_varying_outputs(registry, errors);
 
-        // A vertex-only node under a fragment terminal is the mistake
-        // this catches: `object_position` has no meaning by the time the
-        // surface is shaded, and the generated fragment function has no
-        // struct to read it from.
-        let fragment_roots = self
-            .surface_outputs(registry)
-            .into_iter()
-            .chain(self.discard_outputs(registry));
-        for root in fragment_roots {
-            for id in self.dependencies_of(root) {
-                let Some(node) = self.nodes.get(&id) else {
-                    continue;
-                };
-                let Some(def) = registry.get(&node.def) else {
-                    continue;
-                };
-                if def.is_vertex_only() {
-                    errors.push(GraphError::WrongStage {
-                        node: id,
-                        def: def.id.clone(),
-                        output: root,
-                        reason: "it reads object space, which only the vertex stage has"
-                            .to_string(),
-                    });
-                }
-            }
-        }
-
-        // And the mirror mistake, which only exists now that a graph can
-        // compute an interpolant: reading one from the vertex stage,
-        // which is the stage computing it.
-        let vertex_roots = self
-            .vertex_outputs(registry)
-            .into_iter()
-            .chain(self.varying_outputs(registry));
-        for root in vertex_roots {
-            for id in self.dependencies_of(root) {
-                let Some(name) = self.attribute_read_name(registry, id) else {
-                    continue;
-                };
-                let Some(decl) = self.attribute(name.as_str()) else {
-                    continue;
-                };
-                if decl.frequency != AttributeFrequency::Computed {
-                    continue;
-                }
-                let def = self.nodes.get(&id).map(|node| node.def.clone());
-                errors.push(GraphError::WrongStage {
-                    node: id,
-                    def: def.unwrap_or_default(),
-                    output: root,
-                    reason: format!(
-                        "`{name}` is an interpolant the vertex stage computes, so \
-                         only the fragment stage can read it"
-                    ),
-                });
+        // The stage rules — a vertex-only node that ends up computed in
+        // the fragment stage, a computed interpolant read in the stage
+        // that computes it — are the analysis's to state now, because it
+        // is the analysis that decides where every node runs (plan2 P9).
+        // Running it here, against whatever terminals exist, is what
+        // keeps the editor's problem panel and the compiler agreeing.
+        if let Some(outputs) = self.outputs(registry) {
+            if let Err(failures) = crate::stages::analyze(self, registry, &outputs) {
+                errors.extend(failures.0);
             }
         }
     }
 
     /// The name a [`NodeBody::AttributeRead`] node reads, if that is what
     /// `node` is.
-    fn attribute_read_name(&self, registry: &NodeRegistry, node: NodeId) -> Option<WxslIdent> {
+    pub(crate) fn attribute_read_name(
+        &self,
+        registry: &NodeRegistry,
+        node: NodeId,
+    ) -> Option<WxslIdent> {
         let def = registry.get(&self.nodes.get(&node)?.def)?;
         matches!(def.body, NodeBody::AttributeRead)
             .then(|| self.declared_name(registry, node, node::SETTING_NAME))

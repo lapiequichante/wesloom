@@ -116,7 +116,19 @@ facade crate's feature set, not about the workspace.
 ### What the tests cover
 
 - `cargo test -p wxsl-core` — the graph model: typing, cycle rejection,
-  validation, codegen, macro precedence. Fast, no GPU, no shader compiler.
+  validation, codegen, macro precedence, stage analysis. Fast, no GPU, no
+  shader compiler.
+- `cargo test -p wxsl-stdlib --test lighting_models` — the **corpus gate**
+  (ADR 0029): every shader the generators produce, compiled with no device —
+  every shipped model standalone and as a direct dispatch, the switch shape
+  for every telling lighting set, the lighting pass for every set under
+  every binding of the ABI's macro flags, and the generated material module
+  for every stage of every set. This is where a generator or template
+  change fails, in about a second, with the compiler's diagnostic.
+- `cargo test -p wxsl --test stage_analysis` — a node the compiler places
+  in the vertex stage and interpolates down (a synthesized stage cut, ADR
+  0032) rendering the same picture as the same value hand-wired through a
+  declared interpolant. Skips with no adapter.
 - `cargo test -p wxsl --test graph_to_wgsl` — the real WXSL compiler
   over the real shader sources: **every node in the library** compiled on
   every material stage, the demo graph, macro switching, node-format round
@@ -153,7 +165,7 @@ facade crate's feature set, not about the workspace.
   shadow and a displacing one casting a displaced shadow are true only
   if those subgraphs reached a stage that writes no colour. Also that
   forward and deferred shade the same ground identically, which is what
-  keeps one `shadow_factor` in `shading.wxsl` rather than two. Skips with
+  keeps one generated `shadow_factor` rather than two. Skips with
   no adapter.
 - `cargo test -p wxsl --test lighting_models` — lighting models on a real
   device (ADR 0028): three models shaded through one deferred lighting
