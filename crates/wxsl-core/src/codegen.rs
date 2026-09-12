@@ -856,6 +856,13 @@ impl Emitter<'_> {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
             }
+            NodeBody::Document => {
+                // A pipeline document has no surface output, so `generate`
+                // stops at `NoOutputNode` long before the walk reaches it.
+                // It compiles to a `RenderGraph` (in `wxsl-render`), never
+                // to WXSL.
+                unreachable!("a pipeline document node has no WXSL to emit");
+            }
         }
         Ok(())
     }

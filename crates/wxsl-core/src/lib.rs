@@ -76,6 +76,7 @@ pub mod graph;
 pub mod lighting;
 pub mod macros;
 pub mod node;
+pub mod pipeline;
 pub mod resources;
 pub mod scene;
 pub mod stages;

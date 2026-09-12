@@ -481,6 +481,34 @@ pub enum GBufferPrecision {
 }
 
 impl GBufferPrecision {
+    /// The name used in serialized documents, on a command line and in the
+    /// editor.
+    ///
+    /// The abstract vocabulary a *pipeline document* spells a target's
+    /// precision in (plan2 P3) — `wxsl-render` maps it onto concrete
+    /// `wgpu` formats, which is knowledge this crate does not have.
+    pub fn name(self) -> &'static str {
+        match self {
+            GBufferPrecision::Normalized => "standard",
+            GBufferPrecision::HighDynamicRange => "hdr",
+            GBufferPrecision::NormalizedScalar => "scalar",
+            GBufferPrecision::HighDynamicRangePair => "pair",
+        }
+    }
+
+    /// Parse a precision from its [`GBufferPrecision::name`].
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        [
+            GBufferPrecision::Normalized,
+            GBufferPrecision::HighDynamicRange,
+            GBufferPrecision::NormalizedScalar,
+            GBufferPrecision::HighDynamicRangePair,
+        ]
+        .into_iter()
+        .find(|precision| precision.name().eq_ignore_ascii_case(text))
+    }
+
     /// How many components a fragment writes to a target of this
     /// precision, and the generated [`GBUFFER_STRUCT`] field carries.
     pub fn channels(self) -> usize {

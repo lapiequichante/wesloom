@@ -1,16 +1,19 @@
-//! What a frame is made of: [`TargetConfig`], the two stock pass lists, and
+//! What a frame is made of: [`TargetConfig`], the stock pipelines, and
 //! the `wgpu` pipeline cache they draw with.
 //!
 //! Until M1 this module held two hand-written structs, `ForwardPipeline` and
 //! `DeferredPipeline`, each owning its attachments, its depth texture and a
 //! pipeline cache, each writing `begin_render_pass` out by hand. A fourth
-//! pass meant a fourth struct repeating all of it. Now a pipeline is a
-//! [`crate::graph::RenderGraph`] — a list of [`crate::pass::PassDesc`]s —
-//! and the two shipped ones are built here by
-//! [`forward_graph`] and [`deferred_graph`]
-//! ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
+//! pass meant a fourth struct repeating all of it. Then a pipeline became a
+//! [`crate::graph::RenderGraph`] — a list of [`crate::pass::PassDesc`]s
+//! ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)) —
+//! and since the pipelines became *documents* (plan2 P3,
+//! [ADR 0033](../../docs/adr/0033-pipelines-are-documents.md)) the shipped
+//! pass lists come from the preset files under `assets/presets/`, compiled
+//! by [`crate::pipeline_doc`]. [`forward_graph`] and [`deferred_graph`]
+//! stay as the hand-built references those presets are tested against.
 //!
-//! [`PipelineCache`] is what survives from the old shape, generalized: a
+//! [`PipelineCache`] is what survives from the oldest shape, generalized: a
 //! `wgpu` pipeline is keyed on the shader variant *and* the pass state and
 //! target formats it was built for, so the same material draws opaque in
 //! one pass, blended in another and front-face-culled into a shadow map,
@@ -20,6 +23,7 @@ use core::fmt;
 use std::collections::HashMap;
 
 use wxsl_core::abi::{self, GBufferPrecision, MaterialStage};
+use wxsl_core::graph::Graph;
 use wxsl_core::lighting::LightingSet;
 use wxsl_core::resources::VertexAttributeBinding;
 use wxsl_core::scene::TagExpr;
@@ -53,6 +57,15 @@ impl StockPipeline {
     /// Both, in declaration order.
     pub const ALL: &'static [StockPipeline] = &[StockPipeline::Forward, StockPipeline::Deferred];
 
+    /// The preset document each stock pipeline is, embedded at compile
+    /// time from `assets/presets/` — the shipped truth, readable and
+    /// diffable as the data it is
+    /// ([ADR 0033](../../docs/adr/0033-pipelines-are-documents.md)).
+    const PRESET_SOURCE: &'static [&'static str] = &[
+        include_str!("../assets/presets/forward.pipeline.json"),
+        include_str!("../assets/presets/deferred.pipeline.json"),
+    ];
+
     /// The name, as used in labels and on the command line.
     pub fn name(&self) -> &'static str {
         match self {
@@ -75,11 +88,35 @@ impl StockPipeline {
         matches!(self, StockPipeline::Deferred)
     }
 
-    /// This pipeline's pass list, under `config`.
+    /// This pipeline's document, parsed from the shipped preset file.
+    ///
+    /// A parse failure is a broken embedded asset — a programming error,
+    /// not a runtime condition, so it panics with the file's name in the
+    /// message.
+    pub fn document(&self) -> Graph {
+        let source = StockPipeline::PRESET_SOURCE[self.index()];
+        serde_json::from_str(source)
+            .unwrap_or_else(|error| panic!("the shipped `{self}` preset does not parse: {error}"))
+    }
+
+    /// This pipeline's pass list, under `config`: the preset document,
+    /// compiled.
+    ///
+    /// A compile failure would mean a shipped preset that does not
+    /// schedule — the parity tests in `pipeline_doc` and
+    /// `stock_pipeline_names_round_trip` exist so that this `expect` is
+    /// never the first place a mistake shows up.
     pub fn graph(&self, config: &PipelineConfig) -> RenderGraph {
+        let document = self.document();
+        crate::pipeline_doc::compile(&document, &wxsl_core::pipeline::registry(), config)
+            .unwrap_or_else(|error| panic!("the shipped `{self}` preset does not compile: {error}"))
+    }
+
+    /// Position in [`StockPipeline::ALL`], indexing [`Self::PRESET_SOURCE`].
+    fn index(&self) -> usize {
         match self {
-            StockPipeline::Forward => forward_graph(config.target),
-            StockPipeline::Deferred => deferred_graph(config.target, &config.lighting),
+            StockPipeline::Forward => 0,
+            StockPipeline::Deferred => 1,
         }
     }
 }
@@ -277,6 +314,14 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
 
 /// The forward pipeline: a depth prepass, then shade what survived it.
 ///
+/// Since the stock pipelines became preset documents
+/// ([ADR 0033](../../docs/adr/0033-pipelines-are-documents.md)) this is no
+/// longer what [`StockPipeline::graph`] runs — the shipped
+/// `assets/presets/*.pipeline.json` are. It stays as the hand-built
+/// *reference*: `pipeline_doc`'s parity tests compile the preset document
+/// and assert the result is this graph, field for field, which is what
+/// keeps "two implementations of forward" one pipeline.
+///
 /// Two passes rather than one, and the second is the reason M2 exists: the
 /// prepass runs the same materials compiled for
 /// [`MaterialStage::DEPTH_ONLY`], which has no fragment entry at all, and
@@ -307,6 +352,10 @@ pub fn forward_graph(target: TargetConfig) -> RenderGraph {
 }
 
 /// The deferred pipeline: write the surface into a G-buffer, then shade it.
+///
+/// Like [`forward_graph`], the hand-built reference the preset document's
+/// parity tests compile against — not what [`StockPipeline::graph`] runs
+/// any more.
 ///
 /// The G-buffer's depth is sampled by the lighting pass rather than attached
 /// to it — a depth texture cannot be attached and sampled in the same pass —
@@ -907,6 +956,25 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The preset files are the shipped truth, and the document builder in
+    /// `pipeline_doc` is how they were written: the two must agree node
+    /// for node, or a preset has drifted from the pipeline it claims to
+    /// be. Regenerate the files with
+    /// `cargo test -p wxsl-render --lib preset_dump -- --ignored` — this
+    /// test is what says the regeneration is honest.
+    #[test]
+    fn the_shipped_preset_files_are_the_stock_documents() {
+        for pipeline in StockPipeline::ALL {
+            let shipped = pipeline.document();
+            let built = crate::pipeline_doc::stock_document(*pipeline);
+            assert_eq!(
+                shipped, built,
+                "the shipped `{pipeline}` preset does not match the document it claims \
+                 to be; regenerate it"
+            );
         }
     }
 }

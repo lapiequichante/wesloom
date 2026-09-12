@@ -16,6 +16,9 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 ttf-parser = { workspace = true }
+# The stock pipelines are shipped as preset documents (plan2 P3) and parsed
+# at startup; the graphs themselves stay plain data without it.
+serde_json = { workspace = true }
 # glTF/GLB geometry import, optional: a renderer that cannot load a mesh is
 # a toy, and a renderer that always pulls in an asset pipeline is a tax.
 gltf = { workspace = true, optional = true }

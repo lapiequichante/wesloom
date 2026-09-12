@@ -68,17 +68,21 @@ validation, traversal, the serialized node format), `codegen` (graph → WXSL,
 plus the generated macro module), `macros` (macro variables), `abi` (the
 shader ABI's names and field tables), `lighting` (the lighting-model
 registry, and the shading function, G-buffer pack and lighting pass
-generated from a set of models), `wesl` (identifier/float/hash helpers),
-`error`.
+generated from a set of models), `stages` (the stage analysis, plan2 P9),
+`pipeline` (the pipeline *document* vocabulary, plan2 P3 — a different
+registry over the same graph model), `template` (strict hole-filling for
+the generated shader text), `scene` (the scene document), `wesl`
+(identifier/float/hash helpers), `error`.
 
 **`wxsl-stdlib`** — `shaders` (the embedded `.wxsl` sources, keyed by
 module path), `registry` (the operators as node definitions, plus the
 function nodes `build.rs` derived from the sources).
 
-**`wxsl-render`** — `pipeline` (`StockPipeline`), `library` (`ShaderLibrary`),
+**`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
+`wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
+`RenderGraph`, plan2 P3), `library` (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
-variant cache), `pipeline` (the `Pipeline` trait, forward and deferred),
-`renderer` (the front end that hides the path switch), `scene` (camera,
+variant cache), `renderer` (the front end that hides the path switch), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
 `gpu` (device setup, offscreen rendering and readback), `error`, and `ui` —
 the 2D layer with nothing to do with materials (ADR 0013): `draw` (the
@@ -150,9 +154,25 @@ and [ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
 ## How a frame is drawn
 
 A pipeline is not a Rust struct: it is a list of `PassDesc`s over a set of
-`ResourceDesc`s — a `wxsl_render::graph::RenderGraph`. `pipeline.rs` builds
-the two stock ones (`forward_graph`, `deferred_graph`); an application
-building its own hands it to `Renderer::set_graph`.
+`ResourceDesc`s — a `wxsl_render::graph::RenderGraph`. Where the list comes
+from has two spellings, tested to agree
+([ADR 0033](adr/0033-pipelines-are-documents.md)):
+
+* **As a document.** A pipeline is a `wxsl_core::graph::Graph` over the
+  *pipeline node registry* (`wxsl_core::pipeline`): sources
+  (`source.scene`, `source.lights`), resources (`resource.gbuffer`,
+  `resource.color`, `resource.depth`), passes (`pass.geometry`,
+  `pass.shadow`, `pass.screen`) and one `present` terminal. Edges carry
+  render-graph resources (`DrawQueue`, `ColorTarget`, `DepthTarget`,
+  `ShadowMaps`, `GBuffer` — handle types outside `ValueType::ALL`, like
+  the texture sockets). `wxsl_render::pipeline_doc::compile` is a pure
+  function turning the document into a `RenderGraph`; every error names
+  the document node. The two stock pipelines are preset files
+  (`crates/wxsl-render/assets/presets/*.pipeline.json`) that
+  `StockPipeline::graph` loads and compiles.
+* **As hand-built Rust.** `forward_graph` and `deferred_graph` stay as the
+  reference pass lists the presets' parity tests compile against; an
+  application building its own graph hands it to `Renderer::set_graph`.
 
 The two shipped pass lists are `StockPipeline::{Forward, Deferred}`.
 Forward is a depth prepass (`depth_only`) followed by a shading pass

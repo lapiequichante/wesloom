@@ -341,6 +341,15 @@ impl Theme {
             ValueType::Texture2d => Color::rgb(0.45, 0.90, 0.70),
             ValueType::TextureCube => Color::rgb(0.35, 0.75, 0.60),
             ValueType::Sampler => Color::rgb(0.60, 0.95, 0.80),
+            // The pipeline resources, in the same "not a number" spirit
+            // but a distinct hue, so a pipeline document's edges read as
+            // resources that are theirs: no shader node ever takes one,
+            // and the colour should say so before the canvas is read.
+            ValueType::DrawQueue => Color::rgb(0.85, 0.85, 0.60),
+            ValueType::ShadowMaps => Color::rgb(0.75, 0.85, 0.45),
+            ValueType::GBuffer => Color::rgb(0.90, 0.75, 0.55),
+            ValueType::ColorTarget => Color::rgb(0.95, 0.65, 0.50),
+            ValueType::DepthTarget => Color::rgb(0.60, 0.70, 0.95),
         }
     }
 
@@ -397,6 +406,7 @@ mod tests {
         let types: Vec<ValueType> = ValueType::ALL
             .iter()
             .chain(ValueType::RESOURCES)
+            .chain(ValueType::PIPELINE_RESOURCES)
             .copied()
             .collect();
         let colors: Vec<[f32; 4]> = types

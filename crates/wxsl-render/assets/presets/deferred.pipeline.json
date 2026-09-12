@@ -1,0 +1,100 @@
+{
+  "name": "deferred",
+  "nodes": [
+    {
+      "id": 1,
+      "def": "source.scene"
+    },
+    {
+      "id": 2,
+      "def": "source.lights"
+    },
+    {
+      "id": 3,
+      "def": "pass.shadow"
+    },
+    {
+      "id": 4,
+      "def": "resource.gbuffer"
+    },
+    {
+      "id": 5,
+      "def": "pass.geometry",
+      "settings": {
+        "stage": "gbuffer"
+      },
+      "label": "deferred material"
+    },
+    {
+      "id": 6,
+      "def": "pass.screen",
+      "label": "deferred lighting"
+    },
+    {
+      "id": 7,
+      "def": "present"
+    }
+  ],
+  "edges": [
+    {
+      "from": {
+        "node": 1,
+        "socket": "draws"
+      },
+      "to": {
+        "node": 3,
+        "socket": "draws"
+      }
+    },
+    {
+      "from": {
+        "node": 2,
+        "socket": "shadows"
+      },
+      "to": {
+        "node": 3,
+        "socket": "into"
+      }
+    },
+    {
+      "from": {
+        "node": 1,
+        "socket": "draws"
+      },
+      "to": {
+        "node": 5,
+        "socket": "draws"
+      }
+    },
+    {
+      "from": {
+        "node": 4,
+        "socket": "gbuffer"
+      },
+      "to": {
+        "node": 5,
+        "socket": "gbuffer"
+      }
+    },
+    {
+      "from": {
+        "node": 4,
+        "socket": "gbuffer"
+      },
+      "to": {
+        "node": 6,
+        "socket": "gbuffer"
+      }
+    },
+    {
+      "from": {
+        "node": 6,
+        "socket": "color"
+      },
+      "to": {
+        "node": 7,
+        "socket": "surface"
+      }
+    }
+  ]
+}

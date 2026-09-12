@@ -61,7 +61,14 @@ impl ValueType {
             ValueType::Bool | ValueType::I32 | ValueType::U32 | ValueType::F32 => 4,
             ValueType::Vec2 => 8,
             ValueType::Vec3 | ValueType::Vec4 | ValueType::Mat3 | ValueType::Mat4 => 16,
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+            ValueType::Texture2d
+            | ValueType::TextureCube
+            | ValueType::Sampler
+            | ValueType::DrawQueue
+            | ValueType::ShadowMaps
+            | ValueType::GBuffer
+            | ValueType::ColorTarget
+            | ValueType::DepthTarget => return None,
         })
     }
 
@@ -79,7 +86,14 @@ impl ValueType {
             // Three columns, each a `vec3f` padded to its 16-byte alignment.
             ValueType::Mat3 => 48,
             ValueType::Mat4 => 64,
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+            ValueType::Texture2d
+            | ValueType::TextureCube
+            | ValueType::Sampler
+            | ValueType::DrawQueue
+            | ValueType::ShadowMaps
+            | ValueType::GBuffer
+            | ValueType::ColorTarget
+            | ValueType::DepthTarget => return None,
         })
     }
 

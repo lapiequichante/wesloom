@@ -10,8 +10,11 @@ editor, and chaining them** — so it deliberately overlaps plan.md's
 section 4 ("The pipeline graph, as nodes") and M7, and should be read as
 the accelerated, debt-first route to them.
 
-Status: P6, P2, P1 and P9 have landed — ADRs 0029, 0030, 0031 and 0032.
-The rest is proposal; each numbered item becomes an ADR when it lands. The architecture behind P2–P5 — where each layer
+Status: P6, P2, P1, P9 and P3 have landed — ADRs 0029, 0030, 0031, 0032
+and 0033. P3 kept one deviation from
+[plan2-architecture.md](plan2-architecture.md), recorded in the ADR: the
+presets ship in `wxsl-render` beside their compiler (not the facade), and
+`PipelineConfig` stayed where ADR 0030 put it. The rest is proposal; each numbered item becomes an ADR when it lands. The architecture behind P2–P5 — where each layer
 lives, what it holds, and what it costs — is written out in
 [plan2-architecture.md](plan2-architecture.md).
 

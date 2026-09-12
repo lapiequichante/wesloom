@@ -67,6 +67,7 @@ pub mod material;
 pub mod mesh;
 pub mod pass;
 pub mod pipeline;
+pub mod pipeline_doc;
 pub mod renderer;
 pub mod swap;
 pub mod ui;
@@ -94,6 +95,7 @@ pub use pass::{
     ResourceId,
 };
 pub use pipeline::{PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
+pub use pipeline_doc::{compile as compile_pipeline, PipelineError};
 pub use renderer::{single_draw, RenderRequest, Renderer};
 pub use swap::SwapProgress;
 pub use variants::{ShaderVariant, ShaderVariants};

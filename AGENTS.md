@@ -116,8 +116,9 @@ facade crate's feature set, not about the workspace.
 ### What the tests cover
 
 - `cargo test -p wxsl-core` — the graph model: typing, cycle rejection,
-  validation, codegen, macro precedence, stage analysis. Fast, no GPU, no
-  shader compiler.
+  validation, codegen, macro precedence, stage analysis, and the pipeline
+  document vocabulary (its handle types, and that a pipeline document
+  validates as an ordinary graph). Fast, no GPU, no shader compiler.
 - `cargo test -p wxsl-stdlib --test lighting_models` — the **corpus gate**
   (ADR 0029): every shader the generators produce, compiled with no device —
   every shipped model standalone and as a direct dispatch, the switch shape
@@ -199,7 +200,12 @@ facade crate's feature set, not about the workspace.
 - `cargo test -p wxsl-render` — the render graph's scheduling, which is a
   pure function and needs no GPU: pass ordering, transient texture reuse,
   history rotation, and every pass-list mistake that is reported as a named
-  error rather than a `wgpu` complaint.
+  error rather than a `wgpu` complaint. Also the **preset parity** tests
+  (ADR 0033): the compiled forward/deferred preset documents equal the
+  hand-built reference pass lists field for field, schedule identically,
+  and each shipped preset file parses back to the document that generated
+  it. This is where a preset edit that drifts from the pipeline it claims
+  to be fails.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
@@ -235,6 +241,13 @@ facade crate's feature set, not about the workspace.
 - A pipeline is **data**: a list of `wxsl_render::pass::PassDesc` over a set
   of `ResourceDesc`, run by `wxsl_render::graph` (ADR 0021). Adding a pass
   means building one more `PassDesc`, never writing `begin_render_pass`.
+  Since ADR 0033 the two *stock* pipelines are preset documents
+  (`crates/wxsl-render/assets/presets/*.pipeline.json`) over the pipeline
+  node registry (`wxsl_core::pipeline`), compiled by
+  `wxsl_render::pipeline_doc` — never edit generated pass lists in Rust;
+  the hand-built `forward_graph`/`deferred_graph` are the reference the
+  preset-parity tests compile against, nothing more. A document error
+  names the document node; the scheduler's checks stay as the last line.
 - A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
   geometry pass names one. Adding a stage is that row plus the constant
   naming it, plus whatever `codegen::write_entry_points` has to emit for
@@ -287,7 +300,10 @@ facade crate's feature set, not about the workspace.
   material's graph *declared* and supplies it by name — which is why it
   keeps working against a `--graph` it has never seen.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
-  comments in the file explaining it.
+  comments in the file explaining it. The pipeline documents under
+  `crates/wxsl-render/assets/presets/` are the same format over the
+  pipeline registry — read `deferred.pipeline.json` next to it to see
+  both.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred
   shader-switching design, macro variables, feature-flag matrix.
 - `docs/adr/` — the decision log. Start at `docs/adr/README.md`.

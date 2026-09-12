@@ -403,6 +403,16 @@ fn graph_using(
         // its own reaches nothing: both are covered as *inputs* of
         // `sample.texture_2d` above rather than as outputs here.
         ValueType::TextureCube | ValueType::Sampler => return None,
+        // The pipeline resources are material-graph nodes' outputs never:
+        // they live in pipeline documents, a registry this material-graph
+        // test never walks (`ValueType::is_resource` is true for them, so
+        // the loop above would have tried to *feed* one had a shader node
+        // declared it — no shipped node does).
+        ValueType::DrawQueue
+        | ValueType::ShadowMaps
+        | ValueType::GBuffer
+        | ValueType::ColorTarget
+        | ValueType::DepthTarget => return None,
     };
     // A vertex-only node reaches the *vertex* terminal instead: it reads
     // object space, which the fragment stage has not got, and

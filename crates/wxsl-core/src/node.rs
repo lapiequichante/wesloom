@@ -75,6 +75,25 @@ pub enum ValueType {
     TextureCube,
     /// WGSL `sampler`. A resource, see the type's own docs.
     Sampler,
+    /// A pipeline's draw list: what a geometry pass draws
+    /// ([`crate::pipeline`]). A render-graph resource, not a WGSL value —
+    /// the same trick as [`Self::Texture2d`], one domain over: it names a
+    /// *thing a pass consumes* rather than a value a shader computes, and
+    /// like the shader resources it is kept out of [`Self::ALL`].
+    DrawQueue,
+    /// A pipeline's shadow-map array, declared by `source.lights` and filled
+    /// by shadow passes. A render-graph resource, see [`Self::DrawQueue`].
+    ShadowMaps,
+    /// A pipeline's G-buffer: every target the enabled lighting set
+    /// requests, plus its depth, as one expandable handle. A render-graph
+    /// resource, see [`Self::DrawQueue`].
+    GBuffer,
+    /// A pipeline's colour target. A render-graph resource, see
+    /// [`Self::DrawQueue`].
+    ColorTarget,
+    /// A pipeline's depth target. A render-graph resource, see
+    /// [`Self::DrawQueue`].
+    DepthTarget,
 }
 
 impl ValueType {
@@ -97,11 +116,27 @@ impl ValueType {
     /// The types that name a bound resource rather than a value: textures
     /// and samplers.
     ///
-    /// Disjoint from [`Self::ALL`], and the two together are every variant.
+    /// Disjoint from [`Self::ALL`], and the two together with
+    /// [`Self::PIPELINE_RESOURCES`] are every variant.
     pub const RESOURCES: &'static [ValueType] = &[
         ValueType::Texture2d,
         ValueType::TextureCube,
         ValueType::Sampler,
+    ];
+
+    /// The types that name a *render-graph* resource rather than a value:
+    /// what a pipeline document's edges carry
+    /// ([`crate::pipeline`], plan2 P3).
+    ///
+    /// Disjoint from [`Self::ALL`] and [`Self::RESOURCES`] — these are
+    /// never bound in a *material's* bind groups, so no shader node ever
+    /// takes one — and the three together are every variant.
+    pub const PIPELINE_RESOURCES: &'static [ValueType] = &[
+        ValueType::DrawQueue,
+        ValueType::ShadowMaps,
+        ValueType::GBuffer,
+        ValueType::ColorTarget,
+        ValueType::DepthTarget,
     ];
 
     /// The float scalar and vector types, in increasing width.
@@ -152,15 +187,37 @@ impl ValueType {
             ValueType::Texture2d => "texture_2d<f32>",
             ValueType::TextureCube => "texture_cube<f32>",
             ValueType::Sampler => "sampler",
+            // The pipeline resources never appear in generated shader text —
+            // a document node has no WXSL body — so this is the spelling
+            // error messages and the editor show, not a WGSL type.
+            ValueType::DrawQueue => "draw_queue",
+            ValueType::ShadowMaps => "shadow_maps",
+            ValueType::GBuffer => "gbuffer",
+            ValueType::ColorTarget => "color_target",
+            ValueType::DepthTarget => "depth_target",
         }
     }
 
-    /// Whether this type names a bound resource rather than a value:
-    /// a member of [`Self::RESOURCES`].
+    /// Whether this type names a bound resource rather than a value: a
+    /// member of [`Self::RESOURCES`] or of [`Self::PIPELINE_RESOURCES`].
+    ///
+    /// Both kinds answer yes, because the *typing* consequences are the
+    /// same: no zero, no splat, no arithmetic, and — in the graph model —
+    /// a type that cannot be a vertex attribute or a uniform field. What
+    /// the resource *binds to* differs (a material group versus a pass
+    /// group), and that distinction is [`Self::RESOURCES`] versus
+    /// [`Self::PIPELINE_RESOURCES`], not this predicate.
     pub fn is_resource(&self) -> bool {
         matches!(
             self,
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler
+            ValueType::Texture2d
+                | ValueType::TextureCube
+                | ValueType::Sampler
+                | ValueType::DrawQueue
+                | ValueType::ShadowMaps
+                | ValueType::GBuffer
+                | ValueType::ColorTarget
+                | ValueType::DepthTarget
         )
     }
 
@@ -267,7 +324,14 @@ impl ValueType {
             ValueType::Vec4 => Value::Vec4([0.0; 4]),
             ValueType::Mat3 => Value::Mat3([0.0; 9]),
             ValueType::Mat4 => Value::Mat4([0.0; 16]),
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+            ValueType::Texture2d
+            | ValueType::TextureCube
+            | ValueType::Sampler
+            | ValueType::DrawQueue
+            | ValueType::ShadowMaps
+            | ValueType::GBuffer
+            | ValueType::ColorTarget
+            | ValueType::DepthTarget => return None,
         })
     }
 
@@ -304,7 +368,14 @@ impl ValueType {
             ValueType::Bool => Some(Value::Bool(value != 0.0)),
             ValueType::I32 => Some(Value::I32(value as i32)),
             ValueType::U32 => Some(Value::U32(value.max(0.0) as u32)),
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => None,
+            ValueType::Texture2d
+            | ValueType::TextureCube
+            | ValueType::Sampler
+            | ValueType::DrawQueue
+            | ValueType::ShadowMaps
+            | ValueType::GBuffer
+            | ValueType::ColorTarget
+            | ValueType::DepthTarget => None,
         }
     }
 }
@@ -474,7 +545,14 @@ impl Value {
             // the identity.
             ValueType::Mat3 | ValueType::Mat4 => return ty.splat(first).or_else(|| ty.zero()),
             ValueType::Bool | ValueType::I32 | ValueType::U32 => return ty.zero(),
-            ValueType::Texture2d | ValueType::TextureCube | ValueType::Sampler => return None,
+            ValueType::Texture2d
+            | ValueType::TextureCube
+            | ValueType::Sampler
+            | ValueType::DrawQueue
+            | ValueType::ShadowMaps
+            | ValueType::GBuffer
+            | ValueType::ColorTarget
+            | ValueType::DepthTarget => return None,
         })
     }
 
@@ -548,9 +626,10 @@ pub struct Socket {
     /// Whether the input may be left unfed entirely, with no value at all.
     ///
     /// Only meaningful on a [`NodeBody::SurfaceOutput`] node, whose fields
-    /// fall back to what [`crate::abi::DEFAULT_SURFACE_FN`] wrote: every
-    /// other body needs an expression for each input to emit anything. The
-    /// builder enforces that.
+    /// fall back to what [`crate::abi::DEFAULT_SURFACE_FN`] wrote, or on a
+    /// [`NodeBody::Document`] node, where "unconnected" is often a meaning
+    /// in its own right: every shader body needs an expression for each
+    /// input to emit anything. The builder enforces that.
     pub optional: bool,
     /// One-line description for the editor.
     pub doc: String,
@@ -977,6 +1056,19 @@ pub enum NodeBody {
     /// side there is nothing to tell a value the vertex stage computed
     /// from one the mesh carried.
     VaryingOutput,
+    /// Not a shader node at all: a node of a **pipeline document**
+    /// ([`crate::pipeline`], plan2 P3) — a source, a pass, a resource or
+    /// the present terminal, carried by the same graph model but compiled
+    /// to a `RenderGraph` by a different compiler than [`crate::codegen`].
+    ///
+    /// A variant rather than a separate node vocabulary because the guard
+    /// rail cuts one way: pipeline nodes reuse `wxsl-core`'s graph, its
+    /// typing, its serialization and its editor canvas, and a *second*
+    /// document model would fork all four. Nothing else in this enum has
+    /// an opinion about rendering; neither does this — the body carries no
+    /// payload, and the meaning of a document node is entirely its
+    /// definition's sockets and settings, read by the document compiler.
+    Document,
 }
 
 /// Setting name every [`NodeBody::Param`] and [`NodeBody::Resource`] node
@@ -1252,6 +1344,13 @@ impl NodeDefinition {
             || self.is_varying_output()
     }
 
+    /// Whether this is a pipeline-document node
+    /// ([`NodeBody::Document`]) — something a *document* compiler
+    /// consumes, and which has no WXSL body at all.
+    pub fn is_document(&self) -> bool {
+        matches!(self.body, NodeBody::Document)
+    }
+
     /// Whether this node can only be compiled into the vertex stage.
     pub fn is_vertex_only(&self) -> bool {
         matches!(self.body, NodeBody::VertexContextRead(_))
@@ -1477,6 +1576,22 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
+    /// Finish with a [`NodeBody::Document`] body: a pipeline-document node
+    /// ([`crate::pipeline`]), compiled to a `RenderGraph` rather than to
+    /// WXSL.
+    ///
+    /// Unlike a shader node, a document node may declare optional inputs —
+    /// a `pass.screen`'s target-to-write is *meant* to be leaveable
+    /// unconnected (unconnected means "the frame's own target"), which for
+    /// a shader node is exactly the half-typed state the builder refuses.
+    /// What a document node requires is the document compiler's business,
+    /// reported as named errors, for the same reason a material's
+    /// stage-level requirements are.
+    pub fn document(mut self) -> NodeDefinition {
+        self.def.body = NodeBody::Document;
+        self.build()
+    }
+
     /// Finish without changing the body.
     ///
     /// # Panics
@@ -1487,15 +1602,19 @@ impl NodeDefinitionBuilder {
         // A terminal's inputs may be unfed — that is what makes a
         // half-wired graph still compile, and what makes a vertex or
         // discard output free to leave in place while its branch is
-        // built. Nothing else may be.
-        let terminal = matches!(
+        // built. A document node's may too: "unconnected" there is often a
+        // *meaning* (a screen pass with no target wired writes the frame's
+        // own), and the document compiler reports what genuinely must be
+        // wired. Nothing else may be.
+        let unfed_ok = matches!(
             self.def.body,
             NodeBody::SurfaceOutput
                 | NodeBody::VertexOutput
                 | NodeBody::DiscardOutput
                 | NodeBody::VaryingOutput
+                | NodeBody::Document
         );
-        if !terminal {
+        if !unfed_ok {
             for socket in &self.def.inputs {
                 assert!(
                     !socket.optional,
