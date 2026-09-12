@@ -1301,13 +1301,20 @@ mod tests {
         }
     }
 
+    /// The shipped modules that are plumbing rather than node functions:
+    /// the ABI directory, and the lighting models, which are shaded through
+    /// `wxsl_core::lighting`'s contract instead of placed on a canvas.
+    fn is_abi_module(path: &str) -> bool {
+        path.starts_with("package::wxsl::") || path.starts_with("package::lighting::models::")
+    }
+
     /// Every function node came from a `.wxsl` file, so this is the set
     /// `derived_nodes` should be exactly.
     fn node_source_modules() -> Vec<&'static str> {
         shaders::MODULES
             .iter()
             .map(|(path, _)| *path)
-            .filter(|path| !path.starts_with("package::wxsl::"))
+            .filter(|path| !is_abi_module(path))
             .collect()
     }
 
@@ -1348,7 +1355,7 @@ mod tests {
         let generated = derived_nodes();
         for (path, source) in shaders::MODULES
             .iter()
-            .filter(|(path, _)| !path.starts_with("package::wxsl::"))
+            .filter(|(path, _)| !is_abi_module(path))
         {
             let fresh = wxsl_lang::node_from_source(source, path).unwrap_or_else(|errors| {
                 panic!(

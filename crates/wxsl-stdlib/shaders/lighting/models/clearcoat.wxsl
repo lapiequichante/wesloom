@@ -1,0 +1,76 @@
+// The clear-coat lighting model
+//
+// The PBR model plus a second GGX specular lobe over a thin coat —
+// lacquered wood, car paint, a wet surface.
+//
+// This model exists to prove the composition the registry asks for: it is
+// the one shipped entry that *requests a G-buffer target*, and the deferred
+// path only allocates that target when the set enables this model. The coat
+// parameters travel through it (strength in `x`, roughness in `y`), packed
+// by `pack_clearcoat` in the material's G-buffer stage and read back by the
+// lighting pass.
+//
+// Until a graph can author coat parameters directly, the pack derives them
+// from the surface by the model's own convention: the smoother a surface,
+// the more coat it gets. The point is that the target is per-fragment data
+// flowing material → G-buffer → lighting pass, not the particular choice of
+// convention.
+//
+// Not a node: it is one of the entries of `wxsl_core::lighting::
+// DEFAULT_MODELS`, shaded through the lighting-model registry rather than
+// placed on a canvas.
+
+import package::lighting::distribution_ggx::distribution_ggx;
+import package::lighting::fresnel_schlick::fresnel_schlick;
+import package::lighting::models::pbr::lighting_pbr;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+// Fills the model's requested G-buffer target from the surface.
+fn pack_clearcoat(surface: Surface) -> vec4f {
+    return vec4f(
+        // Strength: fully rough surfaces take no coat; fully smooth ones
+        // take the full lobe.
+        pow(1.0 - saturate(surface.roughness), 2.0),
+        // Roughness: a coat is glossier than what it covers, but not a
+        // mirror — a lobe this tight would light one pixel in a hundred.
+        0.25,
+        0.0,
+        0.0,
+    );
+}
+
+fn lighting_clearcoat(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f, // `pack_clearcoat`'s texel, read back out of the G-buffer
+) -> vec3f {
+    let base = lighting_pbr(surface, ctx, light, extra);
+    let coat_amount = extra.x;
+    // No coat, no second lobe — and no division by a roughness that was
+    // never packed either.
+    if coat_amount <= 0.0 {
+        return base;
+    }
+
+    let coat_roughness = extra.y;
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+    let half_vector = normalize(light.direction + view_direction);
+    let n_dot_h = saturate(dot(normal, half_vector));
+    let n_dot_v = saturate(dot(normal, view_direction));
+    let v_dot_h = saturate(dot(view_direction, half_vector));
+
+    // Walter's visibility approximation: 0.25 / (N·L, N·V) products, which
+    // is the cheap half of a full Smith term and is exact enough for a
+    // lobe this subordinate.
+    let n_dot_l = saturate(dot(normal, light.direction));
+    let distribution = distribution_ggx(n_dot_h, coat_roughness);
+    let visibility = 0.25 / max(n_dot_l * n_dot_v, 1e-4);
+    // A coat is dielectric: fixed 4% reflectance, Schlick falloff.
+    let fresnel = fresnel_schlick(vec3f(0.04), v_dot_h);
+
+    let coat = distribution * visibility * fresnel * light.radiance * n_dot_l;
+    return base + coat * coat_amount;
+}

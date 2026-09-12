@@ -24,8 +24,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use std::fmt::Write as _;
+
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::codegen;
+use wxsl_core::lighting::LightingSet;
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::wxsl::stable_hash;
 
@@ -152,34 +155,42 @@ impl ShaderVariants {
         variant
     }
 
-    /// The deferred lighting pass variant for `macros`.
+    /// The deferred lighting pass variant for `macros` and the enabled
+    /// lighting-model `set`.
     ///
     /// Independent of any material: by the time this pass runs, the material
     /// has already been resolved into the G-buffer. It still varies with the
     /// macro set, because the shading function it calls has `@if`s of its own
-    /// (tonemapping, the debug-normal view).
+    /// (tonemapping, the debug-normal view) — and with the set, because the
+    /// pass is *generated* from it ([`wxsl_core::lighting`]): its switch
+    /// names the enabled models and its bindings match the G-buffer layout.
     pub fn lighting_pass(
         &mut self,
         device: &wgpu::Device,
         library: &ShaderLibrary,
         macros: &MacroSet,
+        set: &LightingSet,
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        let key = Self::lighting_pass_key(macros);
+        let key = Self::lighting_pass_key(macros, set);
         let macros = macros.clone();
+        let set = set.clone();
         self.get_or_compile(device, key, || {
-            let extra: [(&str, Cow<'_, str>); 0] = [];
+            let source = wxsl_core::lighting::lighting_pass_source(&set);
+            let extra = [(abi::LIGHTING_PASS_MODULE, Cow::Owned(source))];
             (
-                "deferred lighting pass".to_string(),
+                format!("deferred lighting pass ({})", set.signature()),
                 compile(library, &extra, abi::LIGHTING_PASS_MODULE, &macros),
             )
         })
     }
 
-    /// The key the lighting pass for `macros` is cached under.
-    pub fn lighting_pass_key(macros: &MacroSet) -> VariantKey {
+    /// The key the lighting pass for `macros` and `set` is cached under.
+    pub fn lighting_pass_key(macros: &MacroSet, set: &LightingSet) -> VariantKey {
+        let mut identity = macros.signature();
+        let _ = write!(identity, ";{}", set.signature());
         VariantKey {
             kind: VariantKind::LightingPass,
-            identity: stable_hash(macros.signature().as_bytes()),
+            identity: stable_hash(identity.as_bytes()),
             stage: None,
         }
     }
@@ -275,24 +286,33 @@ impl MaterialRequest {
 pub struct LightingRequest {
     /// The cache key the result belongs under.
     pub key: VariantKey,
+    /// Label for the `wgpu` module and for error messages.
+    pub label: String,
     /// The macro values to bind.
     pub macros: MacroSet,
+    /// The generated pass source, owned so this can go to a worker thread.
+    pub source: String,
 }
 
 impl LightingRequest {
-    /// What compiling the lighting pass for `macros` needs.
-    pub fn new(macros: &MacroSet) -> Self {
+    /// What compiling the lighting pass for `macros` and `set` needs.
+    pub fn new(macros: &MacroSet, set: &LightingSet) -> Self {
         LightingRequest {
-            key: ShaderVariants::lighting_pass_key(macros),
+            key: ShaderVariants::lighting_pass_key(macros, set),
+            label: format!("deferred lighting pass ({})", set.signature()),
             macros: macros.clone(),
+            source: wxsl_core::lighting::lighting_pass_source(set),
         }
     }
 
     /// Run the WXSL compiler, off any thread.
     pub fn compile(&self, library: &ShaderLibrary) -> (String, Result<String, RenderError>) {
-        let extra: [(&str, Cow<'_, str>); 0] = [];
+        let extra = [(
+            abi::LIGHTING_PASS_MODULE,
+            Cow::Borrowed(self.source.as_str()),
+        )];
         (
-            "deferred lighting pass".to_string(),
+            self.label.clone(),
             compile(library, &extra, abi::LIGHTING_PASS_MODULE, &self.macros),
         )
     }

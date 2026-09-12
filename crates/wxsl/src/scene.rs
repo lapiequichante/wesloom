@@ -65,6 +65,28 @@ impl SceneResources {
         registry: &NodeRegistry,
         base: Option<&Path>,
     ) -> Result<Self, LoadError> {
+        Self::load_with_lighting(
+            device,
+            scene,
+            registry,
+            base,
+            &wxsl_core::lighting::LightingSet::default(),
+        )
+    }
+
+    /// The same, with every material's model resolved against the lighting
+    /// set the surrounding pipeline enables.
+    ///
+    /// The same set must go to the renderer
+    /// (`wxsl_render::Renderer::set_lighting`); a scene naming a model the
+    /// set does not enable is an error here, naming the material.
+    pub fn load_with_lighting(
+        device: &wgpu::Device,
+        scene: &Scene,
+        registry: &NodeRegistry,
+        base: Option<&Path>,
+        lighting: &wxsl_core::lighting::LightingSet,
+    ) -> Result<Self, LoadError> {
         let invalid = scene.validate();
         if !invalid.is_empty() {
             return Err(LoadError::Invalid(invalid));
@@ -78,14 +100,16 @@ impl SceneResources {
         let mut materials = Vec::with_capacity(scene.materials.len());
         for entry in &scene.materials {
             materials.push(
-                Material::with_options(
+                Material::with_lighting(
                     &entry.graph,
                     registry,
                     &MaterialOptions {
                         macros: entry.macros.clone(),
                         cast_shadow: entry.cast_shadow,
                         receive_shadow: entry.receive_shadow,
+                        lighting: entry.lighting.clone(),
                     },
+                    lighting,
                 )
                 .map_err(|error| LoadError::Material {
                     material: entry.name.clone(),

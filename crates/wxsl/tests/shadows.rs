@@ -370,10 +370,10 @@ fn a_material_that_receives_no_shadow_does_not_compile_the_lookup() {
 
 #[test]
 fn forward_and_deferred_shadow_the_same_ground_the_same_way() {
-    // The lookup lives in `shading.wxsl`, which the forward stage calls
-    // from its fragment entry and the deferred lighting pass calls after
-    // unpacking the G-buffer. If the two ever disagree it is because
-    // somebody wrote a second copy.
+    // The lookup lives in the generated shading function, which the
+    // forward stage calls from its fragment entry and the deferred
+    // lighting pass calls after unpacking the G-buffer. If the two ever
+    // disagree it is because somebody wrote a second copy.
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");

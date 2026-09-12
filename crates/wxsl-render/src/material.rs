@@ -30,6 +30,7 @@
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
+use wxsl_core::lighting::{LightingSet, MaterialLighting};
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::resources::{BufferLayout, FieldLayout, MaterialInterface, VertexAttributeBinding};
@@ -39,7 +40,7 @@ use crate::error::RenderError;
 /// How a material is compiled, beyond the graph itself.
 ///
 /// Everything an author sets on a material that is not a node: the macro
-/// overrides, and the two shadow flags.
+/// overrides, the two shadow flags, and which lighting model shades it.
 #[derive(Clone, Debug)]
 pub struct MaterialOptions {
     /// Macro values taking precedence over the ones the graph pins.
@@ -58,6 +59,13 @@ pub struct MaterialOptions {
     /// receive shadows does not compile the lookup and the variant cache
     /// keeps the two apart on their macro sets.
     pub receive_shadow: bool,
+    /// Which lighting model shades this material, by the name its registry
+    /// entry carries, or `None` for the enabled set's default.
+    ///
+    /// Resolved against the set at compile time — see
+    /// [`Material::with_lighting`] — and a name the set does not enable is
+    /// an error there rather than a silently different shade.
+    pub lighting: Option<String>,
 }
 
 impl Default for MaterialOptions {
@@ -66,6 +74,7 @@ impl Default for MaterialOptions {
             macros: MacroSet::new(),
             cast_shadow: true,
             receive_shadow: true,
+            lighting: None,
         }
     }
 }
@@ -117,6 +126,9 @@ pub struct Material {
     instance_signature: String,
     cast_shadow: bool,
     receive_shadow: bool,
+    /// The lighting model this material was resolved to, and the set it
+    /// was resolved against.
+    lighting: MaterialLighting,
 }
 
 impl Material {
@@ -143,18 +155,54 @@ impl Material {
         )
     }
 
-    /// Compile `graph` under `options`.
+    /// Compile `graph` under `options`, shaded by the default lighting
+    /// model in a set of one.
+    ///
+    /// A material that names a model under this entry point is an error —
+    /// naming one only means something against a set that enables it, and
+    /// the default set enables only the default.
     pub fn with_options(
         graph: &Graph,
         registry: &NodeRegistry,
         options: &MaterialOptions,
     ) -> Result<Self, RenderError> {
+        Self::with_lighting(
+            graph,
+            registry,
+            options,
+            &MaterialLighting::default().set().clone(),
+        )
+    }
+
+    /// Compile `graph` under `options`, with its model resolved against
+    /// the lighting set `lighting` the surrounding pipeline enables.
+    ///
+    /// The same set must be given to the renderer — the material's
+    /// G-buffer module is generated for its layout — and
+    /// [`crate::Renderer::set_lighting`] is the other half of that
+    /// handshake. A name the set does not enable, or a material whose
+    /// model the set leaves out, is reported here rather than discovered
+    /// as a `wgpu` complaint about a mismatched fragment target count.
+    pub fn with_lighting(
+        graph: &Graph,
+        registry: &NodeRegistry,
+        options: &MaterialOptions,
+        lighting: &LightingSet,
+    ) -> Result<Self, RenderError> {
+        let resolved =
+            MaterialLighting::resolve(lighting, options.lighting.as_deref()).map_err(|error| {
+                RenderError::Lighting {
+                    material: graph.name().to_string(),
+                    error: error.to_string(),
+                }
+            })?;
         let overrides = options.effective_macros();
         let mut stages = Vec::with_capacity(MaterialStage::ALL.len());
         for stage in MaterialStage::ALL {
             let codegen_options = CodegenOptions {
                 stage: *stage,
                 override_macros: overrides.clone(),
+                lighting: resolved.clone(),
                 ..CodegenOptions::default()
             };
             stages.push(codegen::generate(graph, registry, &codegen_options)?);
@@ -166,6 +214,7 @@ impl Material {
             stages,
             cast_shadow: options.cast_shadow,
             receive_shadow: options.receive_shadow,
+            lighting: resolved,
         })
     }
 
@@ -177,6 +226,16 @@ impl Material {
     /// Whether this material's shading is attenuated by the shadow maps.
     pub fn receive_shadow(&self) -> bool {
         self.receive_shadow
+    }
+
+    /// Which lighting model shades this material, and the set it was
+    /// resolved against.
+    ///
+    /// A renderer whose own set differs is a frame that draws wrong in the
+    /// best case; the signature is what lets the mismatch be a named
+    /// error before anything is recorded.
+    pub fn lighting(&self) -> &MaterialLighting {
+        &self.lighting
     }
 
     /// The generated module for `stage`.

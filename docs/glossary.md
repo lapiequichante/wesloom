@@ -115,13 +115,22 @@ between two pipelines free.
 written against: the `SurfaceContext` it is given, the `Surface` it returns,
 the uniform bindings, the vertex stage, the lighting function and the
 G-buffer layout. Named in `wxsl_core::abi`, implemented in
-`wxsl-stdlib`'s `shaders/wxsl/`. See
-[ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md).
+`wxsl-stdlib`'s `shaders/wxsl/` — except that the lighting function and
+the G-buffer layout are *generated* from the enabled lighting models.
+See [ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md) and
+[ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md).
+
+**Lighting model** — one WXSL function of a fixed signature plus a small
+integer id, shaded through a registry entry in `wxsl_core::lighting`
+(ADR 0028). `lambert`, `phong`, `pbr` and `clearcoat` ship; a material
+names its model by name, and a deferred pipeline enables a **set** of
+them, which decides the G-buffer's extra targets and the dispatch the
+generated lighting pass performs.
 
 **Surface** — what a material graph produces: base colour, metallic,
 roughness, normal, emissive, occlusion and alpha at one point. A graph
-describes a surface, not a whole shader — the entry points, light loop and
-G-buffer packing are around it, not in it.
+describes a surface, not a whole shader — the entry points, light loop,
+lighting-model dispatch and G-buffer packing are around it, not in it.
 
 **Macro variable** — a graph-level knob that changes the *shape* of the
 generated shader rather than a value flowing through it: a flag becomes a

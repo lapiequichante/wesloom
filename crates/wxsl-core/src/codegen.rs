@@ -92,6 +92,15 @@ pub struct CodegenOptions {
     /// rather than writing them into the graph means the graph still holds
     /// what it was authored with.
     pub override_macros: MacroSet,
+    /// Which lighting model shades this material, and which set the
+    /// surrounding pipeline enables
+    /// ([`crate::lighting`]).
+    ///
+    /// The set decides whether the G-buffer stage writes a dispatch id and
+    /// which targets the G-buffer struct carries; the model decides which
+    /// function the generated shading calls. The default is the library's
+    /// default model in a set of one, which needs neither.
+    pub lighting: crate::lighting::MaterialLighting,
 }
 
 impl Default for CodegenOptions {
@@ -106,6 +115,7 @@ impl Default for CodegenOptions {
                 .map(|decl| (decl.name.as_str().to_string(), decl.default))
                 .collect(),
             override_macros: MacroSet::new(),
+            lighting: crate::lighting::MaterialLighting::default(),
         }
     }
 }
@@ -198,6 +208,7 @@ pub fn generate(
         stage: ShaderStage::Fragment,
         bindings: BTreeMap::new(),
         imports: BTreeMap::new(),
+        lighting_source: String::new(),
         body: String::new(),
     };
 
@@ -315,6 +326,11 @@ struct Emitter<'a> {
     bindings: BTreeMap<SocketRef, String>,
     /// Items to import, grouped by module and deduplicated.
     imports: BTreeMap<ModulePath, Vec<WxslIdent>>,
+    /// The lighting model's dispatch and shading function, or the G-buffer
+    /// struct and pack — whichever this stage's entry point needs. Empty
+    /// for a stage that needs neither (`crate::lighting` generates it; the
+    /// imports are requested up front so they land in the one list).
+    lighting_source: String,
     /// The partition's statements.
     body: String,
 }
@@ -399,11 +415,33 @@ impl Emitter<'_> {
             self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
             match self.options.stage.output() {
                 abi::StageOutput::Color => {
-                    self.request_import(abi::SHADING_MODULE, abi::SHADE_SURFACE_FN);
+                    // The dispatch and the whole shading function come from
+                    // the material's lighting model, generated here rather
+                    // than imported from a fixed module: the call inside
+                    // the light loop names the model.
+                    let generated = crate::lighting::shade_surface_with(
+                        &crate::lighting::Dispatch::Direct(*self.options.lighting.model()),
+                        // This module declares the macros in effect itself;
+                        // a second declaration would not compile.
+                        false,
+                    );
+                    for (module, item) in &generated.imports {
+                        self.request_import(module, item);
+                    }
+                    self.lighting_source = generated.source;
                 }
                 abi::StageOutput::GBuffer => {
-                    self.request_import(abi::DEFERRED_MODULE, abi::GBUFFER_STRUCT);
-                    self.request_import(abi::DEFERRED_MODULE, abi::PACK_GBUFFER_FN);
+                    // The struct's fields are the set's layout, so the pack
+                    // is generated beside it instead of imported from a
+                    // fixed module.
+                    let generated = crate::lighting::pack_gbuffer(
+                        self.options.lighting.model(),
+                        self.options.lighting.set(),
+                    );
+                    for (module, item) in &generated.imports {
+                        self.request_import(module, item);
+                    }
+                    self.lighting_source = generated.source;
                 }
                 abi::StageOutput::Nothing => {}
             }
@@ -805,6 +843,7 @@ impl Emitter<'_> {
             options,
             interface,
             imports,
+            lighting_source,
             ..
         } = self;
         let mut out = String::with_capacity(2048);
@@ -968,6 +1007,16 @@ impl Emitter<'_> {
                 let _ = writeln!(out, "    surface.{field} = {expr};");
             }
             out.push_str("    return surface;\n}\n");
+        }
+
+        // What the lighting model generated for this stage: the dispatch
+        // and the shading function, or the G-buffer struct and pack. One
+        // block, appended before the entry points, because WGSL does not
+        // care about declaration order and a reader reads the material's
+        // own functions first.
+        if !lighting_source.is_empty() {
+            out.push('\n');
+            out.push_str(&lighting_source);
         }
 
         if options.emit_entry_points {
@@ -1359,11 +1408,16 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         ),
         abi::StageOutput::GBuffer => format!(
             "-> {gbuffer} {{\n{prologue}    \
-             return {pack}({material}({ctx}{args}));\n}}\n",
+             return {pack}({material}({ctx}{args}){id});\n}}\n",
             ctx = abi::CONTEXT_VAR,
             gbuffer = abi::GBUFFER_STRUCT,
             material = options.material_fn,
             pack = abi::PACK_GBUFFER_FN,
+            id = if options.lighting.set().dispatches() {
+                format!(", {}u", options.lighting.model)
+            } else {
+                String::new()
+            },
         ),
         // Reached only when the material discards: a depth or shadow
         // stage whose whole fragment program is the alpha test.
@@ -1513,12 +1567,16 @@ mod tests {
         assert!(shader
             .source
             .contains("surface.base_color = vec3f(0.8, 0.8, 0.8);"));
-        // One stage, one fragment entry, no conditional gate.
+        // One stage, one fragment entry. The two `@if`s are the lighting
+        // generator's debug-normals arm — the knobs the ABI honours are
+        // conditional-translation features, and the pasted shading
+        // function declares and switches them.
         assert!(shader
             .source
             .contains("fn fs_forward_lit(vertex: VertexOut)"));
         assert_eq!(shader.source.matches("@fragment").count(), 1);
-        assert!(!shader.source.contains("@if("));
+        assert_eq!(shader.source.matches("@if(wxsl_debug_normals)").count(), 1);
+        assert_eq!(shader.source.matches("@if(!wxsl_debug_normals)").count(), 1);
     }
 
     #[test]

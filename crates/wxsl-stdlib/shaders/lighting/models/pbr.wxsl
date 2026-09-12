@@ -1,0 +1,33 @@
+// The PBR lighting model
+//
+// One light's contribution under the Cook-Torrance GGX model — exactly what
+// the library's `pbr_direct` node computes, re-stated over the registry's
+// signature.
+//
+// This is the model every surface was shaded with before the registry
+// existed, and it stays the default: a material that names no model gets
+// this one, and a set of one containing only it generates no dispatch and
+// no id channel at all. Not a node: it is one of the entries of
+// `wxsl_core::lighting::DEFAULT_MODELS`, shaded through the lighting-model
+// registry rather than placed on a canvas.
+
+import package::lighting::pbr_direct::pbr_direct;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_pbr(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f, // unused: this model requests no G-buffer data
+) -> vec3f {
+    return pbr_direct(
+        normalize(surface.normal),
+        normalize(ctx.view_direction),
+        light.direction,
+        light.radiance,
+        surface.base_color,
+        surface.metallic,
+        surface.roughness,
+    );
+}

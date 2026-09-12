@@ -84,15 +84,13 @@ impl ShaderLibrary {
     /// Worth calling once at startup: the failure mode otherwise is a
     /// a "no module" error on the first material compiled, which is
     /// both later and less obvious than being told the library is incomplete.
+    ///
+    /// The shading function and the lighting pass are *generated* now, from
+    /// the enabled lighting models (ADR 0028), so they are not in any
+    /// library — and a lighting model's module is checked by
+    /// `Renderer::set_lighting`, which knows the set to check.
     pub fn check_abi(&self) -> Result<(), RenderError> {
-        for module in [
-            abi::SURFACE_MODULE,
-            abi::VERTEX_MODULE,
-            abi::SHADOW_MODULE,
-            abi::SHADING_MODULE,
-            abi::DEFERRED_MODULE,
-            abi::LIGHTING_PASS_MODULE,
-        ] {
+        for module in [abi::SURFACE_MODULE, abi::VERTEX_MODULE, abi::SHADOW_MODULE] {
             if !self.contains(module) {
                 return Err(RenderError::MissingModule {
                     module: module.to_string(),

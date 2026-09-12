@@ -35,6 +35,7 @@ use crate::pass::{
     ResourceDesc, ResourceId,
 };
 use crate::pipeline::TargetConfig;
+use wxsl_core::abi;
 
 /// A pipeline, as a list of passes over a set of resources.
 #[derive(Clone, Debug)]
@@ -42,6 +43,13 @@ pub struct RenderGraph {
     resources: Vec<ResourceDesc>,
     passes: Vec<PassDesc>,
     shadow_maps: Option<ResourceId>,
+    /// The G-buffer layout this graph's `gbuffer`-stage passes are built
+    /// for: what the scheduler checks a material pass's attachment count
+    /// against. The base targets unless the graph says otherwise — see
+    /// `RenderGraph::with_gbuffer_layout`, which a pipeline built from a
+    /// lighting-model set calls
+    /// (`wxsl_core::lighting::LightingSet::gbuffer_layout`).
+    gbuffer_layout: Vec<abi::GBufferTarget>,
 }
 
 impl RenderGraph {
@@ -54,7 +62,24 @@ impl RenderGraph {
             resources: vec![ResourceDesc::imported("target", format)],
             passes: Vec::new(),
             shadow_maps: None,
+            gbuffer_layout: abi::GBUFFER_BASE_TARGETS.to_vec(),
         }
+    }
+
+    /// Declare the G-buffer layout this graph's material passes write.
+    ///
+    /// Without this, a `gbuffer`-stage pass is checked against the ABI's
+    /// base targets; with it, against exactly what the enabled set
+    /// requests — which is what keeps the scheduler's target-count check
+    /// exact once that count stops being fixed.
+    pub fn with_gbuffer_layout(mut self, layout: Vec<abi::GBufferTarget>) -> Self {
+        self.gbuffer_layout = layout;
+        self
+    }
+
+    /// The G-buffer layout this graph was built for.
+    pub fn gbuffer_layout(&self) -> &[abi::GBufferTarget] {
+        &self.gbuffer_layout
     }
 
     /// Declare a resource, returning the id passes refer to it by.
@@ -133,7 +158,7 @@ impl RenderGraph {
             // A pass writing three colour targets needs a shader that
             // returns three. This is the one mismatch `wgpu` reports as an
             // entry-point signature error with no mention of the pass.
-            if let Some(expected) = expected_color_targets(&pass.kind) {
+            if let Some(expected) = expected_color_targets(&pass.kind, self) {
                 if pass.color.len() != expected {
                     return Err(GraphError::WrongColorTargetCount {
                         pass: pass.label.clone(),
@@ -397,9 +422,14 @@ impl RenderGraph {
 /// For a geometry pass this comes straight from the stage table: a stage
 /// that returns a G-buffer needs one attachment per G-buffer target, and a
 /// depth-only stage needs none.
-fn expected_color_targets(kind: &PassKind) -> Option<usize> {
+fn expected_color_targets(kind: &PassKind, graph: &RenderGraph) -> Option<usize> {
     match kind {
-        PassKind::Geometry { stage, .. } => Some(stage.color_targets()),
+        PassKind::Geometry { stage, .. } => Some(match stage.output() {
+            // A G-buffer pass writes what the *enabled set* requested, not
+            // the fixed base count the stage's own row names.
+            abi::StageOutput::GBuffer => graph.gbuffer_layout.len(),
+            _ => stage.color_targets(),
+        }),
         PassKind::Screen { .. } => Some(1),
         PassKind::Compute { .. } => Some(0),
     }
@@ -1204,7 +1234,7 @@ mod tests {
             Err(GraphError::WrongColorTargetCount {
                 expected, found, ..
             }) => {
-                assert_eq!((expected, found), (abi::GBUFFER_TARGETS.len(), 1));
+                assert_eq!((expected, found), (abi::GBUFFER_BASE_TARGETS.len(), 1));
             }
             other => panic!("expected a target-count error, got {other:?}"),
         }

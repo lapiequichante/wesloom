@@ -66,7 +66,9 @@ comment is the detailed version.
 descriptors, `NodeDefinition`, the registry), `graph` (nodes, edges,
 validation, traversal, the serialized node format), `codegen` (graph → WXSL,
 plus the generated macro module), `macros` (macro variables), `abi` (the
-shader ABI's names and field tables), `wesl` (identifier/float/hash helpers),
+shader ABI's names and field tables), `lighting` (the lighting-model
+registry, and the shading function, G-buffer pack and lighting pass
+generated from a set of models), `wesl` (identifier/float/hash helpers),
 `error`.
 
 **`wxsl-stdlib`** — `shaders` (the embedded `.wxsl` sources, keyed by
@@ -126,7 +128,7 @@ graph TD
     compiler --> variants["wxsl_render::variants<br/>cache: (source+macros hash, stage)<br/>-> wgpu shader module"]
     path["MaterialStage of the pass<br/>(forward_lit | gbuffer | depth_only)"] --> variants
     variants --> record
-    passes["wxsl_render::pipeline<br/>(forward: 1 pass;<br/>deferred: G-buffer + lighting)"] --> schedule["wxsl_render::graph::Schedule<br/>(order, transient reuse,<br/>history rotation)"]
+    passes["wxsl_render::pipeline<br/>(forward: prepass + shading;<br/>deferred: G-buffer + lighting)"] --> schedule["wxsl_render::graph::Schedule<br/>(order, transient reuse,<br/>history rotation)"]
     schedule --> record["record: attachments, pass<br/>bind groups, draws"]
     record --> gpu["wgpu render passes"]
 ```
@@ -142,7 +144,7 @@ and [ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
 | Stage | Fragment returns | Used by |
 |---|---|---|
 | `forward_lit` | one `vec4f` colour | the forward pipeline's shading pass |
-| `gbuffer` | the `GBuffer` struct | the deferred pipeline's material pass |
+| `gbuffer` | the `GBuffer` struct | the deferred pipeline's material pass (the struct is generated per lighting-model set) |
 | `depth_only` | nothing — no fragment stage at all | the forward pipeline's depth prepass |
 
 ## How a frame is drawn
@@ -216,18 +218,44 @@ See [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
 A material graph describes a *surface*, not a whole shader: it compiles to
 one function taking the per-fragment `SurfaceContext` and returning a
 `Surface` (base colour, metallic, roughness, normal, emissive, occlusion,
-alpha). Codegen wraps that in the entry points, and the vertex stage, light
-loop and G-buffer packing are hand-written WXSL in `wxsl-stdlib`.
+alpha). Codegen wraps that in the entry points; the vertex stage is
+hand-written WXSL in `wxsl-stdlib`; and the light loop, the lighting-model
+dispatch and the G-buffer packing are *generated* — see "Lighting models"
+below.
 
 `wxsl_core::abi` is where the two halves agree on names and field
 layouts, and where the render-path flag and the macro variables the ABI
 honours are declared. See
 [ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md).
 
-Both paths call the *same* `shade_surface` function — the forward fragment
-entry directly, the deferred lighting pass after unpacking the G-buffer — so
-the two cannot drift apart in what lighting means. `crates/wxsl/tests/`
-asserts they render the same image.
+Both paths shade through the *same generator* — `wxsl_core::lighting`
+writes `shade_surface` for the forward fragment entry (calling that
+material's model directly) and for the deferred lighting pass (switching
+over the model id the G-buffer carries) — so the two cannot drift apart in
+what lighting means. `crates/wxsl/tests/` asserts they render the same
+image, with mixed lighting models in the frame.
+
+## Lighting models
+
+A *lighting model* is one WXSL function of a fixed signature plus a small
+integer id; a registry entry in `wxsl_core::lighting` names it. A material
+says which model shades it (by name, in `MaterialOptions::lighting` or the
+scene document's `lighting` field); a deferred pipeline enables a
+**`LightingSet`**, which decides three things at once:
+
+* the **G-buffer layout** — base targets, plus a scalar id channel when
+  the set dispatches, plus one target per model that requests one;
+* the **generated dispatch** — a direct call in a forward module, a
+  `switch` over the id in the lighting pass;
+* the **cost** — the set's layout is checked against WebGPU's
+  bytes-per-sample attachment budget by name, in `Renderer::set_lighting`.
+
+The default set is one model, the library's PBR: no dispatch, no id
+channel, a G-buffer shaped exactly as it always was. The shipped models —
+`lambert`, `phong`, `pbr`, `clearcoat` — live under
+`shaders/lighting/models/`, deliberately outside the node derivation:
+they are shaded through the registry's contract, not placed on a canvas.
+See [ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md).
 
 ## Bind groups
 
@@ -354,8 +382,9 @@ and so a variant of its own ([ADR 0026](adr/0026-shadows-a-view-per-light-and-tw
 ## How a shadow gets there
 
 One depth 2D texture array, one slice per light, in the **frame group**
-beside the lights themselves — so `shading.wxsl` has one `shadow_factor`
-and the forward stage and the deferred lighting pass both inherit it.
+beside the lights themselves — so the generated shading function has one
+`shadow_factor` and the forward stage and the deferred lighting pass both
+inherit it.
 
 A pass renders from a **view**: `PassDesc::view` names the camera or a
 light, and the frame group's camera binding is addressed by a dynamic
@@ -571,7 +600,7 @@ Implemented and tested end to end:
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
 | `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
-| `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, cube mesh, scene uniforms, offscreen rendering | done |
+| `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
 | `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing, per-node name and colour, light/dark themes | done |
 | `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `editor` demo | done |
@@ -582,6 +611,9 @@ The demo is the thing to run first:
 cargo run -p wxsl --example pbr_cube              # windowed; F/D switch path
 cargo run -p wxsl --example pbr_cube -- --headless  # both pipelines to PNG
 cargo run -p wxsl --example pbr_cube -- --dump-wgsl # what the graph became
+cargo run -p wxsl --example pbr_cube -- --headless --models lambert,phong,pbr,clearcoat
+                                     # three models and an extra G-buffer target,
+                                     # through one deferred lighting pass
 ```
 
 And the editor, which is the same graph with somewhere to edit it:

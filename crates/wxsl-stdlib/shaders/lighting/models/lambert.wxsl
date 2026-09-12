@@ -1,0 +1,26 @@
+// The Lambert lighting model
+//
+// One light's diffuse-only contribution: energy-normalized Lambertian,
+// scaled by the radiance arriving along the light's direction.
+//
+// The simplest model the library ships, and the natural starting point for
+// a hand-rolled stylized surface. Not a node: it is one of the entries of
+// `wxsl_core::lighting::DEFAULT_MODELS`, shaded through the lighting-model
+// registry rather than placed on a canvas, so the node derivation skips
+// this directory on purpose.
+
+import package::lighting::diffuse_lambert::diffuse_lambert;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_lambert(
+    surface: Surface,
+    ctx: SurfaceContext,          // unused: Lambertian needs no view direction
+    light: LightSample,
+    extra: vec4f,                 // unused: this model requests no G-buffer data
+) -> vec3f {
+    let n_dot_l = saturate(dot(surface.normal, light.direction));
+    return diffuse_lambert(surface.base_color, surface.metallic)
+        * light.radiance
+        * n_dot_l;
+}

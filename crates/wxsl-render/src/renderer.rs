@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use wxsl_core::abi::{self, MaterialStage};
+use wxsl_core::lighting::LightingSet;
 
 use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
@@ -84,6 +85,11 @@ pub struct Renderer {
     stock: Option<StockPipeline>,
     swap: Option<PipelineSwap>,
     target: TargetConfig,
+    /// The lighting models enabled for the deferred path. The default is
+    /// the library's default model in a set of one — the shape the G-buffer
+    /// and the lighting pass had before models existed — and
+    /// [`Renderer::set_lighting`] widens it.
+    lighting: LightingSet,
 }
 
 impl Renderer {
@@ -100,7 +106,8 @@ impl Renderer {
     ) -> Result<Self, RenderError> {
         library.check_abi()?;
         let stock = StockPipeline::default();
-        let graph = stock.graph(target);
+        let lighting = LightingSet::default();
+        let graph = stock.graph(target, &lighting);
         let schedule = graph.schedule()?;
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
@@ -116,7 +123,54 @@ impl Renderer {
             stock: Some(stock),
             swap: None,
             target,
+            lighting,
         })
+    }
+
+    /// Enable a different set of lighting models for the deferred path,
+    /// now.
+    ///
+    /// The set decides the G-buffer's shape, so the deferred pass list is
+    /// rebuilt — and every material must have been compiled against the
+    /// same set ([`crate::material::Material::with_lighting`]); a draw
+    /// whose material disagrees is a named error when the frame is
+    /// compiled, before a pass is opened. Every model's module must be in
+    /// the library, which is checked here rather than left to the first
+    /// shader compilation.
+    pub fn set_lighting(&mut self, set: LightingSet) -> Result<(), RenderError> {
+        for model in set.models() {
+            if !self.library.contains(model.module) {
+                return Err(RenderError::MissingModule {
+                    module: model.module.to_string(),
+                });
+            }
+        }
+        // WebGPU guarantees 32 bytes per sample across a pass's colour
+        // attachments, and the G-buffer is one pass. The base targets spend
+        // 24 of it once alignment is paid; a set whose requests overrun the
+        // rest would only fail at pipeline creation, in a message naming
+        // bytes rather than models. Checked here, where the set is being
+        // named anyway.
+        let bytes = crate::pipeline::gbuffer_bytes_per_sample(&set);
+        if bytes > crate::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE {
+            return Err(RenderError::Lighting {
+                material: String::new(),
+                error: format!(
+                    "the G-buffer layout for {} needs {bytes} bytes per sample; the \
+                     most a pass may carry is {} — drop a model that requests a target",
+                    set.signature(),
+                    crate::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE
+                ),
+            });
+        }
+        self.lighting = set;
+        self.rebuild();
+        Ok(())
+    }
+
+    /// The lighting models currently enabled.
+    pub fn lighting(&self) -> &LightingSet {
+        &self.lighting
     }
 
     /// The stock pipeline in use, or `None` when an application supplied
@@ -159,7 +213,7 @@ impl Renderer {
 
     fn rebuild(&mut self) {
         let Some(stock) = self.stock else { return };
-        self.graph = stock.graph(self.target);
+        self.graph = stock.graph(self.target, &self.lighting);
         self.schedule = self
             .graph
             .schedule()
@@ -182,7 +236,7 @@ impl Renderer {
         pipeline: StockPipeline,
         materials: &[&Material],
     ) -> Result<(), RenderError> {
-        let graph = pipeline.graph(self.target);
+        let graph = pipeline.graph(self.target, &self.lighting);
         self.request_graph_inner(graph, Some(pipeline), materials)
     }
 
@@ -255,7 +309,10 @@ impl Renderer {
                 } => {
                     for material in materials {
                         push(
-                            Request::Lighting(LightingRequest::new(material.macros())),
+                            Request::Lighting(LightingRequest::new(
+                                material.macros(),
+                                &self.lighting,
+                            )),
                             &mut seen,
                             &mut requests,
                         );
@@ -455,8 +512,12 @@ impl Renderer {
                 PassKind::Screen {
                     shader: ScreenShader::DeferredLighting,
                 } => {
-                    self.variants
-                        .lighting_pass(device, &self.library, material.macros())?;
+                    self.variants.lighting_pass(
+                        device,
+                        &self.library,
+                        material.macros(),
+                        &self.lighting,
+                    )?;
                 }
                 PassKind::Compute { .. } => {}
             }
@@ -627,6 +688,22 @@ impl Renderer {
                         // naming all three, not a `wgpu` complaint about
                         // vertex buffer 4 and not a frame that draws
                         // whatever was left bound at that slot.
+                        // The material's G-buffer module was generated for
+                        // the layout of the set it was compiled against;
+                        // drawing it under a different set would be a
+                        // `wgpu` complaint about a fragment target count
+                        // with no mention of either set. Caught here, by
+                        // name, before anything is recorded.
+                        if item.material.lighting().set() != &self.lighting {
+                            return Err(RenderError::Lighting {
+                                material: item.material.name.clone(),
+                                error: format!(
+                                    "compiled against lighting set {}, but the renderer                                      enables {}",
+                                    item.material.lighting().set().signature(),
+                                    self.lighting.signature()
+                                ),
+                            });
+                        }
                         item.mesh.check_attributes(
                             &item.material.name,
                             item.material.vertex_attributes(),
@@ -650,9 +727,12 @@ impl Renderer {
                         .first()
                         .map(|item| item.material.macros().clone())
                         .unwrap_or_default();
-                    let variant = self
-                        .variants
-                        .lighting_pass(device, &self.library, &macros)?;
+                    let variant = self.variants.lighting_pass(
+                        device,
+                        &self.library,
+                        &macros,
+                        &self.lighting,
+                    )?;
                     plan.screen.insert(index, variant);
                 }
                 PassKind::Compute { .. } => {}

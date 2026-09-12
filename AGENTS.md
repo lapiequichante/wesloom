@@ -155,6 +155,14 @@ facade crate's feature set, not about the workspace.
   forward and deferred shade the same ground identically, which is what
   keeps one `shadow_factor` in `shading.wxsl` rather than two. Skips with
   no adapter.
+- `cargo test -p wxsl --test lighting_models` — lighting models on a real
+  device (ADR 0028): three models shaded through one deferred lighting
+  pass with forward and deferred still agreeing, the dispatch id channel
+  costing no pixel when the set widens, the clearcoat model's extra
+  target appearing only when it is enabled and its data reaching the
+  model, and both mismatch errors (a model outside the set, a frame
+  against a renderer running another set) reported by name. Skips with no
+  adapter.
 - `cargo test -p wxsl --test interpolants` — a value the vertex partition
   computes arriving in the fragment stage, two of them not crossing
   locations, and the four ways of declaring one wrong. The GPU half
@@ -223,6 +231,14 @@ facade crate's feature set, not about the workspace.
   Anything the scheduler can check — attachment counts, depth formats, a
   resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,
   which is pure and tested with no device; keep it that way.
+- A **lighting model** is a `.wxsl` file under
+  `shaders/lighting/models/` plus an entry in
+  `wxsl_core::lighting::DEFAULT_MODELS` (ADR 0028). The shading function,
+  the G-buffer struct/pack and the lighting pass are *generated* from the
+  enabled set — never edit generated text, and never re-add a fixed
+  `shading.wxsl`. Materials name models by name, not id; the G-buffer's
+  byte budget is checked in `Renderer::set_lighting`, and the cost table
+  in `pipeline::gbuffer_bytes_per_sample` mirrors the spec's numbers.
 - A **scene** (`wxsl_core::scene`) is what exists; an **environment**
   (`wxsl_render::environment`) is camera and lights; a **draw list**
   (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a
@@ -252,7 +268,10 @@ facade crate's feature set, not about the workspace.
   each reading its own tint out of it — the per-instance half of ADR 0024,
   and the reason one copy is white: white is the identity for the multiply
   the graph does with it, so the default image is unchanged.
-  It also shows the application's half of ADR 0023: it reads what the
+  `--models lambert,phong,pbr,clearcoat` widens the deferred G-buffer
+  with a dispatch-id channel and the clearcoat model's target, and
+  `--model` shades the material with a named model — the runtime half of
+  ADR 0028. It also shows the application's half of ADR 0023: it reads what the
   material's graph *declared* and supplies it by name — which is why it
   keeps working against a `--graph` it has never seen.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with

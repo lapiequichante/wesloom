@@ -42,6 +42,7 @@ is signal, don't delete it.
 | [0025](0025-a-material-graph-spans-shader-stages.md) | A material graph spans shader stages, and compiles per pass stage | Accepted, amended by [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0027](0027-a-graph-computes-its-own-interpolants.md) |
 | [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md) | Shadows: a view per light, a lookup in the shading function, and two flags on the material | Accepted |
 | [0027](0027-a-graph-computes-its-own-interpolants.md) | A graph computes its own interpolants | Accepted |
+| [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) | Lighting models dispatched by a G-buffer id, with a composable G-buffer layout | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

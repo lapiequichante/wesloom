@@ -57,9 +57,7 @@ explains the split.
 | `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `environment` module. |
 | `surface.wxsl` | `SurfaceContext` and `Surface`, the graph's input and output. |
 | `vertex.wxsl` | The vertex stage, shared by every material stage, and the context builder. |
-| `shading.wxsl` | `shade_surface`: the lighting model. Called by *both* paths. |
-| `deferred.wxsl` | The G-buffer struct, and packing/unpacking it. |
-| `lighting_pass.wxsl` | The deferred lighting pass, compiled as its own root module. |
+| `lighting models/` | the lighting-model functions (ADR 0028): shaded through `wxsl_core::lighting`'s registry, not placed as nodes. |
 
 Editing any of these means editing `wxsl_core::abi` in the same change:
 the struct field tables there are the Rust half of the same contract, in the
@@ -76,7 +74,7 @@ contents change ([ADR 0010](../../../docs/adr/0010-four-bind-groups-allocated-by
 | 0 | `frame` | `bindings.wxsl`, and *generated* at binding 3 | Camera, scene, the instance transform storage buffer, and a second array of whatever per-instance attributes a material declares |
 | 1 | `material` | *generated* | A graph's uniform parameters, textures and samplers |
 | 2 | `user` | *generated* | The application's slot. A graph may declare the block it expects there; nothing in this crate binds it |
-| 3 | `pass` | `lighting_pass.wxsl` | G-buffer, and future shadow/IBL resources |
+| 3 | `pass` | `lighting models/` | the lighting-model functions (ADR 0028): shaded through `wxsl_core::lighting`'s registry, not placed as nodes. |
 
 Groups 1 and 2 say *generated* because they have no fixed layout: a
 material's graph decides them, and `wxsl_core::resources` computes the

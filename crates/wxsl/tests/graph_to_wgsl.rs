@@ -40,7 +40,11 @@ fn compile(material: &Material, stage: MaterialStage) -> Result<String, String> 
 
 fn compile_lighting_pass(macros: &MacroSet) -> Result<String, String> {
     let library = wxsl::stdlib_library();
-    let extra: [(&str, Cow<'_, str>); 0] = [];
+    // The pass is generated from the enabled lighting models now (ADR 0028);
+    // the default set of one is what these tests exercise.
+    let source =
+        wxsl_core::lighting::lighting_pass_source(&wxsl_core::lighting::LightingSet::default());
+    let extra = [(abi::LIGHTING_PASS_MODULE, Cow::Owned(source))];
     variants::compile(&library, &extra, abi::LIGHTING_PASS_MODULE, macros)
         .map_err(|error| error.to_string())
 }

@@ -50,6 +50,7 @@ use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeRegistry, Value};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
+use wxsl::render::material::MaterialOptions;
 use wxsl::render::variants;
 use wxsl::render::{
     Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh, RenderRequest,
@@ -75,6 +76,9 @@ OPTIONS:
     --out <DIR>                Where --headless writes (default: current directory)
     --size <WIDTHxHEIGHT>      Render size (default: 1280x720, or 800x600 headless)
     --instances <N>            Draw N copies of the cube in a row (default: 1)
+    --models <A,B,...>         Lighting models the deferred path enables, from:
+                               lambert, phong, pbr, clearcoat (default: pbr)
+    --model <NAME>             Which model shades this material (default: pbr)
     --dump-wxsl                Print the WXSL generated from the graph and exit
     --dump-wgsl                Print the WGSL the active pipeline's shading
                                stage compiles to and exit
@@ -117,7 +121,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let material = Material::from_graph_with_macros(&graph, &registry, &options.macros)?;
+    let lighting = options.lighting_set()?;
+    let material = Material::with_lighting(
+        &graph,
+        &registry,
+        &MaterialOptions {
+            macros: options.macros.clone(),
+            lighting: options.model.clone(),
+            ..MaterialOptions::default()
+        },
+        &lighting,
+    )?;
 
     if options.list_macros {
         list_macros(&graph, &registry, &material);
@@ -133,9 +147,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if options.headless {
-        return run_headless(&options, &graph, &material);
+        return run_headless(&options, &graph, &material, &lighting);
     }
-    run_windowed(options, graph, registry, material)
+    run_windowed(options, graph, registry, material, lighting)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +170,10 @@ struct Options {
     list_nodes: bool,
     list_macros: bool,
     help: bool,
+    /// The lighting models the deferred path enables, by name.
+    models: Option<Vec<String>>,
+    /// Which model shades this material, by name.
+    model: Option<String>,
 }
 
 impl Default for Options {
@@ -174,11 +192,43 @@ impl Default for Options {
             list_nodes: false,
             list_macros: false,
             help: false,
+            models: None,
+            model: None,
         }
     }
 }
 
 impl Options {
+    /// The lighting models the deferred path enables, resolved against the
+    /// shipped registry. The default is just `pbr`, which needs no id
+    /// channel and generates no dispatch; `--models lambert,phong,pbr` is
+    /// the three-model demo.
+    fn lighting_set(&self) -> Result<wxsl::core::lighting::LightingSet, String> {
+        let Some(names) = &self.models else {
+            return Ok(wxsl::core::lighting::LightingSet::default());
+        };
+        let chosen: Vec<_> = names
+            .iter()
+            .map(|name| {
+                wxsl::core::lighting::DEFAULT_MODELS
+                    .iter()
+                    .copied()
+                    .find(|model| model.name == name.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown lighting model `{name}` (shipped: {})",
+                            wxsl::core::lighting::DEFAULT_MODELS
+                                .iter()
+                                .map(|model| model.name)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        wxsl::core::lighting::LightingSet::new(chosen).map_err(|error| error.to_string())
+    }
+
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut options = Options::default();
         let mut args = args.peekable();
@@ -204,6 +254,19 @@ impl Options {
                     );
                 }
                 "--graph" => options.graph = Some(PathBuf::from(value()?)),
+                "--models" => {
+                    let text = value()?;
+                    let names: Vec<String> = text
+                        .split(',')
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    if names.is_empty() {
+                        return Err("`--models` wants at least one name".to_string());
+                    }
+                    options.models = Some(names);
+                }
+                "--model" => options.model = Some(value()?.trim().to_string()),
                 "--instances" => {
                     let text = value()?;
                     options.instances = text
@@ -552,6 +615,7 @@ fn run_headless(
     options: &Options,
     graph: &Graph,
     material: &Material,
+    lighting: &wxsl::core::lighting::LightingSet,
 ) -> Result<(), Box<dyn Error>> {
     let (width, height) = options.size.unwrap_or((800, 600));
     let gpu = pollster::block_on(GpuContext::headless())?;
@@ -570,6 +634,7 @@ fn run_headless(
         wxsl::stdlib_library(),
         TargetConfig::new(width, height, target.format()),
     )?;
+    renderer.set_lighting(lighting.clone())?;
     let mesh = Mesh::cube(&gpu.device, 1.6);
     let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
     let bindings = demo_bindings(
@@ -667,6 +732,7 @@ fn run_windowed(
     graph: Graph,
     registry: NodeRegistry,
     material: Material,
+    lighting: wxsl::core::lighting::LightingSet,
 ) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -675,6 +741,7 @@ fn run_windowed(
         graph,
         registry,
         material,
+        lighting,
         state: None,
         started: Instant::now(),
         paused_at: None,
@@ -711,6 +778,7 @@ struct App {
     graph: Graph,
     registry: NodeRegistry,
     material: Material,
+    lighting: wxsl::core::lighting::LightingSet,
     state: Option<State>,
     started: Instant,
     paused_at: Option<f32>,
@@ -725,7 +793,16 @@ impl App {
 
     /// Recompile the material after a macro change and report what happened.
     fn rebuild_material(&mut self) {
-        match Material::from_graph_with_macros(&self.graph, &self.registry, &self.options.macros) {
+        match Material::with_lighting(
+            &self.graph,
+            &self.registry,
+            &MaterialOptions {
+                macros: self.options.macros.clone(),
+                lighting: self.options.model.clone(),
+                ..MaterialOptions::default()
+            },
+            &self.lighting,
+        ) {
             Ok(material) => self.material = material,
             Err(error) => eprintln!("cannot recompile the material: {error}"),
         }
@@ -1024,14 +1101,16 @@ impl App {
             });
 
         let size = window.inner_size();
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             &gpu.device,
             wxsl::stdlib_library(),
             TargetConfig::new(size.width, size.height, format),
         )?;
+        renderer
+            .set_lighting(self.lighting.clone())
+            .expect("the set was resolved from the shipped models");
         let mesh = Mesh::cube(&gpu.device, 1.6);
         let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
-        let mut renderer = renderer;
         let bindings = demo_bindings(
             &gpu.device,
             &gpu.queue,

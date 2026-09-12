@@ -208,21 +208,28 @@ fn library(root: &Path) -> Modules {
     modules
 }
 
+/// Mount the *generated* lighting pass — a real root module with its own
+/// entry points, six levels of imports underneath it and `@if`-gated
+/// macros — over the shipped library. Since ADR 0028 the pass is
+/// generated from the enabled lighting models, which is the closest thing
+/// to the renderer's own job that can be tested without a GPU.
+fn library_with_generated_pass() -> Option<Modules> {
+    let root = shader_root()?;
+    let mut modules = library(&root);
+    modules.insert(
+        "package::wxsl::lighting_pass",
+        wxsl_core::lighting::lighting_pass_source(&wxsl_core::lighting::LightingSet::default()),
+    );
+    Some(modules)
+}
+
 #[test]
 fn the_deferred_lighting_pass_compiles_to_wgsl() {
-    // A real root module from the library: its own entry points, six levels
-    // of imports underneath it, and `@if`-gated macros. This is the closest
-    // thing to the renderer's own job that can be tested without a GPU.
-    let Some(root) = shader_root() else {
+    let Some(modules) = library_with_generated_pass() else {
         eprintln!("skipping: wxsl-stdlib/shaders not found");
         return;
     };
-    let modules = library(&root);
     let entry = "package::wxsl::lighting_pass";
-    assert!(
-        modules.get(entry).is_some(),
-        "lighting pass is in the library"
-    );
 
     let wgsl = match compile(&modules, entry, &Bindings::new()) {
         Ok(wgsl) => wgsl,
@@ -243,10 +250,12 @@ fn the_deferred_lighting_pass_compiles_to_wgsl() {
     // The entry points kept their names -- the renderer looks them up.
     assert!(wgsl.contains("fn lighting_vs("), "vertex entry missing");
     assert!(wgsl.contains("fn lighting_fs("), "fragment entry missing");
-    // Imported functions were inlined under mangled names.
+    // The shading function is generated into the root and keeps its name;
+    // the model it calls was imported and so carries a mangled one.
+    assert!(wgsl.contains("fn shade_surface("), "shade_surface missing");
     assert!(
-        wgsl.contains("fn package_wxsl_shading_shade_surface("),
-        "shade_surface missing"
+        wgsl.contains("package_lighting_models_pbr_lighting_pbr"),
+        "the default model's function missing"
     );
     assert!(
         wgsl.contains("@group(3) @binding(0)"),
@@ -257,11 +266,10 @@ fn the_deferred_lighting_pass_compiles_to_wgsl() {
 
 #[test]
 fn macro_bindings_change_the_compiled_lighting_pass() {
-    let Some(root) = shader_root() else {
+    let Some(modules) = library_with_generated_pass() else {
         eprintln!("skipping: wxsl-stdlib/shaders not found");
         return;
     };
-    let modules = library(&root);
     let entry = "package::wxsl::lighting_pass";
 
     let default = compile(&modules, entry, &Bindings::new()).expect("compiles");

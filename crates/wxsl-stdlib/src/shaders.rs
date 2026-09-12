@@ -31,9 +31,10 @@ modules! {
     "package::wxsl::surface" => "wxsl/surface.wxsl",
     "package::wxsl::vertex" => "wxsl/vertex.wxsl",
     "package::wxsl::shadow" => "wxsl/shadow.wxsl",
-    "package::wxsl::shading" => "wxsl/shading.wxsl",
-    "package::wxsl::deferred" => "wxsl/deferred.wxsl",
-    "package::wxsl::lighting_pass" => "wxsl/lighting_pass.wxsl",
+    // The shading function and the lighting pass are *generated* now, from
+    // the enabled lighting models (wxsl_core::lighting, ADR 0028), so
+    // neither ships as a file. The model functions the generated shaders
+    // call do.
     // The 2D UI pass the editor draws itself with (ADR 0013). Part of the
     // ABI because `wxsl_core::abi` names its entry points, bindings and
     // vertex layout, and because `wxsl-render` ships no shaders (ADR 0009).
@@ -67,6 +68,14 @@ modules! {
     "package::lighting::pbr_direct" => "lighting/pbr_direct.wxsl",
     "package::lighting::pbr_direct_split" => "lighting/pbr_direct_split.wxsl",
     "package::lighting::visibility_smith" => "lighting/visibility_smith.wxsl",
+
+    // The lighting models (`wxsl_core::lighting::DEFAULT_MODELS`). Kept out
+    // of the node derivation on purpose: they are shaded through the
+    // registry's contract, not placed on a canvas.
+    "package::lighting::models::lambert" => "lighting/models/lambert.wxsl",
+    "package::lighting::models::phong" => "lighting/models/phong.wxsl",
+    "package::lighting::models::pbr" => "lighting/models/pbr.wxsl",
+    "package::lighting::models::clearcoat" => "lighting/models/clearcoat.wxsl",
 
     "package::math::safe_normalize" => "math/safe_normalize.wxsl",
     "package::math::smootherstep" => "math/smootherstep.wxsl",
@@ -279,16 +288,10 @@ mod tests {
             .collect();
         assert_eq!(frame, vec![abi::GROUP_FRAME; 3], "camera, scene, object");
 
-        let pass: Vec<u32> = groups
-            .iter()
-            .filter(|(path, _)| *path == abi::LIGHTING_PASS_MODULE)
-            .map(|(_, index)| *index)
-            .collect();
-        assert_eq!(
-            pass,
-            vec![abi::GROUP_PASS; abi::GBUFFER_TARGETS.len() + 1],
-            "one binding per G-buffer target, plus depth"
-        );
+        // The lighting pass is generated now (wxsl_core::lighting), so its
+        // bindings are checked against the generated source in
+        // `tests/lighting_models.rs` — one per G-buffer target plus depth,
+        // all in the pass group.
     }
 
     #[test]

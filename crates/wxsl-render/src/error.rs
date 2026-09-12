@@ -38,6 +38,17 @@ pub enum RenderError {
         /// The offending path.
         module: String,
     },
+    /// A lighting model could not be resolved, or the set is not usable.
+    ///
+    /// Kept as pre-rendered text, like the compiler's diagnostic: the
+    /// registry's error lives in `wxsl-core` and the material's name is
+    /// what the reader needs here.
+    Lighting {
+        /// The material whose model could not be resolved.
+        material: String,
+        /// The rendered error.
+        error: String,
+    },
     /// A pipeline was asked to record a frame before `configure` gave it a
     /// target size and format.
     NotConfigured,
@@ -209,6 +220,13 @@ impl fmt::Display for RenderError {
             RenderError::InvalidModulePath { module } => {
                 write!(f, "`{module}` is not a valid WXSL module path")
             }
+            RenderError::Lighting { material, error } if material.is_empty() => {
+                write!(f, "the lighting set is not usable: {error}")
+            }
+            RenderError::Lighting { material, error } => write!(
+                f,
+                "material `{material}`: {error} - a material's model must be one the                  enabled set names (see `Renderer::set_lighting` and `Material::with_lighting`)"
+            ),
             RenderError::NotConfigured => {
                 f.write_str("pipeline has no target yet: call `configure` first")
             }

@@ -6,7 +6,7 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0, M1, M2, M3, M4, M5.
+**Landed so far:** M0, M1, M2, M3, M4, M5, M6.
 
 ## How to read this
 
@@ -595,30 +595,42 @@ hardware, beside a test that forward and deferred agree pixel for pixel.
   is there for the nodes a later milestone wants — a per-vertex wind
   phase, a triplanar blend weight.
 
-### M6 — Lighting models, by ID in the G-buffer
+### M6 — Lighting models, by ID in the G-buffer — **done**
 
-* A lighting-model registry: each model is a WXSL function of one fixed
-  signature, plus a small integer id. **The registry entry is the seam** —
-  the generated dispatch cannot tell a hand-written function from one
-  generated out of a graph, so hand-written models now cost nothing later:
-  graph-authored models become a milestone that adds a producer, not one
-  that redesigns the consumer.
-* The G-buffer gains a `lighting_id` channel; `GBUFFER_TARGETS` stops being
-  a fixed table and becomes base targets plus targets the pipeline requests
-  (a clear-coat target only exists if some model needs it).
-* `lighting_pass.wxsl` stops being hand-written and becomes *generated* from
-  the enabled set: a `switch` over the id calling each model. A model nobody
-  enabled costs nothing, because dead-code elimination already runs after
-  monomorphization (ADR 0012).
-* Ship `lambert`, `phong` and the existing PBR as three models, plus one
-  extra-G-buffer model (clear coat) to prove the composition.
+Landed as [ADR 0028](docs/adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md),
+which is now where the reasoning lives. What shipped, and the four things a
+later milestone needs to know:
 
-**Done when** one frame shows three objects shaded by three different models
-through one deferred lighting pass, and the WGSL for a single-model pipeline
-contains only that model.
+`wxsl_core::lighting` is the registry: a `LightingSet` per pipeline (the
+default is one model — the library's PBR — which generates no dispatch and
+no id channel), four shipped models (`lambert`, `phong`, `pbr`,
+`clearcoat`) under `shaders/lighting/models/`, and the generators that
+produce the shading function, the G-buffer struct/pack and the whole
+lighting pass from the set. `shading.wxsl`, `deferred.wxsl` and
+`lighting_pass.wxsl` are gone. The demo grows `--models`/`--model`.
 
-**ADR** — "Lighting models dispatched by a G-buffer id, with a composable
-G-buffer layout". Amends ADR 0008.
+* **Every vec4 G-buffer target costs 8 bytes per sample against WebGPU's
+  32-byte attachment floor, whatever its bit depth** — so the base three
+  targets have nearly spent the budget before any model asks. The id
+  channel is a *scalar* target (1 byte), clearcoat's request a *pair* (4);
+  `GBufferPrecision` grew those two variants and the generated struct's
+  field types follow them. `pipeline::gbuffer_bytes_per_sample` mirrors
+  the spec's arithmetic and `Renderer::set_lighting` checks a set against
+  the floor by name — the naive byte count was wrong here once already.
+* **The forward path needs no set and no dispatch at all**: each
+  material's module gets its own model pasted in directly, so a forward
+  module contains only the model its material uses. The set is a deferred
+  concept, and the strongest test in `tests/lighting_models.rs` is that
+  forward and deferred still agree pixel for pixel with mixed models in
+  the frame.
+* **Materials name their model, never the id** — a scene document that
+  stored ids would silently reshade when one was renumbered. `None`
+  resolves to the library default (PBR) when enabled, else the lowest id,
+  so widening a set does not quietly reshade materials that named nothing.
+* **The registry entry is the seam, as planned.** The dispatch, the
+  G-buffer layout and the lighting pass cannot tell a hand-written model
+  from a generated one, so graph-authored models later are a new producer
+  of entries — nothing downstream changes.
 
 ### M7 — The `Screen` domain and postprocess
 

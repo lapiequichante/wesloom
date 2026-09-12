@@ -20,6 +20,7 @@ use core::fmt;
 use std::collections::HashMap;
 
 use wxsl_core::abi::{self, GBufferPrecision, MaterialStage};
+use wxsl_core::lighting::LightingSet;
 use wxsl_core::resources::VertexAttributeBinding;
 use wxsl_core::scene::TagExpr;
 
@@ -74,11 +75,11 @@ impl StockPipeline {
         matches!(self, StockPipeline::Deferred)
     }
 
-    /// This pipeline's pass list, at `target`.
-    pub fn graph(&self, target: TargetConfig) -> RenderGraph {
+    /// This pipeline's pass list, at `target`, under `lighting`.
+    pub fn graph(&self, target: TargetConfig, lighting: &LightingSet) -> RenderGraph {
         match self {
             StockPipeline::Forward => forward_graph(target),
-            StockPipeline::Deferred => deferred_graph(target),
+            StockPipeline::Deferred => deferred_graph(target, lighting),
         }
     }
 }
@@ -91,22 +92,69 @@ impl fmt::Display for StockPipeline {
 }
 
 /// The `wgpu` format for a G-buffer target of the given precision.
+///
+/// Each row names the target's channel count too, and the channel count is
+/// what the attachment budget cares about: every four-channel target here
+/// costs 8 bytes per sample whatever its bit depth, while a scalar costs 1
+/// and a pair 4 — which is why the lighting models' small requests declare
+/// themselves small.
 pub fn gbuffer_format(precision: GBufferPrecision) -> wgpu::TextureFormat {
     match precision {
         // Base colour and metallic are both in 0..1, and this is the one
-        // target where 8 bits is visually enough.
+        // four-channel target where 8 bits is visually enough.
         GBufferPrecision::Normalized => wgpu::TextureFormat::Rgba8Unorm,
         // Normals need a sign and emissive can exceed 1.
         GBufferPrecision::HighDynamicRange => wgpu::TextureFormat::Rgba16Float,
+        // The dispatch id: one normalized channel, one byte.
+        GBufferPrecision::NormalizedScalar => wgpu::TextureFormat::R8Unorm,
+        // A pair of half floats: two signed quantities, half the cost.
+        GBufferPrecision::HighDynamicRangePair => wgpu::TextureFormat::Rg16Float,
     }
 }
 
-/// The G-buffer's formats, in `@location` order, from the ABI's table.
-pub fn gbuffer_formats() -> Vec<wgpu::TextureFormat> {
-    abi::GBUFFER_TARGETS
+/// The most bytes per sample a pass's colour attachments may total.
+///
+/// WebGPU's floor for `maxColorAttachmentBytesPerSample`, so it is a
+/// budget every device honours and therefore a budget a lighting-model set
+/// can be checked against before a device is asked. The base targets
+/// spend 24 of it — three vec4 targets at 8 bytes each, whatever their bit
+/// depths — which is what a set's requests are measured against; a scalar
+/// id channel and a pair-precision request are what let the shipped full
+/// set fit the rest. See `Renderer::set_lighting`.
+pub const MAX_GBUFFER_BYTES_PER_SAMPLE: u32 = 32;
+
+/// The G-buffer's formats, in `@location` order, for `lighting`'s layout:
+/// the ABI's base targets, then whatever the enabled set requests.
+pub fn gbuffer_formats(lighting: &LightingSet) -> Vec<wgpu::TextureFormat> {
+    lighting
+        .gbuffer_layout()
         .iter()
         .map(|target| gbuffer_format(target.precision))
         .collect()
+}
+
+/// What `lighting`'s G-buffer costs against the attachment budget, using
+/// the same arithmetic the WebGPU spec does — including the alignment
+/// round-up — so a set that fits by this number fits on every device,
+/// not just the ones whose drivers are forgiving.
+pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
+    let mut total: u32 = 0;
+    for format in gbuffer_formats(lighting) {
+        // The spec's own table: a four-channel target costs 8 bytes per
+        // sample whatever its bit depth ("despite being 4 bytes per pixel,
+        // these are 8 bytes per pixel in the table", says wgpu), a pair
+        // costs 4, a scalar 1. Alignment rounds up before each add.
+        let (cost, alignment) = match format {
+            wgpu::TextureFormat::Rgba8Unorm => (8, 1),
+            wgpu::TextureFormat::Rgba16Float => (8, 2),
+            wgpu::TextureFormat::R8Unorm => (1, 1),
+            wgpu::TextureFormat::Rg16Float => (4, 2),
+            other => unreachable!("the G-buffer maps only to byte-cost formats, not {other:?}"),
+        };
+        total = total.next_multiple_of(alignment);
+        total += cost;
+    }
+    total
 }
 
 /// Size, format and clear colour of what is being rendered into.
@@ -120,7 +168,8 @@ pub struct TargetConfig {
     ///
     /// A non-`Srgb` format is expected: the ABI's shading function encodes
     /// sRGB itself so that the forward path and the deferred lighting pass
-    /// produce identical values (see `shaders/wxsl/shading.wxsl`).
+    /// produce identical values (see `wxsl_core::lighting`, which
+    /// generates the shading function).
     pub format: wgpu::TextureFormat,
     /// Colour to clear to where nothing is drawn.
     pub clear_color: wgpu::Color,
@@ -233,10 +282,15 @@ pub fn forward_graph(target: TargetConfig) -> RenderGraph {
 /// to it — a depth texture cannot be attached and sampled in the same pass —
 /// which the graph expresses as a read, and therefore as the edge that
 /// orders the two passes.
-pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
-    let mut graph = RenderGraph::new(target.format);
+pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGraph {
+    let layout = lighting.gbuffer_layout();
+    let mut graph = RenderGraph::new(target.format)
+        // The scheduler checks the material pass's attachment count against
+        // this, not against the ABI's base table: a set that requests an id
+        // channel or a model target writes them here.
+        .with_gbuffer_layout(layout.clone());
     shadow_passes(&mut graph);
-    let gbuffer: Vec<ResourceId> = abi::GBUFFER_TARGETS
+    let gbuffer: Vec<ResourceId> = layout
         .iter()
         .map(|entry| {
             graph.resource(ResourceDesc::color(
@@ -262,8 +316,10 @@ pub fn deferred_graph(target: TargetConfig) -> RenderGraph {
     graph.pass(
         PassDesc::screen("deferred lighting", ScreenShader::DeferredLighting)
             .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
-            // Bindings in `abi::GBUFFER_TARGETS` order, with depth last —
-            // the order `lighting_pass.wxsl` declares them in.
+            // Bindings in `abi::GBUFFER_BASE_TARGETS` order, with depth last —
+            // the order the generated lighting pass declares them in.
+            // Bindings in layout order, with depth last — the order the
+            // generated pass declares them in.
             .with_reads(
                 gbuffer
                     .iter()
@@ -576,10 +632,17 @@ mod tests {
     use super::*;
     use crate::pass::PassKind;
 
+    /// The tests run against the default — a set of one, the shape every
+    /// pipeline had before lighting models existed — plus, where the
+    /// dispatch is what is under test, the full shipped set.
+    fn default_lighting() -> LightingSet {
+        LightingSet::default()
+    }
+
     #[test]
     fn the_gbuffer_formats_come_from_the_abi_table() {
-        let formats = gbuffer_formats();
-        assert_eq!(formats.len(), abi::GBUFFER_TARGETS.len());
+        let formats = gbuffer_formats(&default_lighting());
+        assert_eq!(formats.len(), abi::GBUFFER_BASE_TARGETS.len());
         assert_eq!(formats[0], wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!(formats[1], wgpu::TextureFormat::Rgba16Float);
     }
@@ -647,7 +710,7 @@ mod tests {
     #[test]
     fn every_pipeline_fills_one_shadow_slice_per_light_from_that_lights_view() {
         for pipeline in StockPipeline::ALL {
-            let graph = pipeline.graph(config());
+            let graph = pipeline.graph(config(), &default_lighting());
             let maps = graph.shadow_maps().expect("shadow maps are declared");
             let desc = graph.resource_desc(maps).expect("declared resource");
             assert_eq!(desc.dimension, Dimension::D2Array);
@@ -688,13 +751,13 @@ mod tests {
 
     #[test]
     fn the_deferred_pipeline_is_a_geometry_pass_and_a_screen_pass() {
-        let graph = deferred_graph(config());
+        let graph = deferred_graph(config(), &default_lighting());
         let material = abi::MAX_LIGHTS;
         let lighting = material + 1;
         assert_eq!(graph.passes().len(), lighting + 1);
         assert_eq!(
             graph.passes()[material].color.len(),
-            abi::GBUFFER_TARGETS.len()
+            abi::GBUFFER_BASE_TARGETS.len()
         );
         assert!(matches!(
             graph.passes()[material].kind,
@@ -713,7 +776,7 @@ mod tests {
         // those reads are what order it after the material pass.
         assert_eq!(
             graph.passes()[lighting].reads.len(),
-            abi::GBUFFER_TARGETS.len() + 1
+            abi::GBUFFER_BASE_TARGETS.len() + 1
         );
         let schedule = graph.schedule().expect("the deferred pass list schedules");
         assert_eq!(schedule.order(), (0..=lighting).collect::<Vec<_>>());
@@ -725,7 +788,7 @@ mod tests {
             for (width, height) in [(1, 1), (64, 64), (3840, 2160)] {
                 let target = TargetConfig::new(width, height, wgpu::TextureFormat::Rgba8Unorm);
                 pipeline
-                    .graph(target)
+                    .graph(target, &default_lighting())
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));
             }
@@ -750,7 +813,7 @@ mod tests {
         // ship so a new stage cannot be wired into a pass that cannot hold
         // its output.
         for pipeline in StockPipeline::ALL {
-            let graph = pipeline.graph(config());
+            let graph = pipeline.graph(config(), &default_lighting());
             for pass in graph.passes() {
                 if let PassKind::Geometry { stage, .. } = &pass.kind {
                     assert_eq!(

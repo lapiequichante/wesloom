@@ -255,6 +255,14 @@ pub struct MaterialEntry {
     /// ([ADR 0026](../../../docs/adr/0026-a-material-casts-and-receives-shadows.md)).
     #[cfg_attr(feature = "serde", serde(default = "yes"))]
     pub receive_shadow: bool,
+    /// Which lighting model shades this material, by the name its registry
+    /// entry carries, or `None` for the enabled set's default
+    /// ([ADR 0028](../../../docs/adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md)).
+    ///
+    /// A name, never an id: ids belong to the registry, and a document
+    /// that stored them would reshade silently when one was renumbered.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub lighting: Option<String>,
 }
 
 /// The default of both shadow flags. A function because that is the shape
@@ -274,7 +282,14 @@ impl MaterialEntry {
             tags: Tags::from_iter([TAG_OPAQUE]),
             cast_shadow: true,
             receive_shadow: true,
+            lighting: None,
         }
+    }
+
+    /// Shade this material with the named lighting model.
+    pub fn with_lighting(mut self, model: impl Into<String>) -> Self {
+        self.lighting = Some(model.into());
+        self
     }
 
     /// Set both shadow flags.

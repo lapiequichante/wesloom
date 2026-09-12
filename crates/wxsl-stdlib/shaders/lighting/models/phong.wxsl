@@ -1,0 +1,44 @@
+// The Phong lighting model
+//
+// One light's contribution: Lambertian diffuse plus a Phong specular lobe,
+// with the classic reflect-vector formulation.
+//
+// The shininess is derived from the surface's perceptual roughness — 8 at
+// fully rough, 2048 at fully smooth — so a Phong material and a PBR
+// material can share one slider's meaning. Not a node: it is one of the
+// entries of `wxsl_core::lighting::DEFAULT_MODELS`, shaded through the
+// lighting-model registry rather than placed on a canvas.
+
+import package::lighting::diffuse_lambert::diffuse_lambert;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_phong(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f, // unused: this model requests no G-buffer data
+) -> vec3f {
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+    let n_dot_l = saturate(dot(normal, light.direction));
+
+    let diffuse = diffuse_lambert(surface.base_color, surface.metallic)
+        * light.radiance
+        * n_dot_l;
+
+    // Specular tint follows the same convention the PBR model uses:
+    // dielectric white, tinted by the base colour as metallic rises. The
+    // lobe strength is the model's own convention — a flat 0.25, the
+    // classic Phong coefficient — because this model exists to be the
+    // readable, non-physical one, and a lobe capped at dielectric F0 is
+    // barely a highlight at all.
+    let tint = mix(vec3f(1.0), surface.base_color, surface.metallic);
+    let shininess = exp2(11.0 * (1.0 - saturate(surface.roughness)));
+    let reflection = reflect(-light.direction, normal);
+    let specular = 0.25
+        * pow(saturate(dot(reflection, view_direction)), shininess)
+        * light.radiance;
+
+    return diffuse + specular * tint;
+}
