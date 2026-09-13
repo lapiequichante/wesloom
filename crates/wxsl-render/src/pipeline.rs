@@ -32,7 +32,7 @@ use crate::graph::{PassBinding, RenderGraph};
 use crate::mesh::{AttributeValues, Vertex};
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Read, ResourceDesc, ResourceId, ScreenShader, DEPTH_FORMAT,
+    Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
 };
 use crate::variants::{ShaderVariant, VariantKey};
 
@@ -108,8 +108,13 @@ impl StockPipeline {
     /// never the first place a mistake shows up.
     pub fn graph(&self, config: &PipelineConfig) -> RenderGraph {
         let document = self.document();
-        crate::pipeline_doc::compile(&document, &wxsl_core::pipeline::registry(), config)
-            .unwrap_or_else(|error| panic!("the shipped `{self}` preset does not compile: {error}"))
+        crate::pipeline_doc::compile(
+            &document,
+            &wxsl_core::pipeline::registry(),
+            &crate::effect::EffectRegistry::shipped(),
+            config,
+        )
+        .unwrap_or_else(|error| panic!("the shipped `{self}` preset does not compile: {error}"))
     }
 
     /// Position in [`StockPipeline::ALL`], indexing [`Self::PRESET_SOURCE`].
@@ -393,7 +398,7 @@ pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGra
             .with_depth(DepthAttachment::clear(depth, 1.0)),
     );
     graph.pass(
-        PassDesc::screen("deferred lighting", ScreenShader::DeferredLighting)
+        PassDesc::screen("deferred lighting", "deferred_lighting")
             .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
             // Bindings in `abi::GBUFFER_BASE_TARGETS` order, with depth last —
             // the order the generated lighting pass declares them in.
@@ -584,7 +589,8 @@ impl PipelineCache {
         )
     }
 
-    /// The pipeline for a fullscreen pass running `variant`.
+    /// The pipeline for a fullscreen pass running `variant` — the module
+    /// of some effect, whose entry points name the stages here.
     ///
     /// No vertex buffer: the triangle comes from `@builtin(vertex_index)`.
     #[allow(clippy::too_many_arguments)]
@@ -594,6 +600,8 @@ impl PipelineCache {
         frame: &wgpu::BindGroupLayout,
         pass_layout: Option<&wgpu::BindGroupLayout>,
         variant: &ShaderVariant,
+        vertex_entry: &str,
+        fragment_entry: &str,
         state: PassState,
         targets: &[Option<wgpu::ColorTargetState>],
         pass_shape: &[PassBinding],
@@ -610,8 +618,8 @@ impl PipelineCache {
             state,
             targets,
             pass_shape,
-            abi::LIGHTING_PASS_VERTEX_ENTRY,
-            Some(abi::LIGHTING_PASS_FRAGMENT_ENTRY),
+            vertex_entry,
+            Some(fragment_entry),
             false,
         )
     }
@@ -851,10 +859,8 @@ mod tests {
             }
         ));
         assert!(matches!(
-            graph.passes()[lighting].kind,
-            PassKind::Screen {
-                shader: ScreenShader::DeferredLighting
-            }
+            &graph.passes()[lighting].kind,
+            PassKind::Screen { effect } if effect == "deferred_lighting"
         ));
         // The lighting pass reads every G-buffer target plus depth, and
         // those reads are what order it after the material pass.

@@ -52,9 +52,15 @@ pub enum RenderError {
     /// A pipeline was asked to record a frame before `configure` gave it a
     /// target size and format.
     NotConfigured,
-    /// The deferred path was asked to record a frame with no lighting-pass
-    /// shader. [`crate::renderer::Renderer`] compiles one for you.
-    NoLightingShader,
+    /// A screen pass names an effect this renderer does not know. The
+    /// pass list came from a graph built by hand rather than compiled by
+    /// [`crate::pipeline_doc`] — the compiler rejects the same name
+    /// against its registry's list, which is the message a document
+    /// author sees.
+    UnknownEffect {
+        /// The effect id the pass named.
+        effect: String,
+    },
     /// A pass list could not be ordered, validated or allocated.
     Graph(crate::graph::GraphError),
     /// A background pipeline swap will never finish: the thread compiling
@@ -230,9 +236,11 @@ impl fmt::Display for RenderError {
             RenderError::NotConfigured => {
                 f.write_str("pipeline has no target yet: call `configure` first")
             }
-            RenderError::NoLightingShader => {
-                f.write_str("the deferred path needs a compiled lighting-pass shader")
-            }
+            RenderError::UnknownEffect { effect } => write!(
+                f,
+                "a screen pass runs `{effect}`, which is not an effect this renderer \
+                 knows — register it with `Renderer::add_effect`"
+            ),
             RenderError::Graph(error) => write!(f, "cannot run the pass list: {error}"),
             RenderError::SwapAbandoned => {
                 f.write_str("the pipeline swap was abandoned: its compiler thread is gone")

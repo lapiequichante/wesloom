@@ -47,7 +47,8 @@ is signal, don't delete it.
 | [0030](0030-a-pipeline-config-instead-of-threaded-parameters.md) | One `PipelineConfig` instead of parameters threaded by hand | Accepted |
 | [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) | Shader text lives in template files; generators fill holes | Accepted |
 | [0032](0032-stage-analysis-computes-the-cut-between-stages.md) | Stage analysis computes the cut between stages | Accepted |
-| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted |
+| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md) |
+| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

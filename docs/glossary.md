@@ -25,6 +25,13 @@ persistent ones, and records them. A *pipeline* is a render graph; forward
 and deferred are two of them. See
 [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
 
+**Effect** — a fullscreen pass as a self-describing unit
+(`wxsl_render::effect::Effect`): declared inputs in binding order, entry
+points, and its shader. A pipeline document's `pass.screen` names one by
+id, and a chain of them — lighting into a colour target, bloom over it —
+is how a pipeline composes. See
+[ADR 0034](adr/0034-effects-are-first-class-units.md).
+
 **Scene** — the document: meshes, materials and instances, as pure
 serializable data (`wxsl_core::scene::Scene`). It says what exists, never
 how it is drawn — the pipeline belongs to the renderer, not to the

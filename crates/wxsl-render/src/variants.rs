@@ -32,6 +32,7 @@ use wxsl_core::lighting::LightingSet;
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::wxsl::stable_hash;
 
+use crate::effect::{Effect, EffectShader};
 use crate::error::RenderError;
 use crate::library::ShaderLibrary;
 use crate::material::Material;
@@ -41,8 +42,9 @@ use crate::material::Material;
 pub enum VariantKind {
     /// A material: the module generated from a graph, plus the ABI around it.
     Material,
-    /// The deferred lighting pass, which has no material graph.
-    LightingPass,
+    /// A screen effect's module — the lighting pass or a post effect —
+    /// which has no material graph.
+    Effect,
 }
 
 /// Identity of one compiled shader module.
@@ -155,41 +157,41 @@ impl ShaderVariants {
         variant
     }
 
-    /// The deferred lighting pass variant for `macros` and the enabled
-    /// lighting-model `set`.
+    /// The variant `effect` runs, for `macros` and the enabled lighting
+    /// set.
     ///
-    /// Independent of any material: by the time this pass runs, the material
-    /// has already been resolved into the G-buffer. It still varies with the
-    /// macro set, because the shading function it calls has `@if`s of its own
-    /// (tonemapping, the debug-normal view) — and with the set, because the
-    /// pass is *generated* from it ([`wxsl_core::lighting`]): its switch
-    /// names the enabled models and its bindings match the G-buffer layout.
-    pub fn lighting_pass(
+    /// Independent of any material: by the time a screen effect runs, the
+    /// material has already been resolved into the G-buffer. The lighting
+    /// effect still varies with the macro set, because the shading
+    /// function it calls has `@if`s of its own (tonemapping, the
+    /// debug-normal view) — and with the set, because its module is
+    /// *generated* from it ([`wxsl_core::lighting`]): its switch names the
+    /// enabled models and its bindings match the G-buffer layout. A fixed
+    /// effect's text is its own, so its key folds in only the macros.
+    pub fn effect(
         &mut self,
         device: &wgpu::Device,
         library: &ShaderLibrary,
+        effect: Effect,
         macros: &MacroSet,
         set: &LightingSet,
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        let key = Self::lighting_pass_key(macros, set);
-        let macros = macros.clone();
-        let set = set.clone();
-        self.get_or_compile(device, key, || {
-            let source = wxsl_core::lighting::lighting_pass_source(&set);
-            let extra = [(abi::LIGHTING_PASS_MODULE, Cow::Owned(source))];
-            (
-                format!("deferred lighting pass ({})", set.signature()),
-                compile(library, &extra, abi::LIGHTING_PASS_MODULE, &macros),
-            )
-        })
+        let key = Self::effect_key(&effect, macros, set);
+        let request = EffectRequest::new(effect, macros, set);
+        self.get_or_compile(device, key, || request.compile(library))
     }
 
-    /// The key the lighting pass for `macros` and `set` is cached under.
-    pub fn lighting_pass_key(macros: &MacroSet, set: &LightingSet) -> VariantKey {
-        let mut identity = macros.signature();
-        let _ = write!(identity, ";{}", set.signature());
+    /// The key the variant for `effect` is cached under.
+    pub fn effect_key(effect: &Effect, macros: &MacroSet, set: &LightingSet) -> VariantKey {
+        let mut identity = String::from(effect.id);
+        identity.push(';');
+        identity.push_str(&macros.signature());
+        if effect.shader == EffectShader::Lighting {
+            identity.push(';');
+            let _ = write!(identity, "{}", set.signature());
+        }
         VariantKey {
-            kind: VariantKind::LightingPass,
+            kind: VariantKind::Effect,
             identity: stable_hash(identity.as_bytes()),
             stage: None,
         }
@@ -281,39 +283,56 @@ impl MaterialRequest {
     }
 }
 
-/// Everything needed to compile the deferred lighting pass, owned.
+/// Everything needed to compile one effect's shader, owned.
+///
+/// Owned rather than borrowed so it can be sent to a worker thread: a
+/// background pipeline swap compiles these off the main thread and hands
+/// the WGSL back ([`crate::swap`]).
 #[derive(Clone, Debug)]
-pub struct LightingRequest {
+pub struct EffectRequest {
     /// The cache key the result belongs under.
     pub key: VariantKey,
     /// Label for the `wgpu` module and for error messages.
     pub label: String,
+    /// The module path the shader is mounted at and compiled from.
+    pub path: &'static str,
+    /// The shader text: the effect's own, or the lighting pass generated
+    /// for the enabled set — owned either way, so this can go to a worker
+    /// thread.
+    pub source: Cow<'static, str>,
     /// The macro values to bind.
     pub macros: MacroSet,
-    /// The generated pass source, owned so this can go to a worker thread.
-    pub source: String,
 }
 
-impl LightingRequest {
-    /// What compiling the lighting pass for `macros` and `set` needs.
-    pub fn new(macros: &MacroSet, set: &LightingSet) -> Self {
-        LightingRequest {
-            key: ShaderVariants::lighting_pass_key(macros, set),
-            label: format!("deferred lighting pass ({})", set.signature()),
+impl EffectRequest {
+    /// What compiling `effect` for `macros` and `set` needs.
+    pub fn new(effect: Effect, macros: &MacroSet, set: &LightingSet) -> Self {
+        let (path, source) = match effect.shader {
+            EffectShader::Lighting => (
+                abi::LIGHTING_PASS_MODULE,
+                Cow::Owned(wxsl_core::lighting::lighting_pass_source(set)),
+            ),
+            EffectShader::Source { path, wxsl } => (path, Cow::Borrowed(wxsl)),
+        };
+        let label = match effect.shader {
+            EffectShader::Lighting => format!("{} ({})", effect.label, set.signature()),
+            EffectShader::Source { .. } => effect.label.to_string(),
+        };
+        EffectRequest {
+            key: ShaderVariants::effect_key(&effect, macros, set),
+            label,
+            path,
+            source,
             macros: macros.clone(),
-            source: wxsl_core::lighting::lighting_pass_source(set),
         }
     }
 
     /// Run the WXSL compiler, off any thread.
     pub fn compile(&self, library: &ShaderLibrary) -> (String, Result<String, RenderError>) {
-        let extra = [(
-            abi::LIGHTING_PASS_MODULE,
-            Cow::Borrowed(self.source.as_str()),
-        )];
+        let extra = [(self.path, Cow::Borrowed(self.source.as_ref()))];
         (
             self.label.clone(),
-            compile(library, &extra, abi::LIGHTING_PASS_MODULE, &self.macros),
+            compile(library, &extra, self.path, &self.macros),
         )
     }
 }

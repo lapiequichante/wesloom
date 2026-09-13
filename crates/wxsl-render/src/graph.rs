@@ -1080,7 +1080,7 @@ fn store_op(store: bool) -> wgpu::StoreOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass::{Attachment, DrawSource, PassState, Read, ScreenShader, DEPTH_FORMAT};
+    use crate::pass::{Attachment, DrawSource, PassState, Read, DEPTH_FORMAT};
     use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::scene::TagExpr;
 
@@ -1092,7 +1092,7 @@ mod tests {
 
     /// A pass that writes `target`, clearing it, with no depth.
     fn writer(label: &str, target: ResourceId) -> PassDesc {
-        PassDesc::screen(label, ScreenShader::DeferredLighting)
+        PassDesc::screen(label, "deferred_lighting")
             .with_color(Attachment::clear(target, wgpu::Color::BLACK))
     }
 
@@ -1108,7 +1108,7 @@ mod tests {
         graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
         graph.pass(writer("write b", b));
         graph.pass(
-            PassDesc::screen("b to target", ScreenShader::DeferredLighting)
+            PassDesc::screen("b to target", "deferred_lighting")
                 .with_color(Attachment::load(RenderGraph::TARGET))
                 .with_reads([Read::current(b)]),
         );

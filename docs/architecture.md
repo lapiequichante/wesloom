@@ -80,7 +80,9 @@ function nodes `build.rs` derived from the sources).
 
 **`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
 `wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
-`RenderGraph`, plan2 P3), `library` (`ShaderLibrary`),
+`RenderGraph`, plan2 P3), `effect` (screen effects as data: declared
+inputs, entry points, shader source — the registry `pass.screen` names
+into, plan2 P4), `library` (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `renderer` (the front end that hides the path switch), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
@@ -178,6 +180,18 @@ The two shipped pass lists are `StockPipeline::{Forward, Deferred}`.
 Forward is a depth prepass (`depth_only`) followed by a shading pass
 (`forward_lit`) that tests `LessEqual` without writing depth; deferred is a
 G-buffer pass (`gbuffer`) followed by a fullscreen lighting pass.
+
+A `pass.screen` node names an **effect** by id
+([ADR 0034](adr/0034-effects-are-first-class-units.md)): a
+`wxsl_render::effect::Effect` — declared inputs in pass-group binding
+order, entry points, and the shader (generated for the lighting set, or a
+WXSL file the effect owns). The shipped registry holds the migrated
+lighting pass and bloom, whose chain — lighting into a `resource.color`,
+bloom over it, `into` unconnected so bloom writes the frame's target — is
+how a pipeline composes; applications register more with
+`Renderer::add_effect`, which is ADR 0009's rule extended from shaders to
+passes. `cargo run -p wxsl --example gallery -- --screenshot` renders the
+stock pipelines, the minimal document and the bloom chain side by side.
 
 `RenderGraph::schedule` is a pure function and is tested without a device.
 It orders the passes by what they read and write (never by declaration
@@ -638,7 +652,7 @@ Implemented and tested end to end:
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
 | `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing, per-node name and colour, light/dark themes | done |
-| `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `editor` demo | done |
+| `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `gallery` demo, the `editor` demo | done |
 
 The demo is the thing to run first:
 
@@ -649,6 +663,8 @@ cargo run -p wxsl --example pbr_cube -- --dump-wgsl # what the graph became
 cargo run -p wxsl --example pbr_cube -- --headless --models lambert,phong,pbr,clearcoat
                                      # three models and an extra G-buffer target,
                                      # through one deferred lighting pass
+cargo run -p wxsl --example gallery               # every pipeline in one window
+cargo run -p wxsl --example gallery -- --screenshot # one PNG each + contact sheet
 ```
 
 And the editor, which is the same graph with somewhere to edit it:

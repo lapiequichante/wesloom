@@ -582,7 +582,7 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
     // one frame back is what the frame before it wrote — not what this
     // frame is in the middle of writing (ADR 0021). Every temporal
     // technique there will ever be depends on exactly this.
-    use wxsl::render::pass::{Attachment, Read, ResourceDesc, ScreenShader};
+    use wxsl::render::pass::{Attachment, Read, ResourceDesc};
     use wxsl::render::{wgpu, PassDesc, RenderGraph, ResourcePool};
 
     let Some(gpu) = gpu() else { return };
@@ -637,7 +637,7 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
                 .persistent(2)
                 .with_usage(wgpu::TextureUsages::COPY_SRC),
         );
-        let pass = PassDesc::screen("accumulate", ScreenShader::DeferredLighting)
+        let pass = PassDesc::screen("accumulate", "deferred_lighting")
             .with_color(Attachment::clear(history, clear))
             .with_reads([Read::previous(history, 1)]);
         graph.pass(pass);

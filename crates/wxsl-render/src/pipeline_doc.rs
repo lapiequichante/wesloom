@@ -40,15 +40,16 @@
 //!
 //! The document never spells a `wgpu` format — `resource.color` says
 //! `standard` or `hdr`, and [`gbuffer_format`] is the mirror. The same for
-//! screen effects: `pass.screen` names one by id, and [`EFFECTS`] is the
-//! table of what this crate knows how to run. One row for now — the
-//! deferred lighting pass, migrated out of the hardcoded enum it was
-//! reachable only through. P4's effect registry generalizes the table into
-//! application-supplied data, which is also when an effect chain through
-//! `resource.color` becomes *expressible* rather than merely compiled
-//! against: today the shipped effect writes the frame's target, so a chain
-//! fails in [`PipelineError::NotPresentable`] with the message that says
-//! what to do instead.
+//! screen effects: `pass.screen` names one by id, and the
+//! [`EffectRegistry`] is the table of what this crate knows how to run —
+//! the migrated lighting pass and bloom, plus whatever an application
+//! registers (plan2 P4). The effect's declared inputs are the contract:
+//! what is wired into the pass must match them, binding for binding. An
+//! effect chain through `resource.color` is how a pipeline composes —
+//! lighting writes a colour target, a post effect reads it and writes the
+//! frame's target by leaving `into` unconnected — and a pass that tries to
+//! feed its *output* (the presented target) into another effect's image
+//! input is the named error [`PipelineError::ImageFromPass`].
 
 use std::collections::HashMap;
 
@@ -60,22 +61,15 @@ use wxsl_core::node::NodeRegistry;
 use wxsl_core::pipeline as doc;
 use wxsl_core::scene::TagExpr;
 
+use crate::effect::{EffectInputKind, EffectRegistry};
 use crate::graph::RenderGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Persistence, Read, ResourceDesc, ResourceId, ScreenShader, DEPTH_FORMAT,
+    Persistence, Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
 };
 #[cfg(test)]
 use crate::pipeline::StockPipeline;
 use crate::pipeline::{gbuffer_format, PipelineConfig};
-
-/// The screen effects a document can name, by the id its `effect` setting
-/// carries: `(id, shader, one-line description)`.
-pub const EFFECTS: &[(&str, ScreenShader, &str)] = &[(
-    "deferred_lighting",
-    ScreenShader::DeferredLighting,
-    "Shade the G-buffer with the enabled lighting models.",
-)];
 
 /// What is wrong with a pipeline document.
 ///
@@ -181,6 +175,16 @@ pub enum PipelineError {
     IntoFromPass {
         /// The pass doing the writing.
         node: String,
+    },
+    /// A screen effect's `image` input is fed by a pass whose colour
+    /// output is the frame's target. The target is what is *on screen* —
+    /// it cannot be presented and sampled in the same frame — so a chain
+    /// passes along a `resource.color` instead.
+    ImageFromPass {
+        /// The pass doing the reading.
+        node: String,
+        /// The pass whose output was wired in.
+        fed_by: String,
     },
     /// The document has no `present` node, so nothing reaches the frame.
     NoPresent,
@@ -308,6 +312,13 @@ impl core::fmt::Display for PipelineError {
                  `resource.color` into `into` instead — a resource is the thing a \
                  chain passes along"
             ),
+            PipelineError::ImageFromPass { node, fed_by } => write!(
+                f,
+                "screen pass `{node}` reads `{fed_by}`'s colour output, which is the \
+                 frame's target — what is on screen cannot also be sampled; wire a \
+                 `resource.color` between the two passes and have `{fed_by}` write \
+                 into that"
+            ),
             PipelineError::NoPresent => {
                 f.write_str("the pipeline has no `present` node, so nothing reaches the frame")
             }
@@ -358,12 +369,13 @@ impl std::error::Error for PipelineError {}
 pub fn compile(
     document: &Graph,
     registry: &NodeRegistry,
+    effects: &EffectRegistry,
     config: &PipelineConfig,
 ) -> Result<RenderGraph, PipelineError> {
     if let Err(errors) = document.validate(registry) {
         return Err(PipelineError::InvalidDocument(errors));
     }
-    Compiler::new(document, registry, config).compile()
+    Compiler::new(document, registry, effects, config).compile()
 }
 
 /// The label a document node carries in errors and engine labels: the
@@ -388,6 +400,9 @@ fn def_label(registry: &NodeRegistry, id: &str) -> String {
 struct Compiler<'a> {
     document: &'a Graph,
     registry: &'a NodeRegistry,
+    /// The effects a `pass.screen` node may name, and whose declared
+    /// inputs are what its wiring is validated against.
+    effects: &'a EffectRegistry,
     config: &'a PipelineConfig,
     graph: RenderGraph,
     /// `resource.gbuffer` node → (targets in layout order, depth).
@@ -410,10 +425,16 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(document: &'a Graph, registry: &'a NodeRegistry, config: &'a PipelineConfig) -> Self {
+    fn new(
+        document: &'a Graph,
+        registry: &'a NodeRegistry,
+        effects: &'a EffectRegistry,
+        config: &'a PipelineConfig,
+    ) -> Self {
         Compiler {
             document,
             registry,
+            effects,
             config,
             graph: RenderGraph::new(config.target.format),
             gbuffers: HashMap::new(),
@@ -797,57 +818,110 @@ impl<'a> Compiler<'a> {
 
     fn screen_pass(&mut self, node: NodeId) -> Result<(), PipelineError> {
         let name = self.label(node);
-        let effect_text = self.setting(node, doc::SETTING_EFFECT);
-        let known: Vec<String> = EFFECTS.iter().map(|(id, _, _)| id.to_string()).collect();
-        let (_, shader, _) = EFFECTS
-            .iter()
-            .find(|(id, _, _)| *id == effect_text.trim())
-            .ok_or_else(|| PipelineError::UnknownEffect {
-                node: name.clone(),
-                effect: effect_text,
-                known,
-            })?;
-        let effect = shader_label(*shader);
+        let effect_text = self.setting(node, doc::SETTING_EFFECT).trim().to_string();
+        let known: Vec<String> = self.effects.ids();
+        let effect =
+            self.effects
+                .get(&effect_text)
+                .ok_or_else(|| PipelineError::UnknownEffect {
+                    node: name.clone(),
+                    effect: effect_text,
+                    known,
+                })?;
 
-        // What the effect reads is what is wired into it. The lighting pass
-        // shades a G-buffer and nothing else; the reads land in the order
-        // the generated pass declares its bindings — targets in layout
-        // order, depth last.
-        let reads: Vec<Read> = match self.fed(node, "gbuffer") {
-            Some(source) => {
-                let (targets, depth) = &self.gbuffers[&source];
-                targets
-                    .iter()
-                    .copied()
-                    .chain(core::iter::once(*depth))
-                    .map(Read::current)
-                    .collect()
+        // The reads are the effect's declared inputs, in declaration order
+        // — the order the shader declares its pass-group bindings in. A
+        // G-buffer input expands to one read per layout target plus depth;
+        // an image is exactly one. A wired socket the effect does not
+        // declare is the mirror mistake and gets the same named error.
+        let mut reads: Vec<Read> = Vec::new();
+        for input in effect.inputs {
+            match input.kind {
+                EffectInputKind::GBuffer => match self.fed(node, "gbuffer") {
+                    Some(source) => {
+                        let (targets, depth) = &self.gbuffers[&source];
+                        reads.extend(
+                            targets
+                                .iter()
+                                .copied()
+                                .chain(core::iter::once(*depth))
+                                .map(Read::current),
+                        );
+                    }
+                    None => {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but no G-buffer is wired into it",
+                                input.description
+                            ),
+                        });
+                    }
+                },
+                EffectInputKind::Image => match self.fed(node, "image") {
+                    Some(source) => reads.push(Read::current(self.image_source(source, node)?)),
+                    None => {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but nothing is wired into `image`",
+                                input.description
+                            ),
+                        });
+                    }
+                },
             }
-            None => Vec::new(),
-        };
-        if reads.is_empty() {
-            return Err(PipelineError::EffectInputMismatch {
-                node: name.clone(),
-                effect,
-                reason: "no G-buffer is wired into it".to_string(),
-            });
         }
-        if self.fed(node, "image").is_some() {
-            return Err(PipelineError::EffectInputMismatch {
-                node: name.clone(),
-                effect,
-                reason: "it shades a G-buffer, not an image".to_string(),
-            });
+        for (socket, wired) in [("gbuffer", "a G-buffer"), ("image", "an image")] {
+            if effect.declares(socket) {
+                continue;
+            }
+            if self.fed(node, socket).is_some() {
+                return Err(PipelineError::EffectInputMismatch {
+                    node: name.clone(),
+                    effect: effect.id.to_string(),
+                    reason: format!(
+                        "{wired} is wired into it, which `{}` does not take",
+                        effect.id
+                    ),
+                });
+            }
         }
 
         let target = self.write_target(node)?;
         self.graph.pass(
-            PassDesc::screen(name, *shader)
+            PassDesc::screen(name, effect.id)
                 .with_color(self.color_attachment(target))
                 .with_reads(reads),
         );
         self.pass_colors.insert(node, target);
         Ok(())
+    }
+
+    /// The resource a screen effect's `image` input stands for: a
+    /// `resource.color` node, or a pass's colour output — which is an
+    /// intermediate when that pass wrote into one, and the *frame's
+    /// target* when it did not. Sampling the target is the one
+    /// un-compilable chain shape, and the error says what to wire instead.
+    fn image_source(&self, source: NodeId, reader: NodeId) -> Result<ResourceId, PipelineError> {
+        match self.kind(source) {
+            Some(doc::RESOURCE_COLOR) => Ok(self.colors[&source]),
+            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) => {
+                match self.pass_colors.get(&source) {
+                    Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                    _ => Err(PipelineError::ImageFromPass {
+                        node: self.label(reader),
+                        fed_by: label(self.document, self.registry, source),
+                    }),
+                }
+            }
+            other => unreachable!(
+                "typing only lets a `resource.color` or a material pass produce a \
+                 colour target, not {other:?}"
+            ),
+        }
     }
 
     fn finish(&mut self, presents: Vec<NodeId>) -> Result<(), PipelineError> {
@@ -900,13 +974,6 @@ impl<'a> Compiler<'a> {
             });
         }
         Ok(())
-    }
-}
-
-/// The user-facing name of a screen shader, for error messages.
-fn shader_label(shader: ScreenShader) -> String {
-    match shader {
-        ScreenShader::DeferredLighting => "deferred_lighting".to_string(),
     }
 }
 
@@ -973,7 +1040,8 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass::{PassKind, ResourceDesc};
+    use crate::effect::EffectRegistry;
+    use crate::pass::PassKind;
     use crate::pipeline::{deferred_graph, forward_graph, TargetConfig};
     use wxsl_core::lighting::LightingSet;
     use wxsl_core::pipeline::registry as make_registry;
@@ -984,6 +1052,11 @@ mod tests {
 
     fn config() -> PipelineConfig {
         PipelineConfig::new(target())
+    }
+
+    /// The shipped effects, as every document below compiles against them.
+    fn effects() -> EffectRegistry {
+        EffectRegistry::shipped()
     }
 
     /// Compare two compiled graphs field by field. `PassDesc` cannot
@@ -1013,7 +1086,7 @@ mod tests {
                                 _ => false,
                             }
                     }
-                    (PassKind::Screen { shader: x }, PassKind::Screen { shader: y }) => x == y,
+                    (PassKind::Screen { effect: x }, PassKind::Screen { effect: y }) => x == y,
                     _ => false,
                 }
             }
@@ -1040,7 +1113,8 @@ mod tests {
     #[test]
     fn the_forward_document_compiles_to_the_hand_built_pass_list() {
         let document = stock_document(StockPipeline::Forward);
-        let compiled = compile(&document, &make_registry(), &config()).expect("compiles");
+        let compiled =
+            compile(&document, &make_registry(), &effects(), &config()).expect("compiles");
         let hand_built = forward_graph(target());
         assert!(
             same_graph(&compiled, &hand_built),
@@ -1051,7 +1125,8 @@ mod tests {
     #[test]
     fn the_deferred_document_compiles_to_the_hand_built_pass_list() {
         let document = stock_document(StockPipeline::Deferred);
-        let compiled = compile(&document, &make_registry(), &config()).expect("compiles");
+        let compiled =
+            compile(&document, &make_registry(), &effects(), &config()).expect("compiles");
         let hand_built = deferred_graph(target(), &LightingSet::default());
         assert!(
             same_graph(&compiled, &hand_built),
@@ -1070,7 +1145,7 @@ mod tests {
             lighting: full,
         };
         let document = stock_document(StockPipeline::Deferred);
-        let compiled = compile(&document, &make_registry(), &config).expect("compiles");
+        let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
         let hand_built = deferred_graph(target(), &config.lighting);
         assert!(same_graph(&compiled, &hand_built));
     }
@@ -1079,7 +1154,8 @@ mod tests {
     fn compiled_documents_schedule_like_the_hand_built_ones() {
         for stock in StockPipeline::ALL {
             let document = stock_document(*stock);
-            let compiled = compile(&document, &make_registry(), &config()).expect("compiles");
+            let compiled =
+                compile(&document, &make_registry(), &effects(), &config()).expect("compiles");
             let hand_built = stock.graph(&config());
             let a = compiled.schedule().expect("the compiled list schedules");
             let b = hand_built
@@ -1091,7 +1167,8 @@ mod tests {
     }
 
     fn errors_of(document: &Graph, config: &PipelineConfig) -> PipelineError {
-        compile(document, &make_registry(), config).expect_err("expected compile to fail")
+        compile(document, &make_registry(), &effects(), config)
+            .expect_err("expected compile to fail")
     }
 
     #[test]
@@ -1110,7 +1187,7 @@ mod tests {
         ] {
             graph.wire(&registry, from, to).expect("wiring");
         }
-        let compiled = compile(&graph, &registry, &config()).expect("compiles");
+        let compiled = compile(&graph, &registry, &effects(), &config()).expect("compiles");
         // No shadow passes, no prepass: one pass per light is the shadow
         // node's doing, and this document has none.
         assert_eq!(compiled.passes().len(), 1);
@@ -1492,7 +1569,7 @@ mod tests {
         // `broken` has depth (from the resource), so `shade` chains off it
         // legally — this document actually compiles, and schedules in the
         // prepass order.
-        let compiled = compile(&graph, &registry, &config()).expect("compiles");
+        let compiled = compile(&graph, &registry, &effects(), &config()).expect("compiles");
         let schedule = compiled.schedule().expect("schedules");
         assert_eq!(schedule.order(), &[0, 1]);
     }
@@ -1515,24 +1592,169 @@ mod tests {
         ] {
             graph.wire(&registry, from, to).expect("wiring");
         }
-        // The compiler stops first: the shipped effect takes a G-buffer,
-        // not an image. The scheduler's NeverWritten check is the last
-        // line for effects that *do* take images (P4), so assert the
-        // compiler's error here and the label plumbing via the parity
-        // tests.
+        // The compiler stops first: the default effect takes a G-buffer,
+        // not an image. The scheduler's NeverWritten check stays the last
+        // line for effects that *do* take images — bloom wired to an
+        // orphan target gets exactly that — so the label plumbing is
+        // asserted by the scheduler tests over a hand-built list.
         assert!(matches!(
             errors_of(&graph, &config()),
             PipelineError::EffectInputMismatch { .. }
         ));
     }
 
+    /// The chain P4 was for: deferred lighting writes a `resource.color`,
+    /// bloom reads it and writes the frame's target — expressed as
+    /// document edits, compiled and ordered with nothing bespoke.
+    fn bloom_chain_document(bloom_from_pass_output: bool) -> Graph {
+        let registry = make_registry();
+        let mut graph = Graph::new("deferred bloom");
+        let scene = graph.add_node(doc::SOURCE_SCENE);
+        let lights = graph.add_node(doc::SOURCE_LIGHTS);
+        let shadows = graph.add_node(doc::PASS_SHADOW);
+        let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+        let material = graph.add(
+            Node::new(doc::PASS_GEOMETRY)
+                .with_label("deferred material")
+                .with_setting(doc::SETTING_STAGE, "gbuffer"),
+        );
+        let scene_color = graph.add(Node::new(doc::RESOURCE_COLOR).with_label("scene"));
+        let lighting = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("deferred lighting")
+                .with_setting(doc::SETTING_EFFECT, "deferred_lighting"),
+        );
+        let bloom = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("bloom")
+                .with_setting(doc::SETTING_EFFECT, "bloom"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        let wire = |graph: &mut Graph, from: (NodeId, &str), to: (NodeId, &str)| {
+            graph.wire(&registry, from, to).expect("wiring");
+        };
+        wire(&mut graph, (scene, "draws"), (shadows, "draws"));
+        wire(&mut graph, (lights, "shadows"), (shadows, "into"));
+        wire(&mut graph, (scene, "draws"), (material, "draws"));
+        wire(&mut graph, (gbuffer, "gbuffer"), (material, "gbuffer"));
+        wire(&mut graph, (gbuffer, "gbuffer"), (lighting, "gbuffer"));
+        // The lighting pass writes *into* the colour target instead of the
+        // frame's; bloom takes the image from the resource — or, in the
+        // second spelling, straight from the lighting pass's output,
+        // which stands for the same thing.
+        wire(&mut graph, (scene_color, "color"), (lighting, "into"));
+        if bloom_from_pass_output {
+            wire(&mut graph, (lighting, "color"), (bloom, "image"));
+        } else {
+            wire(&mut graph, (scene_color, "color"), (bloom, "image"));
+        }
+        wire(&mut graph, (bloom, "color"), (present, "surface"));
+        graph
+    }
+
     #[test]
-    fn the_effect_table_holds_the_migrated_lighting_pass() {
-        assert_eq!(EFFECTS.len(), 1);
-        let (id, shader, doc) = EFFECTS[0];
-        assert_eq!(id, "deferred_lighting");
-        assert!(matches!(shader, ScreenShader::DeferredLighting));
-        assert!(!doc.is_empty());
+    fn a_deferred_lighting_bloom_chain_compiles_and_schedules() {
+        for from_pass_output in [false, true] {
+            let document = bloom_chain_document(from_pass_output);
+            let compiled = compile(&document, &make_registry(), &effects(), &config())
+                .expect("the chain compiles");
+            let schedule = compiled.schedule().expect("and schedules");
+
+            let position = |label: &str| {
+                compiled
+                    .passes()
+                    .iter()
+                    .position(|pass| pass.label == label)
+                    .unwrap_or_else(|| panic!("no pass labelled `{label}`"))
+            };
+            let material = position("deferred material");
+            let lighting = position("deferred lighting");
+            let bloom = position("bloom");
+
+            // Shadow passes, the material pass, then the two effects.
+            assert_eq!(compiled.passes().len(), abi::MAX_LIGHTS + 3);
+            assert_eq!(
+                &schedule.order()[abi::MAX_LIGHTS..],
+                &[material, lighting, bloom],
+                "the chain orders by what it reads and writes"
+            );
+
+            // The lighting pass writes the intermediate; bloom reads it as
+            // its one input and writes the frame's target, because its
+            // `into` is unconnected.
+            let scene_color = compiled.passes()[lighting]
+                .color
+                .first()
+                .expect("the lighting pass writes the chain's resource")
+                .resource;
+            assert_ne!(scene_color, RenderGraph::TARGET);
+            assert_eq!(
+                compiled.passes()[lighting].reads.len(),
+                abi::GBUFFER_BASE_TARGETS.len() + 1
+            );
+            let bloom_pass = &compiled.passes()[bloom];
+            assert!(matches!(&bloom_pass.kind, PassKind::Screen { effect } if effect == "bloom"));
+            assert_eq!(bloom_pass.reads.len(), 1, "one image input, one read");
+            assert_eq!(bloom_pass.reads[0].resource, scene_color);
+            assert_eq!(bloom_pass.color.len(), 1);
+            assert_eq!(bloom_pass.color[0].resource, RenderGraph::TARGET);
+        }
+    }
+
+    #[test]
+    fn reading_the_presented_target_through_an_image_input_is_reported() {
+        // The one un-compilable chain shape: the lighting pass writes the
+        // frame's target and bloom's image input is wired to its output.
+        // What is on screen cannot also be sampled; the error says what to
+        // wire instead.
+        let registry = make_registry();
+        let mut graph = Graph::new("read the target");
+        let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+        let lighting = graph.add_node(doc::PASS_SCREEN);
+        let bloom =
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((gbuffer, "gbuffer"), (lighting, "gbuffer")),
+            ((lighting, "color"), (bloom, "image")),
+            ((bloom, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        match errors_of(&graph, &config()) {
+            PipelineError::ImageFromPass { node, fed_by } => {
+                assert_eq!(fed_by, "screen effect", "the lighting pass's default label");
+                assert!(!node.is_empty());
+            }
+            other => panic!("expected an image-from-pass error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_input_the_effect_does_not_declare_is_reported() {
+        // Bloom takes an image, not a G-buffer — wiring one is a named
+        // mismatch, not a bind group that happens to line up.
+        let registry = make_registry();
+        let mut graph = Graph::new("bloom with a gbuffer");
+        let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+        let color = graph.add_node(doc::RESOURCE_COLOR);
+        let bloom =
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((gbuffer, "gbuffer"), (bloom, "gbuffer")),
+            ((color, "color"), (bloom, "image")),
+            ((bloom, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        match errors_of(&graph, &config()) {
+            PipelineError::EffectInputMismatch { effect, reason, .. } => {
+                assert_eq!(effect, "bloom");
+                assert!(reason.contains("G-buffer"), "{reason}");
+            }
+            other => panic!("expected an input mismatch, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1546,38 +1768,44 @@ mod tests {
                 .with_setting(doc::SETTING_SCALE, "0.5")
                 .with_setting(doc::SETTING_HISTORY, "1"),
         );
-        let screen = graph.add_node(doc::PASS_SCREEN);
+        // Bloom takes images, so a document naming a half-res history
+        // target in a chain actually compiles since P4 — and the compiled
+        // descriptor is the assertion, not a hand-mirrored one.
+        let bloom =
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
-            ((color, "color"), (screen, "into")),
-            ((screen, "color"), (present, "surface")),
+            ((color, "color"), (bloom, "image")),
+            ((bloom, "color"), (present, "surface")),
         ] {
             graph.wire(&registry, from, to).expect("wiring");
         }
-        // The screen pass wants a G-buffer, so this fails at the effect
-        // check — but the *resource* was declared first, and its shape is
-        // what this test pins: reachable by compiling just the resource
-        // sweep through a document whose screen pass is otherwise valid.
-        // Until a second effect exists, half-res and history resources are
-        // exercised through their descriptor here.
-        let error = errors_of(&graph, &config());
-        assert!(matches!(error, PipelineError::EffectInputMismatch { .. }));
-
-        // The descriptor shape itself, compiled from the same settings:
-        // hdr → Rgba16Float, half scale, a ring of two.
-        let desc = ResourceDesc::color(
-            "accumulation",
-            crate::pipeline::gbuffer_format(abi::GBufferPrecision::HighDynamicRange),
-        )
-        .with_extent(Extent::Viewport { scale: 0.5 })
-        .persistent(1);
-        assert_eq!(desc.format, wgpu::TextureFormat::Rgba16Float);
+        let compiled = compile(&graph, &registry, &effects(), &config()).expect("compiles");
+        let accumulation = compiled
+            .resources()
+            .iter()
+            .find(|resource| resource.label == "accumulation")
+            .expect("the document's colour target is declared");
+        assert_eq!(accumulation.format, wgpu::TextureFormat::Rgba16Float, "hdr");
         assert_eq!(
-            desc.extent.resolve(128, 128),
+            accumulation.extent.resolve(128, 128),
             (64, 64),
             "half scale, rounded"
         );
-        assert_eq!(desc.persistence.ring_length(), 2);
+        assert_eq!(
+            accumulation.persistence.ring_length(),
+            2,
+            "history: 1 is a ring of two"
+        );
+
+        // Nothing in this document writes the target, which the compiler
+        // has no opinion on — an effect might not read its whole input —
+        // and the scheduler names it, by the document label.
+        let error = compiled.schedule().expect_err("nobody writes the target");
+        assert!(
+            error.to_string().contains("accumulation"),
+            "the orphan is named by its document label: {error}"
+        );
     }
 }
 

@@ -43,19 +43,27 @@
 //! [`environment::Environment`] is the other half of a frame: camera,
 //! lights, ambient.
 //!
-//! # This crate ships no shaders
+//! # Which shaders this crate owns
 //!
-//! It compiles WXSL but contains none: the shader ABI and the node library
-//! are `wxsl-stdlib`'s, and the dependency arrow only points *into*
-//! `wxsl-core` ([ADR 0002](../../docs/adr/0002-cargo-workspace-crate-boundaries.md)).
-//! The application supplies the modules through
+//! The shader ABI and the node library are `wxsl-stdlib`'s, and the
+//! dependency arrow only points *into* `wxsl-core`
+//! ([ADR 0002](../../docs/adr/0002-cargo-workspace-crate-boundaries.md)).
+//! The application supplies those modules through
 //! [`library::ShaderLibrary`], which is also how it can override an ABI
 //! module or add hand-written WXSL of its own.
+//!
+//! The exception is the *effects* this crate ships
+//! ([`effect`]): a screen effect is a self-describing unit whose shader
+//! travels with it — bloom's WXSL lives beside its descriptor under
+//! `shaders/`, mounted when the variant is compiled. An application's own
+//! effects carry their sources the same way, or resolve against the
+//! library like everything else.
 
 #![warn(missing_docs)]
 
 pub mod bindings;
 pub mod draw;
+pub mod effect;
 pub mod environment;
 pub mod error;
 #[cfg(feature = "gltf")]
@@ -81,6 +89,10 @@ pub use wgpu;
 
 pub use bindings::{BindingLayouts, MaterialBindings};
 pub use draw::{DrawItem, DrawList, InstanceAttributes};
+pub use effect::{
+    Effect, EffectInput, EffectInputKind, EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE,
+    DEFERRED_LIGHTING,
+};
 pub use environment::{
     Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,
 };

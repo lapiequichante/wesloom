@@ -38,15 +38,15 @@ use crate::error::RenderError;
 use crate::graph::{RenderGraph, Schedule};
 use crate::library::ShaderLibrary;
 use crate::pipeline::StockPipeline;
-use crate::variants::{LightingRequest, MaterialRequest, VariantKey};
+use crate::variants::{EffectRequest, MaterialRequest, VariantKey};
 
 /// One shader a swap is waiting on.
 #[derive(Clone, Debug)]
 pub enum Request {
     /// A material compiled for one stage.
     Material(MaterialRequest),
-    /// The deferred lighting pass.
-    Lighting(LightingRequest),
+    /// A screen effect's shader.
+    Effect(EffectRequest),
 }
 
 impl Request {
@@ -54,14 +54,14 @@ impl Request {
     pub fn key(&self) -> VariantKey {
         match self {
             Request::Material(request) => request.key,
-            Request::Lighting(request) => request.key,
+            Request::Effect(request) => request.key,
         }
     }
 
     fn compile(&self, library: &ShaderLibrary) -> Compiled {
         let (label, wgsl) = match self {
             Request::Material(request) => request.compile(library),
-            Request::Lighting(request) => request.compile(library),
+            Request::Effect(request) => request.compile(library),
         };
         Compiled {
             key: self.key(),

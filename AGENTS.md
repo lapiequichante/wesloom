@@ -205,7 +205,11 @@ facade crate's feature set, not about the workspace.
   hand-built reference pass lists field for field, schedule identically,
   and each shipped preset file parses back to the document that generated
   it. This is where a preset edit that drifts from the pipeline it claims
-  to be fails.
+  to be fails. And the **effect chain** tests (ADR 0034): a
+  lighting-into-a-resource-then-bloom document compiles and schedules,
+  both spellings of "what bloom reads" agree, and the un-compilable
+  chain shapes (`ImageFromPass`, an input the effect does not declare)
+  are named errors.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
@@ -214,6 +218,13 @@ facade crate's feature set, not about the workspace.
 - `cargo run -p wxsl --example pbr_cube -- --headless` — the fastest way
   to see whether a change to the ABI or the pipelines still produces a
   picture. Writes a PNG per path and reports how far apart they are.
+- `cargo run -p wxsl --example gallery -- --screenshot` — every pipeline
+  in one command: the stock presets, the minimal document, and the
+  deferred-plus-bloom chain, one PNG each plus a contact sheet, or all
+  five live in one window without the flag. The fastest way to see
+  whether a *pipeline* change (presets, effects, the compiler) still
+  renders — and the working example of composing a pipeline as a
+  document from an application.
 - `cargo run -p wxsl --features editor --example editor -- --screenshot out.png`
   — the same for the editor: one frame, no window, reviewable as a PNG. Then
   `cargo run -p wxsl-render --example glyph_field -- <FONT> c` when the
@@ -248,6 +259,15 @@ facade crate's feature set, not about the workspace.
   the hand-built `forward_graph`/`deferred_graph` are the reference the
   preset-parity tests compile against, nothing more. A document error
   names the document node; the scheduler's checks stay as the last line.
+- A **screen effect** is data too (ADR 0034): a `wxsl_render::effect::
+  Effect` row — declared inputs in pass-group binding order, entry
+  points, and its shader (generated, or a `.wxsl` file the effect owns,
+  like `crates/wxsl-render/shaders/bloom.wxsl`). A document's
+  `pass.screen` names it by id; the compiler validates wiring against
+  `inputs`, and the descriptor-vs-shader contract (bindings, entries) is
+  pinned by a test in `effect.rs`. Adding an effect is a row and a file,
+  never a `PassKind` arm — `ScreenShader` was deleted for exactly that
+  reason, don't grow one back.
 - A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
   geometry pass names one. Adding a stage is that row plus the constant
   naming it, plus whatever `codegen::write_entry_points` has to emit for
@@ -299,6 +319,12 @@ facade crate's feature set, not about the workspace.
   ADR 0028. It also shows the application's half of ADR 0023: it reads what the
   material's graph *declared* and supplies it by name — which is why it
   keeps working against a `--graph` it has never seen.
+- `crates/wxsl/examples/gallery.rs` — many demos, one window (arrow keys
+  or `1`–`9` to switch) or `--screenshot` for a PNG per demo plus a
+  contact sheet. Its deferred-bloom demos are the shipped preset's
+  document with two nodes added and one rewired, compiled by the public
+  `compile_pipeline` — the copyable example of ADR 0034's chains and of
+  "a pipeline is a document edit".
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it. The pipeline documents under
   `crates/wxsl-render/assets/presets/` are the same format over the

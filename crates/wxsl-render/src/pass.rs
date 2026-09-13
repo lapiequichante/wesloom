@@ -491,18 +491,6 @@ pub enum DrawSource {
     },
 }
 
-/// The one screen-space shader the renderer knows how to run.
-///
-/// A single variant for now, because the deferred lighting pass is the only
-/// fullscreen shader that exists. M7 replaces it with a screen-domain
-/// *graph* id, at which point this becomes the second variant of an enum
-/// rather than a new pass kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ScreenShader {
-    /// Shade the G-buffer: `abi::LIGHTING_PASS_MODULE`.
-    DeferredLighting,
-}
-
 /// A compute dispatch's workgroup count.
 #[derive(Clone, Debug)]
 pub enum Dispatch {
@@ -536,10 +524,13 @@ pub enum PassKind {
         /// one at all, for a depth-only pass.
         stage: MaterialStage,
     },
-    /// One fullscreen triangle running a screen-space shader.
+    /// One fullscreen triangle running a screen-space effect. The id
+    /// names an [`crate::effect::Effect`], whose descriptor is what the
+    /// compiler validates the pass's wiring against and what the renderer
+    /// compiles the shader from.
     Screen {
-        /// Which shader.
-        shader: ScreenShader,
+        /// The effect id, as a document's `effect` setting names it.
+        effect: String,
     },
     /// A compute dispatch.
     ///
@@ -622,11 +613,13 @@ impl PassDesc {
         }
     }
 
-    /// A fullscreen pass running `shader`.
-    pub fn screen(label: impl Into<String>, shader: ScreenShader) -> Self {
+    /// A fullscreen pass running the effect named by `effect`.
+    pub fn screen(label: impl Into<String>, effect: impl Into<String>) -> Self {
         PassDesc {
             label: label.into(),
-            kind: PassKind::Screen { shader },
+            kind: PassKind::Screen {
+                effect: effect.into(),
+            },
             view: PassView::default(),
             color: Vec::new(),
             depth: None,
@@ -818,7 +811,7 @@ mod tests {
         // pass that writes this frame's; that is a cycle, and the whole
         // reason temporal techniques need history in the first place.
         let taa = ResourceId(4);
-        let pass = PassDesc::screen("taa", ScreenShader::DeferredLighting)
+        let pass = PassDesc::screen("taa", "deferred_lighting")
             .with_reads([Read::previous(taa, 1)])
             .with_color(Attachment::clear(taa, wgpu::Color::BLACK));
         assert_eq!(pass.read_this_frame().count(), 0);

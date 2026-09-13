@@ -41,17 +41,16 @@ use wxsl_core::lighting::LightingSet;
 
 use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
+use crate::effect::EffectRegistry;
 use crate::environment::{Environment, FrameBindings, ShadowMaps};
 use crate::error::RenderError;
 use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
 use crate::library::ShaderLibrary;
 use crate::material::Material;
-use crate::pass::{DrawSource, PassKind, PassView, ScreenShader};
+use crate::pass::{DrawSource, PassKind, PassView};
 use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
-use crate::variants::{
-    CacheStats, LightingRequest, MaterialRequest, ShaderVariant, ShaderVariants,
-};
+use crate::variants::{CacheStats, EffectRequest, MaterialRequest, ShaderVariant, ShaderVariants};
 
 /// What to render, for [`Renderer::render`].
 ///
@@ -84,6 +83,10 @@ pub struct Renderer {
     /// else's is left alone.
     stock: Option<StockPipeline>,
     swap: Option<PipelineSwap>,
+    /// The screen effects this renderer can run, and a pipeline document
+    /// may name. Shipped with the lighting pass and bloom; extended with
+    /// [`Renderer::add_effect`](plan2 P4).
+    effects: EffectRegistry,
     /// Every knob the stock pass list varies by, in one place: size,
     /// format, clear colour, lighting set. Mutated by `set_lighting`,
     /// `set_pipeline` and `resize`, read by `rebuild`
@@ -121,6 +124,7 @@ impl Renderer {
             schedule,
             stock: Some(stock),
             swap: None,
+            effects: EffectRegistry::shipped(),
             config,
         })
     }
@@ -169,6 +173,23 @@ impl Renderer {
     /// The lighting models currently enabled.
     pub fn lighting(&self) -> &LightingSet {
         &self.config.lighting
+    }
+
+    /// The screen effects this renderer can run.
+    pub fn effects(&self) -> &EffectRegistry {
+        &self.effects
+    }
+
+    /// Teach the renderer one more screen effect.
+    ///
+    /// An effect registered here can be named by a pipeline document's
+    /// `pass.screen` nodes and run by the next frame — the pass-level
+    /// version of handing the renderer a shader library
+    /// ([ADR 0009](../../../docs/adr/0009-the-application-supplies-the-shader-library.md),
+    /// extended from shaders to passes; plan2 P4). Re-registering an id
+    /// replaces the effect under it.
+    pub fn add_effect(&mut self, effect: crate::effect::Effect) {
+        self.effects.add(effect);
     }
 
     /// The stock pipeline in use, or `None` when an application supplied
@@ -302,18 +323,24 @@ impl Renderer {
                         );
                     }
                 }
-                PassKind::Screen {
-                    shader: ScreenShader::DeferredLighting,
-                } => {
-                    for material in materials {
-                        push(
-                            Request::Lighting(LightingRequest::new(
-                                material.macros(),
-                                &self.config.lighting,
-                            )),
-                            &mut seen,
-                            &mut requests,
-                        );
+                PassKind::Screen { effect } => {
+                    // An effect this renderer does not know cannot be
+                    // requested — and cannot be compiled later either, so
+                    // `compile_frame` is where the named error fires. A
+                    // *known* one is requested once per macro set, which
+                    // is what a swap waits on.
+                    if let Some(known) = self.effects.get(effect) {
+                        for material in materials {
+                            push(
+                                Request::Effect(EffectRequest::new(
+                                    known,
+                                    material.macros(),
+                                    &self.config.lighting,
+                                )),
+                                &mut seen,
+                                &mut requests,
+                            );
+                        }
                     }
                 }
                 PassKind::Compute { .. } => {}
@@ -508,12 +535,17 @@ impl Renderer {
                     self.variants
                         .material(device, &self.library, material, *stage)?;
                 }
-                PassKind::Screen {
-                    shader: ScreenShader::DeferredLighting,
-                } => {
-                    self.variants.lighting_pass(
+                PassKind::Screen { effect } => {
+                    let known =
+                        self.effects
+                            .get(effect)
+                            .ok_or_else(|| RenderError::UnknownEffect {
+                                effect: effect.clone(),
+                            })?;
+                    self.variants.effect(
                         device,
                         &self.library,
+                        known,
                         material.macros(),
                         &self.config.lighting,
                     )?;
@@ -590,8 +622,9 @@ impl Renderer {
             }
         }
 
-        // Destructured so the recording closure can hold the pipeline cache
-        // mutably while the graph and the pool are borrowed alongside it.
+        // Destructured so the recording closure can hold the pipeline
+        // cache mutably while the graph, the pool and the effect registry
+        // are borrowed alongside it.
         let Renderer {
             bindings,
             layouts,
@@ -599,6 +632,7 @@ impl Renderer {
             pool,
             graph,
             schedule,
+            effects,
             ..
         } = self;
 
@@ -625,6 +659,7 @@ impl Renderer {
                     bindings,
                     layouts,
                     pipelines,
+                    effects,
                     &plan,
                     request.draws,
                     pass,
@@ -715,21 +750,27 @@ impl Renderer {
                     }
                     plan.geometry.insert(index, variants);
                 }
-                PassKind::Screen {
-                    shader: ScreenShader::DeferredLighting,
-                } => {
-                    // The lighting pass has no material graph, but it does
+                PassKind::Screen { effect } => {
+                    // A screen effect has no material graph, but it does
                     // have the macro set the materials were built with —
-                    // tonemapping and the debug-normal view are `@if`s
-                    // inside the shading function it calls.
+                    // the lighting pass's shading function has `@if`s of
+                    // its own (tonemapping, the debug-normal view), and
+                    // every effect compiles under the same set.
+                    let known =
+                        self.effects
+                            .get(effect)
+                            .ok_or_else(|| RenderError::UnknownEffect {
+                                effect: effect.clone(),
+                            })?;
                     let macros = draws
                         .items()
                         .first()
                         .map(|item| item.material.macros().clone())
                         .unwrap_or_default();
-                    let variant = self.variants.lighting_pass(
+                    let variant = self.variants.effect(
                         device,
                         &self.library,
+                        known,
                         &macros,
                         &self.config.lighting,
                     )?;
@@ -759,6 +800,7 @@ fn record_pass(
     bindings: &FrameBindings,
     layouts: &mut BindingLayouts,
     pipelines: &mut PipelineCache,
+    effects: &EffectRegistry,
     plan: &FramePlan,
     draws: &DrawList<'_>,
     pass: &RecordedPass<'_>,
@@ -858,16 +900,27 @@ fn record_pass(
                 }
             }
         }
-        (PassKind::Screen { .. }, PassEncoder::Render(render)) => {
+        (PassKind::Screen { effect }, PassEncoder::Render(render)) => {
             let variant = plan
                 .screen
                 .get(&index)
-                .ok_or(RenderError::NoLightingShader)?;
+                .ok_or_else(|| RenderError::UnknownEffect {
+                    effect: effect.clone(),
+                })?;
+            // The entry points are the effect's, not the ABI's: the
+            // pipeline is built from whichever module the effect mounted.
+            let known = effects
+                .get(effect)
+                .ok_or_else(|| RenderError::UnknownEffect {
+                    effect: effect.clone(),
+                })?;
             let pipeline = pipelines.screen(
                 device,
                 bindings.layout(),
                 pass.pass_layout.as_ref(),
                 variant,
+                known.vertex_entry,
+                known.fragment_entry,
                 pass.desc.state,
                 &pass.color_formats,
                 &pass.pass_bindings,
