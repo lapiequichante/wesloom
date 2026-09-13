@@ -775,7 +775,11 @@ surprise or a defect:
   buffer read from the vertex stage are fine on the WebGPU baseline and
   unavailable on WebGL. WebGL is not a target, so this is a cost only if
   that ever changes — at which point the fallback is the instance-buffer
-  shape ADR 0010's dynamic offset was already close to.
+  shape ADR 0010's dynamic offset was already close to. (It changed:
+  WebGL2 is now a target, and plan3's N10 reopens this note on purpose —
+  the fallback shape is scheduled work, and the instance decision,
+  attributes everywhere versus a second implementation, is that item's
+  ADR.)
 * **A blocking pipeline swap on single-threaded wasm.** `wgpu` exposes no
   asynchronous pipeline creation, so background compilation is a worker
   thread. Where there is no thread there is no background. The progress

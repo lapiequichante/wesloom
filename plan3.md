@@ -5,7 +5,10 @@ queue for everything still open across the three planning docs: plan.md's
 milestones M7–M11, plan2's proposals P5, P7 and P8, and the deferred work
 that ADRs 0034–0037 each named honestly enough to be queued here by name.
 It follows plan2's discipline — every item lands with an ADR and a
-runnable demo, or it did not land.
+runnable demo, or it did not land. Two items joined after the plan was
+written: N9, the editor catching up with everything the last stretch
+shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
+accepted costs on purpose.
 
 Status: nothing in this file has landed. The shipped state it starts from
 is plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
@@ -56,6 +59,13 @@ earlier plans' items did.
   named error) is the capability check P8 describes, for the one case
   whose facts were computed. P8 generalizes it: namespaced ids, document
   schema versions, and one `RenderSetup::check` over published metadata.
+* **The web question was answered.** plan.md accepted
+  `DownlevelFlags::VERTEX_STORAGE` on the strength of "WebGL is not a
+  target". The decision reversed: WebGL2 is a target. plan.md's cost
+  note is reopened by N10 below, and the portability rule gains a third
+  column rather than a rewrite — what the engine cannot lower to
+  ES 3.0 is a short, named list, each with a fallback decided in the
+  item rather than discovered in a browser console.
 * **The document vocabulary has known holes, not mysteries.** A compute
   pass has no document node (ADR 0036 records why); an effect cannot
   declare a second image input (`pass.screen`'s socket set is fixed);
@@ -66,7 +76,9 @@ earlier plans' items did.
 ## Proposals
 
 Ordered by (payoff ÷ cost). The M- and P-numbers are the ones the earlier
-plans and the ADRs use; the N-series is new work those ADRs queued.
+plans and the ADRs use; the N-series is new work those ADRs queued — N9
+and N10 at the end are newer still: the editor's catch-up, and a decision
+made after this file was written.
 
 ### P7 — One `MaterialConfig`
 
@@ -371,18 +383,137 @@ The items `todo.md` has carried, plus the one decision behind them:
   compiles the whole corpus (corpus gate + every shipped preset under
   every config) with minimal libs linked, so a release cannot ship a
   generator that panics on a driver.
-* **The web question, answered honestly.** plan.md accepted
-  `DownlevelFlags::VERTEX_STORAGE` and wrote "WebGL is not a target".
-  If WebGL2 becomes one, that cost note reopens — instance transforms
-  need the fallback shape, the background pipeline swap degrades to
-  blocking (already designed for), and the baseline/native rule gains a
-  third column. That is an ADR before it is a feature; the plan here is
-  only to force the decision rather than drift into it.
+* **The web target.** Decided after this plan was written: WebGL2 is a
+  target, and the work has its own item — N10 below — with the ADR that
+  amends plan.md's accepted cost. Nothing is left here to force.
 
-* Cost: small for the gate, medium for the format decision, unknown
-  until the web ADR is written — which is the point of writing it.
-* ADR: "What a shipped application embeds" (the format + gate); the web
-  target gets its own if the answer is yes.
+* Cost: small for the gate, medium for the format decision; the web
+  target's bill is N10's, and it is scoped there.
+* ADR: "What a shipped application embeds" (the format + gate); N10
+  carries its own.
+
+### N9 — The editor catches up
+
+The engine gained policies, buffers, feature channels and a channel plan
+in the last stretch; the editor's chrome still shows only what M6 knew —
+a toolbar, a palette, an inspector, a code panel with three tabs, a
+status bar. Almost everything below reads data that already exists. This
+is the cheap half of P5, landable without the canvas, and it slots in
+wherever a pause wants filling, M11-style.
+
+*Panels that read what the engine now knows:*
+
+* **A features panel.** The shipped feature registry (`FEATURES`) as
+  checkboxes driving `Renderer::set_features` live, over a byte-budget
+  bar drawn from `gbuffer_layout_bytes_per_sample` — 28 of 32 today.
+  The budget function exists; the editor just draws it. Toggling a
+  channel and watching the plan, the budget and the image move in one
+  frame is the demo P12 never had.
+* **A policy inspector.** One row per pass: label, policy, runs, last
+  size, due. "Run now" is `Renderer::mark_pass(label)`; reset is
+  `reset_runs()`. This is the only face P10 has ever had — and N5's
+  bake UI reuses it as its invalidation button.
+* **The resolved material config** in the inspector: model, macros,
+  feature channels, uniform parameters with live `drag_value` sliders
+  (the widget exists; M3 landed the parameters). P7's one config, with
+  a face.
+
+*Modes:*
+
+* **Debug views** — a View menu isolating one G-buffer channel (albedo,
+  normal, depth, metallic-roughness, emissive, subsurface), plus
+  overdraw and wireframe. The first mode builds the only new seam — a
+  debug pipeline derived from the current one's plan, final pass
+  swapped — and every mode after is a row. The channel plan is data, so
+  the menu is data-driven: channels the plan does not carry are greyed
+  out, not missing.
+* **A/B split** — the viewport divided between two pipelines with a
+  draggable edge. Forward/deferred parity is already asserted by test
+  (mean diff 0.0002); this shows it live.
+* **Pass stepping** — pause, run one pass at a time, show any
+  persistent target in a corner viewport; the screenshot harness the
+  GPU tests use is the same code. RenderDoc in miniature, and honest
+  precisely because passes are data.
+* **Hot reload** — watch the shader files; on change, recompile and put
+  the spans in the problem panel. Half of M11's payoff, none of its
+  text-editing cost.
+
+*The one new engine capability:* pass timings via timestamp queries —
+`cache_stats` shows the variant cache, but nothing shows where a frame
+went. Small, but it is render-side, and the WebGL2 story for timer
+queries is messy: it lands native-first, with an honest absence in the
+web column.
+
+* Cost: small per panel, medium in total — editor work, as always. The
+  debug-view pipeline is the only piece that touches wxsl-render.
+* Done when: the subsurface channel has an isolation view, a features
+  checkbox re-renders live while the budget bar moves, and a policy
+  row's "Run now" visibly re-runs the LUT bake.
+* ADR: probably none — the debug view is a derived pipeline, not a new
+  boundary. If it wants to fork the pipeline build, that is the signal
+  to stop and write one.
+
+### N10 — WebGL2 is a target
+
+The decision plan.md deferred — "WebGL is not a target, so
+`VERTEX_STORAGE` is a cost only if that ever changes" — has been made:
+it changed. WebGL2 is a target, which reopens that accepted cost on
+purpose, by plan rather than by drift. What the third column actually
+takes:
+
+* **The shader backend's missing leg.** WXSL → WGSL exists; WGSL →
+  GLSL ES 3.00 is the new piece, and the honest route is naga
+  (wgsl-in, glsl-out) behind the existing compile seam. The generator
+  stays untouched, and the corpus gate gains an ES column that compiles
+  every shipped shader twice. "Logic in Rust, text in files" survives
+  because naga consumes the emitted WGSL, not the generator's internals.
+* **Three shipped shapes cannot lower to ES 3.0**, each with a fallback
+  decided here rather than discovered later:
+  * **No compute.** P10's compute effects (the LUT bake, the ramp fill)
+    get fragment lowerings — a LUT bake is trivially a fullscreen pass
+    writing the same texture (float render targets ride
+    `EXT_color_buffer_float`, near-universal and recorded honestly).
+    The Policy machinery is untouched: due-ness lives in the scheduler,
+    which is device-free by guard rail. Rule from here on: *every
+    compute effect registers its fragment fallback beside it, or names
+    itself native-only* — at landing time, not port time.
+  * **No storage buffers.** P11's buffers lower by use: read-only data
+    to a UBO, read-write scratch (the ramp) to a texture ping-pong or a
+    CPU upload. The graph's `ResourceShape::Buffer` gains a lowering
+    table; the never-aliased rule survives untouched.
+  * **Vertex-stage storage.** The instance-transform row — plan.md's
+    accepted cost, now real. Two shapes: per-instance vertex
+    *attributes* (ES 3.0 instanced arrays; the shape ADR 0010's dynamic
+    offset was already near) adopted for *everyone* — one
+    implementation, no fork, but a mat4 spends four vertex-attribute
+    slots, and N2's previous-frame matrix would make it eight of
+    sixteen — or a second, web-only instance implementation, which owes
+    the msdf-rule agreement test forever. The ADR picks one; the money
+    here is on attributes-everywhere if the slot math survives N2,
+    because one implementation beats two.
+* **The device asks less.** With the web feature on, the requested
+  downlevel flags drop `VERTEX_STORAGE`; the background pipeline swap
+  degrades to blocking exactly as already designed, with the progress
+  indicator keeping it honest. One test suite creates its device under
+  WebGL2-equivalent downlevel flags, so a violation is a red test the
+  day it is written, not a console error in someone's browser.
+* **Where it lands:** a `wasm32` feature on wxsl-render and the editor
+  (winit/web-sys); the boundary checks gain a wasm check beside
+  `--no-default-features` and `--features editor`.
+
+What survives untouched is the quiet payoff of the last year:
+documents, graphs, the scheduler, the policies, the editor's MSDF UI —
+none of it knows or cares which backend is underneath.
+
+* Cost: large in total but flat — lowering tables, a build target, and
+  one real decision (the instance shape). Sequencing note: that
+  decision gates N2's second matrix, so the ADR lands before N2 even if
+  the port waits.
+* Done when: the gallery runs in a browser under WebGL2 — forward and
+  deferred, the LUT baked by its fragment fallback — and the corpus
+  gate's ES column is green in CI.
+* ADR: "WebGL2: the third column" — amends plan.md's accepted-cost note
+  in place.
 
 ## Suggested order
 
@@ -405,12 +536,17 @@ The items `todo.md` has carried, plus the one decision behind them:
    that wants P8's contracts published first.
 9. **N6** (the subsurface model), **N7** (lighting scale) — feature work
    on top of a finished frame.
-10. **M11**, **M10** — the editor's code editor and the precision host
-    work; unblocked at any time, so they slot in wherever a pause wants
-    filling.
-11. **N8** — the release gate and format decision run alongside from the
-    start; only the web ADR is sequenced, because its answer reshapes
-    the portability rule.
+10. **M11**, **M10**, **N9** — the editor's code editor, the precision
+    host work, and the editor catching up; all unblocked at any time, so
+    they slot in wherever a pause wants filling. N9's panels are the
+    cheapest visible wins on this list — everything they show already
+    exists.
+11. **N10** — the *ADR* lands before N2, because the instance-shape
+    decision gates the previous-frame matrix, and the downlevel corpus
+    gate runs alongside from the start; the port itself follows P8,
+    before M8 and N2 spend more of the budget the third column prices.
+12. **N8** — the release gate and format decision run alongside from the
+    start.
 
 This order finishes the *authoring* story first (config, screen domain,
 documents, canvas, contracts) and then spends its render-feature budget
@@ -424,10 +560,10 @@ make the next features cheap before making the features.
 | **The screen domain forks the node model** — a third registry, a second canvas, special rules. | It reuses `wxsl-core`'s graph, `ValueType`'s handle trick, and the registry's domain filter — the mechanism `context_read` vs `vertex_context_read` already is. A screen node needing a mechanism materials lack is a signal to generalize, per plan.md's own guard rail. |
 | **Multi-pass effects with internal transients** (a real bloom pyramid) need the compiler to synthesize sub-documents with scoped name allocation. | Deferred honestly twice now (plan2-architecture, ADR 0034). When forced, the scheduler already orders and aliases; only name allocation is new. The single-pass shipped bloom is the honest fallback that keeps the seam working meanwhile. |
 | **TAA ghosting** — reprojection wrong, disocclusions smear. | The history rings and the velocity target exist; the acceptance test is the gallery's spinning cube, which has ground truth. TAA ships behind a policy'd chain, so shipping it is a document edit, not a code path. |
-| **Two render implementations drift** (M8's blend split; later the web column). | The msdf rule, stated now: every second implementation owes a test asserting the two agree, before the feature lands. |
+| **Two render implementations drift** (M8's blend split; N10's web column — the "later" arrived). | The msdf rule, stated now: every second implementation owes a test asserting the two agree, before the feature lands. |
 | **Variant explosion grows again** (stages × macros × models × feature plans × screen graphs). | Key precisely, compile lazily, warm explicitly — `cache_stats()` and the swap progress indicator exist; P8's published metadata is what tells a pipeline *up front* which combinations it needs. |
 | **The editor becomes two editors.** | P5 reuses the canvas component, the palette, the problem panel and the undo-less immediate-mode layer as-is. The pipeline registry is a second *instance*, not a second framework. |
-| **The web decision drifting in by accident** — a dependency or a `wasm` feature sneaking past the portability rule. | N8 forces the ADR first; until it lands, the rule stands as written and the boundary checks keep proving it. |
+| **The WebGL2 column growing by half-measures** — an effect lands compute-only with no fallback named, and the port rediscovers each one late. | N10's rule applies at landing time: every compute effect registers its fragment fallback beside it or names itself native-only, and the downlevel corpus gate runs from the start, so the first violation is a red test, not a browser console. |
 
 ## Guard rails
 
@@ -454,5 +590,5 @@ Two added by what this stretch of work taught:
   graveyard.** Every deferred half in ADRs 0034–0037 is an N-item here
   by name; the same discipline applies to whatever 0038+ defer.
 * **Two implementations owe an agreement test before they land** — the
-  msdf rule, generalized the moment M8 makes it load-bearing for
-  rendering.
+  msdf rule, generalized now that M8 and N10's web column both make it
+  load-bearing for rendering.
