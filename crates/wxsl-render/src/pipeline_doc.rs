@@ -65,7 +65,7 @@ use crate::effect::{EffectInputKind, EffectRegistry};
 use crate::graph::RenderGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Persistence, Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
+    Persistence, Policy, Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
 };
 #[cfg(test)]
 use crate::pipeline::StockPipeline;
@@ -105,6 +105,13 @@ pub enum PipelineError {
         node: String,
         /// The precision it named.
         precision: String,
+    },
+    /// A pass names a [`crate::pass::Policy`] that is not one.
+    UnknownPolicy {
+        /// The pass node.
+        node: String,
+        /// The policy it named.
+        policy: String,
     },
     /// A numeric setting is not a number.
     BadNumber {
@@ -218,6 +225,16 @@ pub enum PipelineError {
         /// Both nodes' labels.
         nodes: Vec<String>,
     },
+    /// The config's channel requests collide — a feature and a model (or
+    /// two features) claiming one G-buffer field. The pipeline compiler
+    /// needs one plan to declare resources from, so the collision is
+    /// named here, by the node that made the document notice it.
+    ChannelCollision {
+        /// The `resource.gbuffer` node being declared.
+        node: String,
+        /// The rendered collision.
+        error: String,
+    },
 }
 
 impl core::fmt::Display for PipelineError {
@@ -252,6 +269,11 @@ impl core::fmt::Display for PipelineError {
                 f,
                 "colour target `{node}` asks for precision `{precision}`, which is not \
                  one — standard, hdr, scalar or pair"
+            ),
+            PipelineError::UnknownPolicy { node, policy } => write!(
+                f,
+                "pass `{node}` runs {policy:?}, which is not a policy — per frame, once, \
+                 on resize or on demand"
             ),
             PipelineError::BadNumber {
                 node,
@@ -354,6 +376,9 @@ impl core::fmt::Display for PipelineError {
                  exactly one array",
                 nodes.join(", ")
             ),
+            PipelineError::ChannelCollision { node, error } => {
+                write!(f, "the G-buffer of `{node}` cannot be built: {error}")
+            }
         }
     }
 }
@@ -471,7 +496,7 @@ impl<'a> Compiler<'a> {
         for node in &nodes {
             match self.kind(*node) {
                 Some(doc::SOURCE_LIGHTS) => self.declare_shadow_maps(*node)?,
-                Some(doc::RESOURCE_GBUFFER) => self.declare_gbuffer(*node),
+                Some(doc::RESOURCE_GBUFFER) => self.declare_gbuffer(*node)?,
                 Some(doc::RESOURCE_COLOR) => self.declare_color(*node)?,
                 Some(doc::RESOURCE_DEPTH) => self.declare_depth(*node)?,
                 _ => {}
@@ -522,12 +547,20 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn declare_gbuffer(&mut self, node: NodeId) {
-        // The layout is the enabled set's, not the document's: widening the
-        // set rewires nothing, because the lighting pass reads the G-buffer
-        // by the shape it was generated for.
-        let layout = self.config.lighting.gbuffer_layout();
+    fn declare_gbuffer(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        // The layout is the config's plan — the enabled set's requests
+        // plus any feature channels — not the document's: widening either
+        // rewires nothing, because the lighting pass reads the G-buffer by
+        // the shape it was generated for.
+        let layout = self
+            .config
+            .plan()
+            .map_err(|error| PipelineError::ChannelCollision {
+                node: self.label(node),
+                error: error.to_string(),
+            })?;
         let targets: Vec<ResourceId> = layout
+            .layout()
             .iter()
             .map(|entry| {
                 self.graph.resource(ResourceDesc::color(
@@ -539,8 +572,9 @@ impl<'a> Compiler<'a> {
         let depth = self
             .graph
             .resource(ResourceDesc::color("gbuffer depth", DEPTH_FORMAT));
-        self.layout = Some(layout.to_vec());
+        self.layout = Some(layout.layout().to_vec());
         self.gbuffers.insert(node, (targets, depth));
+        Ok(())
     }
 
     fn declare_color(&mut self, node: NodeId) -> Result<(), PipelineError> {
@@ -583,6 +617,17 @@ impl<'a> Compiler<'a> {
             node: self.label(node),
             setting,
             value: text,
+        })
+    }
+
+    /// The pass's execution policy, from the `policy` setting. The
+    /// default setting text parses to `per frame`, so documents that never
+    /// mention it compile exactly as they always did.
+    fn policy(&self, node: NodeId) -> Result<Policy, PipelineError> {
+        let text = self.setting(node, doc::SETTING_POLICY);
+        Policy::parse(&text).ok_or_else(|| PipelineError::UnknownPolicy {
+            node: self.label(node),
+            policy: text,
         })
     }
 
@@ -776,9 +821,23 @@ impl<'a> Compiler<'a> {
         };
 
         let tags = self.tags(node)?;
+        let policy = self.policy(node)?;
+        // The G-buffer a policy'd pass writes is stable storage for the
+        // same reason a chain's colour target is.
+        if policy != Policy::PerFrame {
+            if let Some((targets, depth)) = gbuffer.as_ref().and_then(|s| self.gbuffers.get(s)) {
+                for target in targets {
+                    self.graph.make_stable_storage(*target);
+                }
+                self.graph.make_stable_storage(*depth);
+            } else if let Some((depth, _)) = self.depth_input(node)? {
+                self.graph.make_stable_storage(depth.resource);
+            }
+        }
         let mut pass = PassDesc::geometry(name, DrawSource::Scene(tags), stage)
             .with_colors(colors)
-            .with_state(state);
+            .with_state(state)
+            .with_policy(policy);
         if let Some(depth) = depth {
             pass = pass.with_depth(depth);
         }
@@ -872,6 +931,22 @@ impl<'a> Compiler<'a> {
                         });
                     }
                 },
+                EffectInputKind::Buffer => {
+                    // No document socket carries a buffer yet — the pass
+                    // node's vocabulary has `gbuffer`, `image` and `into`,
+                    // and a `pass.compute` node waits for its first
+                    // document-shaped consumer (plan2 P11). A buffer input
+                    // is wired by building the pass list by hand.
+                    return Err(PipelineError::EffectInputMismatch {
+                        node: name.clone(),
+                        effect: effect.id.to_string(),
+                        reason: format!(
+                            "{} — but buffer inputs have no document socket yet; \
+                             wire this effect into a hand-built pass list",
+                            input.description
+                        ),
+                    });
+                }
             }
         }
         for (socket, wired) in [("gbuffer", "a G-buffer"), ("image", "an image")] {
@@ -891,10 +966,18 @@ impl<'a> Compiler<'a> {
         }
 
         let target = self.write_target(node)?;
+        let policy = self.policy(node)?;
+        // A pass that skips frames writes stable storage, or the
+        // scheduler names the mistake: a chain's colour target is
+        // promoted here, so `once`-into-`resource.color` just works.
+        if policy != Policy::PerFrame && target != RenderGraph::TARGET {
+            self.graph.make_stable_storage(target);
+        }
         self.graph.pass(
             PassDesc::screen(name, effect.id)
                 .with_color(self.color_attachment(target))
-                .with_reads(reads),
+                .with_reads(reads)
+                .with_policy(policy),
         );
         self.pass_colors.insert(node, target);
         Ok(())
@@ -1143,11 +1226,67 @@ mod tests {
         let config = PipelineConfig {
             target: target(),
             lighting: full,
+            features: Vec::new(),
         };
         let document = stock_document(StockPipeline::Deferred);
         let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
         let hand_built = deferred_graph(target(), &config.lighting);
         assert!(same_graph(&compiled, &hand_built));
+    }
+
+    #[test]
+    fn a_feature_channel_joins_the_compiled_gbuffer() {
+        // Enabling a feature is a *config* change too: the document never
+        // names the channel, but the compiled G-buffer carries it — the
+        // second source of requests, declared by the same compiler path
+        // (plan2 P12).
+        let features = wxsl_core::lighting::feature_requests(&["subsurface"]).unwrap();
+        let config = PipelineConfig {
+            target: target(),
+            lighting: LightingSet::default(),
+            features,
+        };
+        let document = stock_document(StockPipeline::Deferred);
+        let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
+        let names: Vec<&str> = compiled
+            .gbuffer_layout()
+            .iter()
+            .map(|target| target.field)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["base_color", "normal", "emissive", "subsurface"],
+            "the base targets, then the feature's channel"
+        );
+        // The scheduler's attachment-count check ran against the widened
+        // layout — this compiling is the proof it agreed.
+        compiled.schedule().expect("the widened graph schedules");
+
+        // And a colliding config is named at compile, not at the device.
+        let clashing = wxsl_core::lighting::ChannelRequest {
+            source: wxsl_core::lighting::ChannelSource::Feature { name: "subsurface" },
+            target: wxsl_core::abi::GBufferTarget {
+                field: "base_color",
+                doc: "",
+                precision: wxsl_core::abi::GBufferPrecision::Normalized,
+            },
+        };
+        let config = PipelineConfig {
+            target: target(),
+            lighting: LightingSet::default(),
+            features: vec![clashing],
+        };
+        match compile(
+            &stock_document(StockPipeline::Deferred),
+            &make_registry(),
+            &effects(),
+            &config,
+        ) {
+            Err(PipelineError::ChannelCollision { error, .. }) => {
+                assert!(error.contains("base_color"), "{error}");
+            }
+            other => panic!("expected a channel collision, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1786,12 +1925,11 @@ mod tests {
             .iter()
             .find(|resource| resource.label == "accumulation")
             .expect("the document's colour target is declared");
-        assert_eq!(accumulation.format, wgpu::TextureFormat::Rgba16Float, "hdr");
-        assert_eq!(
-            accumulation.extent.resolve(128, 128),
-            (64, 64),
-            "half scale, rounded"
-        );
+        let crate::pass::ResourceShape::Texture { format, extent, .. } = accumulation.shape else {
+            panic!("a colour target is a texture");
+        };
+        assert_eq!(format, wgpu::TextureFormat::Rgba16Float, "hdr");
+        assert_eq!(extent.resolve(128, 128), (64, 64), "half scale, rounded");
         assert_eq!(
             accumulation.persistence.ring_length(),
             2,

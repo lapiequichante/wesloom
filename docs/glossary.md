@@ -25,12 +25,36 @@ persistent ones, and records them. A *pipeline* is a render graph; forward
 and deferred are two of them. See
 [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
 
-**Effect** — a fullscreen pass as a self-describing unit
-(`wxsl_render::effect::Effect`): declared inputs in binding order, entry
-points, and its shader. A pipeline document's `pass.screen` names one by
-id, and a chain of them — lighting into a colour target, bloom over it —
-is how a pipeline composes. See
-[ADR 0034](adr/0034-effects-are-first-class-units.md).
+**Effect** — a pass as a self-describing unit
+(`wxsl_render::effect::Effect`): declared inputs and outputs in binding
+order, screen or compute entry points, and its shader. A pipeline
+document's `pass.screen` names one by id, and a chain of them — lighting
+into a colour target, bloom over it — is how a pipeline composes. See
+[ADR 0034](adr/0034-effects-are-first-class-units.md) and
+[ADR 0035](adr/0035-execution-policies.md).
+
+**Policy** — how often a pass runs: `per frame` (the default), `once`,
+`on resize` or `on demand`
+(`wxsl_render::pass::Policy`, plan2 P10). The renderer's frame loop
+honours it; a pass of any non-default policy may write only stable
+storage — a persistent target with no history — which is the scheduler's
+check, and is what makes skipping safe. `Renderer::pass_run_count` and
+`mark_pass` are the observable halves. See
+[ADR 0035](adr/0035-execution-policies.md).
+
+**Channel plan** — the collected G-buffer channel requests, each tagged
+with its source: the base layout, a lighting model, or a material
+feature (`wxsl_core::lighting::GBufferPlan`, plan2 P12). The layout, the
+generated pack, the lighting pass and the budget check all read it; a
+field claimed twice is an error naming both claimants. See
+[ADR 0037](adr/0037-semantic-channels.md).
+
+**Material feature** — a registry entry
+(`wxsl_core::lighting::MaterialFeature`) that owns a G-buffer channel on
+the models' behalf: a macro pin turns it on per material, a pack function
+in the feature's module fills the channel, and any feature-aware model
+reads it from its dispatch's extras. Subsurface ships first. See
+[ADR 0037](adr/0037-semantic-channels.md).
 
 **Scene** — the document: meshes, materials and instances, as pure
 serializable data (`wxsl_core::scene::Scene`). It says what exists, never

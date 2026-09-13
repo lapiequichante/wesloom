@@ -1,0 +1,27 @@
+//! ramp — fill a storage buffer with one value per invocation.
+//!
+//! The buffer proof (plan2 P11): a compute effect whose one output is a
+//! storage buffer, declared on the effect descriptor and bound through
+//! the pass group at binding 0 — the same contract a storage texture
+//! follows, so the scheduler's ordering, the pool's allocation and the
+//! bind group generation all treat it as the resource it is. The values
+//! are a smoothstep ease of the index, which makes the buffer's contents
+//! readable at a glance when `ramp_view` draws them.
+
+@group(3) @binding(0) var<storage, read_write> ramp: array<f32>;
+
+/// How many values the buffer holds. The effect's workgroup count
+/// (`4, 1, 1` at `@workgroup_size(64)`) covers exactly this.
+const COUNT: u32 = 256u;
+
+@compute
+@workgroup_size(64)
+fn fill_ramp(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= COUNT) {
+        return;
+    }
+    let t = f32(id.x) / f32(COUNT - 1u);
+    // A smoothstep ease: steep in the middle, flat at the ends, and
+    // obviously not a memcpy if something above it is broken.
+    ramp[id.x] = t * t * (3.0 - 2.0 * t);
+}

@@ -80,9 +80,9 @@ function nodes `build.rs` derived from the sources).
 
 **`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
 `wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
-`RenderGraph`, plan2 P3), `effect` (screen effects as data: declared
-inputs, entry points, shader source — the registry `pass.screen` names
-into, plan2 P4), `library` (`ShaderLibrary`),
+`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs and
+outputs, screen or compute entry points, shader source — the registry a
+pass names into, plan2 P4/P10), `library` (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `renderer` (the front end that hides the path switch), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
@@ -190,15 +190,30 @@ lighting pass and bloom, whose chain — lighting into a `resource.color`,
 bloom over it, `into` unconnected so bloom writes the frame's target — is
 how a pipeline composes; applications register more with
 `Renderer::add_effect`, which is ADR 0009's rule extended from shaders to
-passes. `cargo run -p wxsl --example gallery -- --screenshot` renders the
-stock pipelines, the minimal document and the bloom chain side by side.
+passes. Compute effects are the same shape with
+[`EffectKind::Compute`](adr/0035-execution-policies.md) — entry point and
+workgroup count on the descriptor, storage writes declared as outputs —
+and the BRDF-LUT and buffer-ramp effects ship beside bloom as the worked
+examples. `cargo run -p wxsl --example gallery -- --screenshot` renders
+the stock pipelines, the minimal document, the bloom chain and the
+policy/buffer/channel proofs side by side.
+
+A pass also carries a **policy** — `per frame`, `once`, `on resize` or
+`on demand` (plan2 P10). The renderer's frame loop honours it: a pass
+whose target survives frames may skip, and what it last wrote is what a
+later frame reads. `Renderer::pass_run_count` and `mark_pass` are the
+observable halves.
 
 `RenderGraph::schedule` is a pure function and is tested without a device.
 It orders the passes by what they read and write (never by declaration
 order), validates them, and decides which physical texture serves each
-resource. `ResourcePool` then owns the textures, and `RenderGraph::record`
-opens each pass, resolves its attachments, builds its pass bind group from
-its declared reads and hands it to the renderer to draw into.
+resource. Resources are textures *or buffers*
+([ADR 0036](adr/0036-buffers-are-graph-resources.md)): a compute pass can
+fill a storage buffer and a later pass read it as storage, with the read
+ordering them exactly as a texture read would. `ResourcePool` then owns
+the textures and buffers, and `RenderGraph::record` opens each pass,
+resolves its attachments, builds its pass bind group from its declared
+reads and writes and hands it to the renderer to draw into.
 
 Two properties of a resource are worth knowing before you need them:
 
@@ -206,7 +221,7 @@ Two properties of a resource are worth knowing before you need them:
   reusable after its last read; `Persistent { history: n }` is a ring of
   `n + 1` textures, so a pass can read what a previous frame wrote. Reading
   history creates no ordering edge — that is what keeps a temporal pass from
-  being a cycle.
+  being a cycle. Buffers never alias — their rule is "never" for now.
 * **Dimension.** 2D, 2D array, cube or 3D, because cascaded shadows,
   reflection probes and volumetrics each want a different one.
 
@@ -290,6 +305,16 @@ channel, a G-buffer shaped exactly as it always was. The shipped models —
 `shaders/lighting/models/`, deliberately outside the node derivation:
 they are shaded through the registry's contract, not placed on a canvas.
 See [ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md).
+
+Models are one *source* of G-buffer channels. A material **feature** is
+the second ([ADR 0037](adr/0037-semantic-channels.md)): a registry entry
+in `wxsl_core::lighting::FEATURES` — subsurface is the first — that asks
+for a channel on the models' behalf, turns itself on per material with a
+macro pin, and is enabled for a pipeline with `Renderer::set_features`.
+All requests, models' and features', join one **plan**
+(`LightingSet::plan`) that names each channel's source, rejects a field
+claimed twice by naming both claimants, and is what the layout, the
+generated pack, the lighting pass and the budget check all read.
 
 ## Bind groups
 
@@ -649,7 +674,7 @@ Implemented and tested end to end:
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
 | `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
-| `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, cube mesh, scene uniforms, offscreen rendering | done |
+| `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, execution policies, buffer resources, compute and screen effects, channel plans, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
 | `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing, per-node name and colour, light/dark themes | done |
 | `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `gallery` demo, the `editor` demo | done |
@@ -665,6 +690,9 @@ cargo run -p wxsl --example pbr_cube -- --headless --models lambert,phong,pbr,cl
                                      # through one deferred lighting pass
 cargo run -p wxsl --example gallery               # every pipeline in one window
 cargo run -p wxsl --example gallery -- --screenshot # one PNG each + contact sheet
+cargo run -p wxsl --example gallery -- --list     # the demos, including the
+                                     # policy (BRDF LUT), buffer-ramp and
+                                     # subsurface-channel proofs
 ```
 
 And the editor, which is the same graph with somewhere to edit it:

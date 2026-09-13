@@ -42,6 +42,11 @@ modules! {
     // Glyph distance-field generation as a compute pass (ADR 0014), the GPU
     // half of `wxsl_render::ui::msdf`.
     "package::wxsl::msdf" => "wxsl/msdf.wxsl",
+    // Material features: the second source of G-buffer channels (plan2
+    // P12). A feature's module declares its macro knob and its pack, and
+    // travels with the ABI modules because `wxsl_core::lighting::FEATURES`
+    // names its path.
+    "package::wxsl::features::subsurface" => "wxsl/features/subsurface.wxsl",
 
     // Granular functions, one per file, grouped by category.
     "package::animation::ease_in_out_cubic" => "animation/ease_in_out_cubic.wxsl",

@@ -120,6 +120,88 @@ impl Default for Extent {
     }
 }
 
+/// How often a pass runs.
+///
+/// request.md's four answers to "when does this pass execute?", as data on
+/// the pass rather than a convention of whoever records it (plan2 P10).
+/// The default is today's behaviour, so every pass list that exists keeps
+/// meaning what it meant; the other three exist for the things a frame
+/// does *not* redo — the BRDF LUT a compute effect bakes once, a backdrop
+/// that only the window's size can change, a pass an application asks for.
+///
+/// A pass of any non-default policy writes only stable storage — a
+/// [`Persistence::Persistent`] resource keeping no history — because a
+/// transient's slot is reused within the frame: its contents would be
+/// undefined on every frame the pass skips. That rule is one of the
+/// scheduler's checks, and it is what makes skipping safe: a skipped pass
+/// leaves behind exactly the contents its last run wrote.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Policy {
+    /// Record it every frame — every pass today, and every pass whose
+    /// output the frame changes.
+    #[default]
+    PerFrame,
+    /// Run once, on the first frame the pass list runs after being set (or
+    /// after the pool reallocated: its texture was destroyed with it). The
+    /// BRDF LUT is the proof case.
+    Once,
+    /// Run when the frame target's size changes — really "when my inputs'
+    /// shapes change", of which the target's size is the one a pass list
+    /// can see. Also its first frame.
+    OnResize,
+    /// Run when the application asks, and not otherwise. A bake an
+    /// operation triggers — "rebuild the irradiance probe" — is the shape.
+    OnDemand,
+}
+
+impl Policy {
+    /// The name used in serialized documents and on a command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Policy::PerFrame => "per frame",
+            Policy::Once => "once",
+            Policy::OnResize => "on resize",
+            Policy::OnDemand => "on demand",
+        }
+    }
+
+    /// Parse a policy from its [`Policy::name`]. Both spellings of the
+    /// multi-word ones are accepted, so a document may say `on_resize`.
+    pub fn parse(text: &str) -> Option<Self> {
+        let folded = text.trim().replace('_', " ");
+        let candidate = folded.to_ascii_lowercase();
+        [
+            Policy::PerFrame,
+            Policy::Once,
+            Policy::OnResize,
+            Policy::OnDemand,
+        ]
+        .into_iter()
+        .find(|policy| policy.name() == candidate)
+    }
+
+    /// Whether this pass is due, given the run state the frame loop keeps.
+    ///
+    /// Pure, so the whole question is testable with no device: `ran` is
+    /// "has run since the pass list was set or the pool reallocated",
+    /// `size_changed` is "the target is a different size than when it last
+    /// ran", `demanded` is "the application marked it since it last ran".
+    pub fn due(self, ran: bool, size_changed: bool, demanded: bool) -> bool {
+        match self {
+            Policy::PerFrame => true,
+            Policy::Once => !ran,
+            Policy::OnResize => !ran || size_changed,
+            Policy::OnDemand => demanded,
+        }
+    }
+}
+
+impl std::fmt::Display for Policy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// How long a resource's contents have to live.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Persistence {
@@ -146,28 +228,53 @@ impl Persistence {
     }
 }
 
+/// What a resource is made of: a texture or a buffer.
+///
+/// Textures were the whole story until plan2 P11; the buffers a frame uses
+/// were implicit ABI infrastructure the scheduler could not see. Declared,
+/// they join the same reasoning as attachments: a pass that writes a
+/// buffer orders the passes that read it, and the pool allocates it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ResourceShape {
+    /// A texture: size, shape and texel format.
+    Texture {
+        /// Size.
+        extent: Extent,
+        /// Shape.
+        dimension: Dimension,
+        /// Array layers, cube faces (6) or volume depth. Always 1 for
+        /// [`Dimension::D2`].
+        layers: u32,
+        /// Texel format.
+        format: wgpu::TextureFormat,
+        /// Usages beyond the ones the graph infers from how the passes use
+        /// it.
+        usage: wgpu::TextureUsages,
+    },
+    /// A storage buffer of `size` bytes.
+    Buffer {
+        /// Size in bytes. A read-back buffer wants a multiple of 4 — the
+        /// alignment `copy_buffer_to_buffer` demands.
+        size: u64,
+        /// Usages beyond [`wgpu::BufferUsages::STORAGE`], which the graph
+        /// always infers for a buffer any pass touches.
+        usage: wgpu::BufferUsages,
+    },
+}
+
 /// Everything the graph needs in order to allocate a resource.
 ///
 /// `Imported` is the escape hatch and the reason the frame's own target is
 /// expressible: the graph is handed the view rather than creating it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResourceDesc {
-    /// Label, used for the `wgpu` texture and in diagnostics.
+    /// Label, used for the `wgpu` texture or buffer and in diagnostics.
     pub label: String,
-    /// Size.
-    pub extent: Extent,
-    /// Shape.
-    pub dimension: Dimension,
-    /// Array layers, cube faces (6) or volume depth. Always 1 for
-    /// [`Dimension::D2`].
-    pub layers: u32,
-    /// Texel format.
-    pub format: wgpu::TextureFormat,
-    /// Usages beyond the ones the graph infers from how the passes use it.
-    pub usage: wgpu::TextureUsages,
+    /// What it is made of.
+    pub shape: ResourceShape,
     /// Whether the contents outlive the frame.
     pub persistence: Persistence,
-    /// Whether the graph owns the texture, or is handed one per frame.
+    /// Whether the graph owns the resource, or is handed one per frame.
     pub imported: bool,
 }
 
@@ -176,11 +283,26 @@ impl ResourceDesc {
     pub fn color(label: impl Into<String>, format: wgpu::TextureFormat) -> Self {
         ResourceDesc {
             label: label.into(),
-            extent: Extent::default(),
-            dimension: Dimension::D2,
-            layers: 1,
-            format,
-            usage: wgpu::TextureUsages::empty(),
+            shape: ResourceShape::Texture {
+                extent: Extent::default(),
+                dimension: Dimension::D2,
+                layers: 1,
+                format,
+                usage: wgpu::TextureUsages::empty(),
+            },
+            persistence: Persistence::Transient,
+            imported: false,
+        }
+    }
+
+    /// A storage buffer of `size` bytes (plan2 P11).
+    pub fn buffer(label: impl Into<String>, size: u64) -> Self {
+        ResourceDesc {
+            label: label.into(),
+            shape: ResourceShape::Buffer {
+                size,
+                usage: wgpu::BufferUsages::empty(),
+            },
             persistence: Persistence::Transient,
             imported: false,
         }
@@ -195,22 +317,49 @@ impl ResourceDesc {
         }
     }
 
+    /// The texture shape, if this is a texture.
+    pub fn texture(&self) -> Option<&ResourceShape> {
+        match &self.shape {
+            shape @ ResourceShape::Texture { .. } => Some(shape),
+            ResourceShape::Buffer { .. } => None,
+        }
+    }
+
     /// Set the extent.
     pub fn with_extent(mut self, extent: Extent) -> Self {
-        self.extent = extent;
+        if let ResourceShape::Texture { extent: at, .. } = &mut self.shape {
+            *at = extent;
+        }
         self
     }
 
     /// Set the shape and layer count.
     pub fn with_dimension(mut self, dimension: Dimension, layers: u32) -> Self {
-        self.dimension = dimension;
-        self.layers = layers.max(1);
+        if let ResourceShape::Texture {
+            dimension: at,
+            layers: count,
+            ..
+        } = &mut self.shape
+        {
+            *at = dimension;
+            *count = layers.max(1);
+        }
         self
     }
 
-    /// Add usages on top of the ones the graph infers.
+    /// Add texture usages on top of the ones the graph infers.
     pub fn with_usage(mut self, usage: wgpu::TextureUsages) -> Self {
-        self.usage |= usage;
+        if let ResourceShape::Texture { usage: at, .. } = &mut self.shape {
+            *at |= usage;
+        }
+        self
+    }
+
+    /// Add buffer usages on top of the ones the graph infers.
+    pub fn with_buffer_usage(mut self, usage: wgpu::BufferUsages) -> Self {
+        if let ResourceShape::Buffer { usage: at, .. } = &mut self.shape {
+            *at |= usage;
+        }
         self
     }
 
@@ -225,16 +374,39 @@ impl ResourceDesc {
     ///
     /// Everything the `wgpu` descriptor is built from has to match; the
     /// label does not, because a shared texture ends up labelled after
-    /// whichever resource claimed the slot first.
+    /// whichever resource claimed the slot first. Buffers never share —
+    /// their rule is "never" for now, because a buffer aliasing bug
+    /// corrupts a whole block rather than a frame region, and no workload
+    /// has asked for the memory back yet.
     pub fn aliasable_with(&self, other: &ResourceDesc) -> bool {
-        !self.imported
-            && !other.imported
-            && self.persistence == Persistence::Transient
-            && other.persistence == Persistence::Transient
-            && self.extent == other.extent
-            && self.dimension == other.dimension
-            && self.layers == other.layers
-            && self.format == other.format
+        match (&self.shape, &other.shape) {
+            (
+                ResourceShape::Texture {
+                    extent: a,
+                    dimension: ad,
+                    layers: al,
+                    format: af,
+                    ..
+                },
+                ResourceShape::Texture {
+                    extent: b,
+                    dimension: bd,
+                    layers: bl,
+                    format: bf,
+                    ..
+                },
+            ) => {
+                !self.imported
+                    && !other.imported
+                    && self.persistence == Persistence::Transient
+                    && other.persistence == Persistence::Transient
+                    && a == b
+                    && ad == bd
+                    && al == bl
+                    && af == bf
+            }
+            _ => false,
+        }
     }
 }
 
@@ -491,27 +663,6 @@ pub enum DrawSource {
     },
 }
 
-/// A compute dispatch's workgroup count.
-#[derive(Clone, Debug)]
-pub enum Dispatch {
-    /// A fixed number of workgroups.
-    Direct {
-        /// Workgroups in x.
-        x: u32,
-        /// Workgroups in y.
-        y: u32,
-        /// Workgroups in z.
-        z: u32,
-    },
-    /// A count another pass wrote.
-    Indirect {
-        /// Buffer holding a `wgpu::util::DispatchIndirectArgs`.
-        buffer: Arc<wgpu::Buffer>,
-        /// Byte offset of the record.
-        offset: u64,
-    },
-}
-
 /// What kind of work a pass does.
 #[derive(Clone, Debug)]
 pub enum PassKind {
@@ -532,17 +683,16 @@ pub enum PassKind {
         /// The effect id, as a document's `effect` setting names it.
         effect: String,
     },
-    /// A compute dispatch.
-    ///
-    /// Present from the start rather than bolted on in M7, and nearly free
-    /// because the repo already runs a compute pass: MSDF glyph generation
-    /// (ADR 0014) has already solved compute pipelines, their bind groups
-    /// and their variant compilation.
+    /// A compute dispatch running an effect. As with a screen pass, the
+    /// id names an [`crate::effect::Effect`] — this time one whose kind is
+    /// [`crate::effect::EffectKind::Compute`], which carries the entry
+    /// point and the workgroup count. Present from the start rather than
+    /// bolted on in M7, and nearly free because the repo already runs a
+    /// compute pass: MSDF glyph generation (ADR 0014) had already solved
+    /// compute pipelines, their bind groups and their variant compilation.
     Compute {
-        /// Entry point in the module.
-        entry: String,
-        /// How many workgroups.
-        workgroups: Dispatch,
+        /// The effect id.
+        effect: String,
     },
 }
 
@@ -593,8 +743,14 @@ pub struct PassDesc {
     /// order.
     pub reads: Vec<Read>,
     /// Resources the pass writes without attaching them — a compute pass's
-    /// storage textures. Attachments are writes too and need not be listed.
+    /// storage textures and storage buffers. Attachments are writes too
+    /// and need not be listed.
     pub writes: Vec<ResourceId>,
+    /// How often the pass runs. [`Policy::PerFrame`] — every frame — is
+    /// the default and every pass list's behaviour before this field
+    /// existed; the rest are honoured by the renderer's frame loop
+    /// (plan2 P10).
+    pub policy: Policy,
 }
 
 impl PassDesc {
@@ -610,6 +766,7 @@ impl PassDesc {
             state: PassState::OPAQUE,
             reads: Vec::new(),
             writes: Vec::new(),
+            policy: Policy::PerFrame,
         }
     }
 
@@ -626,20 +783,16 @@ impl PassDesc {
             state: PassState::FULLSCREEN,
             reads: Vec::new(),
             writes: Vec::new(),
+            policy: Policy::PerFrame,
         }
     }
 
-    /// A compute pass.
-    pub fn compute(
-        label: impl Into<String>,
-        entry: impl Into<String>,
-        workgroups: Dispatch,
-    ) -> Self {
+    /// A compute pass running the effect named by `effect`.
+    pub fn compute(label: impl Into<String>, effect: impl Into<String>) -> Self {
         PassDesc {
             label: label.into(),
             kind: PassKind::Compute {
-                entry: entry.into(),
-                workgroups,
+                effect: effect.into(),
             },
             view: PassView::default(),
             color: Vec::new(),
@@ -647,6 +800,7 @@ impl PassDesc {
             state: PassState::FULLSCREEN,
             reads: Vec::new(),
             writes: Vec::new(),
+            policy: Policy::PerFrame,
         }
     }
 
@@ -689,6 +843,12 @@ impl PassDesc {
     /// Declare a write that is not an attachment.
     pub fn with_write(mut self, resource: ResourceId) -> Self {
         self.writes.push(resource);
+        self
+    }
+
+    /// Set how often the pass runs.
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -828,5 +988,48 @@ mod tests {
             .expect("geometry has depth");
         assert_eq!(opaque.format, DEPTH_FORMAT);
         assert_eq!(opaque.depth_write_enabled, Some(true));
+    }
+
+    #[test]
+    fn policies_answer_when_they_are_due() {
+        // Per frame is always due — every pass today. Once, only before
+        // its first run. On resize, also after a size change. On demand,
+        // only when marked.
+        assert!(Policy::PerFrame.due(true, false, false));
+        assert!(Policy::Once.due(false, false, false));
+        assert!(
+            !Policy::Once.due(true, true, false),
+            "a resize re-runs the resize passes, not the once ones"
+        );
+        assert!(
+            !Policy::Once.due(true, false, true),
+            "demand does not wake a once pass"
+        );
+        assert!(Policy::OnResize.due(false, false, false));
+        assert!(!Policy::OnResize.due(true, false, false));
+        assert!(Policy::OnResize.due(true, true, false));
+        assert!(!Policy::OnDemand.due(false, true, false));
+        assert!(Policy::OnDemand.due(true, false, true));
+    }
+
+    #[test]
+    fn policies_round_trip_through_their_document_names() {
+        for policy in [
+            Policy::PerFrame,
+            Policy::Once,
+            Policy::OnResize,
+            Policy::OnDemand,
+        ] {
+            assert_eq!(
+                Policy::parse(policy.name()),
+                Some(policy),
+                "{}",
+                policy.name()
+            );
+        }
+        // Documents may spell the multi-word ones with underscores.
+        assert_eq!(Policy::parse("on_resize"), Some(Policy::OnResize));
+        assert_eq!(Policy::parse("  PER FRAME "), Some(Policy::PerFrame));
+        assert_eq!(Policy::parse("every frame"), None);
     }
 }

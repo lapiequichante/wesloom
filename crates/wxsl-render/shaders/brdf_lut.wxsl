@@ -1,0 +1,82 @@
+//! brdf_lut — the split-sum environment-BRDF LUT, baked once.
+//!
+//! The proof case for execution policies (plan2 P10): a pure function of
+//! its own coordinates, written by a compute effect with policy `once`
+//! into a persistent target. `uv.x` is N·V, `uv.y` roughness; the texel
+//! holds the (scale, bias) pair Karis' environment-BRDF approximation
+//! reduces to, integrated over a Hammersley sample set. Nothing here reads
+//! a uniform or the scene, which is exactly why it never has to run again
+//! — and why the scheduler's rule that a policy'd pass writes only stable
+//! storage is not a limitation here but the whole design.
+
+@group(3) @binding(0) var lut: texture_storage_2d<rgba16float, write>;
+
+/// Side of the LUT, in texels. The effect's workgroup count divides this
+/// exactly: 8 × 8 workgroups of 8 × 8 invocations.
+const LUT_SIZE: u32 = 64u;
+/// Samples per texel. Once-only work, so it can afford to be thorough.
+const SAMPLE_COUNT: u32 = 1024u;
+
+/// A tangent frame around `n`, any tangent — the integral is rotationally
+/// symmetric about the normal, so the frame's twist does not matter.
+fn tangent_frame(n: vec3f) -> mat3x3f {
+    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(n.z) < 0.999);
+    let tangent = normalize(cross(up, n));
+    let bitangent = cross(n, tangent);
+    return mat3x3f(tangent, bitangent, n);
+}
+
+/// The (scale, bias) pair for one (N·V, roughness) point: the average of
+/// `F0 * scale + bias * F` over the visible hemisphere, which folds the
+/// whole environment-BRDF into one 2D lookup.
+fn integrate(n: vec3f, v: vec3f, roughness: f32) -> vec2f {
+    let alpha = max(roughness * roughness, 1e-3);
+    let n_dot_v = max(dot(n, v), 1e-4);
+    let basis = tangent_frame(n);
+
+    var sum = vec2f(0.0, 0.0);
+    for (var i = 0u; i < SAMPLE_COUNT; i++) {
+        // Hammersley point set: even coverage, no RNG, no state.
+        let xi = vec2f(
+            f32(i) / f32(SAMPLE_COUNT),
+            f32(reverseBits(i)) / 4294967296.0,
+        );
+        // The GGX half vector, in the tangent frame.
+        let phi = 6.2831853 * xi.x;
+        let cos_theta = sqrt((1.0 - xi.y) / (1.0 + (alpha * alpha - 1.0) * xi.y));
+        let sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+        let h = basis * vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta);
+        let l = 2.0 * dot(v, h) * h - v;
+
+        let n_dot_l = max(dot(n, l), 0.0);
+        let n_dot_h = max(dot(n, h), 0.0);
+        let v_dot_h = max(dot(v, h), 0.0);
+        if (n_dot_l > 0.0) {
+            // Smith visibility with the IBL roughness remap.
+            let k = alpha * 0.5;
+            let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
+            let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
+            let fresnel = pow(1.0 - v_dot_h, 5.0);
+            // The importance-sampling pdf cancels into this weight.
+            let weight = g_v * g_l * n_dot_l / max(n_dot_h * n_dot_v, 1e-4);
+            sum += vec2f((1.0 - fresnel) * weight, fresnel * weight);
+        }
+    }
+    return sum / f32(SAMPLE_COUNT);
+}
+
+@compute
+@workgroup_size(8, 8)
+fn bake_lut(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= LUT_SIZE || id.y >= LUT_SIZE) {
+        return;
+    }
+    // Texel centres, so the LUT's edges are reachable rather than half a
+    // texel outside the sampled range.
+    let uv = (vec2f(id.xy) + vec2f(0.5, 0.5)) / f32(LUT_SIZE);
+    // One canonical geometry: the normal up, the view tilted to N·V.
+    let n = vec3f(0.0, 0.0, 1.0);
+    let v = vec3f(sqrt(max(0.0, 1.0 - uv.x * uv.x)), 0.0, uv.x);
+    let scale_bias = integrate(n, v, uv.y);
+    textureStore(lut, vec2i(id.xy), vec4f(scale_bias, 0.0, 1.0));
+}

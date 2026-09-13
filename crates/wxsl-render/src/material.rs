@@ -30,7 +30,7 @@
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
-use wxsl_core::lighting::{LightingSet, MaterialLighting};
+use wxsl_core::lighting::{ChannelRequest, LightingSet, MaterialLighting};
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::resources::{BufferLayout, FieldLayout, MaterialInterface, VertexAttributeBinding};
@@ -66,6 +66,11 @@ pub struct MaterialOptions {
     /// [`Material::with_lighting`] — and a name the set does not enable is
     /// an error there rather than a silently different shade.
     pub lighting: Option<String>,
+    /// The feature channels the surrounding pipeline carries, which the
+    /// material's G-buffer struct is generated for (plan2 P12). Empty for
+    /// a pipeline that enables none; the renderer's handshake check is
+    /// what names a material built for one plan and drawn under another.
+    pub features: Vec<ChannelRequest>,
 }
 
 impl Default for MaterialOptions {
@@ -75,6 +80,7 @@ impl Default for MaterialOptions {
             cast_shadow: true,
             receive_shadow: true,
             lighting: None,
+            features: Vec::new(),
         }
     }
 }
@@ -189,13 +195,12 @@ impl Material {
         options: &MaterialOptions,
         lighting: &LightingSet,
     ) -> Result<Self, RenderError> {
-        let resolved =
-            MaterialLighting::resolve(lighting, options.lighting.as_deref()).map_err(|error| {
-                RenderError::Lighting {
-                    material: graph.name().to_string(),
-                    error: error.to_string(),
-                }
-            })?;
+        let resolved = MaterialLighting::resolve(lighting, options.lighting.as_deref())
+            .map_err(|error| RenderError::Lighting {
+                material: graph.name().to_string(),
+                error: error.to_string(),
+            })?
+            .with_features(options.features.clone());
         let overrides = options.effective_macros();
         let mut stages = Vec::with_capacity(MaterialStage::ALL.len());
         for stage in MaterialStage::ALL {

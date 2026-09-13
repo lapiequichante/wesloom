@@ -30,21 +30,30 @@
 //! document edit, which is what makes an effect *chain* expressible for
 //! the first time (deferred lighting into a `resource.color`, bloom over
 //! it, bloom's `into` left unconnected so it writes the frame's target).
+//! Two further effects ship as descriptors but stay out of the registry:
+//! [`BRDF_LUT`] and [`LUT_VIEW`], the execution-policy proof (plan2 P10)
+//! — an application registers them with `Renderer::add_effect` exactly as
+//! it would its own.
 
 use wxsl_core::abi;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
+/// Module path the BRDF-LUT bake's shader is mounted under.
+pub const BRDF_LUT_MODULE: &str = "package::wxsl::brdf_lut";
+/// Module path the LUT viewer's shader is mounted under.
+pub const LUT_VIEW_MODULE: &str = "package::wxsl::lut_view";
 
 /// One input an effect consumes.
 ///
 /// The `name` is the `pass.screen` socket the document wires, and the
-/// `kind` is what the compiler does with it — the two spellings exist
+/// `kind` is what the compiler does with it — the spellings exist
 /// because a G-buffer input expands to one texture per layout target plus
-/// depth, while an image is exactly one read.
+/// depth, an image is exactly one read, and a buffer one more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectInput {
-    /// The `pass.screen` socket this input is wired through.
+    /// The socket this input is wired through (the `pass.screen` socket in
+    /// a document).
     pub name: &'static str,
     /// What the compiler turns the wire into.
     pub kind: EffectInputKind,
@@ -61,12 +70,55 @@ pub enum EffectInputKind {
     GBuffer,
     /// One colour image, one binding.
     Image,
+    /// One storage buffer, read as storage — one binding. The reader
+    /// declares `var<storage>` in its shader, so it sees the data the
+    /// writer's compute left there without a copy through a texture
+    /// (plan2 P11).
+    Buffer,
+}
+
+/// One output an effect writes that is not an attachment: a compute
+/// effect's storage target.
+///
+/// Named for palettes and diagnostics; the binding comes from the pass's
+/// `writes`, in this order, after every input. A screen effect writes its
+/// attachment and declares no outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectOutput {
+    /// The name the output goes by.
+    pub name: &'static str,
+    /// One line for the palette and for error messages.
+    pub description: &'static str,
+}
+
+/// What work an effect does, and therefore which entry points a `wgpu`
+/// pipeline is built from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectKind {
+    /// One fullscreen triangle, with a vertex and a fragment entry. The
+    /// fragment writes the pass's colour attachment.
+    Screen {
+        /// Vertex entry point (a fullscreen triangle, no vertex buffer).
+        vertex_entry: &'static str,
+        /// Fragment entry point.
+        fragment_entry: &'static str,
+    },
+    /// One compute dispatch. The entry is the module's; the workgroup
+    /// count is the effect's own business — it knows its shader's
+    /// `@workgroup_size`, which is why it lives here and not on the pass
+    /// (plan2 P10). Indirect dispatch waits for a consumer that needs it.
+    Compute {
+        /// Entry point in the module.
+        entry: &'static str,
+        /// Workgroups in x, y, z.
+        workgroups: [u32; 3],
+    },
 }
 
 /// The shader an effect runs.
 ///
-/// Every effect's shader is a WXSL module with a vertex and a fragment
-/// entry; the variants are *where the text comes from*.
+/// Every effect's shader is a WXSL module; the variants are *where the
+/// text comes from*.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectShader {
     /// Generated from the enabled lighting set — the migrated deferred
@@ -85,8 +137,8 @@ pub enum EffectShader {
     },
 }
 
-/// A screen effect, as data: what it reads, the shader it runs, the entry
-/// points a `wgpu` pipeline is built from.
+/// An effect, as data: what it reads and writes, the shader it runs, the
+/// entry points a `wgpu` pipeline is built from.
 ///
 /// `Copy` on purpose: an effect is a static description, and the renderer
 /// hands copies around freely.
@@ -98,23 +150,30 @@ pub struct Effect {
     pub label: &'static str,
     /// One line for the palette.
     pub description: &'static str,
+    /// What work the effect does, and its entry points.
+    pub kind: EffectKind,
     /// The inputs, in pass-group binding order — the contract the
     /// pipeline compiler validates wiring against and the shader declares
     /// its `@group(3)` bindings by.
     pub inputs: &'static [EffectInput],
-    /// Vertex entry point (a fullscreen triangle, no vertex buffer).
-    pub vertex_entry: &'static str,
-    /// Fragment entry point.
-    pub fragment_entry: &'static str,
+    /// The non-attachment writes, in pass-group binding order after the
+    /// inputs — a compute effect's storage targets.
+    pub outputs: &'static [EffectOutput],
     /// Where the shader text comes from.
     pub shader: EffectShader,
 }
 
 impl Effect {
     /// Whether this effect declares an input wired through the named
-    /// `pass.screen` socket.
+    /// socket.
     pub(crate) fn declares(&self, socket: &str) -> bool {
         self.inputs.iter().any(|input| input.name == socket)
+    }
+
+    /// Whether this is a compute effect — and so whether the pass running
+    /// it dispatches rather than draws.
+    pub fn is_compute(&self) -> bool {
+        matches!(self.kind, EffectKind::Compute { .. })
     }
 }
 
@@ -125,13 +184,16 @@ pub const DEFERRED_LIGHTING: Effect = Effect {
     id: "deferred_lighting",
     label: "deferred lighting",
     description: "Shade the G-buffer with the enabled lighting models.",
+    kind: EffectKind::Screen {
+        vertex_entry: abi::LIGHTING_PASS_VERTEX_ENTRY,
+        fragment_entry: abi::LIGHTING_PASS_FRAGMENT_ENTRY,
+    },
     inputs: &[EffectInput {
         name: "gbuffer",
         kind: EffectInputKind::GBuffer,
         description: "The G-buffer to shade: every target, then depth.",
     }],
-    vertex_entry: abi::LIGHTING_PASS_VERTEX_ENTRY,
-    fragment_entry: abi::LIGHTING_PASS_FRAGMENT_ENTRY,
+    outputs: &[],
     shader: EffectShader::Lighting,
 };
 
@@ -142,16 +204,118 @@ pub const BLOOM: Effect = Effect {
     id: "bloom",
     label: "bloom",
     description: "Blur the bright parts of an image and add them back: glow.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_vs",
+        fragment_entry: "bloom_fs",
+    },
     inputs: &[EffectInput {
         name: "image",
         kind: EffectInputKind::Image,
         description: "The image to glow from, in the frame's own encoding.",
     }],
-    vertex_entry: "bloom_vs",
-    fragment_entry: "bloom_fs",
+    outputs: &[],
     shader: EffectShader::Source {
         path: BLOOM_MODULE,
         wxsl: include_str!("../shaders/bloom.wxsl"),
+    },
+};
+
+/// The split-sum environment-BRDF LUT, baked by a compute effect — the
+/// execution-policy proof (plan2 P10). Not in the shipped registry: no
+/// stock pipeline reads it yet (the IBL that would is M7's), so this is
+/// a descriptor an application registers and a worked example of a
+/// `once`-policy compute effect. Its shader is a pure function of its
+/// coordinates, which is why `once` is the honest policy for it.
+pub const BRDF_LUT: Effect = Effect {
+    id: "brdf_lut",
+    label: "BRDF LUT",
+    description: "Bake the split-sum environment-BRDF LUT, once.",
+    kind: EffectKind::Compute {
+        entry: "bake_lut",
+        workgroups: [8, 8, 1],
+    },
+    inputs: &[],
+    outputs: &[EffectOutput {
+        name: "lut",
+        description: "The LUT: a 64x64 storage texture of (scale, bias).",
+    }],
+    shader: EffectShader::Source {
+        path: BRDF_LUT_MODULE,
+        wxsl: include_str!("../shaders/brdf_lut.wxsl"),
+    },
+};
+
+/// The LUT viewer: one image, stretched over the frame's target — the
+/// screen half of the [`BRDF_LUT`] proof, and how a demo or a test looks
+/// at what a once-only bake left behind.
+pub const LUT_VIEW: Effect = Effect {
+    id: "lut_view",
+    label: "LUT view",
+    description: "Draw one image across the frame's target.",
+    kind: EffectKind::Screen {
+        vertex_entry: "view_vs",
+        fragment_entry: "view_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The image to display.",
+    }],
+    outputs: &[],
+    shader: EffectShader::Source {
+        path: LUT_VIEW_MODULE,
+        wxsl: include_str!("../shaders/lut_view.wxsl"),
+    },
+};
+
+/// Module path the ramp fill's shader is mounted under.
+pub const RAMP_MODULE: &str = "package::wxsl::ramp";
+/// Module path the ramp viewer's shader is mounted under.
+pub const RAMP_VIEW_MODULE: &str = "package::wxsl::ramp_view";
+
+/// The buffer proof (plan2 P11): a compute effect whose one output is a
+/// 256-entry storage buffer of eased values. Like [`BRDF_LUT`], a
+/// descriptor an application registers rather than a shipped pass — and
+/// the smallest complete example of a buffer-writing effect.
+pub const RAMP_FILL: Effect = Effect {
+    id: "ramp_fill",
+    label: "ramp fill",
+    description: "Fill a storage buffer with an eased ramp, one f32 per entry.",
+    kind: EffectKind::Compute {
+        entry: "fill_ramp",
+        workgroups: [4, 1, 1],
+    },
+    inputs: &[],
+    outputs: &[EffectOutput {
+        name: "ramp",
+        description: "The buffer: 256 f32 values, a smoothstep ease of the index.",
+    }],
+    shader: EffectShader::Source {
+        path: RAMP_MODULE,
+        wxsl: include_str!("../shaders/ramp.wxsl"),
+    },
+};
+
+/// The buffer reader: a screen effect that draws a storage buffer as one
+/// value per screen column — the half that proves a fragment stage can
+/// consume what a compute pass wrote, with no texture in between.
+pub const RAMP_VIEW: Effect = Effect {
+    id: "ramp_view",
+    label: "ramp view",
+    description: "Draw a storage buffer as one value per screen column.",
+    kind: EffectKind::Screen {
+        vertex_entry: "view_vs",
+        fragment_entry: "view_fs",
+    },
+    inputs: &[EffectInput {
+        name: "ramp",
+        kind: EffectInputKind::Buffer,
+        description: "The buffer to draw, read as storage.",
+    }],
+    outputs: &[],
+    shader: EffectShader::Source {
+        path: RAMP_VIEW_MODULE,
+        wxsl: include_str!("../shaders/ramp_view.wxsl"),
     },
 };
 
@@ -253,7 +417,15 @@ mod tests {
             .get("deferred_lighting")
             .expect("the lighting pass");
         assert!(matches!(lighting.shader, EffectShader::Lighting));
-        assert_eq!(lighting.vertex_entry, abi::LIGHTING_PASS_VERTEX_ENTRY);
+        let EffectKind::Screen {
+            vertex_entry,
+            fragment_entry,
+        } = lighting.kind
+        else {
+            panic!("the lighting pass is a screen effect");
+        };
+        assert_eq!(vertex_entry, abi::LIGHTING_PASS_VERTEX_ENTRY);
+        assert_eq!(fragment_entry, abi::LIGHTING_PASS_FRAGMENT_ENTRY);
         assert_eq!(
             lighting.inputs.len(),
             1,
@@ -304,5 +476,30 @@ mod tests {
             !wxsl.contains("@binding(1)"),
             "one input, one binding — a second is a drift from the descriptor"
         );
+    }
+
+    #[test]
+    fn the_brdf_lut_shader_writes_its_one_output_and_reads_nothing() {
+        // A compute effect with no inputs and one storage write: the
+        // write is binding 0 (outputs come after inputs, of which there
+        // are none), and the descriptor's entry and workgroup count are
+        // the shader's.
+        let EffectShader::Source { path: _, wxsl } = BRDF_LUT.shader else {
+            panic!("the LUT bake ships its source");
+        };
+        assert!(
+            wxsl.contains("@group(3) @binding(0) var lut: texture_storage_2d"),
+            "the bake writes its one output"
+        );
+        assert!(wxsl.contains("fn bake_lut("), "the declared entry exists");
+        assert!(
+            wxsl.contains("@workgroup_size(8, 8)"),
+            "the workgroup size divides the declared 8x8x1 dispatch"
+        );
+        assert!(!wxsl.contains("@binding(1)"), "one output, one binding");
+        let EffectKind::Compute { workgroups, .. } = BRDF_LUT.kind else {
+            panic!("the LUT bake is a compute effect");
+        };
+        assert_eq!(workgroups, [8, 8, 1]);
     }
 }

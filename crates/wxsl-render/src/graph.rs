@@ -31,8 +31,8 @@ use std::fmt;
 
 use crate::error::RenderError;
 use crate::pass::{
-    Attachment, DepthAttachment, Dimension, Extent, Load, PassDesc, PassKind, Persistence,
-    ResourceDesc, ResourceId,
+    Attachment, DepthAttachment, Dimension, Extent, Load, PassDesc, PassKind, Persistence, Policy,
+    ResourceDesc, ResourceId, ResourceShape,
 };
 use crate::pipeline::TargetConfig;
 use wxsl_core::abi;
@@ -66,7 +66,25 @@ impl RenderGraph {
         }
     }
 
-    /// Declare the G-buffer layout this graph's material passes write.
+    /// Look up a resource description.
+    pub fn resource_desc(&self, id: ResourceId) -> Option<&ResourceDesc> {
+        self.resources.get(id.index())
+    }
+
+    /// Make `resource` stable storage: persistent, keeping no history.
+    ///
+    /// What a pass whose policy is not `per frame` needs its target to be
+    /// (plan2 P10) — the scheduler rejects anything less, because a
+    /// transient's slot is reused within a frame and an off-frame read of
+    /// a rotating ring is of some other frame's bake. The pipeline
+    /// compiler calls this when a policy'd pass writes a chain's colour
+    /// target: documents carry less than pass lists on purpose, and this
+    /// is a derivation, not a new knob.
+    pub fn make_stable_storage(&mut self, resource: ResourceId) {
+        if let Some(desc) = self.resources.get_mut(resource.index()) {
+            desc.persistence = Persistence::Persistent { history: 0 };
+        }
+    }
     ///
     /// Without this, a `gbuffer`-stage pass is checked against the ABI's
     /// base targets; with it, against exactly what the enabled set
@@ -103,11 +121,6 @@ impl RenderGraph {
     /// The passes, in declaration order.
     pub fn passes(&self) -> &[PassDesc] {
         &self.passes
-    }
-
-    /// Look up a resource description.
-    pub fn resource_desc(&self, id: ResourceId) -> Option<&ResourceDesc> {
-        self.resources.get(id.index())
     }
 
     /// Declare `desc` as the graph's shadow maps: the layered depth texture
@@ -155,6 +168,27 @@ impl RenderGraph {
                 }
             }
 
+            // Attachments are texture writes: a buffer in a colour or
+            // depth slot is a shape mistake, and naming it here beats a
+            // bind-group complaint three layers down (plan2 P11).
+            for id in pass
+                .color
+                .iter()
+                .map(|attachment| attachment.resource)
+                .chain(pass.depth.iter().map(|depth| depth.resource))
+            {
+                if self
+                    .resources
+                    .get(id.index())
+                    .is_some_and(|desc| desc.texture().is_none())
+                {
+                    return Err(GraphError::AttachmentNotATexture {
+                        pass: pass.label.clone(),
+                        resource: self.resources[id.index()].label.clone(),
+                    });
+                }
+            }
+
             // A pass writing three colour targets needs a shader that
             // returns three. This is the one mismatch `wgpu` reports as an
             // entry-point signature error with no mention of the pass.
@@ -174,11 +208,18 @@ impl RenderGraph {
             let attached = pass
                 .depth
                 .and_then(|depth| self.resources.get(depth.resource.index()))
-                .map(|desc| desc.format);
-            if attached != pass.state.depth_format {
+                .map(|desc| {
+                    desc.texture().map(|shape| {
+                        let ResourceShape::Texture { format, .. } = shape else {
+                            unreachable!("texture() answers only textures")
+                        };
+                        *format
+                    })
+                });
+            if attached.flatten() != pass.state.depth_format {
                 return Err(GraphError::DepthFormatMismatch {
                     pass: pass.label.clone(),
-                    attached,
+                    attached: attached.flatten(),
                     state: pass.state.depth_format,
                 });
             }
@@ -204,6 +245,27 @@ impl RenderGraph {
                         history: read.history,
                         available: desc.persistence.ring_length() as u32 - 1,
                     });
+                }
+            }
+
+            // A pass that does not run every frame must write only stable
+            // storage: a transient's texture is free for reuse within the
+            // frame, so its contents would be undefined on every frame the
+            // pass skips — and the frame's own target is re-presented every
+            // frame by definition. With this, *skipping* is safe: whatever
+            // the pass last wrote is exactly what a later pass reads.
+            if pass.policy != Policy::PerFrame {
+                for id in pass.written() {
+                    let desc = &self.resources[id.index()];
+                    let stable = matches!(desc.persistence, Persistence::Persistent { history: 0 });
+                    if !stable {
+                        return Err(GraphError::PolicyNeedsStableStorage {
+                            pass: pass.label.clone(),
+                            resource: desc.label.clone(),
+                            policy: pass.policy,
+                            imported: desc.imported,
+                        });
+                    }
                 }
             }
         }
@@ -314,6 +376,7 @@ impl RenderGraph {
         }
 
         let mut usage = vec![wgpu::TextureUsages::empty(); self.resources.len()];
+        let mut buffer_usage = vec![wgpu::BufferUsages::empty(); self.resources.len()];
         let mut first = vec![usize::MAX; self.resources.len()];
         let mut last = vec![0usize; self.resources.len()];
         let mut used = vec![false; self.resources.len()];
@@ -331,6 +394,9 @@ impl RenderGraph {
             last[index] = last[index].max(step);
         };
 
+        // Which usage a touch infers depends on what the resource is: a
+        // read of a texture binds it as a sampled texture, a read of a
+        // buffer as storage — the pass group decides at record time.
         for (pass_index, pass) in self.passes.iter().enumerate() {
             let step = position[pass_index];
             for attachment in &pass.color {
@@ -342,11 +408,25 @@ impl RenderGraph {
                 touch(depth.resource, step, &mut used, &mut first, &mut last);
             }
             for read in &pass.reads {
-                usage[read.resource.index()] |= wgpu::TextureUsages::TEXTURE_BINDING;
+                match self.resources[read.resource.index()].shape {
+                    ResourceShape::Texture { .. } => {
+                        usage[read.resource.index()] |= wgpu::TextureUsages::TEXTURE_BINDING;
+                    }
+                    ResourceShape::Buffer { .. } => {
+                        buffer_usage[read.resource.index()] |= wgpu::BufferUsages::STORAGE;
+                    }
+                }
                 touch(read.resource, step, &mut used, &mut first, &mut last);
             }
             for write in &pass.writes {
-                usage[write.index()] |= wgpu::TextureUsages::STORAGE_BINDING;
+                match self.resources[write.index()].shape {
+                    ResourceShape::Texture { .. } => {
+                        usage[write.index()] |= wgpu::TextureUsages::STORAGE_BINDING;
+                    }
+                    ResourceShape::Buffer { .. } => {
+                        buffer_usage[write.index()] |= wgpu::BufferUsages::STORAGE;
+                    }
+                }
                 touch(*write, step, &mut used, &mut first, &mut last);
             }
         }
@@ -366,14 +446,28 @@ impl RenderGraph {
             let desc = &self.resources[index];
             let slot_desc = SlotDesc {
                 label: desc.label.clone(),
-                extent: desc.extent,
-                dimension: desc.dimension,
-                layers: desc.layers,
-                format: desc.format,
-                usage: usage[index] | desc.usage,
+                shape: match desc.shape {
+                    ResourceShape::Texture {
+                        extent,
+                        dimension,
+                        layers,
+                        format,
+                        usage: extra,
+                    } => SlotShape::Texture {
+                        extent,
+                        dimension,
+                        layers,
+                        format,
+                        usage: usage[index] | extra,
+                    },
+                    ResourceShape::Buffer { size, usage: extra } => SlotShape::Buffer {
+                        size,
+                        usage: buffer_usage[index] | extra,
+                    },
+                },
             };
             let length = desc.persistence.ring_length();
-            if desc.persistence == Persistence::Transient {
+            if desc.persistence == Persistence::Transient && desc.texture().is_some() {
                 // Reuse a compatible slot whose last reader has already run.
                 let reusable = slots.iter().enumerate().position(|(slot, existing)| {
                     slot_free_after[slot] < first[index] && existing.aliasable_with(&slot_desc)
@@ -382,7 +476,15 @@ impl RenderGraph {
                     slot_free_after[slot] = last[index];
                     // The union of usages, so a texture reused as a sampled
                     // target is created with both flags.
-                    slots[slot].usage |= slot_desc.usage;
+                    if let (
+                        SlotShape::Texture {
+                            usage: existing, ..
+                        },
+                        SlotShape::Texture { usage: extra, .. },
+                    ) = (&mut slots[slot].shape, &slot_desc.shape)
+                    {
+                        *existing |= *extra;
+                    }
                     allocations[index] = Allocation::Ring {
                         base: slot,
                         length: 1,
@@ -451,29 +553,63 @@ pub enum Allocation {
     },
 }
 
-/// One physical texture the pool has to create.
+/// One physical resource the pool has to create.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SlotDesc {
-    /// Label for the `wgpu` texture.
+    /// Label for the `wgpu` texture or buffer.
     pub label: String,
-    /// Size.
-    pub extent: Extent,
-    /// Shape.
-    pub dimension: Dimension,
-    /// Layers, faces or depth.
-    pub layers: u32,
-    /// Format.
-    pub format: wgpu::TextureFormat,
-    /// Every usage any resource in this slot needs.
-    pub usage: wgpu::TextureUsages,
+    /// What it is made of, with every usage any resource in the slot
+    /// needs.
+    pub shape: SlotShape,
+}
+
+/// The make-up of one physical slot: the pool's mirror of
+/// [`ResourceShape`], with the inferred and declared usages unioned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SlotShape {
+    /// A texture.
+    Texture {
+        /// Size.
+        extent: Extent,
+        /// Shape.
+        dimension: Dimension,
+        /// Layers, faces or depth.
+        layers: u32,
+        /// Texel format.
+        format: wgpu::TextureFormat,
+        /// Every usage any resource in this slot needs.
+        usage: wgpu::TextureUsages,
+    },
+    /// A storage buffer.
+    Buffer {
+        /// Size in bytes.
+        size: u64,
+        /// Every usage any resource in this slot needs.
+        usage: wgpu::BufferUsages,
+    },
 }
 
 impl SlotDesc {
     fn aliasable_with(&self, other: &SlotDesc) -> bool {
-        self.extent == other.extent
-            && self.dimension == other.dimension
-            && self.layers == other.layers
-            && self.format == other.format
+        match (&self.shape, &other.shape) {
+            (
+                SlotShape::Texture {
+                    extent: a,
+                    dimension: ad,
+                    layers: al,
+                    format: af,
+                    ..
+                },
+                SlotShape::Texture {
+                    extent: b,
+                    dimension: bd,
+                    layers: bl,
+                    format: bf,
+                    ..
+                },
+            ) => a == b && ad == bd && al == bl && af == bf,
+            _ => false,
+        }
     }
 }
 
@@ -586,6 +722,31 @@ pub enum GraphError {
         /// Frames back the resource keeps.
         available: u32,
     },
+    /// A pass whose [`Policy`] is not `per frame` writes a resource whose
+    /// contents do not survive frames. On every frame the pass skips,
+    /// whatever reads it would read undefined memory — make the target
+    /// persistent (no history) instead.
+    PolicyNeedsStableStorage {
+        /// The pass's label.
+        pass: String,
+        /// The resource's label.
+        resource: String,
+        /// The policy the pass runs under.
+        policy: Policy,
+        /// Whether the resource was imported (the frame's own target) —
+        /// which gets its own sentence, because "the target" is the
+        /// likeliest way to arrive here.
+        imported: bool,
+    },
+    /// A colour or depth attachment names a buffer. Attachments are
+    /// texture writes; a buffer is read and written as storage, through
+    /// the pass group.
+    AttachmentNotATexture {
+        /// The pass's label.
+        pass: String,
+        /// The buffer's label.
+        resource: String,
+    },
 }
 
 impl fmt::Display for GraphError {
@@ -635,6 +796,34 @@ impl fmt::Display for GraphError {
                 f,
                 "pass `{pass}` reads `{resource}` {history} frames back, but it keeps {available}"
             ),
+            GraphError::PolicyNeedsStableStorage {
+                pass,
+                resource,
+                policy,
+                imported,
+            } => {
+                write!(
+                    f,
+                    "pass `{pass}` runs {policy}, but it writes `{resource}`, whose contents do \
+                     not survive frames"
+                )?;
+                if *imported {
+                    f.write_str(
+                        " — that is the frame's own target, which is presented every frame; \
+                         write a persistent resource instead and present that",
+                    )
+                } else {
+                    f.write_str(
+                        " — make it persistent (with no history) so the pass's last \
+                     output is what a later frame reads",
+                    )
+                }
+            }
+            GraphError::AttachmentNotATexture { pass, resource } => write!(
+                f,
+                "pass `{pass}` attaches `{resource}`, which is a buffer — attachments are \
+                 texture writes; bind it through the pass group instead"
+            ),
         }
     }
 }
@@ -659,24 +848,49 @@ pub struct ResourcePool {
     generation: u64,
 }
 
-struct Slot {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+enum Slot {
+    Texture {
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+    },
+    Buffer {
+        buffer: wgpu::Buffer,
+    },
 }
 
 /// The shape of one entry of a pass bind group.
 ///
-/// Two passes whose reads have the same shapes can share a bind group
-/// *layout*, and therefore a pipeline layout — which is why this is what
-/// the caches are keyed on rather than "does this pass have a pass group",
-/// a question two passes can answer the same way while wanting different
-/// layouts.
+/// Two passes whose reads and writes have the same shapes can share a
+/// bind group *layout*, and therefore a pipeline layout — which is why
+/// this is what the caches are keyed on rather than "does this pass have
+/// a pass group", a question two passes can answer the same way while
+/// wanting different layouts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PassBinding {
-    /// How the texture is sampled.
-    pub sample_type: wgpu::TextureSampleType,
-    /// The view's dimension.
-    pub view_dimension: wgpu::TextureViewDimension,
+pub enum PassBinding {
+    /// A texture read — sampled or loaded, whole-resource.
+    Texture {
+        /// How the texture is sampled.
+        sample_type: wgpu::TextureSampleType,
+        /// The view's dimension.
+        view_dimension: wgpu::TextureViewDimension,
+    },
+    /// A storage texture the pass writes — a compute effect's output,
+    /// write-only (plan2 P10).
+    StorageTexture {
+        /// The texel format, which the bind group layout has to name.
+        format: wgpu::TextureFormat,
+        /// The view's dimension.
+        view_dimension: wgpu::TextureViewDimension,
+    },
+    /// A storage buffer read (`read_only`) or written by the pass (plan2
+    /// P11). The size rides along because the bind group layout's
+    /// `min_binding_size` is part of the layout's identity.
+    Buffer {
+        /// Whether the pass only reads it.
+        read_only: bool,
+        /// The buffer's size in bytes.
+        size: u64,
+    },
 }
 
 impl Default for ResourcePool {
@@ -711,7 +925,10 @@ impl ResourcePool {
 
     /// The whole-resource view of one slot, for binding it as a texture.
     pub fn slot_view(&self, slot: usize) -> Option<&wgpu::TextureView> {
-        self.slots.get(slot).map(|slot| &slot.view)
+        match self.slots.get(slot) {
+            Some(Slot::Texture { view, .. }) => Some(view),
+            _ => None,
+        }
     }
 
     /// The frame counter the ring rotation is taken modulo.
@@ -733,43 +950,87 @@ impl ResourcePool {
         self.slots.clear();
         self.bind_groups.clear();
         for desc in schedule.slots() {
-            let (width, height) = desc.extent.resolve(target.width, target.height);
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("wxsl {}", desc.label)),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: desc.layers,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: desc.dimension.texture_dimension(),
-                format: desc.format,
-                usage: desc.usage,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(desc.dimension.view_dimension()),
-                ..Default::default()
-            });
-            self.slots.push(Slot { texture, view });
+            let slot = match desc.shape {
+                SlotShape::Texture {
+                    extent,
+                    dimension,
+                    layers,
+                    format,
+                    usage,
+                } => {
+                    let (width, height) = extent.resolve(target.width, target.height);
+                    let texture = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&format!("wxsl {}", desc.label)),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: layers,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: dimension.texture_dimension(),
+                        format,
+                        usage,
+                        view_formats: &[],
+                    });
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                        dimension: Some(dimension.view_dimension()),
+                        ..Default::default()
+                    });
+                    Slot::Texture { texture, view }
+                }
+                SlotShape::Buffer { size, usage } => {
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("wxsl {}", desc.label)),
+                        size,
+                        usage: usage | wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    Slot::Buffer { buffer }
+                }
+            };
+            self.slots.push(slot);
         }
         self.layout = schedule.slots().to_vec();
         self.target = Some(target);
         self.generation += 1;
     }
 
-    /// The texture serving one slot, if the pool has been configured.
+    /// The texture serving one slot, if the pool has been configured and
+    /// the slot is a texture.
     ///
     /// The escape hatch for anything the graph does not do itself: reading
     /// a target back, or handing it to another system.
     pub fn texture(&self, slot: usize) -> Option<&wgpu::Texture> {
-        self.slots.get(slot).map(|slot| &slot.texture)
+        match self.slots.get(slot) {
+            Some(Slot::Texture { texture, .. }) => Some(texture),
+            _ => None,
+        }
+    }
+
+    /// The buffer serving one slot, if the slot is a buffer — the same
+    /// escape hatch, for reading a compute pass's output back.
+    pub fn buffer(&self, slot: usize) -> Option<&wgpu::Buffer> {
+        match self.slots.get(slot) {
+            Some(Slot::Buffer { buffer }) => Some(buffer),
+            _ => None,
+        }
     }
 
     /// The view of one slot, for a whole-resource binding.
     fn view(&self, slot: usize) -> &wgpu::TextureView {
-        &self.slots[slot].view
+        match &self.slots[slot] {
+            Slot::Texture { view, .. } => view,
+            Slot::Buffer { .. } => panic!("a buffer has no texture view"),
+        }
+    }
+
+    /// The buffer of one slot, for a pass-group binding.
+    fn slot_buffer(&self, slot: usize) -> &wgpu::Buffer {
+        match &self.slots[slot] {
+            Slot::Buffer { buffer } => buffer,
+            Slot::Texture { .. } => panic!("a texture has no buffer"),
+        }
     }
 
     /// A view of one layer of a slot, for an attachment.
@@ -778,11 +1039,13 @@ impl ResourcePool {
     /// time; a plain 2D target's layer 0 is the whole texture, and reuses
     /// the view that already exists.
     fn attachment_view(&self, slot: usize, layer: u32) -> wgpu::TextureView {
-        let entry = &self.slots[slot];
-        if layer == 0 && entry.texture.depth_or_array_layers() == 1 {
-            return entry.view.clone();
+        let Slot::Texture { texture, view } = &self.slots[slot] else {
+            panic!("attachments are textures; the scheduler checks")
+        };
+        if layer == 0 && texture.depth_or_array_layers() == 1 {
+            return view.clone();
         }
-        entry.texture.create_view(&wgpu::TextureViewDescriptor {
+        texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2),
             base_array_layer: layer,
             array_layer_count: Some(1),
@@ -822,10 +1085,15 @@ impl RenderGraph {
     /// Record every pass in `schedule` order into `encoder`.
     ///
     /// `imports` supplies a view for each imported resource — at minimum
-    /// [`RenderGraph::TARGET`]. `body` issues the actual work: the graph has
-    /// opened the pass, resolved its attachments and bound nothing, because
-    /// which bind groups a draw needs is the caller's business, not the
-    /// scheduler's.
+    /// [`RenderGraph::TARGET`]. `run` decides, per pass (by declaration
+    /// index), whether the pass runs this frame at all — the execution
+    /// policies' hook (plan2 P10): a pass it returns `false` for is not
+    /// recorded and leaves whatever its last run wrote behind, which the
+    /// scheduler's stable-storage rule makes safe. `body` issues the
+    /// actual work: the graph has opened the pass, resolved its
+    /// attachments and bound nothing, because which bind groups a draw
+    /// needs is the caller's business, not the scheduler's.
+    #[allow(clippy::too_many_arguments)]
     pub fn record<F>(
         &self,
         device: &wgpu::Device,
@@ -833,6 +1101,7 @@ impl RenderGraph {
         schedule: &Schedule,
         pool: &mut ResourcePool,
         imports: &[(ResourceId, &wgpu::TextureView)],
+        run: &dyn Fn(usize) -> bool,
         mut body: F,
     ) -> Result<(), RenderError>
     where
@@ -849,6 +1118,9 @@ impl RenderGraph {
                 })
         };
         for &index in schedule.order() {
+            if !run(index) {
+                continue;
+            }
             let pass = &self.passes[index];
 
             // The pass bind group: the resources it reads, in order, at
@@ -862,13 +1134,22 @@ impl RenderGraph {
                 .color
                 .iter()
                 .map(|attachment| {
-                    Some(wgpu::ColorTargetState {
-                        format: self.resources[attachment.resource.index()].format,
+                    let format = match self.resources[attachment.resource.index()].shape {
+                        ResourceShape::Texture { format, .. } => format,
+                        ResourceShape::Buffer { .. } => {
+                            return Err(RenderError::Graph(GraphError::AttachmentNotATexture {
+                                pass: pass.label.clone(),
+                                resource: self.resources[attachment.resource.index()].label.clone(),
+                            }));
+                        }
+                    };
+                    Ok(Some(wgpu::ColorTargetState {
+                        format,
                         blend: pass.state.blend,
                         write_mask: wgpu::ColorWrites::ALL,
-                    })
+                    }))
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
             let recorded = RecordedPass {
                 desc: pass,
                 index,
@@ -978,6 +1259,13 @@ impl RenderGraph {
     }
 
     /// Build (or reuse) the pass group's layout and bind group.
+    ///
+    /// The group is the pass's declared contract in binding order: every
+    /// read (a texture or, later, a buffer), then every non-attachment
+    /// write (a compute effect's storage target). Effects declare their
+    /// inputs and outputs in the same order, which is what makes the
+    /// shader and the group meet without either knowing the other
+    /// (plan2 P4/P10).
     #[allow(clippy::type_complexity)]
     fn pass_group(
         &self,
@@ -993,23 +1281,40 @@ impl RenderGraph {
         ),
         RenderError,
     > {
-        if pass.reads.is_empty() {
+        if pass.reads.is_empty() && pass.writes.is_empty() {
             return Ok((Vec::new(), None, None));
         }
-        let kinds: Vec<PassBinding> = pass
-            .reads
-            .iter()
-            .map(|read| {
-                let desc = &self.resources[read.resource.index()];
-                PassBinding {
-                    sample_type: desc
-                        .format
+        let mut kinds: Vec<PassBinding> = Vec::with_capacity(pass.reads.len() + pass.writes.len());
+        for read in &pass.reads {
+            kinds.push(match self.resources[read.resource.index()].shape {
+                ResourceShape::Texture {
+                    format, dimension, ..
+                } => PassBinding::Texture {
+                    sample_type: format
                         .sample_type(None, None)
                         .unwrap_or(wgpu::TextureSampleType::Float { filterable: true }),
-                    view_dimension: desc.dimension.view_dimension(),
-                }
-            })
-            .collect();
+                    view_dimension: dimension.view_dimension(),
+                },
+                ResourceShape::Buffer { size, .. } => PassBinding::Buffer {
+                    read_only: true,
+                    size,
+                },
+            });
+        }
+        for write in &pass.writes {
+            kinds.push(match self.resources[write.index()].shape {
+                ResourceShape::Texture {
+                    format, dimension, ..
+                } => PassBinding::StorageTexture {
+                    format,
+                    view_dimension: dimension.view_dimension(),
+                },
+                ResourceShape::Buffer { size, .. } => PassBinding::Buffer {
+                    read_only: false,
+                    size,
+                },
+            });
+        }
 
         let layout = pool
             .bind_layouts
@@ -1018,16 +1323,53 @@ impl RenderGraph {
                 let entries: Vec<wgpu::BindGroupLayoutEntry> = kinds
                     .iter()
                     .enumerate()
-                    .map(|(binding, kind)| wgpu::BindGroupLayoutEntry {
-                        binding: binding as u32,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT
-                            | wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: kind.sample_type,
-                            view_dimension: kind.view_dimension,
-                            multisampled: false,
-                        },
-                        count: None,
+                    .map(|(binding, kind)| {
+                        // Reads are visible to everything a pass can run;
+                        // writes are compute-only, because a render pass
+                        // writing storage mid-draw is not expressible.
+                        let (visibility, ty) = match *kind {
+                            PassBinding::Texture {
+                                sample_type,
+                                view_dimension,
+                            } => (
+                                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                                wgpu::BindingType::Texture {
+                                    sample_type,
+                                    view_dimension,
+                                    multisampled: false,
+                                },
+                            ),
+                            PassBinding::StorageTexture {
+                                format,
+                                view_dimension,
+                            } => (
+                                wgpu::ShaderStages::COMPUTE,
+                                wgpu::BindingType::StorageTexture {
+                                    access: wgpu::StorageTextureAccess::WriteOnly,
+                                    format,
+                                    view_dimension,
+                                },
+                            ),
+                            PassBinding::Buffer { read_only, size } => (
+                                if read_only {
+                                    wgpu::ShaderStages::VERTEX_FRAGMENT
+                                        | wgpu::ShaderStages::COMPUTE
+                                } else {
+                                    wgpu::ShaderStages::COMPUTE
+                                },
+                                wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: wgpu::BufferSize::new(size),
+                                },
+                            ),
+                        };
+                        wgpu::BindGroupLayoutEntry {
+                            binding: binding as u32,
+                            visibility,
+                            ty,
+                            count: None,
+                        }
                     })
                     .collect();
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1037,10 +1379,17 @@ impl RenderGraph {
             })
             .clone();
 
+        // Reads go to their ring slot at their history; writes to this
+        // frame's slot of what they write.
         let slots: Vec<usize> = pass
             .reads
             .iter()
             .map(|read| schedule.slot(read.resource, pool.frame, read.history))
+            .chain(
+                pass.writes
+                    .iter()
+                    .map(|write| schedule.slot(*write, pool.frame, 0)),
+            )
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| RenderError::MissingImport {
                 resource: pass.label.clone(),
@@ -1049,14 +1398,29 @@ impl RenderGraph {
         if let Some(existing) = pool.bind_groups.get(&key) {
             return Ok((kinds, Some(layout), Some(existing.clone())));
         }
-        let views: Vec<wgpu::TextureView> =
-            slots.iter().map(|slot| pool.view(*slot).clone()).collect();
-        let entries: Vec<wgpu::BindGroupEntry> = views
+        let entries: Vec<wgpu::BindGroupEntry> = slots
             .iter()
             .enumerate()
-            .map(|(binding, view)| wgpu::BindGroupEntry {
-                binding: binding as u32,
-                resource: wgpu::BindingResource::TextureView(view),
+            .map(|(binding, slot)| {
+                // The binding's kind decides how the slot is bound — and
+                // the kind is where the pass declared it, so the two
+                // cannot disagree.
+                let resource = match kinds[binding] {
+                    PassBinding::Texture { .. } | PassBinding::StorageTexture { .. } => {
+                        wgpu::BindingResource::TextureView(pool.view(*slot))
+                    }
+                    PassBinding::Buffer { .. } => {
+                        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: pool.slot_buffer(*slot),
+                            offset: 0,
+                            size: None,
+                        })
+                    }
+                };
+                wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource,
+                }
             })
             .collect();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1080,7 +1444,7 @@ fn store_op(store: bool) -> wgpu::StoreOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass::{Attachment, DrawSource, PassState, Read, DEPTH_FORMAT};
+    use crate::pass::{Attachment, DrawSource, PassState, Policy, Read, DEPTH_FORMAT};
     use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::scene::TagExpr;
 
@@ -1280,8 +1644,112 @@ mod tests {
         graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(a)]));
 
         let schedule = graph.schedule().expect("schedules");
-        let slot = &schedule.slots()[0];
-        assert!(slot.usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
-        assert!(slot.usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+        let SlotShape::Texture { usage, .. } = schedule.slots()[0].shape else {
+            panic!("a texture");
+        };
+        assert!(usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
+        assert!(usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+    }
+
+    #[test]
+    fn a_pass_that_skips_frames_may_only_write_stable_storage() {
+        // The once-baked LUT is the design case: written once, read every
+        // frame — sound only because the target survives frames.
+        let mut graph = RenderGraph::new(COLOR);
+        let lut = graph.resource(ResourceDesc::color("brdf lut", COLOR).persistent(0));
+        graph.pass(
+            PassDesc::compute("bake", "brdf_lut")
+                .with_write(lut)
+                .with_policy(Policy::Once),
+        );
+        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(lut)]));
+        let schedule = graph.schedule().expect("the LUT graph schedules");
+        assert_eq!(schedule.order(), &[0, 1]);
+        // Storage writes get their usage flag, like any other write.
+        let SlotShape::Texture { usage, .. } = schedule.slots()[0].shape else {
+            panic!("a texture");
+        };
+        assert!(usage.contains(wgpu::TextureUsages::STORAGE_BINDING));
+
+        // The same bake into a transient is the mistake the rule exists
+        // for: the slot is reused within the frame, so the second frame's
+        // read would be of whatever rented the texture meanwhile.
+        let mut graph = RenderGraph::new(COLOR);
+        let scratch = graph.resource(ResourceDesc::color("scratch", COLOR));
+        graph.pass(
+            PassDesc::compute("bake", "brdf_lut")
+                .with_write(scratch)
+                .with_policy(Policy::Once),
+        );
+        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(scratch)]));
+        match graph.schedule() {
+            Err(GraphError::PolicyNeedsStableStorage {
+                resource, policy, ..
+            }) => {
+                assert_eq!(resource, "scratch");
+                assert_eq!(policy, Policy::Once);
+            }
+            other => panic!("expected a stable-storage error, got {other:?}"),
+        }
+
+        // And writing the frame's own target under a policy is the same
+        // mistake wearing the target's face.
+        let mut graph = RenderGraph::new(COLOR);
+        graph.pass(
+            PassDesc::screen("backdrop", "lut_view")
+                .with_policy(Policy::Once)
+                .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK)),
+        );
+        let error = graph.schedule().expect_err("the target is not stable");
+        assert!(error.to_string().contains("frame's own target"), "{error}");
+    }
+
+    #[test]
+    fn buffers_participate_in_ordering_and_never_share_a_slot() {
+        // A compute pass fills a buffer; a screen pass reads it as
+        // storage. The read is an ordering edge, exactly as a texture
+        // read is — which is the whole of P11's point (plan2 P11).
+        let mut graph = RenderGraph::new(COLOR);
+        let ramp = graph.resource(ResourceDesc::buffer("ramp", 256));
+        graph.pass(writer("show", RenderGraph::TARGET).with_reads([Read::current(ramp)]));
+        graph.pass(PassDesc::compute("fill", "ramp_fill").with_write(ramp));
+        // Declared second on purpose: the schedule must not need the
+        // author to have got the order right.
+        let schedule = graph.schedule().expect("schedules");
+        assert_eq!(schedule.order(), &[1, 0]);
+        // Storage usage is inferred for a buffer any pass touches.
+        let SlotShape::Buffer { usage, .. } = schedule.slots()[0].shape else {
+            panic!("a buffer");
+        };
+        assert!(usage.contains(wgpu::BufferUsages::STORAGE));
+
+        // And two buffers never share, however neatly their lifetimes
+        // would fit: the aliasing rule is "never" for now, because a
+        // buffer aliasing bug corrupts a whole block.
+        let mut graph = RenderGraph::new(COLOR);
+        let a = graph.resource(ResourceDesc::buffer("a", 64));
+        let b = graph.resource(ResourceDesc::buffer("b", 64));
+        graph.pass(PassDesc::compute("write a", "ramp_fill").with_write(a));
+        graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
+        graph.pass(PassDesc::compute("write b", "ramp_fill").with_write(b));
+        graph.pass(writer("b to target", RenderGraph::TARGET).with_reads([Read::current(b)]));
+        let schedule = graph.schedule().expect("schedules");
+        assert_ne!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
+        assert_eq!(schedule.slots().len(), 2, "one slot per buffer");
+    }
+
+    #[test]
+    fn a_buffer_in_an_attachment_slot_is_named() {
+        // Attachments are texture writes; a buffer belongs to the pass
+        // group. The mistake is a named error, not a bind-group complaint.
+        let mut graph = RenderGraph::new(COLOR);
+        let scratch = graph.resource(ResourceDesc::buffer("scratch", 64));
+        graph.pass(writer("write", scratch));
+        match graph.schedule() {
+            Err(GraphError::AttachmentNotATexture { resource, .. }) => {
+                assert_eq!(resource, "scratch")
+            }
+            other => panic!("expected an attachment-shape error, got {other:?}"),
+        }
     }
 }

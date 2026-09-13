@@ -123,8 +123,10 @@ facade crate's feature set, not about the workspace.
   (ADR 0029): every shader the generators produce, compiled with no device —
   every shipped model standalone and as a direct dispatch, the switch shape
   for every telling lighting set, the lighting pass for every set under
-  every binding of the ABI's macro flags, and the generated material module
-  for every stage of every set. This is where a generator or template
+  every binding of the ABI's macro flags, the generated material module
+  for every stage of every set, and the feature half (ADR 0037): the
+  feature-enabled lighting pass under both arms of the feature's macro,
+  the feature module standalone. This is where a generator or template
   change fails, in about a second, with the compiler's diagnostic.
 - `cargo test -p wxsl --test stage_analysis` — a node the compiler places
   in the vertex stage and interpolates down (a synthesized stage cut, ADR
@@ -199,7 +201,8 @@ facade crate's feature set, not about the workspace.
   device.
 - `cargo test -p wxsl-render` — the render graph's scheduling, which is a
   pure function and needs no GPU: pass ordering, transient texture reuse,
-  history rotation, and every pass-list mistake that is reported as a named
+  history rotation, buffer resources ordering without ever aliasing, the
+  policy stable-storage rule, and every pass-list mistake that is reported as a named
   error rather than a `wgpu` complaint. Also the **preset parity** tests
   (ADR 0033): the compiled forward/deferred preset documents equal the
   hand-built reference pass lists field for field, schedule identically,
@@ -210,6 +213,22 @@ facade crate's feature set, not about the workspace.
   both spellings of "what bloom reads" agree, and the un-compilable
   chain shapes (`ImageFromPass`, an input the effect does not declare)
   are named errors.
+- `cargo test -p wxsl --test execution_policies` — the policies on a real
+  device (ADR 0035): a `once` compute bake (the BRDF LUT) records once and
+  its output is what later frames show, a pool reallocation bakes it
+  again, `on demand` sleeps until marked and stops after, and a
+  document's `policy` setting reaches the pass list with its target
+  promoted to stable storage. Skips with no adapter.
+- `cargo test -p wxsl --test buffer_resources` — buffers as graph
+  resources on a real device (ADR 0036): a compute effect fills a storage
+  buffer, a screen effect reads it as storage and draws it, and the
+  picture's direction proves the data arrived through the pass group.
+  Skips with no adapter.
+- `cargo test -p wxsl --test semantic_channels` — the feature handshake
+  end to end (ADR 0037): a material pinning `wxsl_subsurface` under a
+  pipeline without the channel, a material resolved against another plan,
+  and the matched pair — each the named error or the picture it should
+  be. Skips with no adapter.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
@@ -219,12 +238,13 @@ facade crate's feature set, not about the workspace.
   to see whether a change to the ABI or the pipelines still produces a
   picture. Writes a PNG per path and reports how far apart they are.
 - `cargo run -p wxsl --example gallery -- --screenshot` — every pipeline
-  in one command: the stock presets, the minimal document, and the
-  deferred-plus-bloom chain, one PNG each plus a contact sheet, or all
-  five live in one window without the flag. The fastest way to see
-  whether a *pipeline* change (presets, effects, the compiler) still
-  renders — and the working example of composing a pipeline as a
-  document from an application.
+  in one command: the stock presets, the minimal document, the
+  deferred-plus-bloom chain, and the policy/buffer/channel proofs
+  (BRDF-LUT bake, buffer ramp, subsurface channels), one PNG each plus a
+  contact sheet, or all of them live in one window without the flag. The
+  fastest way to see whether a *pipeline* change (presets, effects, the
+  compiler) still renders — and the working example of composing a
+  pipeline as a document from an application.
 - `cargo run -p wxsl --features editor --example editor -- --screenshot out.png`
   — the same for the editor: one frame, no window, reviewable as a PNG. Then
   `cargo run -p wxsl-render --example glyph_field -- <FONT> c` when the
@@ -259,15 +279,20 @@ facade crate's feature set, not about the workspace.
   the hand-built `forward_graph`/`deferred_graph` are the reference the
   preset-parity tests compile against, nothing more. A document error
   names the document node; the scheduler's checks stay as the last line.
-- A **screen effect** is data too (ADR 0034): a `wxsl_render::effect::
-  Effect` row — declared inputs in pass-group binding order, entry
-  points, and its shader (generated, or a `.wxsl` file the effect owns,
-  like `crates/wxsl-render/shaders/bloom.wxsl`). A document's
-  `pass.screen` names it by id; the compiler validates wiring against
-  `inputs`, and the descriptor-vs-shader contract (bindings, entries) is
-  pinned by a test in `effect.rs`. Adding an effect is a row and a file,
-  never a `PassKind` arm — `ScreenShader` was deleted for exactly that
-  reason, don't grow one back.
+- An **effect** is data (ADR 0034, extended to compute by ADR 0035): a
+  `wxsl_render::effect::Effect` row — declared inputs and outputs in
+  pass-group binding order, screen or compute entry points, and its
+  shader (generated, or a `.wxsl` file the effect owns, like
+  `crates/wxsl-render/shaders/bloom.wxsl`). A pass names it by id; the
+  compiler validates wiring against `inputs`, and the descriptor-vs-shader
+  contract (bindings, entries) is pinned by tests in `effect.rs`. Adding
+  an effect is a row and a file, never a `PassKind` arm — `ScreenShader`
+  was deleted for exactly that reason, don't grow one back.
+- A pass's **policy** (`wxsl_render::pass::Policy`, ADR 0035) says how
+  often it runs. A non-default policy may only write stable storage —
+  the scheduler checks — so a skipped pass leaves exactly its last
+  output behind. Compute is an effect kind, not raw entry/workgroup
+  strings on the pass.
 - A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
   geometry pass names one. Adding a stage is that row plus the constant
   naming it, plus whatever `codegen::write_entry_points` has to emit for
@@ -284,6 +309,13 @@ facade crate's feature set, not about the workspace.
   `shading.wxsl`. Materials name models by name, not id; the G-buffer's
   byte budget is checked in `Renderer::set_lighting`, and the cost table
   in `pipeline::gbuffer_bytes_per_sample` mirrors the spec's numbers.
+- A **material feature** is a row in `wxsl_core::lighting::FEATURES` plus
+  a `.wxsl` module under `shaders/wxsl/features/` (ADR 0037): the second
+  source of G-buffer channels, tagged in the collected
+  `GBufferPlan` beside the models' own. A feature's macro pin is what
+  turns it on per material, and `Renderer::set_features` is what gives a
+  pipeline the channel — the mismatch is a named error, not a silently
+  missing feature.
 - A **scene** (`wxsl_core::scene`) is what exists; an **environment**
   (`wxsl_render::environment`) is camera and lights; a **draw list**
   (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a

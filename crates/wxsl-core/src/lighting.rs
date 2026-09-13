@@ -88,6 +88,235 @@ pub struct ModelExtra {
     pub pack: &'static str,
 }
 
+/// Where a G-buffer channel request came from (plan2 P12).
+///
+/// The tags are what make the channel list *semantic*: an error can say
+/// which two authors collided, and a reader can see that a channel exists
+/// because a model asked for it — or because a material feature did,
+/// without any model in between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChannelSource {
+    /// The ABI's base targets and the dispatch id channel — the fixed
+    /// part of every plan, which every request is measured against.
+    BaseLayout,
+    /// A lighting model's own request — its `extra` target.
+    Model {
+        /// The model's name.
+        name: &'static str,
+    },
+    /// A material feature asking directly, the second source P12 adds:
+    /// data a *model* consumes, requested by the *feature* that owns it.
+    Feature {
+        /// The feature's name.
+        name: &'static str,
+    },
+}
+
+impl ChannelSource {
+    /// The source, as an error message names it.
+    pub fn describe(self) -> String {
+        match self {
+            ChannelSource::BaseLayout => "the G-buffer's base layout".to_string(),
+            ChannelSource::Model { name } => format!("the lighting model `{name}`"),
+            ChannelSource::Feature { name } => format!("the material feature `{name}`"),
+        }
+    }
+
+    /// The name the source goes by, whatever kind it is.
+    pub fn name(self) -> &'static str {
+        match self {
+            ChannelSource::BaseLayout => "base",
+            ChannelSource::Model { name } | ChannelSource::Feature { name } => name,
+        }
+    }
+}
+
+impl fmt::Display for ChannelSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.describe())
+    }
+}
+
+/// One request for a G-buffer channel, with who asked for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ChannelRequest {
+    /// Who asked, for errors and for readers that care.
+    pub source: ChannelSource,
+    /// The channel: its field name, its docs and its precision.
+    pub target: GBufferTarget,
+}
+
+/// A material feature: the second source of channel requests (plan2 P12).
+///
+/// Where a lighting model both requests a channel and consumes it, a
+/// feature *owns* a channel on the models' behalf — subsurface inputs are
+/// the shape: the feature declares the channel, the material turns it on
+/// with its macro and fills it through the feature's pack, and any model
+/// that supports the feature reads it from the extras struct its dispatch
+/// hands it. Nothing downstream can tell a feature's channel from a
+/// model's own, which is the point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MaterialFeature {
+    /// The feature's name, as `Renderer::set_features` and this registry's
+    /// lookups spell it.
+    pub name: &'static str,
+    /// The macro whose `true` value turns the feature on for a material —
+    /// and demands its channel of the surrounding pipeline. Declared by
+    /// the feature's module, so a material pinning it is a normal macro
+    /// pin, and part of the variant cache key like any macro.
+    pub macro_name: &'static str,
+    /// WXSL module path holding `pack`, shipped by the same library that
+    /// ships the model modules.
+    pub module: &'static str,
+    /// Name of the function in the module that produces the channel's
+    /// value: `fn <pack>() -> vec2f` — surface-independent for now,
+    /// reading the feature's own macro constants. A surface-driven
+    /// feature needs a `Surface` field, which is a schema change recorded
+    /// when the first such feature lands.
+    pub pack: &'static str,
+    /// The channel the feature asks for.
+    pub target: GBufferTarget,
+    /// What the feature is, for editors and diagnostics.
+    pub doc: &'static str,
+}
+
+/// Subsurface: the first material feature, and the proof that channels
+/// have a second source. Its channel carries `(strength, radius)` per
+/// fragment; the shipped models do not read it yet — a feature-consuming
+/// model is the first real subsurface model's work, and the seam this
+/// entry provides is what that model builds on.
+pub const SUBSURFACE: MaterialFeature = MaterialFeature {
+    name: "subsurface",
+    macro_name: "wxsl_subsurface",
+    module: "package::wxsl::features::subsurface",
+    pack: "pack_subsurface",
+    target: GBufferTarget {
+        field: "subsurface",
+        doc: "xy = (subsurface strength, radius), for feature-aware models",
+        precision: GBufferPrecision::HighDynamicRangePair,
+    },
+    doc: "Subsurface inputs packed per fragment, for feature-aware models.",
+};
+
+/// The shipped material features.
+pub const FEATURES: &[MaterialFeature] = &[SUBSURFACE];
+
+/// The feature named `name`.
+pub fn feature_by_name(name: &str) -> Option<&'static MaterialFeature> {
+    FEATURES.iter().find(|feature| feature.name == name)
+}
+
+/// The feature turned on by a material's pin of `macro_name`.
+pub fn feature_for_macro(macro_name: &str) -> Option<&'static MaterialFeature> {
+    FEATURES
+        .iter()
+        .find(|feature| feature.macro_name == macro_name)
+}
+
+/// The channel requests for the named features. An unknown name is an
+/// error here rather than a silent drop — a pipeline that quietly skips a
+/// feature its documents name would reshade, not fail.
+pub fn feature_requests(names: &[&str]) -> Result<Vec<ChannelRequest>, LightingError> {
+    names
+        .iter()
+        .map(|name| {
+            let feature = feature_by_name(name).ok_or_else(|| LightingError::UnknownFeature {
+                name: name.to_string(),
+            })?;
+            Ok(ChannelRequest {
+                source: ChannelSource::Feature { name: feature.name },
+                target: feature.target,
+            })
+        })
+        .collect()
+}
+
+/// The collected G-buffer channel plan: base targets, the dispatch id
+/// channel if the set needs one, and every request — model and feature —
+/// with collisions named (plan2 P12).
+///
+/// This is the single answer to "what does the deferred path attach,
+/// bind and read" that [`LightingSet::gbuffer_layout`] has always been,
+/// extended to the second source. The generated struct, the pack, the
+/// lighting pass and `wxsl-render`'s resource declaration all read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GBufferPlan {
+    id_channel: bool,
+    requests: Vec<ChannelRequest>,
+    layout: Vec<GBufferTarget>,
+}
+
+impl GBufferPlan {
+    /// Validate and build a plan: model requests first, in id order —
+    /// the order the set packs them in — then feature requests, each
+    /// claiming a field name the others have not taken.
+    pub fn new(
+        id_channel: bool,
+        requests: impl IntoIterator<Item = ChannelRequest>,
+    ) -> Result<Self, LightingError> {
+        let mut requests: Vec<ChannelRequest> = requests.into_iter().collect();
+        requests.sort_by_key(|request| match request.source {
+            ChannelSource::Model { .. } => (0, request.source.name()),
+            ChannelSource::Feature { .. } => (1, request.source.name()),
+            ChannelSource::BaseLayout => (2, ""),
+        });
+        let mut layout: Vec<GBufferTarget> = abi::GBUFFER_BASE_TARGETS.to_vec();
+        if id_channel {
+            layout.push(MODEL_ID_TARGET);
+        }
+        let mut claimed: Vec<(&'static str, ChannelSource)> = layout
+            .iter()
+            .map(|target| (target.field, ChannelSource::BaseLayout))
+            .collect();
+        for request in &requests {
+            if let Some((_, first)) = claimed
+                .iter()
+                .find(|(field, _)| *field == request.target.field)
+            {
+                return Err(LightingError::DuplicateChannel {
+                    field: request.target.field.to_string(),
+                    first: *first,
+                    second: request.source,
+                });
+            }
+            claimed.push((request.target.field, request.source));
+            layout.push(request.target);
+        }
+        Ok(GBufferPlan {
+            id_channel,
+            requests,
+            layout,
+        })
+    }
+
+    /// The layout this plan asks for, in `@location` order.
+    pub fn layout(&self) -> &[GBufferTarget] {
+        &self.layout
+    }
+
+    /// The collected requests, sources included.
+    pub fn requests(&self) -> &[ChannelRequest] {
+        &self.requests
+    }
+
+    /// Whether the dispatch id channel is part of the plan.
+    pub fn id_channel(&self) -> bool {
+        self.id_channel
+    }
+
+    /// The features part of the plan's identity, for cache keys.
+    pub fn signature(&self) -> String {
+        let names = self
+            .requests
+            .iter()
+            .filter(|request| matches!(request.source, ChannelSource::Feature { .. }))
+            .map(|request| request.source.name())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("features={names}")
+    }
+}
+
 /// One lighting model: a registry entry, and the whole contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LightingModel {
@@ -136,6 +365,21 @@ pub enum LightingError {
         /// The name that was asked for.
         name: String,
     },
+    /// A feature list names a feature this registry does not ship.
+    UnknownFeature {
+        /// The name that was asked for.
+        name: String,
+    },
+    /// Two requests claim the same G-buffer field — the collision the
+    /// source tags exist to name (plan2 P12).
+    DuplicateChannel {
+        /// The contested field name.
+        field: String,
+        /// Who claimed it first.
+        first: ChannelSource,
+        /// Who claimed it second.
+        second: ChannelSource,
+    },
 }
 
 impl fmt::Display for LightingError {
@@ -151,6 +395,18 @@ impl fmt::Display for LightingError {
             LightingError::UnknownModel { name } => {
                 write!(f, "no lighting model named `{name}` is enabled")
             }
+            LightingError::UnknownFeature { name } => {
+                write!(f, "no material feature named `{name}` is shipped")
+            }
+            LightingError::DuplicateChannel {
+                field,
+                first,
+                second,
+            } => write!(
+                f,
+                "the G-buffer field `{field}` is claimed twice: by {first} and by {second} — \
+                 rename one of the requested channels"
+            ),
         }
     }
 }
@@ -287,12 +543,29 @@ impl LightingSet {
     /// `wxsl-render`'s `gbuffer_bytes_per_sample`, which is what tells a
     /// set that asked for more than fits.
     pub fn gbuffer_layout(&self) -> Vec<GBufferTarget> {
-        let mut layout: Vec<GBufferTarget> = abi::GBUFFER_BASE_TARGETS.to_vec();
-        if self.dispatches() {
-            layout.push(MODEL_ID_TARGET);
-        }
-        layout.extend(self.extras().iter().map(|extra| extra.target));
-        layout
+        self.plan(&[])
+            .expect("a set's own requests cannot collide: `LightingSet::new` checks them")
+            .layout()
+            .to_vec()
+    }
+
+    /// The collected channel plan for this set plus `features` — the
+    /// second source of requests joining the first (plan2 P12). Feature
+    /// channels follow the models' own; any field claimed twice is an
+    /// error naming both claimants.
+    pub fn plan(&self, features: &[ChannelRequest]) -> Result<GBufferPlan, LightingError> {
+        let requests = self
+            .models()
+            .iter()
+            .filter_map(|model| {
+                model.extra.map(|extra| ChannelRequest {
+                    source: ChannelSource::Model { name: model.name },
+                    target: extra.target,
+                })
+            })
+            .chain(features.iter().copied())
+            .collect::<Vec<_>>();
+        GBufferPlan::new(self.dispatches(), requests)
     }
 
     /// A stable identity for caches and labels.
@@ -393,6 +666,11 @@ pub struct MaterialLighting {
     pub set: LightingSet,
     /// The id of this material's model, which must be in `set`.
     pub model: u32,
+    /// The feature channels the surrounding pipeline carries, which the
+    /// material's G-buffer struct must match — resolved together with the
+    /// set, because a material compiled for one plan cannot be drawn under
+    /// another (plan2 P12).
+    pub features: Vec<ChannelRequest>,
 }
 
 impl MaterialLighting {
@@ -418,7 +696,16 @@ impl MaterialLighting {
         Ok(MaterialLighting {
             set: set.clone(),
             model,
+            features: Vec::new(),
         })
+    }
+
+    /// The same lighting, resolved for a pipeline carrying `features`'
+    /// channels: the material's G-buffer struct is generated from the same
+    /// plan the pipeline's resources are declared from.
+    pub fn with_features(mut self, features: Vec<ChannelRequest>) -> Self {
+        self.features = features;
+        self
     }
 
     /// The material's model entry.
@@ -432,6 +719,11 @@ impl MaterialLighting {
     pub fn set(&self) -> &LightingSet {
         &self.set
     }
+
+    /// The feature channels this material's G-buffer carries.
+    pub fn features(&self) -> &[ChannelRequest] {
+        &self.features
+    }
 }
 
 impl Default for MaterialLighting {
@@ -442,6 +734,7 @@ impl Default for MaterialLighting {
         MaterialLighting {
             set: default_single_set(),
             model: DEFAULT_MODEL_ID,
+            features: Vec::new(),
         }
     }
 }
@@ -490,7 +783,7 @@ pub enum Dispatch {
 /// module declares the knobs it uses, and the host binds values over the
 /// top.
 pub fn shade_surface(dispatch: &Dispatch) -> GeneratedLighting {
-    shade_surface_with(dispatch, true)
+    shade_surface_with(dispatch, &[], true)
 }
 
 /// The `${NAME}`-holed templates the generators fill, embedded at compile
@@ -507,13 +800,22 @@ const DISPATCH_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/dispa
 const SHADE_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/shade_surface.wxsl");
 const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lighting_pass.wxsl");
 
-/// [`shade_surface`], with the macro declarations omitted.
+/// [`shade_surface`], with the macro declarations omitted and `features`'
+/// channels joined to the models' own extras.
 ///
 /// A generated *material* module declares every macro in effect itself, so
 /// shading text pasted into one must not declare them again — twice in the
 /// same module is a redefinition. The lighting pass, compiled as a root of
-/// its own, has nobody else to declare them and needs them.
-pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> GeneratedLighting {
+/// its own, has nobody else to declare them and needs them. The `features`
+/// are the pipeline's second source of channels (plan2 P12): their targets
+/// join the `ModelExtras` struct so a feature-aware model can read them,
+/// though no dispatch arm is generated for a feature — models opt into
+/// features from their own modules.
+pub fn shade_surface_with(
+    dispatch: &Dispatch,
+    features: &[ChannelRequest],
+    declare_macros: bool,
+) -> GeneratedLighting {
     let mut imports = vec![
         (abi::SURFACE_MODULE, abi::SURFACE_STRUCT),
         (abi::SURFACE_MODULE, abi::CONTEXT_STRUCT),
@@ -575,15 +877,21 @@ pub fn shade_surface_with(dispatch: &Dispatch, declare_macros: bool) -> Generate
                 imports.push((model.module, model.function));
             }
             // The models' view of the G-buffer: one field per requested
-            // target, and nothing else — no id, no base targets. Empty
-            // when no model asked for one, which WGSL permits.
+            // target — the models' own, then the features' — and nothing
+            // else: no id, no base targets. Empty when nobody asked,
+            // which WGSL permits.
             let mut fields = String::new();
-            for extra in set.extras() {
+            for target in set
+                .extras()
+                .iter()
+                .map(|extra| extra.target)
+                .chain(features.iter().map(|request| request.target))
+            {
                 let _ = writeln!(
                     fields,
                     "    {}: {},",
-                    extra.target.field,
-                    extra.target.precision.field_type(),
+                    target.field,
+                    target.precision.field_type(),
                 );
             }
             // A narrower target is widened back to the vec4f the model
@@ -670,17 +978,26 @@ pub fn gbuffer_struct(layout: &[GBufferTarget]) -> String {
 }
 
 /// Generate [`abi::PACK_GBUFFER_FN`] for a material shading with `model`
-/// under `set`.
+/// under `set`, with `features`' channels in the layout (plan2 P12).
 ///
 /// The base targets are packed exactly as they always were; the id channel
-/// is written only when the set dispatches; and the material fills its own
-/// model's target through the model's pack function, leaving every *other*
-/// model's request zeroed. Zeroed rather than skipped: the field exists,
-/// and an undefined channel reads back whatever the clear left.
-pub fn pack_gbuffer(model: &LightingModel, set: &LightingSet) -> GeneratedLighting {
-    let layout = set.gbuffer_layout();
+/// is written only when the set dispatches; the material fills its own
+/// model's target through the model's pack function; and a feature's
+/// channel is filled through the feature's pack when the material's macro
+/// turns the feature on, zeroed when it does not. Zeroed rather than
+/// skipped: the field exists, and an undefined channel reads back whatever
+/// the clear left.
+pub fn pack_gbuffer(
+    model: &LightingModel,
+    set: &LightingSet,
+    features: &[ChannelRequest],
+) -> GeneratedLighting {
+    let plan = set
+        .plan(features)
+        .expect("the material's plan was validated when its lighting was resolved");
+    let layout = plan.layout();
     let mut imports = Vec::new();
-    let mut source = gbuffer_struct(&layout);
+    let mut source = gbuffer_struct(layout);
     let _ = write!(
         source,
         "\nfn {pack}(surface: {surface}{id_param}) -> {struct_name} {{\n    \
@@ -694,7 +1011,7 @@ pub fn pack_gbuffer(model: &LightingModel, set: &LightingSet) -> GeneratedLighti
         },
         struct_name = abi::GBUFFER_STRUCT,
     );
-    for target in &layout {
+    for target in layout {
         let expr = if abi::GBUFFER_BASE_TARGETS
             .iter()
             .any(|base| base.field == target.field)
@@ -719,6 +1036,36 @@ pub fn pack_gbuffer(model: &LightingModel, set: &LightingSet) -> GeneratedLighti
                 2 => format!("{}(surface).xy", extra.pack),
                 _ => format!("{}(surface)", extra.pack),
             }
+        } else if let Some(request) = features
+            .iter()
+            .find(|request| request.target.field == target.field)
+        {
+            // A feature's channel: filled through the feature's own pack
+            // when the material's macro turns the feature on, zeros when
+            // it does not. Conditional translation keeps only the taken
+            // arm, and an unused import dies with it (ADR 0012).
+            let feature = FEATURES
+                .iter()
+                .find(|feature| {
+                    feature.name == request.source.name()
+                        && matches!(request.source, ChannelSource::Feature { .. })
+                })
+                .expect("feature channels name shipped features");
+            imports.push((feature.module, feature.pack));
+            let zero = match target.precision.channels() {
+                1 => "0.0",
+                2 => "vec2f(0.0)",
+                _ => "vec4f(0.0)",
+            };
+            let _ = writeln!(
+                source,
+                "    @if({macro})\n    out.{field} = {pack}();\n    @if(!{macro})\n    out.{field} = {zero};",
+                macro = feature.macro_name,
+                field = target.field,
+                pack = feature.pack,
+                zero = zero,
+            );
+            continue;
         } else {
             match target.precision.channels() {
                 1 => "0.0".to_string(),
@@ -735,15 +1082,22 @@ pub fn pack_gbuffer(model: &LightingModel, set: &LightingSet) -> GeneratedLighti
     }
 }
 
-/// Generate the whole deferred lighting pass for `set`, as one root module.
+/// Generate the whole deferred lighting pass for `set`, with `features`'
+/// channels in the layout (plan2 P12), as one root module.
 ///
 /// The fullscreen triangle and the depth-based background test are the
 /// plumbing they always were; the unpack, the struct it returns and the
 /// shading function are the set's, because they name its targets and
-/// models. Mounted under [`abi::LIGHTING_PASS_MODULE`], which is why that
-/// path still exists for labels and diagnostics.
-pub fn lighting_pass_source(set: &LightingSet) -> String {
-    let layout = set.gbuffer_layout();
+/// models. Feature channels ride along: unpacked, and handed to the
+/// shading function's extras struct for the models that read them.
+/// Mounted under [`abi::LIGHTING_PASS_MODULE`], which is why that path
+/// still exists for labels and diagnostics.
+pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> String {
+    let plan = set
+        .plan(features)
+        .expect("the pipeline's plan was validated when the features were set");
+    let layout = plan.layout();
+    let requests = plan.requests();
     // One model needs no dispatch at all: the pass shades with it
     // directly, and the module contains only that model — which is the
     // bar a single-model pipeline is held to. Only a real set switches.
@@ -798,8 +1152,8 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
     }
 
     // What the texels come back as: the surface, plus whatever the models
-    // asked for. One struct rather than out-params, because the dispatch's
-    // arms read different subsets of it.
+    // and features asked for. One struct rather than out-params, because
+    // the dispatch's arms read different subsets of it.
     let mut unpacked = String::from(
         "struct UnpackedGBuffer {
     surface: Surface,
@@ -811,12 +1165,12 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
 ",
         );
     }
-    for extra in set.extras() {
+    for target in requests.iter().map(|request| request.target) {
         let _ = writeln!(
             unpacked,
             "    {}: {},",
-            extra.target.field,
-            extra.target.precision.field_type(),
+            target.field,
+            target.precision.field_type(),
         );
     }
     unpacked.push_str(
@@ -848,11 +1202,11 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
 
     // One passthrough per requested target.
     let mut extras_unpack = String::new();
-    for extra in set.extras() {
+    for target in requests.iter().map(|request| request.target) {
         let _ = writeln!(
             extras_unpack,
             "    out.{field} = {field};",
-            field = extra.target.field,
+            field = target.field,
         );
     }
 
@@ -873,9 +1227,9 @@ pub fn lighting_pass_source(set: &LightingSet) -> String {
     let shade_args = if switch_shape {
         format!(
             "unpacked.surface, ctx, ModelExtras({}), unpacked.model_id",
-            set.extras()
+            requests
                 .iter()
-                .map(|extra| format!("unpacked.{}", extra.target.field))
+                .map(|request| format!("unpacked.{}", request.target.field))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -1031,14 +1385,14 @@ mod tests {
     #[test]
     fn the_pack_fills_the_id_channel_only_when_dispatching() {
         let single = LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]);
-        let plain = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &single);
+        let plain = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &single, &[]);
         assert!(plain
             .source
             .contains("fn pack_gbuffer(surface: Surface) -> GBuffer"));
         assert!(!plain.source.contains("model_id"));
 
         let set = default_set().unwrap();
-        let dispatched = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set);
+        let dispatched = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[]);
         assert!(dispatched
             .source
             .contains("fn pack_gbuffer(surface: Surface, model_id: u32) -> GBuffer"));
@@ -1052,14 +1406,14 @@ mod tests {
             .iter()
             .find(|m| m.name == "clearcoat")
             .unwrap();
-        let coated = pack_gbuffer(coat, &set);
+        let coated = pack_gbuffer(coat, &set, &[]);
         // The pair-precision target takes the leading components of the
         // pack contract's vec4f.
         assert!(coated
             .source
             .contains("out.clearcoat = pack_clearcoat(surface).xy;"));
         assert!(coated.source.contains("out.lighting = f32(model_id)"));
-        let plain_under_set = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set);
+        let plain_under_set = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[]);
         assert!(plain_under_set
             .source
             .contains("out.clearcoat = vec2f(0.0);"));
@@ -1068,7 +1422,7 @@ mod tests {
     #[test]
     fn the_lighting_pass_binds_one_target_per_layout_entry_plus_depth() {
         let set = default_set().unwrap();
-        let source = lighting_pass_source(&set);
+        let source = lighting_pass_source(&set, &[]);
         let layout = set.gbuffer_layout();
         for (binding, target) in layout.iter().enumerate() {
             assert!(
@@ -1096,7 +1450,7 @@ mod tests {
     #[test]
     fn a_single_model_pass_has_no_dispatch_at_all() {
         let set = LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]);
-        let source = lighting_pass_source(&set);
+        let source = lighting_pass_source(&set, &[]);
         assert!(!source.contains("switch"));
         assert!(!source.contains("model_id"));
         // One model shades directly: no dispatch, no extras argument, and
@@ -1114,5 +1468,133 @@ mod tests {
         // Order of construction does not change the identity.
         let reordered = LightingSet::new(DEFAULT_MODELS.iter().rev().copied()).unwrap();
         assert_eq!(all.signature(), reordered.signature());
+    }
+
+    #[test]
+    fn a_feature_channel_joins_the_plan_after_the_models_requests() {
+        // The second source (plan2 P12): a feature asks directly, and the
+        // plan collects it after every model's own request.
+        let set = default_set().unwrap();
+        let plan = set
+            .plan(&feature_requests(&["subsurface"]).unwrap())
+            .unwrap();
+        let fields: Vec<&str> = plan.layout().iter().map(|t| t.field).collect();
+        assert_eq!(
+            fields,
+            vec![
+                "base_color",
+                "normal",
+                "emissive",
+                "lighting",
+                "clearcoat",
+                "subsurface"
+            ],
+            "base targets, id channel, model requests, then the feature's"
+        );
+        // The request is tagged, which is what an error — or a reader —
+        // needs to say where the channel came from.
+        let last = plan.requests().last().expect("the feature's request");
+        assert_eq!(last.source, ChannelSource::Feature { name: "subsurface" });
+    }
+
+    #[test]
+    fn colliding_channel_requests_are_named_by_both_sources() {
+        // A hypothetical feature claiming a model's field is the
+        // collision the source tags exist to name.
+        let set = default_set().unwrap();
+        let clashing = ChannelRequest {
+            source: ChannelSource::Feature { name: "subsurface" },
+            target: GBufferTarget {
+                field: "clearcoat",
+                doc: "",
+                precision: GBufferPrecision::NormalizedScalar,
+            },
+        };
+        match set.plan(&[clashing]) {
+            Err(LightingError::DuplicateChannel {
+                field,
+                first,
+                second,
+            }) => {
+                assert_eq!(field, "clearcoat");
+                assert_eq!(first, ChannelSource::Model { name: "clearcoat" });
+                assert_eq!(second, ChannelSource::Feature { name: "subsurface" });
+            }
+            other => panic!("expected a channel collision, got {other:?}"),
+        }
+
+        // And even the base layout is a named claimant, not a silent one.
+        let clashing = ChannelRequest {
+            source: ChannelSource::Feature { name: "subsurface" },
+            target: GBufferTarget {
+                field: "normal",
+                doc: "",
+                precision: GBufferPrecision::NormalizedScalar,
+            },
+        };
+        match set.plan(&[clashing]) {
+            Err(LightingError::DuplicateChannel { first, .. }) => {
+                assert_eq!(first, ChannelSource::BaseLayout);
+            }
+            other => panic!("expected a base-layout collision, got {other:?}"),
+        }
+
+        // An unknown feature name is an error, not a quiet skip.
+        assert!(feature_requests(&["melting"]).is_err());
+    }
+
+    #[test]
+    fn the_pack_fills_a_feature_channel_when_the_material_pins_it() {
+        let model = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
+        let single = LightingSet::single(model);
+        let features = feature_requests(&["subsurface"]).unwrap();
+
+        // Under the feature: the channel exists, filled through the
+        // feature's pack when the material's macro turns it on, zeros
+        // when it does not.
+        let packed = pack_gbuffer(&model, &single, &features);
+        assert!(
+            packed.source.contains("subsurface: vec2f,"),
+            "{}",
+            packed.source
+        );
+        assert!(packed.source.contains("@if(wxsl_subsurface)"));
+        assert!(packed
+            .source
+            .contains("out.subsurface = pack_subsurface();"));
+        assert!(packed.source.contains("@if(!wxsl_subsurface)"));
+        assert!(packed.source.contains("out.subsurface = vec2f(0.0);"));
+        assert!(packed
+            .imports
+            .iter()
+            .any(|(module, item)| *module == SUBSURFACE.module && *item == SUBSURFACE.pack));
+
+        // Without the feature there is no field at all — a narrower plan,
+        // and nothing emitted for it.
+        let plain = pack_gbuffer(&model, &single, &[]);
+        assert!(!plain.source.contains("subsurface"));
+    }
+
+    #[test]
+    fn the_lighting_pass_unpacks_feature_channels_for_the_models() {
+        let set = default_set().unwrap();
+        let features = feature_requests(&["subsurface"]).unwrap();
+        let source = lighting_pass_source(&set, &features);
+        // One binding per layout entry, depth included, so the feature's
+        // channel rides at its own `@group(3)` slot.
+        let layout = set.plan(&features).unwrap();
+        let depth_binding = layout.layout().len();
+        assert!(source.contains(&format!(
+            "@group(3) @binding({}) var gbuffer_subsurface:",
+            depth_binding - 1
+        )));
+        assert!(source.contains(&format!(
+            "@group(3) @binding({}) var gbuffer_depth:",
+            depth_binding
+        )));
+        // Unpacked and handed to the shading function's extras, where a
+        // feature-aware model reads it.
+        assert!(source.contains("subsurface: vec2f,"));
+        assert!(source.contains("ModelExtras(unpacked.clearcoat, unpacked.subsurface)"));
     }
 }

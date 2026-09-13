@@ -33,7 +33,7 @@
 //! *stage* rather than the pipeline — so the second swap between two
 //! pipelines is free, and the third costs nothing at all.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wxsl_core::abi::{self, MaterialStage};
@@ -41,13 +41,13 @@ use wxsl_core::lighting::LightingSet;
 
 use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
-use crate::effect::EffectRegistry;
+use crate::effect::{Effect, EffectKind, EffectRegistry};
 use crate::environment::{Environment, FrameBindings, ShadowMaps};
 use crate::error::RenderError;
 use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
 use crate::library::ShaderLibrary;
 use crate::material::Material;
-use crate::pass::{DrawSource, PassKind, PassView};
+use crate::pass::{DrawSource, PassKind, PassView, Policy};
 use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::variants::{CacheStats, EffectRequest, MaterialRequest, ShaderVariant, ShaderVariants};
@@ -92,6 +92,20 @@ pub struct Renderer {
     /// `set_pipeline` and `resize`, read by `rebuild`
     /// ([plan2 P2](../../../plan2.md)).
     config: PipelineConfig,
+    /// The execution policies' run bookkeeping (plan2 P10), per pass by
+    /// declaration index: how many times each pass has actually run since
+    /// the current pass list was set.
+    runs: Vec<u32>,
+    /// The pool generation and target size at which each pass last ran.
+    /// A pass of policy `once` is due when its generation is not the
+    /// pool's — a reallocation destroyed every slot's contents, so the
+    /// bake must happen again — and `on resize` adds its size to the
+    /// question.
+    last_run: Vec<(u64, (u32, u32))>,
+    /// Marks for `on demand` passes, keyed by pass label — the name a
+    /// document author gave the pass, which is the name an application
+    /// knows.
+    demanded: HashSet<String>,
 }
 
 impl Renderer {
@@ -113,6 +127,7 @@ impl Renderer {
         let schedule = graph.schedule()?;
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
+        let pass_count = graph.passes().len();
         Ok(Renderer {
             bindings: FrameBindings::new(device),
             layouts: BindingLayouts::new(),
@@ -125,6 +140,9 @@ impl Renderer {
             stock: Some(stock),
             swap: None,
             effects: EffectRegistry::shipped(),
+            runs: vec![0; pass_count],
+            last_run: vec![(u64::MAX, (0, 0)); pass_count],
+            demanded: HashSet::new(),
             config,
         })
     }
@@ -175,6 +193,56 @@ impl Renderer {
         &self.config.lighting
     }
 
+    /// Enable material features for the deferred path, by name.
+    ///
+    /// Each feature asks for a G-buffer channel beside the lighting set's
+    /// own (plan2 P12), so the deferred pass list is rebuilt — and every
+    /// material must have been resolved against the same plan (a material
+    /// carrying a different set of channels is a named error when the
+    /// frame is compiled). A material whose graph pins a feature's macro
+    /// while its pipeline does not carry the channel is the same error
+    /// from the other side.
+    pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
+        let features = wxsl_core::lighting::feature_requests(names).map_err(|error| {
+            RenderError::Lighting {
+                material: String::new(),
+                error: error.to_string(),
+            }
+        })?;
+        let plan = self
+            .config
+            .lighting
+            .plan(&features)
+            .map_err(|error| RenderError::Lighting {
+                material: String::new(),
+                error: error.to_string(),
+            })?;
+        let bytes = crate::pipeline::gbuffer_layout_bytes_per_sample(plan.layout());
+        if bytes > crate::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE {
+            return Err(RenderError::Lighting {
+                material: String::new(),
+                error: format!(
+                    "the G-buffer layout with {names:?} needs {bytes} bytes per sample; the \
+                     most a pass may carry is {} — drop a feature or a model that requests a \
+                     target",
+                    crate::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE
+                ),
+            });
+        }
+        self.config.features = features;
+        self.rebuild();
+        Ok(())
+    }
+
+    /// The material features currently enabled, by name.
+    pub fn features(&self) -> Vec<&'static str> {
+        self.config
+            .features
+            .iter()
+            .map(|request| request.source.name())
+            .collect()
+    }
+
     /// The screen effects this renderer can run.
     pub fn effects(&self) -> &EffectRegistry {
         &self.effects
@@ -190,6 +258,38 @@ impl Renderer {
     /// replaces the effect under it.
     pub fn add_effect(&mut self, effect: crate::effect::Effect) {
         self.effects.add(effect);
+    }
+
+    /// Ask for the pass labelled `label` to run on the next frame — the
+    /// `on demand` policy's half of the bargain (plan2 P10). The name is
+    /// the pass's label, which is what a pipeline document (or a
+    /// hand-built [`PassDesc`]) calls it; several passes sharing a label
+    /// are all marked.
+    ///
+    /// Marks are consumed when the pass runs, so a mark left while the
+    /// pass list is mid-swap still applies to the pass in the *new* list.
+    pub fn mark_pass(&mut self, label: &str) {
+        self.demanded.insert(label.to_string());
+    }
+
+    /// How many times the pass labelled `label` has actually run since
+    /// the current pass list was set — the observable answer to "did the
+    /// once-only bake run, and did it run once?" A pass of policy
+    /// `per frame` in an ordinary frame counts up with the frame count.
+    ///
+    /// The count resets only when the pass list itself is replaced; a
+    /// reallocation re-runs a `once` pass and the count climbs past its
+    /// old value, which is how the re-run is observable.
+    pub fn pass_run_count(&self, label: &str) -> Option<u32> {
+        let index = self.graph.passes().iter().position(|p| p.label == label)?;
+        self.runs.get(index).copied()
+    }
+
+    /// Fresh run bookkeeping for a new pass list: nothing has run, every
+    /// `once` and `on resize` pass is due.
+    fn reset_runs(&mut self) {
+        self.runs = vec![0; self.graph.passes().len()];
+        self.last_run = vec![(u64::MAX, (0, 0)); self.graph.passes().len()];
     }
 
     /// The stock pipeline in use, or `None` when an application supplied
@@ -227,6 +327,7 @@ impl Renderer {
         self.graph = graph;
         self.stock = None;
         self.swap = None;
+        self.reset_runs();
         Ok(())
     }
 
@@ -237,6 +338,7 @@ impl Renderer {
             .graph
             .schedule()
             .expect("the stock pass lists schedule at every size; a test checks it");
+        self.reset_runs();
     }
 
     /// Switch to `pipeline` once its shaders are ready, without stuttering.
@@ -284,6 +386,7 @@ impl Renderer {
             self.schedule = schedule;
             self.stock = pipeline;
             self.swap = None;
+            self.reset_runs();
             return Ok(());
         }
         self.swap = Some(PipelineSwap::start(
@@ -323,7 +426,7 @@ impl Renderer {
                         );
                     }
                 }
-                PassKind::Screen { effect } => {
+                PassKind::Screen { effect } | PassKind::Compute { effect } => {
                     // An effect this renderer does not know cannot be
                     // requested — and cannot be compiled later either, so
                     // `compile_frame` is where the named error fires. A
@@ -336,6 +439,7 @@ impl Renderer {
                                     known,
                                     material.macros(),
                                     &self.config.lighting,
+                                    &self.config.features,
                                 )),
                                 &mut seen,
                                 &mut requests,
@@ -343,7 +447,6 @@ impl Renderer {
                         }
                     }
                 }
-                PassKind::Compute { .. } => {}
             }
         }
         requests
@@ -388,6 +491,7 @@ impl Renderer {
             self.graph = swap.graph;
             self.schedule = swap.schedule;
             self.stock = swap.pipeline;
+            self.reset_runs();
         }
         Ok(())
     }
@@ -535,7 +639,7 @@ impl Renderer {
                     self.variants
                         .material(device, &self.library, material, *stage)?;
                 }
-                PassKind::Screen { effect } => {
+                PassKind::Screen { effect } | PassKind::Compute { effect } => {
                     let known =
                         self.effects
                             .get(effect)
@@ -548,9 +652,9 @@ impl Renderer {
                         known,
                         material.macros(),
                         &self.config.lighting,
+                        &self.config.features,
                     )?;
                 }
-                PassKind::Compute { .. } => {}
             }
         }
         Ok(())
@@ -622,6 +726,30 @@ impl Renderer {
             }
         }
 
+        // Which passes run this frame: the execution policies, decided
+        // (plan2 P10). `ran` is "ran since the pool last allocated" — a
+        // reallocation destroyed every slot's contents, so a `once` pass
+        // bakes again; `size_changed` is what `on resize` adds.
+        let generation = self.pool.generation();
+        let size = (self.config.target.width, self.config.target.height);
+        let mut run = vec![false; self.graph.passes().len()];
+        for (index, pass) in self.graph.passes().iter().enumerate() {
+            let demanded = if pass.policy == Policy::OnDemand {
+                self.demanded.remove(&pass.label)
+            } else {
+                false
+            };
+            let (ran, size_changed) = {
+                let last = self.last_run[index];
+                (last.0 == generation, last.1 != size)
+            };
+            if pass.policy.due(ran, size_changed, demanded) {
+                run[index] = true;
+                self.runs[index] += 1;
+                self.last_run[index] = (generation, size);
+            }
+        }
+
         // Destructured so the recording closure can hold the pipeline
         // cache mutably while the graph, the pool and the effect registry
         // are borrowed alongside it.
@@ -649,6 +777,7 @@ impl Renderer {
             schedule,
             pool,
             &[(RenderGraph::TARGET, request.view)],
+            &|index| run[index],
             |pass, encoder| {
                 let shadows = match shadow_maps {
                     Some(maps) if pass.desc.written().any(|id| id == maps) => ShadowMaps::Detached,
@@ -739,6 +868,57 @@ impl Renderer {
                                 ),
                             });
                         }
+                        // The same for feature channels: the material's
+                        // G-buffer struct has a field per channel of the
+                        // plan it was resolved against (plan2 P12).
+                        if item.material.lighting().features() != self.config.features.as_slice() {
+                            return Err(RenderError::Lighting {
+                                material: item.material.name.clone(),
+                                error: format!(
+                                    "compiled with feature channels {:?}, but the renderer \
+                                     enables {:?}",
+                                    item.material
+                                        .lighting()
+                                        .features()
+                                        .iter()
+                                        .map(|request| request.source.name())
+                                        .collect::<Vec<_>>(),
+                                    self.config
+                                        .features
+                                        .iter()
+                                        .map(|request| request.source.name())
+                                        .collect::<Vec<_>>()
+                                ),
+                            });
+                        }
+                        // And a material that pins a feature's macro while
+                        // its pipeline does not carry the channel is the
+                        // request going unanswered — named rather than
+                        // silently shaded without the feature.
+                        for feature in wxsl_core::lighting::FEATURES {
+                            let demands = matches!(
+                                item.material.macros().get(feature.macro_name),
+                                Some(wxsl_core::macros::MacroValue::Flag(true))
+                            );
+                            if demands
+                                && !self
+                                    .config
+                                    .features
+                                    .iter()
+                                    .any(|request| request.source.name() == feature.name)
+                            {
+                                return Err(RenderError::Lighting {
+                                    material: item.material.name.clone(),
+                                    error: format!(
+                                        "pins `{macro}`, which asks for the `{name}` channel, \
+                                         but this pipeline does not enable the `{name}` \
+                                         feature — enable it with `Renderer::set_features`",
+                                        macro = feature.macro_name,
+                                        name = feature.name,
+                                    ),
+                                });
+                            }
+                        }
                         item.mesh.check_attributes(
                             &item.material.name,
                             item.material.vertex_attributes(),
@@ -750,12 +930,12 @@ impl Renderer {
                     }
                     plan.geometry.insert(index, variants);
                 }
-                PassKind::Screen { effect } => {
-                    // A screen effect has no material graph, but it does
-                    // have the macro set the materials were built with —
-                    // the lighting pass's shading function has `@if`s of
-                    // its own (tonemapping, the debug-normal view), and
-                    // every effect compiles under the same set.
+                PassKind::Screen { effect } | PassKind::Compute { effect } => {
+                    // An effect has no material graph, but it does have
+                    // the macro set the materials were built with — the
+                    // lighting pass's shading function has `@if`s of its
+                    // own (tonemapping, the debug-normal view), and every
+                    // effect compiles under the same set.
                     let known =
                         self.effects
                             .get(effect)
@@ -773,10 +953,14 @@ impl Renderer {
                         known,
                         &macros,
                         &self.config.lighting,
+                        &self.config.features,
                     )?;
-                    plan.screen.insert(index, variant);
+                    if known.is_compute() {
+                        plan.compute.insert(index, (known, variant));
+                    } else {
+                        plan.screen.insert(index, variant);
+                    }
                 }
-                PassKind::Compute { .. } => {}
             }
         }
         Ok(plan)
@@ -791,6 +975,9 @@ struct FramePlan {
     geometry: HashMap<usize, Vec<(u32, Arc<ShaderVariant>)>>,
     /// Per screen pass: its shader.
     screen: HashMap<usize, Arc<ShaderVariant>>,
+    /// Per compute pass: its effect and shader — the effect carries the
+    /// entry point and workgroup count the dispatch needs.
+    compute: HashMap<usize, (Effect, Arc<ShaderVariant>)>,
 }
 
 /// Issue one pass's work into the encoder the graph opened.
@@ -914,13 +1101,22 @@ fn record_pass(
                 .ok_or_else(|| RenderError::UnknownEffect {
                     effect: effect.clone(),
                 })?;
+            let EffectKind::Screen {
+                vertex_entry,
+                fragment_entry,
+            } = known.kind
+            else {
+                return Err(RenderError::UnknownEffect {
+                    effect: effect.clone(),
+                });
+            };
             let pipeline = pipelines.screen(
                 device,
                 bindings.layout(),
                 pass.pass_layout.as_ref(),
                 variant,
-                known.vertex_entry,
-                known.fragment_entry,
+                vertex_entry,
+                fragment_entry,
                 pass.desc.state,
                 &pass.color_formats,
                 &pass.pass_bindings,
@@ -937,10 +1133,32 @@ fn record_pass(
             // A fullscreen triangle, from the vertex index.
             render.draw(0..3, 0..1);
         }
-        (PassKind::Compute { .. }, PassEncoder::Compute(_)) => {
-            // Nothing in the stock pass lists dispatches yet; M7 is the
-            // first user. The graph already opens the pass, which is the
-            // half that would otherwise have to be invented then.
+        (PassKind::Compute { effect }, PassEncoder::Compute(compute)) => {
+            let (known, variant) =
+                plan.compute
+                    .get(&index)
+                    .ok_or_else(|| RenderError::UnknownEffect {
+                        effect: effect.clone(),
+                    })?;
+            let EffectKind::Compute { entry, workgroups } = known.kind else {
+                return Err(RenderError::UnknownEffect {
+                    effect: effect.clone(),
+                });
+            };
+            // No frame group: a compute effect declares only `@group(3)`,
+            // and the pipeline layout was built to say so.
+            let pipeline = pipelines.compute(
+                device,
+                pass.pass_layout.as_ref(),
+                variant,
+                entry,
+                &pass.pass_bindings,
+            );
+            compute.set_pipeline(pipeline);
+            if let Some(group) = pass.pass_bind_group.as_ref() {
+                compute.set_bind_group(abi::GROUP_PASS, group, &[]);
+            }
+            compute.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
         }
         _ => unreachable!("the graph opens the encoder its pass kind calls for"),
     }

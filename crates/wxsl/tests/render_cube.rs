@@ -680,6 +680,7 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
                 &schedule,
                 &mut pool,
                 &[],
+                &|_| true,
                 |_, _| Ok(()),
             )
             .expect("records");

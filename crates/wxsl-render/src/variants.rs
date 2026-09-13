@@ -28,7 +28,7 @@ use std::fmt::Write as _;
 
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::codegen;
-use wxsl_core::lighting::LightingSet;
+use wxsl_core::lighting::{ChannelRequest, LightingSet};
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::wxsl::stable_hash;
 
@@ -157,17 +157,18 @@ impl ShaderVariants {
         variant
     }
 
-    /// The variant `effect` runs, for `macros` and the enabled lighting
-    /// set.
+    /// The variant `effect` runs, for `macros`, the enabled lighting set
+    /// and the enabled features.
     ///
     /// Independent of any material: by the time a screen effect runs, the
     /// material has already been resolved into the G-buffer. The lighting
     /// effect still varies with the macro set, because the shading
     /// function it calls has `@if`s of its own (tonemapping, the
-    /// debug-normal view) — and with the set, because its module is
-    /// *generated* from it ([`wxsl_core::lighting`]): its switch names the
-    /// enabled models and its bindings match the G-buffer layout. A fixed
-    /// effect's text is its own, so its key folds in only the macros.
+    /// debug-normal view) — and with the set and the features, because its
+    /// module is *generated* from them ([`wxsl_core::lighting`]): its
+    /// switch names the enabled models and its bindings match the
+    /// G-buffer layout the plan asks for. A fixed effect's text is its
+    /// own, so its key folds in only the macros.
     pub fn effect(
         &mut self,
         device: &wgpu::Device,
@@ -175,20 +176,33 @@ impl ShaderVariants {
         effect: Effect,
         macros: &MacroSet,
         set: &LightingSet,
+        features: &[ChannelRequest],
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        let key = Self::effect_key(&effect, macros, set);
-        let request = EffectRequest::new(effect, macros, set);
+        let key = Self::effect_key(&effect, macros, set, features);
+        let request = EffectRequest::new(effect, macros, set, features);
         self.get_or_compile(device, key, || request.compile(library))
     }
 
     /// The key the variant for `effect` is cached under.
-    pub fn effect_key(effect: &Effect, macros: &MacroSet, set: &LightingSet) -> VariantKey {
+    pub fn effect_key(
+        effect: &Effect,
+        macros: &MacroSet,
+        set: &LightingSet,
+        features: &[ChannelRequest],
+    ) -> VariantKey {
         let mut identity = String::from(effect.id);
         identity.push(';');
         identity.push_str(&macros.signature());
         if effect.shader == EffectShader::Lighting {
             identity.push(';');
             let _ = write!(identity, "{}", set.signature());
+            identity.push(';');
+            let names = features
+                .iter()
+                .map(|request| request.source.name())
+                .collect::<Vec<_>>()
+                .join(",");
+            let _ = write!(identity, "features={names}");
         }
         VariantKey {
             kind: VariantKind::Effect,
@@ -305,12 +319,17 @@ pub struct EffectRequest {
 }
 
 impl EffectRequest {
-    /// What compiling `effect` for `macros` and `set` needs.
-    pub fn new(effect: Effect, macros: &MacroSet, set: &LightingSet) -> Self {
+    /// What compiling `effect` for `macros`, `set` and `features` needs.
+    pub fn new(
+        effect: Effect,
+        macros: &MacroSet,
+        set: &LightingSet,
+        features: &[ChannelRequest],
+    ) -> Self {
         let (path, source) = match effect.shader {
             EffectShader::Lighting => (
                 abi::LIGHTING_PASS_MODULE,
-                Cow::Owned(wxsl_core::lighting::lighting_pass_source(set)),
+                Cow::Owned(wxsl_core::lighting::lighting_pass_source(set, features)),
             ),
             EffectShader::Source { path, wxsl } => (path, Cow::Borrowed(wxsl)),
         };
@@ -319,7 +338,7 @@ impl EffectRequest {
             EffectShader::Source { .. } => effect.label.to_string(),
         };
         EffectRequest {
-            key: ShaderVariants::effect_key(&effect, macros, set),
+            key: ShaderVariants::effect_key(&effect, macros, set, features),
             label,
             path,
             source,

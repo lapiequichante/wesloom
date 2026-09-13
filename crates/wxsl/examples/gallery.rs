@@ -1,14 +1,19 @@
 //! The workspace's demos in one window — or, with `--screenshot`, one
 //! PNG each plus a contact sheet.
 //!
-//! Every demo here is the same PBR cube (`assets/pbr_cube.wxsl.json`)
+//! Most demos here are the same PBR cube (`assets/pbr_cube.wxsl.json`)
 //! through a *different pipeline*, because pipelines are the thing this
 //! stretch of work made cheap: two stock presets, the minimal
 //! single-pass document, and the deferred-plus-bloom chain that screen
-//! effects make expressible as a document edit. Nothing below touches
+//! effects make expressible as a document edit. The last three demos are
+//! the plan2 P10–P12 proofs: a compute effect baking the BRDF LUT under
+//! policy `once`, a storage buffer filled by compute and drawn as one
+//! value per column, and the deferred pipeline with the subsurface
+//! feature's channel in its G-buffer. Nothing below touches
 //! `wxsl-render`'s source — the bloom pipeline is the shipped deferred
 //! preset's document with two nodes added and one rewired, compiled by
-//! the same public `compile_pipeline` an application would call.
+//! the same public `compile_pipeline` an application would call, and the
+//! proof effects are registered the same way an application's would be.
 //!
 //! ```text
 //! cargo run --example gallery                          # windowed
@@ -35,10 +40,12 @@ use wxsl::core::graph::Graph;
 use wxsl::core::graph::NodeId;
 use wxsl::core::node::Value;
 use wxsl::core::pipeline as doc;
+use wxsl::render::effect::{BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::{
-    compile_pipeline, Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh,
-    PipelineConfig, RenderRequest, Renderer, StockPipeline, TargetConfig,
+    compile_pipeline, Attachment, Camera, DrawItem, DrawList, Environment, Extent,
+    InstanceAttributes, Light, Mesh, PassDesc, PipelineConfig, Policy, Read, RenderGraph,
+    RenderRequest, Renderer, ResourceDesc, StockPipeline, TargetConfig,
 };
 
 const USAGE: &str = "\
@@ -155,11 +162,17 @@ impl Options {
 // The demos
 // ---------------------------------------------------------------------------
 
-/// Where a demo's pass list comes from: a stock preset, or a document
-/// built here and compiled by the public pipeline compiler.
+/// Where a demo's pass list comes from: a stock preset, a document built
+/// here and compiled by the public pipeline compiler, or a hand-built
+/// pass list for the proofs that name effects no document node can wire
+/// yet (compute; ADR 0036's note on `pass.compute`). The hand-built
+/// builders take the frame target's format, as the compiler does — a
+/// window's surface is `Bgra8Unorm` where an offscreen target is
+/// `Rgba8Unorm`, and the graph has to agree with whichever it is handed.
 enum Pipeline {
     Stock(StockPipeline),
     Document(fn() -> Graph),
+    Graph(fn(wgpu::TextureFormat) -> RenderGraph),
 }
 
 impl Pipeline {
@@ -168,6 +181,7 @@ impl Pipeline {
         match self {
             Pipeline::Stock(stock) => stock.name().to_string(),
             Pipeline::Document(build) => build().name().to_string(),
+            Pipeline::Graph(_) => "hand-built pass list".to_string(),
         }
     }
 }
@@ -182,6 +196,8 @@ struct Demo {
     /// The key light's intensity. The bloom demo needs a highlight that
     /// crosses the threshold — a scene lit normally has nothing to glow.
     key_intensity: f32,
+    /// The material features the demo's pipeline enables (plan2 P12).
+    features: &'static [&'static str],
 }
 
 fn demos() -> Vec<Demo> {
@@ -192,6 +208,7 @@ fn demos() -> Vec<Demo> {
             pipeline: Pipeline::Stock(StockPipeline::Forward),
             instances: 1,
             key_intensity: 42.0,
+            features: &[],
         },
         Demo {
             name: "deferred",
@@ -199,6 +216,7 @@ fn demos() -> Vec<Demo> {
             pipeline: Pipeline::Stock(StockPipeline::Deferred),
             instances: 1,
             key_intensity: 42.0,
+            features: &[],
         },
         Demo {
             name: "single-pass",
@@ -206,6 +224,7 @@ fn demos() -> Vec<Demo> {
             pipeline: Pipeline::Document(minimal_forward_document),
             instances: 1,
             key_intensity: 42.0,
+            features: &[],
         },
         Demo {
             name: "deferred-bloom",
@@ -215,6 +234,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             // A highlight bright enough to cross bloom's threshold.
             key_intensity: 160.0,
+            features: &[],
         },
         Demo {
             name: "bloom-instances",
@@ -222,8 +242,80 @@ fn demos() -> Vec<Demo> {
             pipeline: Pipeline::Document(deferred_bloom_document),
             instances: 6,
             key_intensity: 160.0,
+            features: &[],
+        },
+        Demo {
+            name: "brdf-lut",
+            blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
+                    and a per-frame view displays it — the execution-policy proof",
+            pipeline: Pipeline::Graph(brdf_lut_graph),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+        },
+        Demo {
+            name: "buffer-ramp",
+            blurb: "a compute effect fills a storage buffer and a screen effect reads \
+                    it as storage — buffers are graph resources",
+            pipeline: Pipeline::Graph(buffer_ramp_graph),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+        },
+        Demo {
+            name: "subsurface",
+            blurb: "the deferred pipeline with the subsurface feature: the G-buffer \
+                    plan grows a channel the material packs (pixels unchanged until \
+                    a model reads it — the seam is the point)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &["subsurface"],
         },
     ]
+}
+
+/// The execution-policy proof as a pass list (ADR 0035): a compute effect
+/// bakes the split-sum environment-BRDF LUT once into a stable target, and
+/// a screen effect displays that target every frame. Hand-built, because a
+/// compute pass has no document node yet.
+fn brdf_lut_graph(format: wgpu::TextureFormat) -> RenderGraph {
+    let mut graph = RenderGraph::new(format);
+    let lut = graph.resource(
+        ResourceDesc::color("brdf lut", wgpu::TextureFormat::Rgba16Float)
+            .with_extent(Extent::Fixed {
+                width: 64,
+                height: 64,
+            })
+            .with_usage(wgpu::TextureUsages::TEXTURE_BINDING)
+            .persistent(0),
+    );
+    graph.pass(
+        PassDesc::compute("lut bake", "brdf_lut")
+            .with_write(lut)
+            .with_policy(Policy::Once),
+    );
+    graph.pass(
+        PassDesc::screen("lut view", "lut_view")
+            .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
+            .with_reads([Read::current(lut)]),
+    );
+    graph
+}
+
+/// The buffer proof as a pass list (ADR 0036): a compute effect fills a
+/// 256-entry storage buffer, a screen effect reads it as storage and draws
+/// it, one value per column.
+fn buffer_ramp_graph(format: wgpu::TextureFormat) -> RenderGraph {
+    let mut graph = RenderGraph::new(format);
+    let ramp = graph.resource(ResourceDesc::buffer("ramp", 256 * 4));
+    graph.pass(PassDesc::compute("fill ramp", "ramp_fill").with_write(ramp));
+    graph.pass(
+        PassDesc::screen("show ramp", "ramp_view")
+            .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
+            .with_reads([Read::current(ramp)]),
+    );
+    graph
 }
 
 /// The minimal pipeline there is: a scene, one lit material pass with a
@@ -289,9 +381,15 @@ fn deferred_bloom_document() -> Graph {
 /// Put the renderer on a demo's pass list.
 ///
 /// Stock pipelines go through `set_pipeline`; documents through the
-/// public compiler and `set_graph` — the same two moves an application
-/// makes, and why a gallery demo is not a renderer feature.
+/// public compiler and `set_graph`; hand-built pass lists through
+/// `set_graph` directly — the same moves an application makes, and why a
+/// gallery demo is not a renderer feature. Features (plan2 P12) are
+/// applied first, because they reshape the G-buffer every pipeline
+/// variant builds against.
 fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
+    if renderer.features() != demo.features {
+        renderer.set_features(demo.features)?;
+    }
     match &demo.pipeline {
         Pipeline::Stock(stock) => {
             renderer.set_pipeline(*stock);
@@ -313,6 +411,12 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
             })?;
             renderer
                 .set_graph(graph)
+                .map_err(|error| format!("the `{}` pass list does not run: {error}", demo.name))?;
+            Ok(())
+        }
+        Pipeline::Graph(build) => {
+            renderer
+                .set_graph(build(renderer.target().format))
                 .map_err(|error| format!("the `{}` pass list does not run: {error}", demo.name))?;
             Ok(())
         }
@@ -480,19 +584,36 @@ fn cube_draws<'a>(
 struct Stage {
     gpu: GpuContext,
     renderer: Renderer,
+    /// The scene's graph, recompiled when a demo's feature set differs
+    /// from the one the current material was resolved against.
+    scene_graph: Graph,
     material: wxsl::render::Material,
     mesh: Mesh,
     bindings: wxsl::render::MaterialBindings,
     tints: Vec<InstanceAttributes>,
+    /// The demo texture and sampler, kept so a rebuilt material's
+    /// bindings can be refilled.
+    texture: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    /// The feature set the current material was resolved against.
+    material_features: &'static [&'static str],
 }
 
 impl Stage {
     fn new(gpu: GpuContext, target: TargetConfig) -> Result<Self, Box<dyn Error>> {
         let registry = wxsl::stdlib::registry();
-        let graph: Graph = serde_json::from_str(include_str!("../assets/pbr_cube.wxsl.json"))?;
-        graph.validate(&registry)?;
-        let material = wxsl::render::Material::from_graph(&graph, &registry)?;
+        let scene_graph: Graph =
+            serde_json::from_str(include_str!("../assets/pbr_cube.wxsl.json"))?;
+        scene_graph.validate(&registry)?;
+        let material = wxsl::render::Material::from_graph(&scene_graph, &registry)?;
         let mut renderer = Renderer::new(&gpu.device, wxsl::stdlib_library(), target)?;
+        // The proof effects (ADRs 0035–0037) ship as descriptors; an
+        // application registers them, which is the whole of "add a
+        // compute pass" now.
+        renderer.add_effect(BRDF_LUT);
+        renderer.add_effect(LUT_VIEW);
+        renderer.add_effect(RAMP_FILL);
+        renderer.add_effect(RAMP_VIEW);
         let mesh = Mesh::cube(&gpu.device, 1.6);
         let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
         let bindings = demo_bindings(
@@ -506,11 +627,46 @@ impl Stage {
         Ok(Stage {
             gpu,
             renderer,
+            scene_graph,
             material,
             mesh,
             bindings,
             tints: instance_tints(1),
+            texture,
+            sampler,
+            material_features: &[],
         })
+    }
+
+    /// Put the scene's material on `features`' plan, if the demo's
+    /// differs from the current one (plan2 P12). A material is resolved
+    /// against the plan of the pipeline it will draw under — that is the
+    /// handshake the frame compile checks.
+    fn ensure_material(&mut self, features: &'static [&'static str]) -> Result<(), Box<dyn Error>> {
+        if self.material_features == features {
+            return Ok(());
+        }
+        let registry = wxsl::stdlib::registry();
+        let material = wxsl::render::Material::with_lighting(
+            &self.scene_graph,
+            &registry,
+            &wxsl::render::material::MaterialOptions {
+                features: wxsl::core::lighting::feature_requests(features)?,
+                ..wxsl::render::material::MaterialOptions::default()
+            },
+            self.renderer.lighting(),
+        )?;
+        self.bindings = demo_bindings(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.renderer,
+            &material,
+            &self.texture,
+            &self.sampler,
+        )?;
+        self.material = material;
+        self.material_features = features;
+        Ok(())
     }
 
     /// Render one frame of `demo` at `time`, into `view`.
@@ -523,6 +679,7 @@ impl Stage {
         time: f32,
     ) -> Result<(), Box<dyn Error>> {
         apply(demo, &mut self.renderer)?;
+        self.ensure_material(demo.features)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(
             width as f32 / height.max(1) as f32,

@@ -231,7 +231,7 @@ fn the_generated_shading_compiles_for_every_telling_set() {
 fn the_generated_lighting_pass_compiles_for_every_set_and_macro_combination() {
     let combinations = macro_flag_combinations();
     for (name, set) in telling_sets() {
-        let source = lighting::lighting_pass_source(&set);
+        let source = lighting::lighting_pass_source(&set, &[]);
         // The pass reads the G-buffer through the pass group and nothing
         // else: no frame group, no material group, never the user's.
         assert!(source.contains("@group(3)"), "{name}");
@@ -253,6 +253,67 @@ fn the_generated_lighting_pass_compiles_for_every_set_and_macro_combination() {
                 )
             });
         }
+    }
+}
+
+/// The feature-enabled half of the corpus gate (plan2 P12): the lighting
+/// pass generated with a feature's channel in the plan — its binding, its
+/// unpack, its ride in the extras struct — compiles against the shipped
+/// library, with the feature's own macro on and off, since the *pack* the
+/// same plan generates is conditional on it. The feature module is part of
+/// the library, so a drift between the generator and the module fails here
+/// in seconds.
+#[test]
+fn the_generated_lighting_pass_compiles_with_a_feature_channel() {
+    let features = lighting::feature_requests(&["subsurface"]).expect("subsurface ships");
+    let set = lighting::default_set().expect("the default set");
+    let source = lighting::lighting_pass_source(&set, &features);
+    assert!(source.contains("gbuffer_subsurface"));
+
+    // The pack is the conditional half: generated once per arm of the
+    // feature's macro, both must compile against the shipped module.
+    let packed = lighting::pack_gbuffer(
+        lighting::DEFAULT_MODELS
+            .iter()
+            .find(|model| model.name == "pbr")
+            .expect("the default model"),
+        &lighting::LightingSet::default(),
+        &features,
+    );
+    assert!(packed.source.contains("@if(wxsl_subsurface)"));
+
+    let mut modules = library();
+    let root = abi::LIGHTING_PASS_MODULE;
+    modules.insert(root, source);
+    for feature_on in [true, false] {
+        let mut bindings = wxsl_lang::Bindings::new();
+        bindings.insert(
+            "wxsl_subsurface".to_string(),
+            wxsl_lang::Value::Bool(feature_on),
+        );
+        bindings.insert(
+            "wxsl_subsurface_strength".to_string(),
+            wxsl_lang::Value::Float(0.5),
+        );
+        wxsl_lang::compile(&modules, root, &bindings).unwrap_or_else(|diagnostics| {
+            panic!(
+                "the feature-enabled lighting pass (on: {feature_on}) does not compile:\n{}",
+                diagnostics.render(&|path| modules.get(path).map(str::to_string))
+            )
+        });
+    }
+
+    // The pack compiles as part of a material module below (the corpus
+    // gate graph); here it suffices that its conditional text was
+    // generated against the module that declares the macros it names.
+    let _ = packed;
+}
+
+/// The feature module compiles standalone, like a model module.
+#[test]
+fn the_feature_module_compiles_standalone() {
+    for feature in lighting::FEATURES {
+        compile(feature.module, &[]).unwrap_or_else(|error| panic!("{}: {error}", feature.module));
     }
 }
 

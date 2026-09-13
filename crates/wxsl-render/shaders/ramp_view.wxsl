@@ -1,0 +1,31 @@
+//! ramp_view — draw a storage buffer across the screen.
+//!
+//! The viewer half of the buffer proof: a screen effect whose one input
+//! is a storage buffer, read in the fragment stage. Binding a buffer as
+//! storage — rather than copying it into a texture first — is what a
+//! compute pass's output makes possible, and this is the smallest thing
+//! that proves the pass group can carry it.
+
+@group(3) @binding(0) var<storage> ramp: array<f32>;
+
+@vertex
+fn view_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn view_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    // The buffer drawn left to right, tiled when the screen is wider
+    // than it: one entry per column, wrapping — the whole buffer is on
+    // screen whatever the size.
+    let count = arrayLength(&ramp);
+    let x = u32(position.x) % count;
+    let v = ramp[x];
+    // Green where the ramp is low, red where it is high — a gradient with
+    // an unambiguous direction.
+    return vec4f(v, 1.0 - v, 0.3, 1.0);
+}

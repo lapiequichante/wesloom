@@ -22,9 +22,9 @@
 use core::fmt;
 use std::collections::HashMap;
 
-use wxsl_core::abi::{self, GBufferPrecision, MaterialStage};
+use wxsl_core::abi::{self, GBufferPrecision, GBufferTarget, MaterialStage};
 use wxsl_core::graph::Graph;
-use wxsl_core::lighting::LightingSet;
+use wxsl_core::lighting::{ChannelRequest, GBufferPlan, LightingError, LightingSet};
 use wxsl_core::resources::VertexAttributeBinding;
 use wxsl_core::scene::TagExpr;
 
@@ -144,15 +144,39 @@ pub struct PipelineConfig {
     /// The lighting models enabled for the deferred path, which decide the
     /// G-buffer's shape.
     pub lighting: LightingSet,
+    /// The material features enabled for the deferred path — the second
+    /// source of G-buffer channels (plan2 P12). Each asks for a channel
+    /// beside the lighting set's own; the plan is what the compiler
+    /// declares its resources from and what every gbuffer-stage material
+    /// is generated against.
+    pub features: Vec<ChannelRequest>,
 }
 
 impl PipelineConfig {
-    /// A config for `target` with the default lighting set.
+    /// A config for `target` with the default lighting set and no
+    /// features — the shape every pipeline had before either existed.
     pub fn new(target: TargetConfig) -> Self {
         PipelineConfig {
             target,
             lighting: LightingSet::default(),
+            features: Vec::new(),
         }
+    }
+
+    /// The collected channel plan: the lighting set's requests plus the
+    /// features'. Fails only when the two disagree about a field name —
+    /// a collision the plan names by both sources.
+    pub fn plan(&self) -> Result<GBufferPlan, LightingError> {
+        self.lighting.plan(&self.features)
+    }
+
+    /// The plan's layout, for callers that have already validated —
+    /// the compiler's happy path, and the tests'.
+    pub fn gbuffer_layout(&self) -> Vec<GBufferTarget> {
+        self.plan()
+            .expect("a config's channels were validated when its features were set")
+            .layout()
+            .to_vec()
     }
 }
 
@@ -205,13 +229,14 @@ pub fn gbuffer_formats(lighting: &LightingSet) -> Vec<wgpu::TextureFormat> {
         .collect()
 }
 
-/// What `lighting`'s G-buffer costs against the attachment budget, using
+/// What a G-buffer layout costs against the attachment budget, using
 /// the same arithmetic the WebGPU spec does — including the alignment
-/// round-up — so a set that fits by this number fits on every device,
+/// round-up — so a layout that fits by this number fits on every device,
 /// not just the ones whose drivers are forgiving.
-pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
+pub fn gbuffer_layout_bytes_per_sample(layout: &[GBufferTarget]) -> u32 {
     let mut total: u32 = 0;
-    for format in gbuffer_formats(lighting) {
+    for target in layout {
+        let format = gbuffer_format(target.precision);
         // The spec's own table: a four-channel target costs 8 bytes per
         // sample whatever its bit depth ("despite being 4 bytes per pixel,
         // these are 8 bytes per pixel in the table", says wgpu), a pair
@@ -227,6 +252,12 @@ pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
         total += cost;
     }
     total
+}
+
+/// What `lighting`'s G-buffer costs against the attachment budget — the
+/// layout cost of the set's own requests, features aside (plan2 P12).
+pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
+    gbuffer_layout_bytes_per_sample(&lighting.gbuffer_layout())
 }
 
 /// Size, format and clear colour of what is being rendered into.
@@ -477,6 +508,7 @@ struct PipelineKey {
 /// drawing the same material each pay one pipeline creation, once.
 pub struct PipelineCache {
     render: HashMap<PipelineKey, wgpu::RenderPipeline>,
+    compute: HashMap<(VariantKey, Vec<PassBinding>), wgpu::ComputePipeline>,
     layouts: HashMap<LayoutKey, wgpu::PipelineLayout>,
 }
 
@@ -498,23 +530,25 @@ impl PipelineCache {
     pub fn new() -> Self {
         PipelineCache {
             render: HashMap::new(),
+            compute: HashMap::new(),
             layouts: HashMap::new(),
         }
     }
 
     /// How many pipelines are cached.
     pub fn len(&self) -> usize {
-        self.render.len()
+        self.render.len() + self.compute.len()
     }
 
     /// Whether nothing is cached.
     pub fn is_empty(&self) -> bool {
-        self.render.is_empty()
+        self.render.is_empty() && self.compute.is_empty()
     }
 
     /// Forget everything, e.g. because the frame group's layout changed.
     pub fn clear(&mut self) {
         self.render.clear();
+        self.compute.clear();
         self.layouts.clear();
     }
 
@@ -622,6 +656,43 @@ impl PipelineCache {
             Some(fragment_entry),
             false,
         )
+    }
+
+    /// The compute pipeline for a compute effect's variant.
+    ///
+    /// The layout is the pass group and nothing else: a compute effect
+    /// declares only `@group(3)`, having no draws to transform and — so
+    /// far — no uniforms of its own. A compute effect that wants the
+    /// frame group is a real consumer away from getting it.
+    pub fn compute(
+        &mut self,
+        device: &wgpu::Device,
+        pass_layout: Option<&wgpu::BindGroupLayout>,
+        variant: &ShaderVariant,
+        entry: &str,
+        pass_shape: &[PassBinding],
+    ) -> &wgpu::ComputePipeline {
+        let key = (variant.key, pass_shape.to_vec());
+        if !self.compute.contains_key(&key) {
+            // Groups 0–2 absent, the pass group at `abi::GROUP_PASS` —
+            // where the effect's shader declares it.
+            let groups: [Option<&wgpu::BindGroupLayout>; 4] = [None, None, None, pass_layout];
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(&variant.label),
+                bind_group_layouts: &groups,
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(&variant.label),
+                layout: Some(&layout),
+                module: &variant.module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            self.compute.insert(key.clone(), pipeline);
+        }
+        &self.compute[&key]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -805,12 +876,22 @@ mod tests {
             let graph = pipeline.graph(&default_config(config()));
             let maps = graph.shadow_maps().expect("shadow maps are declared");
             let desc = graph.resource_desc(maps).expect("declared resource");
-            assert_eq!(desc.dimension, Dimension::D2Array);
-            assert_eq!(desc.layers, abi::MAX_LIGHTS as u32);
-            assert_eq!(desc.format, DEPTH_FORMAT);
+            let crate::pass::ResourceShape::Texture {
+                dimension,
+                layers,
+                format,
+                usage,
+                ..
+            } = desc.shape
+            else {
+                panic!("shadow maps are a texture");
+            };
+            assert_eq!(dimension, Dimension::D2Array);
+            assert_eq!(layers, abi::MAX_LIGHTS as u32);
+            assert_eq!(format, DEPTH_FORMAT);
             // Nothing in the pass list reads it — the frame group does —
             // so both of these have to be spelled out.
-            assert!(desc.usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+            assert!(usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
             assert_ne!(desc.persistence, crate::pass::Persistence::Transient);
 
             let shadow: Vec<&PassDesc> = graph
@@ -880,6 +961,7 @@ mod tests {
                 pipeline
                     .graph(&PipelineConfig {
                         lighting: default_lighting(),
+                        features: Vec::new(),
                         target,
                     })
                     .schedule()
@@ -930,6 +1012,19 @@ mod tests {
         // Every shipped set fits, with room to spare.
         assert!(cost(wxsl_core::lighting::default_set().unwrap()) <= MAX_GBUFFER_BYTES_PER_SAMPLE);
         assert_eq!(MAX_GBUFFER_BYTES_PER_SAMPLE, 32, "the spec's floor");
+
+        // A feature channel joins the same budget (plan2 P12): base 24,
+        // the subsurface pair rounds 24 up to its alignment of 2 — still
+        // 24 — and adds 4. 28, with the id channel absent in a
+        // single-model set.
+        let single = LightingSet::single(model("pbr"));
+        let features = wxsl_core::lighting::feature_requests(&["subsurface"]).unwrap();
+        let plan = single.plan(&features).unwrap();
+        assert_eq!(
+            gbuffer_layout_bytes_per_sample(plan.layout()),
+            28,
+            "24 base + 4 for the pair-precision subsurface channel"
+        );
     }
 
     #[test]

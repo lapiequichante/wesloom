@@ -192,6 +192,20 @@ pub fn generate(
     // Precedence, weakest first: the caller's defaults, each node's declared
     // default, what the graph pins, the caller's overrides.
     let mut macros = options.base_macros.clone();
+    // A feature channel in the plan brings its macro into the same
+    // precedence chain: the generated pack's `@if` names it, a WXSL module
+    // declares the knobs it uses, and the graph or the caller pins the
+    // value that turns the feature on (plan2 P12).
+    for feature in crate::lighting::FEATURES {
+        if options
+            .lighting
+            .features()
+            .iter()
+            .any(|request| request.source.name() == feature.name)
+        {
+            macros.set(feature.macro_name, crate::macros::MacroValue::Flag(false));
+        }
+    }
     macros.overlay(&graph.effective_macros(registry)?);
     macros.overlay(&options.override_macros);
 
@@ -528,6 +542,7 @@ impl Emitter<'_> {
                     // the light loop names the model.
                     let generated = crate::lighting::shade_surface_with(
                         &crate::lighting::Dispatch::Direct(*self.options.lighting.model()),
+                        self.options.lighting.features(),
                         // This module declares the macros in effect itself;
                         // a second declaration would not compile.
                         false,
@@ -538,12 +553,14 @@ impl Emitter<'_> {
                     self.lighting_source = generated.source;
                 }
                 abi::StageOutput::GBuffer => {
-                    // The struct's fields are the set's layout, so the pack
-                    // is generated beside it instead of imported from a
-                    // fixed module.
+                    // The struct's fields are the plan's layout — the set's
+                    // requests plus any feature channels — so the pack is
+                    // generated beside it instead of imported from a fixed
+                    // module.
                     let generated = crate::lighting::pack_gbuffer(
                         self.options.lighting.model(),
                         self.options.lighting.set(),
+                        self.options.lighting.features(),
                     );
                     for (module, item) in &generated.imports {
                         self.request_import(module, item);

@@ -218,7 +218,10 @@ fn library_with_generated_pass() -> Option<Modules> {
     let mut modules = library(&root);
     modules.insert(
         "package::wxsl::lighting_pass",
-        wxsl_core::lighting::lighting_pass_source(&wxsl_core::lighting::LightingSet::default()),
+        wxsl_core::lighting::lighting_pass_source(
+            &wxsl_core::lighting::LightingSet::default(),
+            &[],
+        ),
     );
     Some(modules)
 }

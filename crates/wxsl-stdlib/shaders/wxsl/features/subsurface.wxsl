@@ -1,0 +1,36 @@
+// The subsurface material feature
+//
+// The first material feature — the second source of G-buffer channel
+// requests, after lighting models (plan2 P12, ADR 0037). A feature owns a
+// channel on the models' behalf: this module declares the channel's macro
+// knob, and `pack_subsurface` produces the value the channel carries when
+// a material's graph pins `wxsl_subsurface: true`.
+//
+// The strength is a macro *constant* for now, pinned per material like any
+// graph macro — which makes it part of the variant cache key, so a
+// material with a different strength is a different compiled shader, not a
+// different uniform. A surface-driven strength (a graph node writing it
+// into the `Surface`) needs a `Surface` field, which is a schema change
+// recorded when the first such feature lands.
+//
+// No shipped lighting model reads the channel yet: a feature-aware model
+// reads `extras.subsurface` in its dispatch arm, and that model is the
+// first real subsurface model's work. The channel, its packing and its
+// round trip through the G-buffer are what this feature provides.
+
+// Turns the feature on for a material, and asks its pipeline for the
+// channel. Declared here so a material pinning it is an ordinary macro
+// pin; the renderer's feature check reads the same name.
+@macro const wxsl_subsurface: bool = false;
+
+// The strength the channel carries, in 0..1. A macro const rather than a
+// uniform parameter: it shapes the generated pack, and the variant cache
+// keys on it.
+@macro const wxsl_subsurface_strength: f32 = 0.0;
+
+// Produces the channel's value: `(strength, radius)` — radius is here so
+// a model has a second quantity to consume without a second feature, and
+// stays 0 until a model gives it a convention.
+fn pack_subsurface() -> vec2f {
+    return vec2f(wxsl_subsurface_strength, 0.0);
+}

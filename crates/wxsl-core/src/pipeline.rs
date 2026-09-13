@@ -58,6 +58,11 @@ pub const SETTING_SCALE: &str = "scale";
 /// Setting on `resource.color`: how many previous frames stay readable —
 /// `0` is transient, `1` a classic ping-pong.
 pub const SETTING_HISTORY: &str = "history";
+/// Setting on the pass nodes: how often the pass runs — `per frame` (the
+/// default), `once`, `on resize` or `on demand` (plan2 P10). A pass of
+/// any non-default policy must write only targets that keep no history
+/// but do survive frames, which the engine's scheduler checks.
+pub const SETTING_POLICY: &str = "policy";
 
 /// Node id of `source.scene`.
 pub const SOURCE_SCENE: &str = "source.scene";
@@ -222,6 +227,13 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "forward_lit, gbuffer or depth_only — the material stage the pass draws.",
                 "forward_lit",
             ))
+            .setting(text_setting(
+                SETTING_POLICY,
+                "Policy",
+                "How often the pass runs: per frame, once, on resize or on demand. Only a \
+                 pass whose target survives frames may skip.",
+                "per frame",
+            ))
             .document(),
         NodeDefinition::builder(PASS_SHADOW, "shadow")
             .doc(
@@ -267,6 +279,13 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "Effect",
                 "Which screen effect the pass runs.",
                 "deferred_lighting",
+            ))
+            .setting(text_setting(
+                SETTING_POLICY,
+                "Policy",
+                "How often the pass runs: per frame, once, on resize or on demand. Only a \
+                 pass whose target survives frames may skip.",
+                "per frame",
             ))
             .document(),
         // -- terminal ----------------------------------------------------

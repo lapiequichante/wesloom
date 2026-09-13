@@ -108,6 +108,7 @@ impl SceneResources {
                         cast_shadow: entry.cast_shadow,
                         receive_shadow: entry.receive_shadow,
                         lighting: entry.lighting.clone(),
+                        features: Vec::new(),
                     },
                     lighting,
                 )
