@@ -16,7 +16,9 @@ through 0037. P3 kept one deviation from
 presets ship in `wxsl-render` beside their compiler (not the facade), and
 `PipelineConfig` stayed where ADR 0030 put it. P12 landed with its first
 material feature (subsurface) rather than deferring — ADR 0037 records
-why. The rest is proposal; each numbered item becomes an ADR when it lands. The architecture behind P2–P5 — where each layer
+why. The three proposals still open — P5, P7 and P8 — are queued, with
+the deferred halves the ADRs named, in
+[plan3.md](plan3.md). The architecture behind P2–P5 — where each layer
 lives, what it holds, and what it costs — is written out in
 [plan2-architecture.md](plan2-architecture.md).
 

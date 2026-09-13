@@ -6,7 +6,10 @@ the ADRs, which future sessions read as one body of text. This file is a
 and the corresponding section here shrinks to a link. Delete it when the last
 milestone is done.
 
-**Landed so far:** M0, M1, M2, M3, M4, M5, M6.
+**Landed so far:** M0, M1, M2, M3, M4, M5, M6. The still-open milestones
+— M7 through M11 — are queued, reshaped by plan2's work and carrying the
+deferred halves ADRs 0034–0037 named, in [plan3.md](plan3.md); their
+decisions and history below stay as written.
 
 ## How to read this
 

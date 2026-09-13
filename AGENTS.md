@@ -364,6 +364,11 @@ facade crate's feature set, not about the workspace.
   both.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred
   shader-switching design, macro variables, feature-flag matrix.
+- `plan.md` → `plan2.md` → `plan3.md` — the planning chain: what landed
+  and why, and — in plan3 — the queue of everything still open (the
+  screen domain, the pipeline canvas, the contracts, and the deferred
+  halves ADRs 0034–0037 named). Check the newest plan before starting
+  any feature-sized work.
 - `docs/adr/` — the decision log. Start at `docs/adr/README.md`.
 - `docs/glossary.md` — terms (WXSL vs WGSL, node graph vs render graph,
   forward vs deferred, etc.) used without re-explanation elsewhere.
