@@ -50,6 +50,9 @@
 pub use wxsl_core as core;
 
 #[cfg(all(feature = "render", feature = "stdlib"))]
+pub mod effects;
+
+#[cfg(all(feature = "render", feature = "stdlib"))]
 pub mod scene;
 
 #[cfg(feature = "render")]

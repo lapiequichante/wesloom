@@ -14,7 +14,9 @@ use wxsl::core::abi::MaterialStage;
 use wxsl::core::codegen;
 use wxsl::core::graph::{AttributeDecl, Graph, Node, NodeId, UserBlockDecl, UserField};
 use wxsl::core::macros::{MacroSet, MacroValue};
-use wxsl::core::node::{self, NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
+use wxsl::core::node::{
+    self, GraphDomain, NodeBody, NodeDefinition, NodeRegistry, Value, ValueType,
+};
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 
@@ -474,6 +476,13 @@ fn every_node_in_the_library_compiles_for_every_stage() {
         // The output node is the sink every graph below already has, and a
         // context reader is covered through whatever consumes it.
         if def.is_surface_output() {
+            continue;
+        }
+        // Every graph below is a *material*, so a node the surface domain
+        // has no place for cannot be covered here (ADR 0040). The handful
+        // that are — the screen ABI's own — are covered by the shipped
+        // graph effects in `screen_graphs.rs`, which compile and run them.
+        if !def.domains.allows(GraphDomain::Surface) {
             continue;
         }
         // A generic node's socket `ty` is only a placeholder (see

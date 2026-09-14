@@ -11,7 +11,11 @@
 //! value per column, and the deferred pipeline with the subsurface
 //! feature's channel in its G-buffer. The last, `ibl`, is ADR 0039's: no
 //! lamps at all, so what is in the image is `ambient_environment` reading
-//! the split-sum table the `brdf_lut` bake leaves in the frame group.
+//! the split-sum table the `brdf_lut` bake leaves in the frame group. The
+//! tenth, `fxaa`, is ADR 0040's: the stock forward chain with an
+//! anti-aliasing pass appended, where *both* screen effects in it — the
+//! anti-aliaser and the display transform every other demo also presents
+//! through — are node graphs rather than shader files.
 //! Nothing below touches
 //! `wxsl-render`'s source — the bloom pipeline is the shipped deferred
 //! preset's document with two nodes added and one rewired, compiled by
@@ -300,7 +304,65 @@ fn demos() -> Vec<Demo> {
             // surface's own colour.
             sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
         },
+        Demo {
+            name: "fxaa",
+            blurb: "the stock forward chain with an anti-aliasing pass appended — and                     both screen effects in it are node graphs, not shader files",
+            pipeline: Pipeline::Document(fxaa_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            sky: None,
+        },
     ]
+}
+
+/// The stock forward document with one node appended: a `pass.screen`
+/// running `fxaa`, reading what the tonemap wrote
+/// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+///
+/// After the display transform on purpose: perceived edges are what alias,
+/// and by that point in the chain the numbers are perceptual. The two
+/// effects this document names are both *graphs* — see where the gallery
+/// registers them — so what runs here is two generated modules, composed as
+/// a document edit, with nothing in `wxsl-render` touched to allow either.
+fn fxaa_document() -> Graph {
+    use wxsl::core::graph::SocketRef;
+
+    let registry = wxsl::core::pipeline::registry();
+    let mut document = StockPipeline::Forward.document();
+    document.set_name("forward + fxaa");
+    let tonemap = document
+        .nodes()
+        .find(|(_, node)| {
+            node.settings.get(doc::SETTING_EFFECT).map(String::as_str) == Some("tonemap")
+        })
+        .map(|(id, _)| id)
+        .expect("every stock document ends in the tonemap pass");
+    let present = document
+        .edge_from(&SocketRef::new(tonemap, "color"))
+        .expect("the tonemap presents")
+        .to
+        .node;
+
+    let encoded = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("encoded")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let fxaa = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_label("fxaa")
+            .with_setting(doc::SETTING_EFFECT, "fxaa"),
+    );
+    document.disconnect(&registry, &SocketRef::new(present, "surface"));
+    for (from, to) in [
+        ((encoded, "color"), (tonemap, "into")),
+        ((encoded, "color"), (fxaa, "image")),
+        ((fxaa, "color"), (present, "surface")),
+    ] {
+        document.wire(&registry, from, to).expect("gallery wiring");
+    }
+    document
 }
 
 /// The execution-policy proof as a pass list (ADR 0035): a compute effect
@@ -351,7 +413,7 @@ fn buffer_ramp_graph(format: wgpu::TextureFormat) -> RenderGraph {
 /// pipeline document looks like with everything optional left out.
 fn minimal_forward_document() -> Graph {
     let registry = wxsl::core::pipeline::registry();
-    let mut graph = Graph::new("single pass");
+    let mut graph = wxsl::core::pipeline::document("single pass");
     let scene = graph.add_node(doc::SOURCE_SCENE);
     let depth = graph.add_node(doc::RESOURCE_DEPTH);
     let pass = graph.add_node(doc::PASS_GEOMETRY);
@@ -408,7 +470,7 @@ fn present_through_tonemap(graph: &mut Graph, head: NodeId, present: NodeId) {
 /// — the composition that used to be hand-written Rust.
 fn deferred_bloom_document() -> Graph {
     let registry = wxsl::core::pipeline::registry();
-    let mut graph = Graph::new("deferred bloom");
+    let mut graph = wxsl::core::pipeline::document("deferred bloom");
     let scene = graph.add_node(doc::SOURCE_SCENE);
     let lights = graph.add_node(doc::SOURCE_LIGHTS);
     let shadows = graph.add_node(doc::PASS_SHADOW);
@@ -692,6 +754,14 @@ impl Stage {
         renderer.add_effect(LUT_VIEW);
         renderer.add_effect(RAMP_FILL);
         renderer.add_effect(RAMP_VIEW);
+        // And the two effects that are *graphs* (ADR 0040). `tonemap`
+        // registers under the id every stock document already names, so
+        // every demo above presents through a generated module from here
+        // on — which is the claim, and the fact that none of the images
+        // move is the evidence.
+        let nodes = wxsl::stdlib::registry();
+        renderer.add_effect(wxsl::effects::tonemap(&nodes)?);
+        renderer.add_effect(wxsl::effects::fxaa(&nodes)?);
         let mesh = Mesh::cube(&gpu.device, 1.6);
         let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
         let bindings = demo_bindings(

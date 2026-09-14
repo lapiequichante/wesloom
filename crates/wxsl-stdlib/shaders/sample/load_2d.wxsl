@@ -1,0 +1,18 @@
+// Load a 2D texture
+//
+// Read a texel out of a texture at a UV coordinate, with no sampler and no
+// filtering: the uv is scaled to the texture's size, clamped to it, and the
+// texel there is returned from the base mip level.
+//
+// The unsampled counterpart of `sample_texture_2d`, and what a screen
+// effect reads its input image with: the pass group binds textures and no
+// sampler, and a fullscreen pass is one-to-one with the image it reads
+// anyway, so a filter would only blur a pixel into itself.
+fn load_2d(
+    tex: texture_2d<f32>,
+    uv: vec2f, // @default 0.0, 0.0
+) -> vec4f {
+    let size = vec2i(textureDimensions(tex));
+    let texel = clamp(vec2i(uv * vec2f(size)), vec2i(0, 0), size - vec2i(1, 1));
+    return textureLoad(tex, texel, 0);
+}

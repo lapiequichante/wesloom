@@ -63,6 +63,12 @@ agree: the preset documents, the hand-built reference graphs, and
 are still the library's `package::color` modules — the tonemap effect
 imports them — so there remains exactly one filmic curve in this repo.
 
+*Amended by [ADR 0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md):
+the shipped `tonemap` is now a screen **graph** wiring those same two
+library functions, registered under the same id. The file
+(`wxsl-render/shaders/tonemap.wxsl`) stays as the descriptor form a
+renderer built without the node library falls back to.*
+
 Consequences of the move, taken deliberately:
 
 * **Bloom thresholds at 1.0 linear**, with a wider knee. Diffuse white is

@@ -1,0 +1,76 @@
+// FXAA
+//
+// Fast approximate anti-aliasing: find the pixels that sit on a luminance
+// edge and blur each one *along* that edge, so a staircase softens into a
+// line while everything else is left exactly as it was. One pass over an
+// image already drawn, with no depth, no history and no extra samples per
+// primitive — which is why it is the cheapest anti-aliasing there is and
+// why it is the first thing a screen effect gets asked for.
+//
+// This is an original implementation in that family, not a port of any
+// published one (ADR 0007): the direction comes from the luminance gradient
+// across a five-tap cross, and the blur runs perpendicular to it — across
+// the edge is where the detail is, along it is where the aliasing is.
+//
+// The two thresholds are what keep it from softening the whole image. A
+// pixel is only touched when the contrast around it clears both an absolute
+// floor (so that noise in a dark region is not an "edge") and a fraction of
+// the local maximum (so that a bright region needs a proportionally bigger
+// step to count). Below either, the centre texel is returned untouched.
+//
+// Feed it linear radiance and it anti-aliases light; feed it a display-
+// encoded image and it anti-aliases pixels. The second is usually what is
+// wanted — perceived edges are what alias — so in a stock chain this
+// belongs *after* the tonemap.
+
+import package::color::luminance::luminance;
+import package::sample::load_2d::load_2d;
+
+// Contrast below this is never an edge, however dark the neighbourhood.
+const WXSL_FXAA_FLOOR: f32 = 0.02;
+// And contrast below this fraction of the local maximum is never an edge,
+// however bright it is.
+const WXSL_FXAA_RELATIVE: f32 = 0.12;
+
+fn fxaa(
+    image: texture_2d<f32>,
+    uv: vec2f,     // Where to filter, in 0..1. @default 0.0, 0.0
+    texel: vec2f,  // One texel of `image` in uv units. @default 0.0, 0.0
+    strength: f32, // How much of the blur to keep, 0..1. @default 1.0
+) -> vec3f {
+    let center = load_2d(image, uv).rgb;
+    let north = load_2d(image, uv - vec2f(0.0, texel.y)).rgb;
+    let south = load_2d(image, uv + vec2f(0.0, texel.y)).rgb;
+    let east = load_2d(image, uv + vec2f(texel.x, 0.0)).rgb;
+    let west = load_2d(image, uv - vec2f(texel.x, 0.0)).rgb;
+
+    let here = luminance(center);
+    let up = luminance(north);
+    let down = luminance(south);
+    let right = luminance(east);
+    let left = luminance(west);
+
+    let high = max(here, max(max(up, down), max(right, left)));
+    let low = min(here, min(min(up, down), min(right, left)));
+    let contrast = high - low;
+    if contrast < max(WXSL_FXAA_FLOOR, high * WXSL_FXAA_RELATIVE) {
+        return center;
+    }
+
+    // Which way the luminance climbs, and therefore — turned a quarter —
+    // which way the edge runs. One texel along it in each direction is the
+    // whole kernel: the point is to mix the two sides of a staircase step,
+    // not to blur.
+    let gradient = vec2f(right - left, down - up);
+    let magnitude = max(length(gradient), 1e-5);
+    let along = vec2f(-gradient.y, gradient.x) / magnitude * texel;
+
+    let ahead = load_2d(image, uv + along).rgb;
+    let behind = load_2d(image, uv - along).rgb;
+    let blurred = (center * 2.0 + ahead + behind) * 0.25;
+
+    // How much of it to keep: a full-contrast edge takes the blur whole, a
+    // marginal one takes a little, and `strength` scales the lot.
+    let amount = saturate(contrast / max(high, 1e-5)) * saturate(strength);
+    return mix(center, blurred, amount);
+}

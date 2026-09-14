@@ -1081,7 +1081,7 @@ impl<'a> Compiler<'a> {
 #[cfg(test)]
 pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
     let registry = wxsl_core::pipeline::registry();
-    let mut graph = Graph::new(stock.name());
+    let mut graph = wxsl_core::pipeline::document(stock.name());
     let wire = |graph: &mut Graph, from: (NodeId, &str), to: (NodeId, &str)| {
         graph
             .wire(&registry, from, to)
@@ -1341,7 +1341,7 @@ mod tests {
     fn a_minimal_forward_document_compiles() {
         // One lit pass, depth of its own: the single-pass forward shape.
         let registry = make_registry();
-        let mut graph = Graph::new("single pass");
+        let mut graph = wxsl_core::pipeline::document("single pass");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let pass = graph.add_node(doc::PASS_GEOMETRY);
@@ -1364,7 +1364,7 @@ mod tests {
     #[test]
     fn unknown_effects_and_stages_are_reported_by_name() {
         let registry = make_registry();
-        let mut graph = Graph::new("typos");
+        let mut graph = wxsl_core::pipeline::document("typos");
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let screen =
             graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "blur"));
@@ -1389,7 +1389,7 @@ mod tests {
         }
 
         let registry = make_registry();
-        let mut graph = Graph::new("typo stage");
+        let mut graph = wxsl_core::pipeline::document("typo stage");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let pass = graph.add(Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "lit"));
@@ -1409,7 +1409,7 @@ mod tests {
         // The shadow stage is special: it exists, but documents do not
         // name it — the shadow *node* expands to those passes.
         let registry = make_registry();
-        let mut graph = Graph::new("hand shadow");
+        let mut graph = wxsl_core::pipeline::document("hand shadow");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let pass =
@@ -1435,7 +1435,7 @@ mod tests {
     #[test]
     fn a_gbuffer_stage_pass_must_be_wired_to_a_gbuffer() {
         let registry = make_registry();
-        let mut graph = Graph::new("no gbuffer");
+        let mut graph = wxsl_core::pipeline::document("no gbuffer");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let material =
             graph.add(Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "gbuffer"));
@@ -1456,7 +1456,7 @@ mod tests {
         // passes with `into`-less colour outputs feeding one present, or
         // two presents — are each a named error.
         let registry = make_registry();
-        let mut graph = Graph::new("two writers");
+        let mut graph = wxsl_core::pipeline::document("two writers");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let first = graph.add_node(doc::PASS_GEOMETRY);
@@ -1481,7 +1481,7 @@ mod tests {
 
         // Two presents, on an otherwise fine document.
         let registry = make_registry();
-        let mut graph = Graph::new("two presents");
+        let mut graph = wxsl_core::pipeline::document("two presents");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let pass = graph.add_node(doc::PASS_GEOMETRY);
@@ -1507,7 +1507,7 @@ mod tests {
         // that resource: present shows the frame's target, and no pass
         // wrote it.
         let registry = make_registry();
-        let mut graph = Graph::new("present an intermediate");
+        let mut graph = wxsl_core::pipeline::document("present an intermediate");
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let scene_color = graph.add(Node::new(doc::RESOURCE_COLOR).with_label("scene"));
         let screen = graph.add_node(doc::PASS_SCREEN);
@@ -1535,7 +1535,7 @@ mod tests {
     #[test]
     fn writing_into_another_pass_output_is_reported() {
         let registry = make_registry();
-        let mut graph = Graph::new("into a pass");
+        let mut graph = wxsl_core::pipeline::document("into a pass");
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let first = graph.add_node(doc::PASS_SCREEN);
         let second = graph.add_node(doc::PASS_SCREEN);
@@ -1557,7 +1557,7 @@ mod tests {
     #[test]
     fn a_colorless_stage_may_not_claim_a_colour_output() {
         let registry = make_registry();
-        let mut graph = Graph::new("prepass writes colour");
+        let mut graph = wxsl_core::pipeline::document("prepass writes colour");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let prepass =
@@ -1579,7 +1579,7 @@ mod tests {
     #[test]
     fn lit_geometry_without_depth_is_reported() {
         let registry = make_registry();
-        let mut graph = Graph::new("no depth");
+        let mut graph = wxsl_core::pipeline::document("no depth");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let pass = graph.add_node(doc::PASS_GEOMETRY);
         let present = graph.add_node(doc::PRESENT);
@@ -1598,7 +1598,7 @@ mod tests {
     #[test]
     fn wiring_both_a_gbuffer_and_a_depth_target_is_a_conflict() {
         let registry = make_registry();
-        let mut graph = Graph::new("double depth");
+        let mut graph = wxsl_core::pipeline::document("double depth");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
@@ -1622,7 +1622,7 @@ mod tests {
         // The lighting effect shades a G-buffer: no gbuffer wired, or an
         // image wired where it does not take one, are both named errors.
         let registry = make_registry();
-        let mut graph = Graph::new("screen with nothing");
+        let mut graph = wxsl_core::pipeline::document("screen with nothing");
         let screen = graph.add_node(doc::PASS_SCREEN);
         let present = graph.add_node(doc::PRESENT);
         graph
@@ -1634,7 +1634,7 @@ mod tests {
         ));
 
         let registry = make_registry();
-        let mut graph = Graph::new("screen with an image");
+        let mut graph = wxsl_core::pipeline::document("screen with an image");
         let color = graph.add_node(doc::RESOURCE_COLOR);
         let screen = graph.add_node(doc::PASS_SCREEN);
         let present = graph.add_node(doc::PRESENT);
@@ -1656,7 +1656,7 @@ mod tests {
         // A tag expression that does not parse, a precision that is not
         // one, a scale that is not a number.
         let registry = make_registry();
-        let mut graph = Graph::new("bad tags");
+        let mut graph = wxsl_core::pipeline::document("bad tags");
         let scene =
             graph.add(Node::new(doc::SOURCE_SCENE).with_setting(doc::SETTING_TAGS, "opaque &&"));
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
@@ -1675,7 +1675,7 @@ mod tests {
             "a broken tag expression is named, not silently `*`: {error}"
         );
 
-        let mut graph = Graph::new("bad precision");
+        let mut graph = wxsl_core::pipeline::document("bad precision");
         let color =
             graph.add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "float"));
         let _ = color;
@@ -1684,7 +1684,7 @@ mod tests {
             PipelineError::UnknownPrecision { precision, .. } if precision == "float"
         ));
 
-        let mut graph = Graph::new("bad scale");
+        let mut graph = wxsl_core::pipeline::document("bad scale");
         graph.add(Node::new(doc::RESOURCE_DEPTH).with_setting(doc::SETTING_SCALE, "half"));
         assert!(matches!(
             errors_of(&graph, &config()),
@@ -1694,7 +1694,7 @@ mod tests {
 
     #[test]
     fn two_shadow_sources_are_reported() {
-        let mut graph = Graph::new("two light sources");
+        let mut graph = wxsl_core::pipeline::document("two light sources");
         graph.add_node(doc::SOURCE_LIGHTS);
         graph.add_node(doc::SOURCE_LIGHTS);
         assert!(matches!(
@@ -1710,7 +1710,7 @@ mod tests {
         // which the compiler turns into a load attachment, so the
         // scheduler orders them without the document ever saying "after".
         let registry = make_registry();
-        let mut graph = Graph::new("depth from nowhere");
+        let mut graph = wxsl_core::pipeline::document("depth from nowhere");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
         let broken =
@@ -1748,7 +1748,7 @@ mod tests {
         // label, because that is the label the resource was declared
         // with.
         let registry = make_registry();
-        let mut graph = Graph::new("orphan");
+        let mut graph = wxsl_core::pipeline::document("orphan");
         let color = graph.add(Node::new(doc::RESOURCE_COLOR).with_label("scene"));
         let screen = graph.add(Node::new(doc::PASS_SCREEN).with_label("tonemap"));
         let present = graph.add_node(doc::PRESENT);
@@ -1774,7 +1774,7 @@ mod tests {
     /// document edits, compiled and ordered with nothing bespoke.
     fn bloom_chain_document(bloom_from_pass_output: bool) -> Graph {
         let registry = make_registry();
-        let mut graph = Graph::new("deferred bloom");
+        let mut graph = wxsl_core::pipeline::document("deferred bloom");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let lights = graph.add_node(doc::SOURCE_LIGHTS);
         let shadows = graph.add_node(doc::PASS_SHADOW);
@@ -1874,7 +1874,7 @@ mod tests {
         // What is on screen cannot also be sampled; the error says what to
         // wire instead.
         let registry = make_registry();
-        let mut graph = Graph::new("read the target");
+        let mut graph = wxsl_core::pipeline::document("read the target");
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let lighting = graph.add_node(doc::PASS_SCREEN);
         let bloom =
@@ -1901,7 +1901,7 @@ mod tests {
         // Bloom takes an image, not a G-buffer — wiring one is a named
         // mismatch, not a bind group that happens to line up.
         let registry = make_registry();
-        let mut graph = Graph::new("bloom with a gbuffer");
+        let mut graph = wxsl_core::pipeline::document("bloom with a gbuffer");
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let color = graph.add_node(doc::RESOURCE_COLOR);
         let bloom =
@@ -1926,7 +1926,7 @@ mod tests {
     #[test]
     fn a_resource_document_can_ask_for_half_scale_and_history() {
         let registry = make_registry();
-        let mut graph = Graph::new("half res history");
+        let mut graph = wxsl_core::pipeline::document("half res history");
         let color = graph.add(
             Node::new(doc::RESOURCE_COLOR)
                 .with_label("accumulation")

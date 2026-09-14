@@ -494,6 +494,40 @@ roughness and its specular term becomes `irradiance * (F0 * scale +
 bias)`. In the frame group for the shadow maps' reason: one lookup, both
 paths.
 
+## Three kinds of graph
+
+A graph carries a **domain** — `surface`, `screen` or `document` — and a
+node definition carries the set of domains it may be placed in
+([ADR 0040](adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+Most of the library is in all three, because `math.add` does not care what
+it is adding for; what is restricted is what touches a domain's ABI, and
+most of that restricts itself — a body that reads a surface context or
+declares a material's bind group is surface-domain by construction.
+`Graph::validate` reports a node outside its graph's domain by name, and
+`NodeRegistry::in_domain` is what a palette filters by.
+
+| Domain | ABI | Compiled by | Into |
+|---|---|---|---|
+| `surface` | `SurfaceContext` in, `Surface` out | `codegen::generate` | one module per `MaterialStage` |
+| `screen` | `ScreenContext` in, one colour out | `codegen::generate_screen` | one fullscreen pass |
+| `document` | the pass vocabulary (`crate::pipeline`) | `wxsl-render`'s document compiler | a `RenderGraph` |
+
+The screen ABI (`package::wxsl::screen`) is a tenth the size of the surface
+one: `uv`, `time`, `pixel`, `texel`, and the one image the pass binds.
+`uv` and `time` are spelled as `SurfaceContext` spells them, so `input.uv`
+is one node serving both domains — the same trick `VertexContext` plays,
+and the reason this is a second half of a vocabulary rather than a second
+vocabulary.
+
+An effect can therefore *be* a graph: `EffectShader::Graph` beside
+`Lighting` and `Source`, generated once when the effect is built. The
+shipped graph effects live in the `wxsl` facade — the renderer does not
+depend on the node library, and a graph-authored effect needs both — and
+`wxsl::effects::registry()` replaces `tonemap` under its own id, so every
+stock pipeline presents through a generated module without a document
+changing. `fxaa` is the first effect that arrived as a graph rather than
+being translated into one.
+
 ## How a shadow gets there
 
 One depth 2D texture array, one slice per light, in the **frame group**

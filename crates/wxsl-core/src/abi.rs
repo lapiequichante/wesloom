@@ -19,7 +19,9 @@
 //! generated from the ABI instead of being declared twice.
 
 use crate::macros::{MacroDef, MacroValue};
-use crate::node::{GenericParam, NodeDefinition, SettingDef, Socket, Value, ValueType};
+use crate::node::{
+    Domains, GenericParam, GraphDomain, NodeDefinition, SettingDef, Socket, Value, ValueType,
+};
 
 /// Module holding [`CONTEXT_STRUCT`], [`SURFACE_STRUCT`] and
 /// [`DEFAULT_SURFACE_FN`].
@@ -1082,6 +1084,15 @@ pub struct ContextField {
     pub label: &'static str,
     /// What the field holds.
     pub doc: &'static str,
+    /// Which graph domains carry this field, and therefore where the node
+    /// reading it may be placed (ADR 0040).
+    ///
+    /// Most of the surface context is geometry, which a screen effect has
+    /// none of; `uv` and `time` are the two a screen also has, under the
+    /// same name and type, so the same node serves both. The field table
+    /// is where that is decided, so adding a field to one context is one
+    /// edit rather than an edit and a list.
+    pub domains: Domains,
 }
 
 /// Every field of [`CONTEXT_STRUCT`], in declaration order.
@@ -1093,42 +1104,49 @@ pub const CONTEXT_FIELDS: &[ContextField] = &[
         ty: ValueType::Vec3,
         label: "World position",
         doc: "Fragment position in world space.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "world_normal",
         ty: ValueType::Vec3,
         label: "World normal",
         doc: "Interpolated geometric normal in world space, normalized.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "world_tangent",
         ty: ValueType::Vec3,
         label: "World tangent",
         doc: "Interpolated tangent in world space, normalized.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "world_bitangent",
         ty: ValueType::Vec3,
         label: "World bitangent",
         doc: "Interpolated bitangent in world space, normalized.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "view_direction",
         ty: ValueType::Vec3,
         label: "View direction",
         doc: "Unit vector from the fragment towards the camera.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "uv",
         ty: ValueType::Vec2,
         label: "UV",
         doc: "Interpolated texture coordinates.",
+        domains: Domains::SHADERS,
     },
     ContextField {
         name: "time",
         ty: ValueType::F32,
         label: "Time",
         doc: "Seconds since the renderer started, for animated materials.",
+        domains: Domains::SHADERS,
     },
 ];
 
@@ -1144,12 +1162,14 @@ pub const VERTEX_ONLY_FIELDS: &[ContextField] = &[
         ty: ValueType::Vec3,
         label: "Object position",
         doc: "The vertex's position in object space, before the model transform.",
+        domains: Domains::SURFACE,
     },
     ContextField {
         name: "object_normal",
         ty: ValueType::Vec3,
         label: "Object normal",
         doc: "The vertex's normal in object space, unit length.",
+        domains: Domains::SURFACE,
     },
 ];
 
@@ -1216,6 +1236,155 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
     },
 ];
 
+// ---------------------------------------------------------------------------
+// The screen ABI
+// ---------------------------------------------------------------------------
+
+/// Module holding [`SCREEN_CONTEXT_STRUCT`], [`SCREEN_CONTEXT_FN`] and the
+/// one image a screen effect reads
+/// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+///
+/// The screen domain's twin of [`SURFACE_MODULE`], and deliberately about a
+/// tenth its size: a material's ABI has to hand over geometry, and a screen
+/// effect's has to hand over a pixel.
+pub const SCREEN_MODULE: &str = "package::wxsl::screen";
+/// Per-pixel inputs handed to a screen graph's generated function.
+pub const SCREEN_CONTEXT_STRUCT: &str = "ScreenContext";
+/// Builds a [`SCREEN_CONTEXT_STRUCT`] from a fragment's `@builtin(position)`.
+pub const SCREEN_CONTEXT_FN: &str = "screen_context";
+/// The image a screen effect reads, at binding 0 of [`GROUP_PASS`].
+///
+/// One, fixed: it is the shape every shipped screen effect already has —
+/// bloom, the tonemap, the LUT viewer each declare exactly one image input —
+/// and it is what makes a screen *graph* compilable without the graph also
+/// having to declare what the pipeline must wire into it. An effect wanting
+/// two images stays a descriptor with its own source until a graph can
+/// declare its own inputs (plan3's N4).
+pub const SCREEN_IMAGE_VAR: &str = "wxsl_screen_image";
+/// Name of the function a screen graph compiles into.
+pub const SCREEN_FN: &str = "wxsl_screen_effect";
+/// Vertex entry point of a generated screen module: a fullscreen triangle.
+pub const SCREEN_VERTEX_ENTRY: &str = "wxsl_screen_vs";
+/// Fragment entry point of a generated screen module.
+pub const SCREEN_FRAGMENT_ENTRY: &str = "wxsl_screen_fs";
+
+/// Fields [`SCREEN_CONTEXT_STRUCT`] has that [`CONTEXT_STRUCT`] does not.
+///
+/// Pixel-space, which a material has no access to and no use for. The
+/// counterpart of [`VERTEX_ONLY_FIELDS`], and the same mechanism: a node
+/// reading one of these is screen-only, and `Graph::validate` says so if it
+/// is placed in a material.
+pub const SCREEN_ONLY_FIELDS: &[ContextField] = &[
+    ContextField {
+        name: "pixel",
+        ty: ValueType::Vec2,
+        label: "Pixel",
+        doc: "This fragment's pixel coordinates in the image being written.",
+        domains: Domains::SCREEN,
+    },
+    ContextField {
+        name: "texel",
+        ty: ValueType::Vec2,
+        label: "Texel size",
+        doc: "One texel of the input image, in UV units: 1 / its size.",
+        domains: Domains::SCREEN,
+    },
+];
+
+/// Every field of [`SCREEN_CONTEXT_STRUCT`], in declaration order: the
+/// fields [`CONTEXT_FIELDS`] shares with the screen domain, then
+/// [`SCREEN_ONLY_FIELDS`].
+///
+/// The `.wxsl` struct must list exactly these, in this order — the same
+/// contract [`CONTEXT_FIELDS`] has, checked by the same kind of test.
+pub fn screen_context_fields() -> Vec<&'static ContextField> {
+    CONTEXT_FIELDS
+        .iter()
+        .filter(|field| field.domains.allows(GraphDomain::Screen))
+        .chain(SCREEN_ONLY_FIELDS)
+        .collect()
+}
+
+/// Registry id of the screen output node.
+pub const SCREEN_OUTPUT_ID: &str = "output.screen";
+/// Registry id of the node handing out the effect's input image.
+pub const SCREEN_IMAGE_ID: &str = "input.image";
+/// The input socket [`SCREEN_OUTPUT_ID`] takes its colour on.
+pub const SOCKET_SCREEN_COLOR: &str = "color";
+/// The input socket [`SCREEN_OUTPUT_ID`] takes its alpha on.
+pub const SOCKET_SCREEN_ALPHA: &str = "alpha";
+
+/// The screen domain's terminal: what one fullscreen pass writes.
+///
+/// Two optional inputs and no more. A material's output node has seven
+/// fields because a surface has seven properties something else then shades;
+/// an effect's output *is* the pixel, so there is nothing left to describe.
+pub fn screen_output_def() -> NodeDefinition {
+    NodeDefinition::builder(SCREEN_OUTPUT_ID, "Screen output")
+        .category("output")
+        .doc(
+            "The colour one fullscreen pass writes. Unconnected inputs keep \
+             the value shown in the editor, so a graph driving only `color` \
+             is a complete effect.",
+        )
+        .input(
+            Socket::new(SOCKET_SCREEN_COLOR, ValueType::Vec3)
+                .with_doc("Linear radiance, unless this is the pass that encodes for a display.")
+                .with_default(Value::Vec3([0.0, 0.0, 0.0]))
+                .optional(),
+        )
+        .input(
+            Socket::new(SOCKET_SCREEN_ALPHA, ValueType::F32)
+                .with_doc("Alpha written to the target.")
+                .with_default(Value::F32(1.0))
+                .optional(),
+        )
+        .screen_output()
+}
+
+/// The node handing out the effect's one input image, as a value.
+///
+/// A texture is a value in WGSL, so this is an ordinary output socket of
+/// type [`ValueType::Texture2d`] — which means every node that already
+/// takes a texture (`sample.*`, `filter.*`) reads the frame with no new
+/// vocabulary. What it is *not* is a declaration: the pipeline binds this
+/// image, not the graph, so unlike `texture.texture_2d` it adds nothing to
+/// any interface.
+pub fn screen_image_def() -> NodeDefinition {
+    NodeDefinition::builder(SCREEN_IMAGE_ID, "Input image")
+        .category("input")
+        .doc(
+            "The image this effect reads: whatever the pass before it wrote. \
+             Wire it into a sampling or filtering node.",
+        )
+        .domains(Domains::SCREEN)
+        .output(
+            Socket::new("out", ValueType::Texture2d)
+                .with_doc("The pass's input image, at binding 0 of the pass group."),
+        )
+        .import(SCREEN_MODULE, SCREEN_IMAGE_VAR)
+        .expr(SCREEN_IMAGE_VAR)
+}
+
+/// One node definition per [`SCREEN_ONLY_FIELDS`] entry.
+///
+/// The shared fields' nodes come from [`context_node_defs`] — one
+/// `input.uv`, usable in a material and in an effect, because both contexts
+/// carry a `uv` of the same type under the same name.
+pub fn screen_context_node_defs() -> Vec<NodeDefinition> {
+    SCREEN_ONLY_FIELDS
+        .iter()
+        .map(|field| {
+            NodeDefinition::builder(context_node_id(field.name), field.label)
+                .category("input")
+                .doc(field.doc)
+                .domains(field.domains)
+                .output(Socket::new("out", field.ty).with_doc(field.doc))
+                .context_read(field.name)
+        })
+        .collect()
+}
+
 /// Registry id of the surface output node.
 pub const SURFACE_OUTPUT_ID: &str = "output.surface";
 /// Registry id of the vertex output node.
@@ -1265,7 +1434,9 @@ pub fn surface_output_def() -> NodeDefinition {
 /// One node definition per [`CONTEXT_FIELDS`] entry.
 ///
 /// Usable in either shader stage, because every field is in both context
-/// structs under the same name.
+/// structs under the same name — and, for the two the screen context also
+/// carries, in either shader *domain*, for exactly the same reason
+/// (ADR 0040).
 pub fn context_node_defs() -> Vec<NodeDefinition> {
     CONTEXT_FIELDS
         .iter()
@@ -1273,6 +1444,7 @@ pub fn context_node_defs() -> Vec<NodeDefinition> {
             NodeDefinition::builder(context_node_id(field.name), field.label)
                 .category("input")
                 .doc(field.doc)
+                .domains(field.domains)
                 .output(Socket::new("out", field.ty).with_doc(field.doc))
                 .context_read(field.name)
         })

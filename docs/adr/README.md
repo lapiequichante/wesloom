@@ -22,7 +22,7 @@ is signal, don't delete it.
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
-| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md) |
+| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md) |
 | [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
@@ -47,13 +47,14 @@ is signal, don't delete it.
 | [0030](0030-a-pipeline-config-instead-of-threaded-parameters.md) | One `PipelineConfig` instead of parameters threaded by hand | Accepted |
 | [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) | Shader text lives in template files; generators fill holes | Accepted |
 | [0032](0032-stage-analysis-computes-the-cut-between-stages.md) | Stage analysis computes the cut between stages | Accepted |
-| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md) |
-| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md), [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) |
+| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
+| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md), [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
 | [0035](0035-execution-policies.md) | Execution policies: once, on resize, on demand — and compute effects | Accepted, amended by [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) |
 | [0036](0036-buffers-are-graph-resources.md) | Buffers are graph resources, with storage bindings in the pass group | Accepted |
 | [0037](0037-semantic-channels.md) | Semantic channels: G-buffer requests collected with sources, and the material feature | Accepted, amended by [0038](0038-a-materials-configuration-is-one-value.md) |
 | [0038](0038-a-materials-configuration-is-one-value.md) | A material's configuration is one value, resolved once | Accepted |
-| [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) | Tonemap is an effect, and ambient reads the LUT | Accepted |
+| [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) | Tonemap is an effect, and ambient reads the LUT | Accepted, amended by [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
+| [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) | Screen-domain graphs: postprocess is a material over the frame | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

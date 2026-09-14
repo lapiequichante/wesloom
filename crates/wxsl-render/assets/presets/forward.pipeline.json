@@ -1,5 +1,6 @@
 {
   "name": "forward",
+  "domain": "document",
   "nodes": [
     {
       "id": 1,

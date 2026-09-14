@@ -193,6 +193,14 @@ impl ShaderVariants {
         let mut identity = String::from(effect.id);
         identity.push(';');
         identity.push_str(&effect_macros(effect, macros).signature());
+        // A graph-authored effect's text is not `&'static` and not implied
+        // by its id: two effects registered under one id at different times
+        // are two shaders, and the cache has to tell them apart by what
+        // they *are* rather than by what they are called.
+        if let EffectShader::Graph { wxsl, .. } = &effect.shader {
+            identity.push(';');
+            let _ = write!(identity, "{}", stable_hash(wxsl.as_bytes()));
+        }
         if effect.shader == EffectShader::Lighting {
             identity.push(';');
             let _ = write!(identity, "{}", set.signature());
@@ -307,7 +315,7 @@ impl MaterialRequest {
 fn effect_macros(effect: &Effect, macros: &MacroSet) -> MacroSet {
     match effect.shader {
         EffectShader::Lighting => macros.clone(),
-        EffectShader::Source { .. } => MacroSet::new(),
+        EffectShader::Source { .. } | EffectShader::Graph { .. } => MacroSet::new(),
     }
 }
 
@@ -340,16 +348,16 @@ impl EffectRequest {
         set: &LightingSet,
         features: &[ChannelRequest],
     ) -> Self {
-        let (path, source) = match effect.shader {
-            EffectShader::Lighting => (
+        let (path, source) = match effect.shader.source() {
+            Some(mounted) => mounted,
+            None => (
                 abi::LIGHTING_PASS_MODULE,
                 Cow::Owned(wxsl_core::lighting::lighting_pass_source(set, features)),
             ),
-            EffectShader::Source { path, wxsl } => (path, Cow::Borrowed(wxsl)),
         };
         let label = match effect.shader {
             EffectShader::Lighting => format!("{} ({})", effect.label, set.signature()),
-            EffectShader::Source { .. } => effect.label.to_string(),
+            _ => effect.label.to_string(),
         };
         EffectRequest {
             key: ShaderVariants::effect_key(&effect, macros, set, features),

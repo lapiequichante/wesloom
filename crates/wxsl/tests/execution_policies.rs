@@ -8,7 +8,7 @@
 //! compute effect baking the LUT once into a persistent target, and a
 //! screen effect displaying it.
 
-use wxsl::core::graph::{Graph, Node};
+use wxsl::core::graph::Node;
 use wxsl::core::pipeline as doc;
 use wxsl::render::effect::{EffectRegistry, BRDF_LUT, LUT_VIEW};
 use wxsl::render::gpu::OffscreenTarget;
@@ -169,7 +169,7 @@ fn the_document_policy_setting_reaches_the_pass_list() {
     // compiler promotes `stable` to stable storage, because a skipped
     // pass's contents must survive the frames it skips.
     let registry = doc::registry();
-    let mut graph = Graph::new("once view");
+    let mut graph = doc::document("once view");
     let draws = graph.add_node(doc::SOURCE_SCENE);
     let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
     let material =

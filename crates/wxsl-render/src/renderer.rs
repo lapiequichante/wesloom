@@ -436,7 +436,7 @@ impl Renderer {
                         for material in materials {
                             push(
                                 Request::Effect(EffectRequest::new(
-                                    known,
+                                    known.clone(),
                                     material.macros(),
                                     &self.config.lighting,
                                     &self.config.features,
@@ -1018,7 +1018,7 @@ impl Renderer {
                     let variant = self.variants.effect(
                         device,
                         &self.library,
-                        known,
+                        known.clone(),
                         &macros,
                         &self.config.lighting,
                         &self.config.features,

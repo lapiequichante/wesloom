@@ -67,7 +67,9 @@ against (ADR 0033 documented that gap honestly: a chain failed in
   screen graph is a *third* graph domain and a milestone of its own. The
   descriptor is deliberately less: an effect is one fullscreen pass with
   declared inputs. When screen graphs land, an effect's `shader` grows a
-  graph-backed variant; the document vocabulary does not move.
+  graph-backed variant; the document vocabulary does not move. *Landed in
+  [ADR 0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md),
+  as written: `EffectShader::Graph`, and not one document node changed.*
 * **Effect parameters as uniforms** — deferred. Bloom's knobs
   (`THRESHOLD`, `STRENGTH`, …) are `const`s in its file: compile-time,
   like a macro, and a parameter block wants the buffer plumbing P11

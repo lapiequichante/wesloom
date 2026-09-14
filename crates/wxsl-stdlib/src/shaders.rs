@@ -30,6 +30,7 @@ modules! {
     "package::wxsl::bindings" => "wxsl/bindings.wxsl",
     "package::wxsl::surface" => "wxsl/surface.wxsl",
     "package::wxsl::vertex" => "wxsl/vertex.wxsl",
+    "package::wxsl::screen" => "wxsl/screen.wxsl",
     "package::wxsl::shadow" => "wxsl/shadow.wxsl",
     // The shading function and the lighting pass are *generated* now, from
     // the enabled lighting models (wxsl_core::lighting, ADR 0028), so
@@ -62,6 +63,8 @@ modules! {
 
     "package::distort::swirl_uv" => "distort/swirl_uv.wxsl",
 
+    "package::filter::fxaa" => "filter/fxaa.wxsl",
+
     "package::generative::fbm3" => "generative/fbm3.wxsl",
     "package::generative::hash13" => "generative/hash13.wxsl",
     "package::generative::value_noise3" => "generative/value_noise3.wxsl",
@@ -85,6 +88,7 @@ modules! {
     "package::math::safe_normalize" => "math/safe_normalize.wxsl",
     "package::math::smootherstep" => "math/smootherstep.wxsl",
 
+    "package::sample::load_2d" => "sample/load_2d.wxsl",
     "package::sample::texture_2d" => "sample/texture_2d.wxsl",
 
     "package::sdf::box" => "sdf/box.wxsl",

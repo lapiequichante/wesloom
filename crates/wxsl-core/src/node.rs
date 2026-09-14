@@ -1056,6 +1056,14 @@ pub enum NodeBody {
     /// side there is nothing to tell a value the vertex stage computed
     /// from one the mesh carried.
     VaryingOutput,
+    /// The terminal of a **screen** graph: the colour one fullscreen pass
+    /// writes, and its alpha (ADR 0040).
+    ///
+    /// The screen domain's answer to [`NodeBody::SurfaceOutput`], and
+    /// deliberately much smaller: a material describes a surface, which
+    /// takes seven fields, and an effect describes a pixel, which takes
+    /// one.
+    ScreenOutput,
     /// Not a shader node at all: a node of a **pipeline document**
     /// ([`crate::pipeline`], plan2 P3) — a source, a pass, a resource or
     /// the present terminal, carried by the same graph model but compiled
@@ -1181,6 +1189,142 @@ impl GenericParam {
     }
 }
 
+/// What a graph *is*, and therefore which half of the vocabulary its nodes
+/// may come from.
+///
+/// A graph has always had a domain; until
+/// [ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)
+/// there was only one, so it did not need a name. There are three now, and
+/// what separates them is only which terminals and which context a node
+/// gets: everything in between — arithmetic, colour, noise, an SDF — is the
+/// same vocabulary in all of them, which is the point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum GraphDomain {
+    /// A material: a [`crate::abi::CONTEXT_STRUCT`] in, a
+    /// [`crate::abi::SURFACE_STRUCT`] out, compiled per
+    /// [`crate::abi::MaterialStage`].
+    #[default]
+    Surface,
+    /// A screen effect: a [`crate::abi::SCREEN_CONTEXT_STRUCT`] in, one
+    /// colour out, compiled into a fullscreen pass. Postprocess as a
+    /// material over the frame.
+    Screen,
+    /// A pipeline document ([`crate::pipeline`]): not a shader at all, but
+    /// the same graph model, typed and serialized by the same code, and
+    /// compiled to a render graph rather than to WXSL.
+    Document,
+}
+
+impl GraphDomain {
+    /// Every domain, for a UI offering a choice.
+    pub const ALL: &'static [GraphDomain] = &[
+        GraphDomain::Surface,
+        GraphDomain::Screen,
+        GraphDomain::Document,
+    ];
+
+    /// Whether this is [`GraphDomain::Surface`] — the serde skip test, and
+    /// the reason a document written before domains existed still loads.
+    pub fn is_surface(&self) -> bool {
+        *self == GraphDomain::Surface
+    }
+
+    /// The name a document stores and an error message prints.
+    pub fn name(&self) -> &'static str {
+        match self {
+            GraphDomain::Surface => "surface",
+            GraphDomain::Screen => "screen",
+            GraphDomain::Document => "document",
+        }
+    }
+
+    /// Just this domain, as a mask.
+    pub const fn only(self) -> Domains {
+        Domains(1 << self as u8)
+    }
+}
+
+impl std::fmt::Display for GraphDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Which domains a [`NodeDefinition`] may be placed in.
+///
+/// A set rather than a single domain because most of the library belongs in
+/// all of them: `math.add` does not care what it is adding for. Only the
+/// nodes that *touch* a domain's ABI are restricted, and most of those
+/// restrict themselves — a body that reads a surface context or declares a
+/// material's bind group is surface-only by construction, which is where
+/// [`NodeDefinitionBuilder::build`] gets the default from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Domains(u8);
+
+impl Domains {
+    /// Every domain: the default for a node that is a plain function of its
+    /// inputs.
+    pub const ALL: Domains = Domains(0b111);
+
+    /// Both shader domains and not the document one — where a node that
+    /// computes *something* belongs, since a pipeline document's nodes are
+    /// passes and resources rather than values.
+    pub const SHADERS: Domains = GraphDomain::Surface.only().or(GraphDomain::Screen.only());
+
+    /// Materials only.
+    pub const SURFACE: Domains = GraphDomain::Surface.only();
+
+    /// Screen effects only.
+    pub const SCREEN: Domains = GraphDomain::Screen.only();
+
+    /// Pipeline documents only.
+    pub const DOCUMENT: Domains = GraphDomain::Document.only();
+
+    /// Whether a graph in `domain` may place a node of this definition.
+    pub const fn allows(self, domain: GraphDomain) -> bool {
+        self.0 & (1 << domain as u8) != 0
+    }
+
+    /// The union of two masks — for a node that belongs in two of the three.
+    pub const fn or(self, other: Domains) -> Domains {
+        Domains(self.0 | other.0)
+    }
+
+    /// The domains in this mask, in [`GraphDomain::ALL`] order.
+    pub fn iter(self) -> impl Iterator<Item = GraphDomain> {
+        GraphDomain::ALL
+            .iter()
+            .copied()
+            .filter(move |domain| self.allows(*domain))
+    }
+}
+
+impl From<GraphDomain> for Domains {
+    fn from(domain: GraphDomain) -> Self {
+        domain.only()
+    }
+}
+
+impl Default for Domains {
+    fn default() -> Self {
+        Domains::ALL
+    }
+}
+
+impl std::fmt::Display for Domains {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, domain) in self.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(domain.name())?;
+        }
+        Ok(())
+    }
+}
+
 /// The kind of a node: its typed interface plus the WXSL it emits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeDefinition {
@@ -1210,6 +1354,15 @@ pub struct NodeDefinition {
     /// String-valued properties a node *instance* of this kind carries. See
     /// [`SettingDef`].
     pub settings: Vec<SettingDef>,
+    /// Which kinds of graph may place this node (ADR 0040).
+    ///
+    /// [`Domains::ALL`] for anything that is a function of its inputs, which
+    /// is most of the library. Narrowed by
+    /// [`NodeDefinitionBuilder::build`] for the bodies that name a domain's
+    /// ABI, and explicitly by [`NodeDefinitionBuilder::domains`] for the
+    /// handful that neither reveals — a context field two domains share is
+    /// in both, one only one of them has is in one.
+    pub domains: Domains,
     /// How the node emits WXSL.
     pub body: NodeBody,
 }
@@ -1231,6 +1384,7 @@ impl NodeDefinition {
                 generics: Vec::new(),
                 imports: Vec::new(),
                 settings: Vec::new(),
+                domains: Domains::ALL,
                 body: NodeBody::Expr(Vec::new()),
             },
         }
@@ -1320,6 +1474,11 @@ impl NodeDefinition {
         matches!(self.body, NodeBody::SurfaceOutput)
     }
 
+    /// Whether this is a screen graph's terminal.
+    pub fn is_screen_output(&self) -> bool {
+        matches!(self.body, NodeBody::ScreenOutput)
+    }
+
     /// Whether this is the graph's terminal vertex-output node.
     pub fn is_vertex_output(&self) -> bool {
         matches!(self.body, NodeBody::VertexOutput)
@@ -1386,6 +1545,18 @@ impl NodeDefinitionBuilder {
     /// Override the palette category (defaults to the id's first segment).
     pub fn category(mut self, category: impl Into<String>) -> Self {
         self.def.category = category.into();
+        self
+    }
+
+    /// Restrict which kinds of graph may place this node (ADR 0040).
+    ///
+    /// Only for a definition whose body does not already say: a context
+    /// field that two domains both carry, or a node that hands out one
+    /// domain's binding through an ordinary expression. Everything whose
+    /// body names an ABI is narrowed by [`Self::build`] instead, so that
+    /// adding a domain-bound body cannot leave a definition behind.
+    pub fn domains(mut self, domains: Domains) -> Self {
+        self.def.domains = domains;
         self
     }
 
@@ -1565,6 +1736,12 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
+    /// Finish with a [`NodeBody::ScreenOutput`] body.
+    pub fn screen_output(mut self) -> NodeDefinition {
+        self.def.body = NodeBody::ScreenOutput;
+        self.build()
+    }
+
     /// Finish with a [`NodeBody::VertexContextRead`] body.
     ///
     /// # Panics
@@ -1598,7 +1775,27 @@ impl NodeDefinitionBuilder {
     ///
     /// Panics if an [`NodeBody::Expr`] body has a different number of
     /// expressions than the node has outputs.
-    pub fn build(self) -> NodeDefinition {
+    pub fn build(mut self) -> NodeDefinition {
+        // A body that names one domain's ABI belongs to that domain, and
+        // says so without being asked (ADR 0040). Derived here rather than
+        // written on each definition so that a new domain-bound body cannot
+        // be added and left in every palette by omission; a body that says
+        // nothing — an expression, a call, a context read two domains share
+        // — keeps whatever `domains` was set to, which defaults to all.
+        self.def.domains = match self.def.body {
+            NodeBody::SurfaceOutput
+            | NodeBody::VertexOutput
+            | NodeBody::DiscardOutput
+            | NodeBody::VaryingOutput
+            | NodeBody::VertexContextRead(_)
+            | NodeBody::Param
+            | NodeBody::Resource
+            | NodeBody::UserRead
+            | NodeBody::AttributeRead => GraphDomain::Surface.only(),
+            NodeBody::ScreenOutput => GraphDomain::Screen.only(),
+            NodeBody::Document => GraphDomain::Document.only(),
+            NodeBody::Expr(_) | NodeBody::Call(_) | NodeBody::ContextRead(_) => self.def.domains,
+        };
         // A terminal's inputs may be unfed — that is what makes a
         // half-wired graph still compile, and what makes a vertex or
         // discard output free to leave in place while its branch is
@@ -1612,6 +1809,7 @@ impl NodeDefinitionBuilder {
                 | NodeBody::VertexOutput
                 | NodeBody::DiscardOutput
                 | NodeBody::VaryingOutput
+                | NodeBody::ScreenOutput
                 | NodeBody::Document
         );
         if !unfed_ok {
@@ -1757,10 +1955,32 @@ impl NodeRegistry {
         self.defs.values()
     }
 
+    /// The definitions a graph in `domain` may place, in id order — what a
+    /// palette lists (ADR 0040).
+    ///
+    /// The registry stays one map: a definition is a definition, and which
+    /// graphs may hold it is a property of the definition rather than of
+    /// where it is kept. Filtering at the point of display is what keeps
+    /// "the screen domain" from becoming a second library.
+    pub fn in_domain(&self, domain: GraphDomain) -> impl Iterator<Item = &Arc<NodeDefinition>> {
+        self.iter().filter(move |def| def.domains.allows(domain))
+    }
+
     /// Every registered category, in order, without duplicates.
     pub fn categories(&self) -> Vec<&str> {
+        self.categories_in(Domains::ALL)
+    }
+
+    /// The categories of the definitions `domains` allows, in order,
+    /// without duplicates — what a palette over one kind of graph offers as
+    /// filters (ADR 0040).
+    pub fn categories_in(&self, domains: impl Into<Domains>) -> Vec<&str> {
+        let domains = domains.into();
         let mut seen: Vec<&str> = Vec::new();
         for def in self.iter() {
+            if domains.0 & def.domains.0 == 0 {
+                continue;
+            }
             if !seen.contains(&def.category.as_str()) {
                 seen.push(&def.category);
             }

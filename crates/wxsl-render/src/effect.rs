@@ -36,7 +36,13 @@
 //! — an application registers them with `Renderer::add_effect` exactly as
 //! it would its own.
 
+use std::sync::Arc;
+
 use wxsl_core::abi;
+use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
+use wxsl_core::error::CodegenError;
+use wxsl_core::graph::Graph;
+use wxsl_core::node::NodeRegistry;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -122,7 +128,7 @@ pub enum EffectKind {
 ///
 /// Every effect's shader is a WXSL module; the variants are *where the
 /// text comes from*.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum EffectShader {
     /// Generated from the enabled lighting set — the migrated deferred
     /// lighting pass, mounted under [`abi::LIGHTING_PASS_MODULE`] exactly
@@ -138,14 +144,50 @@ pub enum EffectShader {
         /// The WXSL text.
         wxsl: &'static str,
     },
+    /// Generated from a **screen graph**: an effect a user could have
+    /// authored on a canvas, compiled through
+    /// [`wxsl_core::codegen::generate_screen`]
+    /// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+    ///
+    /// The WXSL is generated once, when the effect is built
+    /// ([`Effect::from_graph`]), rather than per compile: generation needs
+    /// a node registry, and an effect descriptor that carried one would be
+    /// a descriptor the renderer had to keep a registry for. What the
+    /// renderer sees afterwards is a module path and some text — which is
+    /// exactly what [`EffectShader::Source`] is, and why nothing
+    /// downstream of the seam had to learn a third case.
+    Graph {
+        /// The authored graph, kept so an editor can open what it shows
+        /// and a document can round-trip it.
+        graph: Arc<Graph>,
+        /// The WXSL generated from it, mounted at
+        /// [`wxsl_core::codegen::SCREEN_MODULE`].
+        wxsl: Arc<str>,
+    },
+}
+
+impl EffectShader {
+    /// Where the text is mounted and what it is, for the compiler.
+    pub(crate) fn source(&self) -> Option<(&'static str, std::borrow::Cow<'static, str>)> {
+        match self {
+            EffectShader::Lighting => None,
+            EffectShader::Source { path, wxsl } => Some((path, std::borrow::Cow::Borrowed(*wxsl))),
+            EffectShader::Graph { wxsl, .. } => Some((
+                codegen::SCREEN_MODULE,
+                std::borrow::Cow::Owned(wxsl.to_string()),
+            )),
+        }
+    }
 }
 
 /// An effect, as data: what it reads and writes, the shader it runs, the
 /// entry points a `wgpu` pipeline is built from.
 ///
-/// `Copy` on purpose: an effect is a static description, and the renderer
-/// hands copies around freely.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `Clone` rather than `Copy`: a descriptor effect is a handful of
+/// `&'static` fields, but a graph-authored one owns its graph and its
+/// generated text behind an [`Arc`], so cloning is a refcount bump rather
+/// than a copy of either.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Effect {
     /// The id a document's `effect` setting names.
     pub id: &'static str,
@@ -167,6 +209,52 @@ pub struct Effect {
 }
 
 impl Effect {
+    /// Build a screen effect from a screen graph (ADR 0040).
+    ///
+    /// The graph is compiled to WXSL here and now, so that a graph that
+    /// does not generate is a failure at registration rather than at the
+    /// first frame that wanted the pass. What comes back is an ordinary
+    /// effect: one image input, the generated module's entry points, and a
+    /// shader the renderer compiles exactly as it compiles a file's.
+    ///
+    /// The one input is fixed because the screen ABI's is
+    /// ([`abi::SCREEN_IMAGE_VAR`]): a graph cannot yet declare what the
+    /// pipeline must wire into it, so it reads the one image every shipped
+    /// screen effect already reads.
+    pub fn from_graph(
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        graph: Graph,
+        registry: &NodeRegistry,
+    ) -> Result<Effect, CodegenError> {
+        let generated: GeneratedShader =
+            codegen::generate_screen(&graph, registry, &ScreenOptions::default())?;
+        Ok(Effect {
+            id,
+            label,
+            description,
+            kind: EffectKind::Screen {
+                vertex_entry: abi::SCREEN_VERTEX_ENTRY,
+                fragment_entry: abi::SCREEN_FRAGMENT_ENTRY,
+            },
+            inputs: SCREEN_GRAPH_INPUTS,
+            outputs: &[],
+            shader: EffectShader::Graph {
+                graph: Arc::new(graph),
+                wxsl: Arc::from(generated.source),
+            },
+        })
+    }
+
+    /// The screen graph behind this effect, if it has one.
+    pub fn graph(&self) -> Option<&Graph> {
+        match &self.shader {
+            EffectShader::Graph { graph, .. } => Some(graph),
+            _ => None,
+        }
+    }
+
     /// Whether this effect declares an input wired through the named
     /// socket.
     pub(crate) fn declares(&self, socket: &str) -> bool {
@@ -179,6 +267,14 @@ impl Effect {
         matches!(self.kind, EffectKind::Compute { .. })
     }
 }
+
+/// The inputs every graph-authored screen effect declares: the one image
+/// the screen ABI binds.
+const SCREEN_GRAPH_INPUTS: &[EffectInput] = &[EffectInput {
+    name: "image",
+    kind: EffectInputKind::Image,
+    description: "The image this effect reads, as linear radiance.",
+}];
 
 /// The deferred lighting pass, as an effect: the first one, migrated out
 /// of the hardcoded enum it was reachable only through. Its generated
@@ -395,7 +491,7 @@ impl EffectRegistry {
 
     /// The effect named by `id`, as documents name them.
     pub fn get(&self, id: &str) -> Option<Effect> {
-        self.effects.iter().copied().find(|effect| effect.id == id)
+        self.effects.iter().find(|effect| effect.id == id).cloned()
     }
 
     /// Every registered effect, in registration order — what a palette

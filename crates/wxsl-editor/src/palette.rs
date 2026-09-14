@@ -10,7 +10,7 @@
 //! ("add", "noise", "pbr"), and a scored search puts an exact label first,
 //! which is the behaviour a user who knows the name expects.
 
-use wxsl_core::node::NodeRegistry;
+use wxsl_core::node::{GraphDomain, NodeRegistry};
 
 /// One search result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,9 +106,18 @@ impl NodePicker {
     ///
     /// Capped, because a hundred rows nobody will scroll to costs a hundred
     /// rows of glyphs; the search is how you reach the rest.
-    pub fn matches(&self, registry: &NodeRegistry, limit: usize) -> Vec<Match> {
+    ///
+    /// Filtered by the domain of the graph being edited, so a palette never
+    /// offers a node the canvas it is over would refuse
+    /// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+    pub fn matches(
+        &self,
+        registry: &NodeRegistry,
+        domain: GraphDomain,
+        limit: usize,
+    ) -> Vec<Match> {
         let mut matches: Vec<Match> = registry
-            .iter()
+            .in_domain(domain)
             .filter(|definition| {
                 self.category
                     .as_ref()
@@ -179,21 +188,24 @@ mod tests {
     #[test]
     fn an_empty_query_lists_everything() {
         let picker = NodePicker::new();
-        let matches = picker.matches(&registry(), 100);
+        let matches = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert_eq!(matches.len(), 6);
     }
 
     #[test]
     fn the_limit_is_respected() {
         let picker = NodePicker::new();
-        assert_eq!(picker.matches(&registry(), 3).len(), 3);
+        assert_eq!(
+            picker.matches(&registry(), GraphDomain::Surface, 3).len(),
+            3
+        );
     }
 
     #[test]
     fn an_exact_label_outranks_a_longer_one_containing_it() {
         let mut picker = NodePicker::new();
         picker.query = "add".to_string();
-        let matches = picker.matches(&registry(), 100);
+        let matches = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert!(matches.len() >= 3);
         // "Add" before "Add weighted", whichever order the registry is in.
         assert_eq!(matches[0].label, "Add");
@@ -208,36 +220,40 @@ mod tests {
     fn a_query_can_match_the_id_the_label_or_the_docs() {
         let mut picker = NodePicker::new();
         picker.query = "vec3".to_string();
-        let by_id = picker.matches(&registry(), 100);
+        let by_id = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert_eq!(by_id.len(), 1);
         assert_eq!(by_id[0].id, "math.add.vec3f");
 
         picker.query = "colour".to_string();
-        let by_doc = picker.matches(&registry(), 100);
+        let by_doc = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert_eq!(by_doc.len(), 1, "the documentation matched");
         assert_eq!(by_doc[0].id, "color.hsv_to_rgb");
 
         picker.query = "nothing here".to_string();
-        assert!(picker.matches(&registry(), 100).is_empty());
+        assert!(picker
+            .matches(&registry(), GraphDomain::Surface, 100)
+            .is_empty());
     }
 
     #[test]
     fn several_words_all_have_to_appear() {
         let mut picker = NodePicker::new();
         picker.query = "noise 3".to_string();
-        let matches = picker.matches(&registry(), 100);
+        let matches = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].id, "generative.value_noise3");
 
         picker.query = "noise pbr".to_string();
-        assert!(picker.matches(&registry(), 100).is_empty());
+        assert!(picker
+            .matches(&registry(), GraphDomain::Surface, 100)
+            .is_empty());
     }
 
     #[test]
     fn a_category_filter_narrows_the_list() {
         let mut picker = NodePicker::new();
         picker.category = Some("math".to_string());
-        let matches = picker.matches(&registry(), 100);
+        let matches = picker.matches(&registry(), GraphDomain::Surface, 100);
         assert_eq!(matches.len(), 3);
         assert!(matches.iter().all(|found| found.category == "math"));
     }
@@ -247,8 +263,8 @@ mod tests {
         // An unstable order in a list being arrowed through is unusable.
         let picker = NodePicker::new();
         let registry = registry();
-        let first = picker.matches(&registry, 100);
-        let second = picker.matches(&registry, 100);
+        let first = picker.matches(&registry, GraphDomain::Surface, 100);
+        let second = picker.matches(&registry, GraphDomain::Surface, 100);
         assert_eq!(first, second);
     }
 

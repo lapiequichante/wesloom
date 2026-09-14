@@ -81,6 +81,12 @@ pub fn registry() -> NodeRegistry {
 
 /// The graph's entry and exit nodes, generated from the shader ABI: one
 /// reader per [`abi::CONTEXT_FIELDS`] entry, and the surface output node.
+///
+/// Both shader domains' terminals, in one registry, because a registry is
+/// global and a *domain* is a property of the graph rather than of the
+/// library (ADR 0040). What keeps a screen output out of a material is the
+/// definition's own [`wxsl_core::node::Domains`], which `Graph::validate`
+/// checks — and what a palette shows is the same mask, filtered.
 pub fn abi_nodes() -> Vec<NodeDefinition> {
     let mut defs = abi::context_node_defs();
     defs.extend(abi::vertex_context_node_defs());
@@ -88,6 +94,9 @@ pub fn abi_nodes() -> Vec<NodeDefinition> {
     defs.push(abi::vertex_output_def());
     defs.push(abi::discard_output_def());
     defs.push(abi::varying_output_def());
+    defs.extend(abi::screen_context_node_defs());
+    defs.push(abi::screen_image_def());
+    defs.push(abi::screen_output_def());
     defs
 }
 
@@ -1054,6 +1063,7 @@ mod tests {
     use super::*;
     use crate::shaders;
     use wxsl_core::graph::{AttributeDecl, Graph, Node, UserBlockDecl, UserField};
+    use wxsl_core::node::GraphDomain;
     use wxsl_core::node::NodeBody;
 
     #[test]
@@ -1255,15 +1265,27 @@ mod tests {
         // under *its* default name. At `f32`, which is the first of
         // `abi::INTERPOLANT_TYPES` and so the type it resolves to fresh.
         graph.declare_attribute(AttributeDecl::computed("value", ValueType::F32));
+        // A node goes in a graph of a domain it belongs to (ADR 0040), and
+        // one that belongs in both goes in the material — which is the one
+        // carrying the declarations the reading nodes need. Two graphs
+        // rather than one, because "valid at its defaults" is a claim about
+        // a node in its own domain: `output.screen` in a material is
+        // correctly an error, and it is not the error this test is about.
+        let mut screen = Graph::in_domain("screen defaults", GraphDomain::Screen);
         let mut resource_inputs = 0;
         for def in registry.iter() {
             if def.is_surface_output() {
                 continue;
             }
-            let node = graph.add_resolved(&registry, Node::new(def.id.clone()));
+            let canvas = if def.domains.allows(GraphDomain::Surface) {
+                &mut graph
+            } else {
+                &mut screen
+            };
+            let node = canvas.add_resolved(&registry, Node::new(def.id.clone()));
             for socket in def.inputs.iter().chain(&def.outputs) {
                 assert!(
-                    graph.effective_type(node, socket).is_some(),
+                    canvas.effective_type(node, socket).is_some(),
                     "`{}`'s socket `{}` has no type at the default {:?}",
                     def.id,
                     socket.name,
@@ -1282,10 +1304,13 @@ mod tests {
         // texture to type in, so "connect something" is the only way to
         // feed it, and `MissingInput` saying so is correct rather than a
         // gap in the defaults.
-        let errors = match graph.validate(&registry) {
+        let mut errors = match graph.validate(&registry) {
             Ok(()) => Vec::new(),
             Err(errors) => errors.0,
         };
+        if let Err(more) = screen.validate(&registry) {
+            errors.extend(more.0);
+        }
         assert!(resource_inputs > 0, "no resource sockets left to except");
         assert_eq!(
             errors.len(),

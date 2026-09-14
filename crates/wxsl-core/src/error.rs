@@ -9,7 +9,7 @@ use core::fmt;
 
 use crate::graph::{NodeId, SocketRef};
 use crate::macros::MacroValue;
-use crate::node::{TypeRule, ValueType};
+use crate::node::{GraphDomain, TypeRule, ValueType};
 
 /// A single problem found while validating a [`crate::graph::Graph`].
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +21,20 @@ pub enum GraphError {
         node: NodeId,
         /// The definition id the node asked for.
         def: String,
+    },
+    /// A node's definition is not available in the kind of graph it was
+    /// placed in: a surface output in a screen effect, a screen context
+    /// read in a material
+    /// ([ADR 0040](../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+    NodeOutsideDomain {
+        /// The offending node.
+        node: NodeId,
+        /// The definition id it names.
+        def: String,
+        /// The domain the graph is in.
+        domain: GraphDomain,
+        /// The domains the definition *is* available in, rendered.
+        allowed: String,
     },
     /// An edge or parameter references a node that is not in the graph.
     UnknownNode(NodeId),
@@ -302,6 +316,16 @@ impl fmt::Display for GraphError {
             GraphError::UnknownDefinition { node, def } => {
                 write!(f, "node {node} references unknown node definition `{def}`")
             }
+            GraphError::NodeOutsideDomain {
+                node,
+                def,
+                domain,
+                allowed,
+            } => write!(
+                f,
+                "node {node} is a `{def}`, which a {domain} graph has no \
+                 place for (it belongs in: {allowed})"
+            ),
             GraphError::UnknownNode(id) => write!(f, "no such node: {id}"),
             GraphError::UnknownSocket { socket, direction } => write!(
                 f,
@@ -570,6 +594,15 @@ pub enum CodegenError {
     /// WXSL from an invalid graph would just move the error into the shader
     /// compiler, where it is much harder to explain.
     Invalid(GraphErrors),
+    /// The graph is not the kind of graph this generator compiles: a
+    /// material handed to the screen generator, or the other way round
+    /// ([ADR 0040](../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+    WrongDomain {
+        /// What the generator compiles.
+        expected: GraphDomain,
+        /// What the graph says it is.
+        found: GraphDomain,
+    },
     /// The graph has no surface-output node, so there is nothing to compile.
     NoOutputNode,
     /// The graph has more than one surface-output node.
@@ -628,6 +661,10 @@ impl fmt::Display for CodegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CodegenError::Invalid(errors) => write!(f, "graph is invalid: {errors}"),
+            CodegenError::WrongDomain { expected, found } => write!(
+                f,
+                "this is a {found} graph, and a {expected} graph is what compiles here"
+            ),
             CodegenError::NoOutputNode => f.write_str("graph has no surface output node"),
             CodegenError::MultipleOutputNodes(nodes) => {
                 write!(

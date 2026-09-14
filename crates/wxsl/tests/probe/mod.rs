@@ -100,7 +100,7 @@ pub fn unlit() -> Environment {
 pub fn linear_document() -> Graph {
     use wxsl::core::pipeline as doc;
     let registry = wxsl::core::pipeline::registry();
-    let mut graph = Graph::new("linear");
+    let mut graph = wxsl::core::pipeline::document("linear");
     let scene = graph.add_node(doc::SOURCE_SCENE);
     let depth = graph.add_node(doc::RESOURCE_DEPTH);
     let shade = graph.add(Node::new(doc::PASS_GEOMETRY).with_label("forward"));

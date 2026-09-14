@@ -329,6 +329,16 @@ facade crate's feature set, not about the workspace.
   a display transform anywhere else, and don't threshold, blend or
   accumulate against encoded values — if a pass needs to read what an
   earlier one wrote, it is reading light.
+- A graph carries a **domain** — surface, screen or document (ADR 0040) —
+  and a node definition carries the domains it may be placed in. Don't add
+  a second registry, a second palette or a second serialization for a
+  domain: the mask is on the definition and the filter is
+  `NodeRegistry::in_domain`. A body that names one domain's ABI should say
+  so through `NodeDefinitionBuilder::build` rather than by hand, so a new
+  domain-bound body cannot be left in every palette by omission. And a new
+  post effect is a **screen graph** first — a `.wxsl` file plus a
+  descriptor is for what a graph cannot yet say (two image inputs, a
+  parameter block).
 - A **scene** (`wxsl_core::scene`) is what exists; an **environment**
   (`wxsl_render::environment`) is camera and lights; a **draw list**
   (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a

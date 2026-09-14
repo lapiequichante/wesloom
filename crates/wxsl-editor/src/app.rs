@@ -29,7 +29,7 @@ use glam::Vec2;
 use wxsl_core::abi;
 use wxsl_core::graph::{Graph, NodeId};
 use wxsl_core::macros::MacroDef;
-use wxsl_core::node::{NodeRegistry, ValueType};
+use wxsl_core::node::{GraphDomain, NodeRegistry, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, UiEvent};
 use wxsl_render::ui::text::{GlyphCache, TextOptions};
@@ -404,6 +404,7 @@ impl Editor {
             palette,
             &mut self.picker,
             &self.registry,
+            self.graph.domain(),
             &mut requests,
         );
         inspector_panel(
@@ -739,6 +740,7 @@ fn palette_panel(
     rect: Rect,
     picker: &mut NodePicker,
     registry: &NodeRegistry,
+    domain: GraphDomain,
     requests: &mut Requests,
 ) {
     let theme = *ui.theme();
@@ -763,9 +765,14 @@ fn palette_panel(
 
     // Category filter: one row of buttons that wraps.
     let mut cursor = Vec2::new(rest.min.x, rest.min.y + metrics.row_gap);
-    let categories = registry.categories();
+    // The categories of what this canvas can hold, not of the whole
+    // registry: an empty category filter is worse than no filter (ADR 0040).
+    let categories = registry.categories_in(domain);
     let button_height = metrics.row_height * 0.85;
-    for (index, category) in std::iter::once("all").chain(categories).enumerate() {
+    for (index, category) in std::iter::once("all")
+        .chain(categories.iter().copied())
+        .enumerate()
+    {
         let width = ui.measure_ui(category).x + metrics.padding;
         if cursor.x + width > rest.max.x {
             cursor = Vec2::new(rest.min.x, cursor.y + button_height + metrics.row_gap);
@@ -807,7 +814,7 @@ fn palette_panel(
         return;
     }
 
-    let matches = picker.matches(registry, 200);
+    let matches = picker.matches(registry, domain, 200);
     // Only show a highlight once the keyboard is actually driving the list:
     // otherwise the first row looks selected in a palette nobody has touched.
     let searching = ui.state.focus() == Some(Id::new("palette.search"));

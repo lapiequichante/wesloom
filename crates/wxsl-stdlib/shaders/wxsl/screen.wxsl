@@ -1,0 +1,63 @@
+// The screen ABI: what a generated screen-effect module is written against.
+//
+// The twin of `surface.wxsl`, for the other shader domain. A material graph
+// is handed a `SurfaceContext` and answers with a `Surface`; a screen graph
+// is handed a `ScreenContext` and answers with a colour, and this file is
+// the half of that contract the generated module imports
+// (ADR 0040).
+//
+// It is much smaller than the surface ABI on purpose. A material's context
+// has to carry geometry — position, normal, tangent frame, view direction —
+// because a surface is somewhere. An effect's context carries where on the
+// screen it is and what one texel is worth, because a pixel is not.
+//
+// `wxsl_core::abi::screen_context_fields()` is the Rust half of the struct
+// below, in the same order, and `wxsl-stdlib` has a test that the two agree.
+
+import package::wxsl::bindings::frame_time;
+
+// The image this effect reads: whatever the pass before it wrote, at
+// binding 0 of the pass group (`abi::GROUP_PASS`).
+//
+// One image, fixed, because that is the shape every shipped screen effect
+// already has and it is what lets a *graph* be an effect without also
+// declaring what the pipeline must wire into it. It is bound by the pass,
+// not by the graph, so unlike a material's textures it appears in no
+// interface and costs no declaration.
+//
+// Read with `textureLoad` rather than through a sampler: the pass group
+// binds textures and no sampler, which is one binding shape for every pass
+// instead of one per effect that happens to filter.
+@group(3) @binding(0) var wxsl_screen_image: texture_2d<f32>;
+
+// Per-pixel inputs handed to a screen graph's generated function.
+struct ScreenContext {
+    // 0..1 across the input image, y down — the same orientation
+    // `@builtin(position)` and `textureLoad` use, so a uv round-trips
+    // through a texel without a flip.
+    uv: vec2f,
+    // Seconds since the renderer started, through `frame_time()` — so a
+    // time-driven effect answers for the previous frame under
+    // `wxsl_previous_frame` exactly as a time-driven material does.
+    time: f32,
+    // This fragment's pixel coordinates in the image being written.
+    pixel: vec2f,
+    // One texel of the input image in uv units: 1 / its size. What a
+    // neighbourhood filter steps by.
+    texel: vec2f,
+}
+
+// Build the context from a fragment's `@builtin(position)`.
+//
+// The size comes from the bound image rather than from a viewport uniform,
+// which is the honest answer for a chain whose intermediates are viewport-
+// scaled: a half-resolution effect wants its own texels, not the frame's.
+fn screen_context(position: vec4f) -> ScreenContext {
+    let size = vec2f(textureDimensions(wxsl_screen_image));
+    var ctx: ScreenContext;
+    ctx.uv = position.xy / size;
+    ctx.time = frame_time();
+    ctx.pixel = position.xy;
+    ctx.texel = vec2f(1.0, 1.0) / size;
+    return ctx;
+}

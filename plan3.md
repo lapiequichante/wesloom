@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7 and N1 have landed — ADRs 0038 and 0039. The shipped state it starts from is
+Status: P7, N1 and M7 have landed — ADRs 0038, 0039 and 0040. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -20,7 +20,7 @@ earlier plans' items did.
 
 | From | Still open | Reshaped by |
 |---|---|---|
-| plan.md | M7 (screen domain), M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
+| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 | queued below as N-items with the ADR that owes them |
 
@@ -153,7 +153,7 @@ group. The policy's argument is unchanged; the pass form is still what the
 gallery's `brdf-lut` demo runs. The sky demo is `ibl`: no lamps at all, so
 the image is `ambient_environment` and therefore the table.
 
-### M7 — The screen domain
+### M7 — The screen domain *(landed, ADR 0040)*
 
 The data end-game ADR 0034 named: an effect authored as a *graph* is pure
 data end to end.
@@ -179,6 +179,22 @@ data end to end.
   have authored, and FXAA is in the palette.
 * ADR: "Screen-domain graphs: postprocess is a material over the frame"
   (plan.md's own title, still the right one).
+
+**Landed, with three deviations worth naming.** The domain is *three*
+values, not two: pipeline documents were already a de-facto third domain
+with nothing saying so, and including them cost one enum variant and gave
+P5 its palette filter for free. The shipped graph effects live in the
+`wxsl` facade rather than in `wxsl-render`, because a graph-authored effect
+needs both the node registry and the shader library and the renderer
+depends on neither (ADR 0002) — `wxsl::effects::registry()` is what an
+application uses, and it replaces `tonemap` under its own id, so every
+stock document presents through a generated module without a document
+changing. And bloom did **not** become a graph: its threshold and composite
+are one pass reading one image today, so there is nothing to split, and the
+version that would want splitting wants two image inputs — which is the
+same "how does a graph declare what the pipeline wires into it" question
+N3 and N4 both owe. The graph-authored effects are the tonemap and FXAA;
+`filter/fxaa.wxsl` is the node, and the `fxaa` gallery demo is the chain.
 
 ### N2 — Motion: the Velocity stage, and TAA
 
@@ -553,8 +569,9 @@ none of it knows or cares which backend is underneath.
 2. ~~**N1**~~ — *landed (ADR 0039)*: tonemap out, IBL in, which closed
    the loop ADRs 0034/0035 opened (the LUT has its reader; bloom has its
    honest threshold).
-3. **M7** — the screen domain, the spine of the remaining plan. After it,
-   an effect can be a graph, and P5 has a full story to show.
+3. ~~**M7**~~ — *landed (ADR 0040)*: the screen domain, the screen ABI,
+   `EffectShader::Graph`, and a shipped registry whose display transform is
+   a graph.
 4. **N3**, then **N4** — compute and buffers in documents, then effect
    parameters. The vocabulary the canvas will draw should exist before
    the canvas does, for the same reason P9 ran before P3.

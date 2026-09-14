@@ -40,7 +40,8 @@
 //! lighting pass reads it by that shape. A document that wants a different
 //! frame group is asking for a different ABI, not a different graph.
 
-use crate::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, ValueType};
+use crate::graph::Graph;
+use crate::node::{GraphDomain, NodeDefinition, NodeRegistry, SettingDef, Socket, ValueType};
 
 /// Setting on the pass nodes that takes a tag expression: what a pass
 /// draws, as a [`crate::scene::TagExpr`].
@@ -307,6 +308,16 @@ pub fn node_defs() -> Vec<NodeDefinition> {
     ]
 }
 
+/// An empty pipeline document: a graph in [`GraphDomain::Document`].
+///
+/// The one way to start one, so that "a document" is a fact about the graph
+/// rather than about which registry someone happened to validate it against
+/// (ADR 0040). A `Graph::new` would be a *material* holding pass nodes, and
+/// `Graph::validate` says exactly that.
+pub fn document(name: impl Into<String>) -> Graph {
+    Graph::in_domain(name, GraphDomain::Document)
+}
+
 /// The pipeline document's node registry: every definition from
 /// [`node_defs`].
 pub fn registry() -> NodeRegistry {
@@ -318,7 +329,6 @@ pub fn registry() -> NodeRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Graph;
 
     #[test]
     fn the_vocabulary_registers_without_collisions() {

@@ -24,7 +24,9 @@ use std::fmt;
 use crate::abi;
 use crate::error::{Direction, GraphError, GraphErrors};
 use crate::macros::{MacroDef, MacroSet, MacroValue};
-use crate::node::{self, NodeBody, NodeDefinition, NodeRegistry, Socket, Value, ValueType};
+use crate::node::{
+    self, GraphDomain, NodeBody, NodeDefinition, NodeRegistry, Socket, Value, ValueType,
+};
 use crate::resources::{
     BufferLayout, GeometryInterface, MaterialInterface, ResourceBinding, UserBlock,
 };
@@ -246,6 +248,7 @@ impl Node {
 )]
 pub struct Graph {
     name: String,
+    domain: GraphDomain,
     nodes: BTreeMap<NodeId, Node>,
     edges: Vec<Edge>,
     macros: MacroSet,
@@ -501,6 +504,7 @@ impl Graph {
     pub fn new(name: impl Into<String>) -> Self {
         Graph {
             name: name.into(),
+            domain: GraphDomain::Surface,
             nodes: BTreeMap::new(),
             edges: Vec::new(),
             macros: MacroSet::new(),
@@ -518,6 +522,33 @@ impl Graph {
     /// Rename the graph.
     pub fn set_name(&mut self, name: impl Into<String>) {
         self.name = name.into();
+    }
+
+    /// What kind of graph this is: a material, a screen effect, or a
+    /// pipeline document (ADR 0040).
+    ///
+    /// [`GraphDomain::Surface`] unless said otherwise, which is why every
+    /// document written before domains existed still loads as what it was.
+    pub fn domain(&self) -> GraphDomain {
+        self.domain
+    }
+
+    /// Set the domain. A builder form is [`Graph::in_domain`].
+    ///
+    /// Changing it does not rewire anything — it changes which nodes
+    /// [`Graph::validate`] will accept, so a graph moved across domains
+    /// reports the nodes that do not come with it rather than silently
+    /// compiling as something else.
+    pub fn set_domain(&mut self, domain: GraphDomain) {
+        self.domain = domain;
+    }
+
+    /// An empty graph in `domain`: [`Graph::new`] plus
+    /// [`Graph::set_domain`].
+    pub fn in_domain(name: impl Into<String>, domain: GraphDomain) -> Self {
+        let mut graph = Graph::new(name);
+        graph.set_domain(domain);
+        graph
     }
 
     /// Insert `node`, returning its fresh id.
@@ -1850,6 +1881,11 @@ impl Graph {
         self.terminals(registry, NodeDefinition::is_surface_output)
     }
 
+    /// Every screen-output node. Exactly one is valid, in a screen graph.
+    pub fn screen_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_screen_output)
+    }
+
     /// Every vertex-output node. At most one is valid.
     pub fn vertex_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
         self.terminals(registry, NodeDefinition::is_vertex_output)
@@ -1925,6 +1961,19 @@ impl Graph {
                 });
                 continue;
             };
+            // What kind of graph this is decides which half of the
+            // vocabulary is available (ADR 0040). Reported here rather than
+            // refused by `Graph::add`, for the reason every other typing
+            // error is: a document may arrive wrong, and a node pasted from
+            // a material into an effect should say what is wrong with it.
+            if !def.domains.allows(self.domain) {
+                errors.push(GraphError::NodeOutsideDomain {
+                    node: id,
+                    def: node.def.clone(),
+                    domain: self.domain,
+                    allowed: def.domains.to_string(),
+                });
+            }
             self.check_params(id, node, def, &mut errors);
             // Every generic parameter this node's definition declares must
             // be resolved for *some* instance to mean anything concrete —
@@ -2584,7 +2633,7 @@ mod wire {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{AttributeDecl, Edge, Graph, Node, NodeId, UserBlockDecl};
+    use super::{AttributeDecl, Edge, Graph, GraphDomain, Node, NodeId, UserBlockDecl};
     use crate::macros::MacroSet;
 
     #[derive(Serialize, Deserialize)]
@@ -2598,6 +2647,8 @@ mod wire {
     pub(super) struct WireGraph {
         #[serde(default)]
         pub name: String,
+        #[serde(default, skip_serializing_if = "GraphDomain::is_surface")]
+        pub domain: GraphDomain,
         #[serde(default, skip_serializing_if = "MacroSet::is_empty")]
         pub macros: MacroSet,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2614,6 +2665,7 @@ mod wire {
         fn from(graph: Graph) -> Self {
             WireGraph {
                 name: graph.name,
+                domain: graph.domain,
                 macros: graph.macros,
                 user_block: graph.user_block,
                 attributes: graph.attributes,
@@ -2637,6 +2689,7 @@ mod wire {
             let next_id = nodes.keys().map(|id| id.0).max().unwrap_or(0) + 1;
             Graph {
                 name: wire.name,
+                domain: wire.domain,
                 nodes,
                 edges: wire.edges,
                 macros: wire.macros,

@@ -323,6 +323,170 @@ pub fn generate(
     })
 }
 
+/// Module path a generated *screen* module is mounted at.
+///
+/// The screen domain's twin of [`MATERIAL_MODULE`]: `wxsl-render` adds the
+/// generated source to its resolver under this path and compiles it as the
+/// root module of one effect
+/// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+pub const SCREEN_MODULE: &str = "package::screen";
+
+/// Knobs for [`generate_screen`].
+///
+/// Much smaller than [`CodegenOptions`], and that is the point: a screen
+/// graph has one stage, one entry-point pair, no lighting model, no
+/// G-buffer and no configuration a material's would recognise. What it
+/// shares is the macro precedence chain, because that belongs to graphs
+/// rather than to materials.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScreenOptions {
+    /// Macro values to sit *beneath* the graph's own, as
+    /// [`CodegenOptions::base_macros`] does.
+    pub base_macros: MacroSet,
+    /// Macro values to sit *above* the graph's own — what the application
+    /// decides rather than the effect's author.
+    pub macros: MacroSet,
+}
+
+/// Generate WXSL for a screen graph: one fullscreen pass over one image.
+///
+/// The screen half of [`generate`], and deliberately a separate function
+/// rather than a branch inside it. A material's generation is a
+/// stage-by-stage affair — a vertex partition, computed interpolants, a
+/// discard test, a surface, and a lighting model wrapped around the lot —
+/// and none of that exists here: an effect is one fragment function and the
+/// triangle that runs it. The parts they *do* share — validation, node
+/// emission, the macro chain, the module header — are shared as code, which
+/// is what keeps the two domains one vocabulary.
+pub fn generate_screen(
+    graph: &Graph,
+    registry: &NodeRegistry,
+    options: &ScreenOptions,
+) -> Result<GeneratedShader, CodegenError> {
+    if graph.domain() != node::GraphDomain::Screen {
+        return Err(CodegenError::WrongDomain {
+            expected: node::GraphDomain::Screen,
+            found: graph.domain(),
+        });
+    }
+    graph.validate(registry)?;
+
+    let found = graph.screen_outputs(registry);
+    let terminal = match found.as_slice() {
+        [] => return Err(CodegenError::NoOutputNode),
+        [only] => *only,
+        _ => return Err(CodegenError::MultipleOutputNodes(found)),
+    };
+
+    // The same precedence chain a material's macros go through, weakest
+    // first: the caller's defaults, each node's declared default, what the
+    // graph pins, the caller's overrides. No feature channels — those are a
+    // G-buffer's business, and an effect has none.
+    let mut macros = options.base_macros.clone();
+    macros.overlay(&graph.effective_macros(registry)?);
+    macros.overlay(&options.macros);
+
+    // A screen graph declares nothing bindable: `param.value`,
+    // `texture.texture_2d`, `input.user` and `input.attribute` are all
+    // surface-domain nodes, so validation has already refused them by the
+    // time we get here. The interface is therefore empty by construction
+    // rather than by a check of its own — and it is still *computed*,
+    // because that is the assertion.
+    let reachable = graph.dependencies_of(terminal);
+    let interface = graph.interface_of(registry, &reachable);
+    debug_assert!(
+        interface.material_group_is_empty()
+            && interface.user.is_none()
+            && interface.geometry.is_empty(),
+        "a screen graph cannot reach a declaring node: they are surface-domain"
+    );
+
+    let material_options = CodegenOptions {
+        emit_entry_points: false,
+        ..CodegenOptions::default()
+    };
+    let mut emitter = Emitter {
+        graph,
+        registry,
+        options: &material_options,
+        interface: interface.clone(),
+        stage: ShaderStage::Fragment,
+        bindings: BTreeMap::new(),
+        imports: BTreeMap::new(),
+        lighting_source: String::new(),
+        body: String::new(),
+    };
+    emitter.request_import(abi::SCREEN_MODULE, abi::SCREEN_CONTEXT_STRUCT);
+    emitter.request_import(abi::SCREEN_MODULE, abi::SCREEN_CONTEXT_FN);
+    let part = emitter.emit_partition(terminal, ShaderStage::Fragment)?;
+    let source = screen_module(graph, &macros, &emitter.imports, &part);
+
+    let source_hash = stable_hash(source.as_bytes());
+    Ok(GeneratedShader {
+        source,
+        macros,
+        material_fn: abi::SCREEN_FN.to_string(),
+        fragment_entry: Some(abi::SCREEN_FRAGMENT_ENTRY.to_string()),
+        interface,
+        source_hash,
+    })
+}
+
+/// The whole generated screen module: header, imports, macros, the graph's
+/// function, and the two entry points that run it.
+fn screen_module(
+    graph: &Graph,
+    macros: &MacroSet,
+    imports: &BTreeMap<ModulePath, Vec<WxslIdent>>,
+    part: &Partition,
+) -> String {
+    let mut out = String::with_capacity(1024);
+    write_header(&mut out, graph, macros, imports);
+
+    let _ = write!(
+        out,
+        "\nfn {}({}: {}) -> vec4f {{\n",
+        abi::SCREEN_FN,
+        abi::CONTEXT_VAR,
+        abi::SCREEN_CONTEXT_STRUCT,
+    );
+    out.push_str(&part.body);
+    let _ = writeln!(
+        out,
+        "    return vec4f({}, {});",
+        part.input(abi::SOCKET_SCREEN_COLOR, "vec3f(0.0, 0.0, 0.0)"),
+        part.input(abi::SOCKET_SCREEN_ALPHA, "1.0"),
+    );
+    out.push_str("}\n");
+
+    // The fullscreen triangle, written here rather than imported: an entry
+    // point belongs to the module that declares it, so every screen effect
+    // in this repo — the shipped `.wxsl` ones included — carries its own
+    // copy of these three lines. Three vertices, no vertex buffer:
+    // (-1,-1), (3,-1), (-1,3).
+    let _ = write!(
+        out,
+        "
+@vertex
+fn {}(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {{
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}}
+
+@fragment
+fn {}(@builtin(position) position: vec4f) -> @location(0) vec4f {{
+    return {}({}(position));
+}}
+",
+        abi::SCREEN_VERTEX_ENTRY,
+        abi::SCREEN_FRAGMENT_ENTRY,
+        abi::SCREEN_FN,
+        abi::SCREEN_CONTEXT_FN,
+    );
+    out
+}
+
 /// One compiled partition: the statements leading up to a terminal, and
 /// what that terminal's inputs came out as.
 struct Partition {
@@ -690,6 +854,14 @@ impl Emitter<'_> {
                     let ty = self.graph.effective_type(node, socket).expect(
                         "a validated graph resolves every generic parameter its nodes declare",
                     );
+                    // A texture or a sampler is a handle, and WGSL has no
+                    // `let` for one: a node handing out a binding — the
+                    // screen ABI's input image — binds the name straight
+                    // through, exactly as a `NodeBody::Resource` does.
+                    if ty.is_resource() {
+                        self.bindings.insert(target, expr);
+                        continue;
+                    }
                     let _ = writeln!(self.body, "    let {name}: {} = {expr};", ty.wxsl_type());
                     self.bindings.insert(target, name);
                 }
@@ -872,7 +1044,8 @@ impl Emitter<'_> {
             NodeBody::SurfaceOutput
             | NodeBody::VertexOutput
             | NodeBody::DiscardOutput
-            | NodeBody::VaryingOutput => {
+            | NodeBody::VaryingOutput
+            | NodeBody::ScreenOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
                 unreachable!("the surface output node is emitted separately");
             }
@@ -981,62 +1154,7 @@ impl Emitter<'_> {
             ..
         } = self;
         let mut out = String::with_capacity(2048);
-
-        let _ = writeln!(
-            out,
-            "// Generated by wxsl-core from graph `{}`.",
-            graph.name()
-        );
-        out.push_str("// Do not edit: regenerate from the graph instead.\n");
-        let signature = macros.signature();
-        if !signature.is_empty() {
-            let _ = writeln!(out, "// Macros: {signature}");
-        }
-        out.push('\n');
-
-        for (module, items) in &imports {
-            let mut items: Vec<&str> = items.iter().map(WxslIdent::as_str).collect();
-            items.sort_unstable();
-            match items.as_slice() {
-                [only] => {
-                    let _ = writeln!(out, "import {module}::{only};");
-                }
-                many => {
-                    let _ = writeln!(out, "import {module}::{{{}}};", many.join(", "));
-                }
-            }
-        }
-
-        // The macros this shader was compiled with, declared with their
-        // effective values as defaults. A WXSL module declares the knobs it
-        // uses (ADR 0011), so there is no shared macro module to import
-        // from: the generated module is self-contained, and the renderer
-        // binds the same values over the top.
-        // There is no render-path flag any more: a stage is chosen by
-        // generating that stage's module, not by an `@if` inside a module
-        // holding all of them (ADR 0022).
-        if !macros.is_empty() {
-            for (name, value) in macros.iter() {
-                let Some(ident) = WxslIdent::new(name) else {
-                    continue;
-                };
-                match value {
-                    MacroValue::Flag(flag) => {
-                        let _ = writeln!(out, "@macro const {ident}: bool = {flag};");
-                    }
-                    MacroValue::Int(number) => {
-                        let _ = writeln!(out, "@macro const {ident}: i32 = {number};");
-                    }
-                    MacroValue::Float(number) => {
-                        let mut literal = String::new();
-                        if crate::wxsl::write_f32(&mut literal, number).is_some() {
-                            let _ = writeln!(out, "@macro const {ident}: f32 = {literal};");
-                        }
-                    }
-                }
-            }
-        }
-
+        write_header(&mut out, graph, macros, &imports);
         write_declarations(&mut out, &interface);
 
         // The material function takes what the geometry supplied as a
@@ -1157,6 +1275,67 @@ impl Emitter<'_> {
             write_entry_points(&mut out, options, &interface, parts);
         }
         out
+    }
+}
+
+/// The lines every generated module starts with, in either domain: where it
+/// came from, what it imports, and the macro values it was generated at.
+///
+/// A WXSL module declares the knobs it uses (ADR 0011), so there is no
+/// shared macro module to import from: the generated module is
+/// self-contained, and the renderer binds the same values over the top.
+/// There is no render-path flag any more either — a stage is chosen by
+/// generating that stage's module, not by an `@if` inside a module holding
+/// all of them (ADR 0022).
+fn write_header(
+    out: &mut String,
+    graph: &Graph,
+    macros: &MacroSet,
+    imports: &BTreeMap<ModulePath, Vec<WxslIdent>>,
+) {
+    let _ = writeln!(
+        out,
+        "// Generated by wxsl-core from graph `{}`.",
+        graph.name()
+    );
+    out.push_str("// Do not edit: regenerate from the graph instead.\n");
+    let signature = macros.signature();
+    if !signature.is_empty() {
+        let _ = writeln!(out, "// Macros: {signature}");
+    }
+    out.push('\n');
+
+    for (module, items) in imports {
+        let mut items: Vec<&str> = items.iter().map(WxslIdent::as_str).collect();
+        items.sort_unstable();
+        match items.as_slice() {
+            [only] => {
+                let _ = writeln!(out, "import {module}::{only};");
+            }
+            many => {
+                let _ = writeln!(out, "import {module}::{{{}}};", many.join(", "));
+            }
+        }
+    }
+
+    for (name, value) in macros.iter() {
+        let Some(ident) = WxslIdent::new(name) else {
+            continue;
+        };
+        match value {
+            MacroValue::Flag(flag) => {
+                let _ = writeln!(out, "@macro const {ident}: bool = {flag};");
+            }
+            MacroValue::Int(number) => {
+                let _ = writeln!(out, "@macro const {ident}: i32 = {number};");
+            }
+            MacroValue::Float(number) => {
+                let mut literal = String::new();
+                if crate::wxsl::write_f32(&mut literal, number).is_some() {
+                    let _ = writeln!(out, "@macro const {ident}: f32 = {literal};");
+                }
+            }
+        }
     }
 }
 

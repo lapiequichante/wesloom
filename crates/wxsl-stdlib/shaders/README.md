@@ -11,11 +11,11 @@ shaders/
   animation/
   color/
   distort/
-  filter/       (empty)
+  filter/
   generative/
   lighting/
   math/
-  sample/       (empty)
+  sample/
   sdf/
   space/
 ```
@@ -32,9 +32,12 @@ definition, and `build.rs` runs it over everything under a category
 directory, so there is no Rust to write for a new function. See "The shape of
 a node source" below for what the derivation reads.
 
-`filter/` is empty: it is mostly about sampling neighbourhoods of a
-texture, which needs the screen domain (M7) to be worth much. It stays as
-a directory so the category layout is not a surprise later.
+`filter/` holds what samples a *neighbourhood* of a texture rather than a
+point: `fxaa` is the first, and it arrived with the screen domain
+([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+These are ordinary functions over a `texture_2d<f32>`, so nothing stops a
+material calling one — what the screen domain adds is where the frame's own
+image comes from.
 
 `sample/` holds the texture readers. Their signatures name
 `texture_2d<f32>` and `sampler`, which the derivation maps to socket types
@@ -55,7 +58,8 @@ explains the split.
 | Module | What it holds |
 |---|---|
 | `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `environment` module. |
-| `surface.wxsl` | `SurfaceContext` and `Surface`, the graph's input and output. |
+| `surface.wxsl` | `SurfaceContext` and `Surface`, a material graph's input and output. |
+| `screen.wxsl` | `ScreenContext` and the one image a screen effect reads — the screen domain's ABI (ADR 0040). |
 | `vertex.wxsl` | The vertex stage, shared by every material stage, and the context builder. |
 | `lighting models/` | the lighting-model functions (ADR 0028): shaded through `wxsl_core::lighting`'s registry, not placed as nodes. |
 
