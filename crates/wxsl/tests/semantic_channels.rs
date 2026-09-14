@@ -6,11 +6,16 @@
 //! pins a feature's macro *demands* its channel of the pipeline, a
 //! pipeline without the channel is a named error rather than a silently
 //! missing feature, and a pipeline that carries it draws the material.
+//!
+//! Since ADR 0038 the demand is named at the *resolution* point — where
+//! the material is compiled against the plan — rather than at the first
+//! frame, so the first of the three facts below is a compile error and the
+//! second (a material resolved against another plan) is still the frame's.
 
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeRegistry, Value, ValueType};
 use wxsl::render::gpu::OffscreenTarget;
-use wxsl::render::material::MaterialOptions;
+use wxsl::render::material::MaterialConfig;
 use wxsl::render::{DrawItem, Material, RenderError, TargetConfig};
 
 mod probe;
@@ -36,9 +41,6 @@ fn a_feature_pinning_material_is_matched_or_named() {
     .expect("renderer");
     renderer.set_pipeline(wxsl::render::StockPipeline::Deferred);
 
-    // The material demands the subsurface channel with its macro pin, but
-    // was resolved against a plan that carries no feature channels — the
-    // pipeline's default.
     let registry: NodeRegistry = wxsl::stdlib::registry();
     let graph = probe::probe_graph(
         &registry,
@@ -46,22 +48,16 @@ fn a_feature_pinning_material_is_matched_or_named() {
         Value::F32(0.375),
         &declare_as_parameter,
     );
-    let material = Material::from_graph_with_macros(&graph, &registry, &subsurface_macros())
-        .expect("compiles");
     let mesh = wxsl::render::Mesh::plane(&gpu.device, 2.0);
 
-    // Drawing it under a pipeline without the channel is named, not
-    // silently shaded without the feature.
+    // A material demanding the subsurface channel with its macro pin, but
+    // resolved against a plan that carries no feature channels — the
+    // pipeline's default. The demand goes unanswered, which is named where
+    // the material is resolved rather than silently shaded without the
+    // feature.
     {
-        let mut bindings = renderer.material_bindings(&gpu.device, &material);
-        bindings
-            .upload(&gpu.device, &gpu.queue)
-            .expect("the parameters upload");
-        let item = DrawItem::new(&mesh, &material)
-            .with_transform(glam::Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2))
-            .with_bindings(&bindings);
-        let draws = wxsl::render::single_draw(item);
-        let error = match render_list_in(&gpu, &mut renderer, &target, &draws, &unlit()) {
+        let error = match Material::from_graph_with_macros(&graph, &registry, &subsurface_macros())
+        {
             Err(RenderError::Lighting { error, .. }) => error,
             other => panic!("expected the demand to be named, got {other:?}"),
         };
@@ -71,18 +67,21 @@ fn a_feature_pinning_material_is_matched_or_named() {
         );
     }
 
-    // Enabling the feature widens the G-buffer — and the same material
-    // still fails the handshake, because it was *resolved* against the
-    // empty plan.
+    // A material that demands nothing still belongs to the plan it was
+    // resolved against: compiled for the empty one, it cannot be drawn
+    // under a pipeline that carries the channel, because its G-buffer
+    // struct has one field fewer than the pass writes.
+    let stranger = Material::from_graph_with_macros(&graph, &registry, &probe::no_tonemap())
+        .expect("compiles against the empty plan");
     renderer
         .set_features(&["subsurface"])
         .expect("the feature fits the budget");
     {
-        let mut bindings = renderer.material_bindings(&gpu.device, &material);
+        let mut bindings = renderer.material_bindings(&gpu.device, &stranger);
         bindings
             .upload(&gpu.device, &gpu.queue)
             .expect("the parameters upload");
-        let item = DrawItem::new(&mesh, &material)
+        let item = DrawItem::new(&mesh, &stranger)
             .with_transform(glam::Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2))
             .with_bindings(&bindings);
         let draws = wxsl::render::single_draw(item);
@@ -103,10 +102,10 @@ fn a_feature_pinning_material_is_matched_or_named() {
     let material = Material::with_lighting(
         &graph,
         &registry,
-        &MaterialOptions {
+        &MaterialConfig {
             macros: subsurface_macros(),
             features,
-            ..MaterialOptions::default()
+            ..MaterialConfig::default()
         },
         renderer.lighting(),
     )

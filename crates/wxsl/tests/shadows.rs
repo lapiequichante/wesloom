@@ -22,7 +22,7 @@ use wxsl::core::abi;
 use wxsl::core::graph::{Graph, Node};
 use wxsl::core::node::{NodeRegistry, Value, ValueType};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
-use wxsl::render::material::{Material, MaterialOptions};
+use wxsl::render::material::{Material, MaterialConfig};
 use wxsl::render::pipeline::StockPipeline;
 use wxsl::render::{
     Camera, DrawItem, DrawList, Environment, Light, Mesh, RenderRequest, Renderer, TargetConfig,
@@ -183,8 +183,8 @@ impl Scene {
         }
     }
 
-    fn material(&self, graph: &Graph, options: &MaterialOptions) -> Material {
-        Material::with_options(graph, &self.registry, options).expect("the graph compiles")
+    fn material(&self, graph: &Graph, options: &MaterialConfig) -> Material {
+        Material::with_config(graph, &self.registry, options).expect("the graph compiles")
     }
 
     /// Draw the ground with `ground` and the floating quad with `caster`,
@@ -232,8 +232,8 @@ fn a_caster_darkens_the_ground_beneath_it_and_nowhere_else() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
-    let caster = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
+    let caster = scene.material(&plain_graph, &MaterialConfig::default());
 
     // The same frame twice, once with the light casting and once not, so
     // the comparison is against this exact scene rather than a constant
@@ -271,7 +271,7 @@ fn a_light_that_casts_nothing_costs_a_clear_and_leaves_the_scene_lit() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
 
     let mut environment = lit(true);
     environment.lights.clear();
@@ -293,13 +293,13 @@ fn a_material_that_casts_no_shadow_is_not_drawn_into_one() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
-    let casting = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
+    let casting = scene.material(&plain_graph, &MaterialConfig::default());
     let not_casting = scene.material(
         &plain_graph,
-        &MaterialOptions {
+        &MaterialConfig {
             cast_shadow: false,
-            ..MaterialOptions::default()
+            ..MaterialConfig::default()
         },
     );
     // The two differ in no generated code at all — this is a selection,
@@ -326,12 +326,12 @@ fn a_material_that_receives_no_shadow_does_not_compile_the_lookup() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let receiving = scene.material(&plain_graph, &MaterialOptions::default());
+    let receiving = scene.material(&plain_graph, &MaterialConfig::default());
     let ignoring = scene.material(
         &plain_graph,
-        &MaterialOptions {
+        &MaterialConfig {
             receive_shadow: false,
-            ..MaterialOptions::default()
+            ..MaterialConfig::default()
         },
     );
     // Unlike `cast_shadow`, this one *is* code: the flag is a macro, so
@@ -357,7 +357,7 @@ fn a_material_that_receives_no_shadow_does_not_compile_the_lookup() {
         "a material that receives no shadow should not compile the lookup"
     );
 
-    let caster = scene.material(&plain_graph, &MaterialOptions::default());
+    let caster = scene.material(&plain_graph, &MaterialConfig::default());
     let receiving_image = scene.render(&lit(true), &receiving, Some(&caster));
     let ignoring_image = scene.render(&lit(true), &ignoring, Some(&caster));
 
@@ -377,8 +377,8 @@ fn forward_and_deferred_shadow_the_same_ground_the_same_way() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
-    let caster = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
+    let caster = scene.material(&plain_graph, &MaterialConfig::default());
 
     let forward = scene.render(&lit(true), &ground, Some(&caster));
     scene.renderer.set_pipeline(StockPipeline::Deferred);
@@ -406,10 +406,10 @@ fn an_alpha_discarding_material_casts_a_perforated_shadow() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
-    let solid = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
+    let solid = scene.material(&plain_graph, &MaterialConfig::default());
     let holed_graph = perforated(&scene.registry);
-    let holed = scene.material(&holed_graph, &MaterialOptions::default());
+    let holed = scene.material(&holed_graph, &MaterialConfig::default());
 
     // The half that survives the discard, and the half that does not.
     let kept = Vec3::new(0.3, 0.0, 0.0);
@@ -453,10 +453,10 @@ fn a_displacing_material_casts_a_displaced_shadow() {
     let Some(gpu) = gpu() else { return };
     let mut scene = Scene::new(gpu);
     let plain_graph = plain(&scene.registry, "ground");
-    let ground = scene.material(&plain_graph, &MaterialOptions::default());
-    let still = scene.material(&plain_graph, &MaterialOptions::default());
+    let ground = scene.material(&plain_graph, &MaterialConfig::default());
+    let still = scene.material(&plain_graph, &MaterialConfig::default());
     let moving_graph = displacing(&scene.registry);
-    let moving = scene.material(&moving_graph, &MaterialOptions::default());
+    let moving = scene.material(&moving_graph, &MaterialConfig::default());
 
     // Where the mesh is, and where the graph puts it.
     let origin = Vec3::ZERO;

@@ -370,6 +370,17 @@ pub enum LightingError {
         /// The name that was asked for.
         name: String,
     },
+    /// A material pins a feature's macro while the plan it is resolved
+    /// against carries no channel for it — the handshake check
+    /// ([ADR 0037](../../../docs/adr/0037-semantic-channels.md)), moved to
+    /// the one resolution point by
+    /// [ADR 0038](../../../docs/adr/0038-a-materials-configuration-is-one-value.md).
+    FeatureNotCarried {
+        /// The macro the material pinned.
+        macro_name: &'static str,
+        /// The feature that macro asks for.
+        feature: &'static str,
+    },
     /// Two requests claim the same G-buffer field — the collision the
     /// source tags exist to name (plan2 P12).
     DuplicateChannel {
@@ -398,6 +409,15 @@ impl fmt::Display for LightingError {
             LightingError::UnknownFeature { name } => {
                 write!(f, "no material feature named `{name}` is shipped")
             }
+            LightingError::FeatureNotCarried {
+                macro_name,
+                feature,
+            } => write!(
+                f,
+                "pins `{macro_name}`, which asks for the `{feature}` channel, but this \
+                 pipeline does not enable the `{feature}` feature — enable it with \
+                 `Renderer::set_features` and resolve the material against the same plan"
+            ),
             LightingError::DuplicateChannel {
                 field,
                 first,

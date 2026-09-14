@@ -50,7 +50,7 @@ use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeRegistry, Value};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
-use wxsl::render::material::MaterialOptions;
+use wxsl::render::material::MaterialConfig;
 use wxsl::render::variants;
 use wxsl::render::{
     Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh, RenderRequest,
@@ -125,10 +125,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let material = Material::with_lighting(
         &graph,
         &registry,
-        &MaterialOptions {
+        &MaterialConfig {
             macros: options.macros.clone(),
-            lighting: options.model.clone(),
-            ..MaterialOptions::default()
+            model: options.model.clone(),
+            ..MaterialConfig::default()
         },
         &lighting,
     )?;
@@ -796,10 +796,10 @@ impl App {
         match Material::with_lighting(
             &self.graph,
             &self.registry,
-            &MaterialOptions {
+            &MaterialConfig {
                 macros: self.options.macros.clone(),
-                lighting: self.options.model.clone(),
-                ..MaterialOptions::default()
+                model: self.options.model.clone(),
+                ..MaterialConfig::default()
             },
             &self.lighting,
         ) {

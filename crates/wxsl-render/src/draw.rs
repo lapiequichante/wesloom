@@ -113,13 +113,20 @@ pub struct DrawItem<'a> {
 }
 
 impl<'a> DrawItem<'a> {
-    /// An untagged draw of `mesh` with `material`, at the origin.
+    /// A draw of `mesh` with `material`, at the origin, tagged with what
+    /// the material was configured with.
+    ///
+    /// The material's own tags rather than none: they are part of its
+    /// configuration (ADR 0038), and this module's own rule is that a
+    /// material says what it *is*. A material configured with no tags gives
+    /// an untagged draw, which is what every draw built by hand used to be.
+    /// [`DrawItem::with_tags`] is still how an instance overrides them.
     pub fn new(mesh: &'a Mesh, material: &'a Material) -> Self {
         DrawItem {
             mesh,
             material,
             transform: Mat4::IDENTITY,
-            tags: Tags::EMPTY,
+            tags: material.tags(),
             bindings: None,
             user: None,
             attributes: InstanceAttributes::EMPTY,

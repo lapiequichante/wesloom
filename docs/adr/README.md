@@ -51,7 +51,8 @@ is signal, don't delete it.
 | [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md) |
 | [0035](0035-execution-policies.md) | Execution policies: once, on resize, on demand — and compute effects | Accepted |
 | [0036](0036-buffers-are-graph-resources.md) | Buffers are graph resources, with storage bindings in the pass group | Accepted |
-| [0037](0037-semantic-channels.md) | Semantic channels: G-buffer requests collected with sources, and the material feature | Accepted |
+| [0037](0037-semantic-channels.md) | Semantic channels: G-buffer requests collected with sources, and the material feature | Accepted, amended by [0038](0038-a-materials-configuration-is-one-value.md) |
+| [0038](0038-a-materials-configuration-is-one-value.md) | A material's configuration is one value, resolved once | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

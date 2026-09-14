@@ -20,7 +20,7 @@ use wxsl_core::node::NodeRegistry;
 use wxsl_core::scene::{MeshSource, Scene, SceneError, Tags};
 use wxsl_render::bindings::MaterialBindings;
 use wxsl_render::draw::{DrawItem, DrawList, InstanceAttributes};
-use wxsl_render::material::{Material, MaterialOptions};
+use wxsl_render::material::Material;
 use wxsl_render::mesh::Mesh;
 use wxsl_render::renderer::Renderer;
 use wxsl_render::RenderError;
@@ -87,6 +87,24 @@ impl SceneResources {
         base: Option<&Path>,
         lighting: &wxsl_core::lighting::LightingSet,
     ) -> Result<Self, LoadError> {
+        Self::load_with_plan(device, scene, registry, base, lighting, &[])
+    }
+
+    /// The same again, against the *whole* plan the pipeline publishes: its
+    /// lighting set and its feature channels.
+    ///
+    /// Both halves, because both shape the G-buffer struct a material is
+    /// generated for (plan2 P12, ADR 0037). The renderer must be running
+    /// the same pair — `set_lighting` and `set_features` — and a material
+    /// resolved against another plan is a named error at the first frame.
+    pub fn load_with_plan(
+        device: &wgpu::Device,
+        scene: &Scene,
+        registry: &NodeRegistry,
+        base: Option<&Path>,
+        lighting: &wxsl_core::lighting::LightingSet,
+        features: &[wxsl_core::lighting::ChannelRequest],
+    ) -> Result<Self, LoadError> {
         let invalid = scene.validate();
         if !invalid.is_empty() {
             return Err(LoadError::Invalid(invalid));
@@ -100,16 +118,13 @@ impl SceneResources {
         let mut materials = Vec::with_capacity(scene.materials.len());
         for entry in &scene.materials {
             materials.push(
+                // The document's own configuration, with the one field a
+                // document cannot author filled in from the pipeline's plan
+                // (ADR 0038).
                 Material::with_lighting(
                     &entry.graph,
                     registry,
-                    &MaterialOptions {
-                        macros: entry.macros.clone(),
-                        cast_shadow: entry.cast_shadow,
-                        receive_shadow: entry.receive_shadow,
-                        lighting: entry.lighting.clone(),
-                        features: Vec::new(),
-                    },
+                    &entry.config.clone().with_features(features.to_vec()),
                     lighting,
                 )
                 .map_err(|error| LoadError::Material {

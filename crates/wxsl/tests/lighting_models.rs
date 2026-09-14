@@ -15,7 +15,7 @@ use wxsl::core::graph::{Graph, Node};
 use wxsl::core::lighting::{LightingSet, DEFAULT_MODELS, DEFAULT_MODEL_ID};
 use wxsl::core::node::{NodeRegistry, Value};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
-use wxsl::render::material::{Material, MaterialOptions};
+use wxsl::render::material::{Material, MaterialConfig};
 use wxsl::render::pipeline::StockPipeline;
 use wxsl::render::{Camera, DrawItem, DrawList, Environment, Light, Mesh, Renderer, TargetConfig};
 
@@ -113,7 +113,7 @@ impl Scene {
         }
     }
 
-    fn material(&self, graph: &Graph, options: &MaterialOptions) -> Material {
+    fn material(&self, graph: &Graph, options: &MaterialConfig) -> Material {
         Material::with_lighting(graph, &self.registry, options, self.renderer.lighting())
             .expect("the graph compiles")
     }
@@ -135,10 +135,10 @@ impl Scene {
     }
 }
 
-fn named(name: &str) -> MaterialOptions {
-    MaterialOptions {
-        lighting: Some(name.to_string()),
-        ..MaterialOptions::default()
+fn named(name: &str) -> MaterialConfig {
+    MaterialConfig {
+        model: Some(name.to_string()),
+        ..MaterialConfig::default()
     }
 }
 
@@ -228,8 +228,8 @@ fn the_dispatch_channel_changes_no_pbr_pixel() {
     assert!(full.renderer.lighting().dispatches());
 
     let graph = glossy(&single.registry, "plain", 0.5);
-    let material = single.material(&graph, &MaterialOptions::default());
-    let full_material = full.material(&graph, &MaterialOptions::default());
+    let material = single.material(&graph, &MaterialConfig::default());
+    let full_material = full.material(&graph, &MaterialConfig::default());
 
     let one_model = single.render(&[&material, &material, &material]);
     let every_model = full.render(&[&full_material, &full_material, &full_material]);
@@ -318,7 +318,7 @@ fn a_frame_mismatched_with_the_renderers_set_is_reported_by_name() {
     let single = Scene::with_lighting(single_gpu, single_set);
 
     let graph = glossy(&scene.registry, "from elsewhere", 0.5);
-    let stranger = single.material(&graph, &MaterialOptions::default());
+    let stranger = single.material(&graph, &MaterialConfig::default());
 
     let items = vec![DrawItem::new(&scene.quad, &stranger)];
     let draws: DrawList<'_> = items.into_iter().collect();

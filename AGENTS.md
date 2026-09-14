@@ -316,6 +316,13 @@ facade crate's feature set, not about the workspace.
   turns it on per material, and `Renderer::set_features` is what gives a
   pipeline the channel — the mismatch is a named error, not a silently
   missing feature.
+- A **material's configuration** is one `wxsl_core::material::MaterialConfig`
+  (ADR 0038): macros, model name, the two shadow flags, tags, and the
+  pipeline's feature channels. It travels document → `Material::with_lighting`
+  → `CodegenOptions.material` without being respelled, and
+  `MaterialConfig::resolve` is the only place a name becomes an id or a flag
+  becomes a macro. A new per-material knob is a field there plus whatever
+  `resolve` does with it — never another options struct.
 - A **scene** (`wxsl_core::scene`) is what exists; an **environment**
   (`wxsl_render::environment`) is camera and lights; a **draw list**
   (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a

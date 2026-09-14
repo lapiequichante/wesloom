@@ -891,34 +891,14 @@ impl Renderer {
                                 ),
                             });
                         }
-                        // And a material that pins a feature's macro while
-                        // its pipeline does not carry the channel is the
-                        // request going unanswered — named rather than
-                        // silently shaded without the feature.
-                        for feature in wxsl_core::lighting::FEATURES {
-                            let demands = matches!(
-                                item.material.macros().get(feature.macro_name),
-                                Some(wxsl_core::macros::MacroValue::Flag(true))
-                            );
-                            if demands
-                                && !self
-                                    .config
-                                    .features
-                                    .iter()
-                                    .any(|request| request.source.name() == feature.name)
-                            {
-                                return Err(RenderError::Lighting {
-                                    material: item.material.name.clone(),
-                                    error: format!(
-                                        "pins `{macro}`, which asks for the `{name}` channel, \
-                                         but this pipeline does not enable the `{name}` \
-                                         feature — enable it with `Renderer::set_features`",
-                                        macro = feature.macro_name,
-                                        name = feature.name,
-                                    ),
-                                });
-                            }
-                        }
+                        // The other side of that — a material pinning a
+                        // feature's macro while its plan carries no channel
+                        // for it — is checked where the material is
+                        // *resolved* rather than here (ADR 0038): that is
+                        // the earliest point the demand exists, and a
+                        // material resolved against a plan that answers it
+                        // cannot reach this frame carrying a different one
+                        // without failing the comparison above.
                         item.mesh.check_attributes(
                             &item.material.name,
                             item.material.vertex_attributes(),

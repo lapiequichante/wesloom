@@ -72,6 +72,46 @@ fn a_scene_round_trips_through_the_document_format() {
     assert!(back.validate().is_empty());
 }
 
+/// The consolidation of ADR 0038 is a Rust-side one: the material's knobs
+/// became one `MaterialConfig`, and the document they are written in did
+/// *not* move. A document written before it still loads, which is the guard
+/// rail "new document fields default to today's behaviour" taken seriously
+/// for a field that was renamed rather than added.
+#[test]
+fn the_material_configs_fields_stay_where_the_document_had_them() {
+    let scene = demo_scene();
+    let text = serde_json::to_string(&scene).expect("serializes");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parses as json");
+    let material = &value["materials"][0];
+    for field in ["macros", "tags", "cast_shadow", "receive_shadow"] {
+        assert!(
+            material.get(field).is_some(),
+            "`{field}` should still sit on the material, not inside a nested config: {material}"
+        );
+    }
+    assert!(
+        material.get("config").is_none(),
+        "the config is flattened, so nothing nests it: {material}"
+    );
+
+    // And the one field that *was* renamed — `lighting` to `model` — still
+    // reads under its old name.
+    let old = serde_json::json!({
+        "name": "legacy",
+        "materials": [{
+            "name": "paint",
+            "graph": serde_json::to_value(demo_graph()).expect("serializes"),
+            "lighting": "lambert",
+            "cast_shadow": false,
+        }],
+    });
+    let back: Scene = serde_json::from_value(old).expect("a pre-0038 document still parses");
+    assert_eq!(back.materials[0].config.model.as_deref(), Some("lambert"));
+    assert!(!back.materials[0].config.cast_shadow);
+    // The fields it left out still default to what they always did.
+    assert!(back.materials[0].config.receive_shadow);
+}
+
 #[test]
 fn a_pass_draws_the_tag_expression_it_asks_for() {
     // The material says what it is; the pass says what it draws. Neither

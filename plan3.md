@@ -10,8 +10,8 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: nothing in this file has landed. The shipped state it starts from
-is plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
+Status: P7 has landed — ADR 0038. The shipped state it starts from is
+plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
 earlier plans' items did.
@@ -21,7 +21,7 @@ earlier plans' items did.
 | From | Still open | Reshaped by |
 |---|---|---|
 | plan.md | M7 (screen domain), M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
-| plan2 | P5 (pipeline canvas), P7 (material config), P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
+| plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
@@ -80,7 +80,7 @@ plans and the ADRs use; the N-series is new work those ADRs queued — N9
 and N10 at the end are newer still: the editor's catch-up, and a decision
 made after this file was written.
 
-### P7 — One `MaterialConfig`
+### P7 — One `MaterialConfig` *(landed, ADR 0038)*
 
 `CodegenOptions.lighting`, `MaterialOptions` (macros, shadow flags, model,
 features) and the scene document's `lighting` field are several spellings
@@ -95,6 +95,19 @@ materials.
 * Payoff: the next per-material knob is a field, not another
   options-struct; the P8 capability metadata has one place to read.
 * ADR: "A material's configuration is one value, resolved once."
+
+Landed as written. `wxsl_core::material::MaterialConfig` is the value;
+`MaterialOptions` is gone and `CodegenOptions` lost `override_macros` and
+`lighting` for one `material` field. `MaterialConfig::resolve` is the one
+resolution point, and the feature handshake moved into it — a material
+demanding a channel its plan does not carry is a *compile* error now, not
+a first-frame one. Two things the plan did not name came along because
+they were the same fact: a material carries its tags, so `DrawItem::new`
+stops asking a caller for what the material already knows, and
+`SceneResources::load_with_plan` lets a scene be loaded under a pipeline
+with feature channels at all. The document is unchanged (the config is
+`flatten`ed, and the one renamed field keeps an alias), which a test
+asserts.
 
 ### N1 — The shipped effects complete their halves
 
@@ -517,8 +530,9 @@ none of it knows or cares which backend is underneath.
 
 ## Suggested order
 
-1. **P7** — a day-class consolidation that pays immediately and un-threws
-   the options plumbing every later item touches.
+1. ~~**P7**~~ — *landed (ADR 0038)*: a day-class consolidation that pays
+   immediately and un-threws the options plumbing every later item
+   touches.
 2. **N1** — tonemap out, IBL in: small, visible, and it completes the
    loop ADRs 0034/0035 opened (the LUT gets its reader; bloom gets its
    honest threshold).

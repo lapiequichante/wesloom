@@ -357,12 +357,14 @@ fn the_generated_material_module_compiles_for_every_stage_and_telling_set() {
         // A material per model in the set — the forward module calls its
         // model directly, so each one is its own shape.
         for model in set.models() {
-            let resolved =
-                lighting::MaterialLighting::resolve(&set, Some(model.name)).expect("in the set");
+            let resolved = wxsl_core::material::MaterialConfig::default()
+                .with_model(model.name)
+                .resolve(&set)
+                .expect("in the set");
             for stage in MaterialStage::ALL {
                 let options = CodegenOptions {
                     stage: *stage,
-                    lighting: resolved.clone(),
+                    material: resolved.clone(),
                     ..CodegenOptions::default()
                 };
                 let generated =

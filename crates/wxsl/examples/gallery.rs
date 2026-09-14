@@ -650,9 +650,9 @@ impl Stage {
         let material = wxsl::render::Material::with_lighting(
             &self.scene_graph,
             &registry,
-            &wxsl::render::material::MaterialOptions {
+            &wxsl::render::material::MaterialConfig {
                 features: wxsl::core::lighting::feature_requests(features)?,
-                ..wxsl::render::material::MaterialOptions::default()
+                ..wxsl::render::material::MaterialConfig::default()
             },
             self.renderer.lighting(),
         )?;

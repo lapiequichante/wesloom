@@ -24,90 +24,32 @@
 //! whether the shadow passes draw it at all, and `receive_shadow` is
 //! whether its shading samples the maps. They land in different places
 //! because they *are* different things — one is a selection, the other is
-//! code — and [`MaterialOptions`] is where an author sets both at once
-//! ([ADR 0026](../../../docs/adr/0026-a-material-casts-and-receives-shadows.md)).
+//! code — and [`MaterialConfig`] is where an author sets both at once
+//! ([ADR 0026](../../../docs/adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
+//!
+//! # One configuration, resolved once
+//!
+//! Everything an author sets on a material that is not a node lives in
+//! `wxsl_core::material::MaterialConfig` — the same value a scene document
+//! carries and the same value codegen reads
+//! ([ADR 0038](../../../docs/adr/0038-a-materials-configuration-is-one-value.md)).
+//! Compiling one is the *resolution point*: the model name becomes an id in
+//! the set that enables it, the receive-shadows flag becomes a macro, and a
+//! material demanding a feature channel its pipeline does not carry is
+//! named here rather than at draw time.
 
-use wxsl_core::abi::{self, MaterialStage};
+use wxsl_core::abi::MaterialStage;
 use wxsl_core::codegen::{self, CodegenOptions, GeneratedShader};
 use wxsl_core::graph::Graph;
-use wxsl_core::lighting::{ChannelRequest, LightingSet, MaterialLighting};
-use wxsl_core::macros::{MacroSet, MacroValue};
+use wxsl_core::lighting::{LightingSet, MaterialLighting};
+use wxsl_core::macros::MacroSet;
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::resources::{BufferLayout, FieldLayout, MaterialInterface, VertexAttributeBinding};
+use wxsl_core::scene::Tags;
 
 use crate::error::RenderError;
 
-/// How a material is compiled, beyond the graph itself.
-///
-/// Everything an author sets on a material that is not a node: the macro
-/// overrides, the two shadow flags, and which lighting model shades it.
-#[derive(Clone, Debug)]
-pub struct MaterialOptions {
-    /// Macro values taking precedence over the ones the graph pins.
-    pub macros: MacroSet,
-    /// Whether the shadow passes draw this material.
-    ///
-    /// Off for anything a shadow would only get in the way of: a ground
-    /// plane, a skybox, a glowing decal. A selection, not code — the
-    /// generated modules of a material that casts and one that does not
-    /// are identical.
-    pub cast_shadow: bool,
-    /// Whether this material's shading is attenuated by the shadow maps.
-    ///
-    /// Code, not a selection: it is
-    /// [`abi::FEATURE_RECEIVE_SHADOWS`], so a material that does not
-    /// receive shadows does not compile the lookup and the variant cache
-    /// keeps the two apart on their macro sets.
-    pub receive_shadow: bool,
-    /// Which lighting model shades this material, by the name its registry
-    /// entry carries, or `None` for the enabled set's default.
-    ///
-    /// Resolved against the set at compile time — see
-    /// [`Material::with_lighting`] — and a name the set does not enable is
-    /// an error there rather than a silently different shade.
-    pub lighting: Option<String>,
-    /// The feature channels the surrounding pipeline carries, which the
-    /// material's G-buffer struct is generated for (plan2 P12). Empty for
-    /// a pipeline that enables none; the renderer's handshake check is
-    /// what names a material built for one plan and drawn under another.
-    pub features: Vec<ChannelRequest>,
-}
-
-impl Default for MaterialOptions {
-    fn default() -> Self {
-        MaterialOptions {
-            macros: MacroSet::new(),
-            cast_shadow: true,
-            receive_shadow: true,
-            lighting: None,
-            features: Vec::new(),
-        }
-    }
-}
-
-impl MaterialOptions {
-    /// The defaults, with `macros` on top.
-    pub fn with_macros(macros: MacroSet) -> Self {
-        MaterialOptions {
-            macros,
-            ..MaterialOptions::default()
-        }
-    }
-
-    /// The macro set these options compile with: `macros`, plus the
-    /// receive-shadows flag they pin.
-    ///
-    /// The flag wins over anything the graph or the caller put under the
-    /// same name, because it is the field's whole meaning.
-    fn effective_macros(&self) -> MacroSet {
-        let mut macros = self.macros.clone();
-        macros.set(
-            abi::FEATURE_RECEIVE_SHADOWS,
-            MacroValue::Flag(self.receive_shadow),
-        );
-        macros
-    }
-}
+pub use wxsl_core::material::{MaterialConfig, ResolvedMaterialConfig};
 
 /// A graph compiled to WXSL, one module per stage.
 #[derive(Clone, Debug)]
@@ -130,17 +72,17 @@ pub struct Material {
     /// buffers are grouped by — and, like [`Material::signature`], it
     /// cannot change while the material exists.
     instance_signature: String,
-    cast_shadow: bool,
-    receive_shadow: bool,
-    /// The lighting model this material was resolved to, and the set it
-    /// was resolved against.
-    lighting: MaterialLighting,
+    /// What this material was compiled under, resolved: the macro set, the
+    /// model and the set it was resolved against, the cast-shadow
+    /// selection and the tags. One value, so a new knob is a field on
+    /// `MaterialConfig` rather than another member here (ADR 0038).
+    config: ResolvedMaterialConfig,
 }
 
 impl Material {
     /// Compile `graph` with the macro values the graph and the ABI ask for.
     pub fn from_graph(graph: &Graph, registry: &NodeRegistry) -> Result<Self, RenderError> {
-        Self::with_options(graph, registry, &MaterialOptions::default())
+        Self::with_config(graph, registry, &MaterialConfig::default())
     }
 
     /// Compile `graph`, with `overrides` taking precedence over the macro
@@ -154,83 +96,105 @@ impl Material {
         registry: &NodeRegistry,
         overrides: &MacroSet,
     ) -> Result<Self, RenderError> {
-        Self::with_options(
+        Self::with_config(
             graph,
             registry,
-            &MaterialOptions::with_macros(overrides.clone()),
+            &MaterialConfig::with_macros(overrides.clone()),
         )
     }
 
-    /// Compile `graph` under `options`, shaded by the default lighting
+    /// Compile `graph` under `config`, shaded by the default lighting
     /// model in a set of one.
     ///
     /// A material that names a model under this entry point is an error —
     /// naming one only means something against a set that enables it, and
     /// the default set enables only the default.
-    pub fn with_options(
+    pub fn with_config(
         graph: &Graph,
         registry: &NodeRegistry,
-        options: &MaterialOptions,
+        config: &MaterialConfig,
     ) -> Result<Self, RenderError> {
         Self::with_lighting(
             graph,
             registry,
-            options,
+            config,
             &MaterialLighting::default().set().clone(),
         )
     }
 
-    /// Compile `graph` under `options`, with its model resolved against
-    /// the lighting set `lighting` the surrounding pipeline enables.
+    /// Compile `graph` under `config`, with its model resolved against the
+    /// lighting set `lighting` the surrounding pipeline enables.
+    ///
+    /// This is the resolution point (ADR 0038): the model name becomes an
+    /// id, the receive-shadows flag becomes a macro, and the feature
+    /// handshake is checked against the macro set the graph and the config
+    /// actually produced.
     ///
     /// The same set must be given to the renderer — the material's
     /// G-buffer module is generated for its layout — and
     /// [`crate::Renderer::set_lighting`] is the other half of that
-    /// handshake. A name the set does not enable, or a material whose
-    /// model the set leaves out, is reported here rather than discovered
-    /// as a `wgpu` complaint about a mismatched fragment target count.
+    /// handshake. A name the set does not enable, a material whose model
+    /// the set leaves out, or a material demanding a feature channel the
+    /// plan does not carry is reported here rather than discovered as a
+    /// `wgpu` complaint about a mismatched fragment target count.
     pub fn with_lighting(
         graph: &Graph,
         registry: &NodeRegistry,
-        options: &MaterialOptions,
+        config: &MaterialConfig,
         lighting: &LightingSet,
     ) -> Result<Self, RenderError> {
-        let resolved = MaterialLighting::resolve(lighting, options.lighting.as_deref())
-            .map_err(|error| RenderError::Lighting {
-                material: graph.name().to_string(),
-                error: error.to_string(),
-            })?
-            .with_features(options.features.clone());
-        let overrides = options.effective_macros();
+        let named = |error: wxsl_core::lighting::LightingError| RenderError::Lighting {
+            material: graph.name().to_string(),
+            error: error.to_string(),
+        };
+        let resolved = config.resolve(lighting).map_err(named)?;
         let mut stages = Vec::with_capacity(MaterialStage::ALL.len());
         for stage in MaterialStage::ALL {
             let codegen_options = CodegenOptions {
                 stage: *stage,
-                override_macros: overrides.clone(),
-                lighting: resolved.clone(),
+                material: resolved.clone(),
                 ..CodegenOptions::default()
             };
             stages.push(codegen::generate(graph, registry, &codegen_options)?);
         }
+        // The graph's own pins are only visible once codegen has overlaid
+        // them, so the demand half of the handshake is checked here rather
+        // than inside `resolve` — a graph that pins a feature's macro is
+        // asking for the channel exactly as a config that pins it is.
+        resolved
+            .check_feature_demands(&stages[0].macros)
+            .map_err(named)?;
         Ok(Material {
             name: graph.name().to_string(),
             signature: stages[0].interface.signature(),
             instance_signature: stages[0].interface.geometry.instance().signature(),
             stages,
-            cast_shadow: options.cast_shadow,
-            receive_shadow: options.receive_shadow,
-            lighting: resolved,
+            config: resolved,
         })
+    }
+
+    /// What this material was compiled under, resolved.
+    pub fn config(&self) -> &ResolvedMaterialConfig {
+        &self.config
     }
 
     /// Whether the shadow passes draw this material.
     pub fn cast_shadow(&self) -> bool {
-        self.cast_shadow
+        self.config.cast_shadow
     }
 
     /// Whether this material's shading is attenuated by the shadow maps.
     pub fn receive_shadow(&self) -> bool {
-        self.receive_shadow
+        self.config.receive_shadow()
+    }
+
+    /// What this material *is*, for a pass's tag expression to select on.
+    ///
+    /// A draw of this material is tagged with these unless the application
+    /// overrides them per instance
+    /// ([`crate::draw::DrawItem::with_tags`]).
+    pub fn tags(&self) -> &Tags {
+        &self.config.tags
     }
 
     /// Which lighting model shades this material, and the set it was
@@ -240,7 +204,7 @@ impl Material {
     /// best case; the signature is what lets the mismatch be a named
     /// error before anything is recorded.
     pub fn lighting(&self) -> &MaterialLighting {
-        &self.lighting
+        &self.config.lighting
     }
 
     /// The generated module for `stage`.
@@ -344,6 +308,41 @@ mod tests {
         assert_eq!(
             material.macros().get(abi::FEATURE_TONEMAP),
             Some(MacroValue::Flag(true))
+        );
+    }
+
+    /// One config in, one config out: what an author set is what the
+    /// material answers with, through the accessors the renderer and the
+    /// draw list read (ADR 0038). The point of the consolidation is that
+    /// there is nowhere else for these to come from.
+    #[test]
+    fn the_material_answers_with_the_config_it_was_built_from() {
+        let registry = registry();
+        let mut graph = Graph::new("config");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+        let tags = wxsl_core::scene::Tags::from_iter(["opaque", "outlined"]);
+        let config = MaterialConfig::default()
+            .with_shadows(false, false)
+            .with_tags(tags.clone());
+        let material = Material::with_config(&graph, &registry, &config).unwrap();
+
+        assert!(!material.cast_shadow());
+        assert!(!material.receive_shadow());
+        assert_eq!(material.tags(), &tags);
+        // The receive-shadows flag *is* the macro, on every stage, which is
+        // what keeps the two variants apart in the cache.
+        assert_eq!(
+            material.macros().get(abi::FEATURE_RECEIVE_SHADOWS),
+            Some(MacroValue::Flag(false))
+        );
+
+        let receiving = Material::with_config(&graph, &registry, &MaterialConfig::default())
+            .expect("the defaults compile");
+        assert!(receiving.receive_shadow());
+        assert!(receiving.tags().is_empty());
+        assert_ne!(
+            material.shader(MaterialStage::FORWARD_LIT).variant_key(),
+            receiving.shader(MaterialStage::FORWARD_LIT).variant_key()
         );
     }
 

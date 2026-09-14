@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::Graph;
 use crate::macros::MacroSet;
+use crate::material::MaterialConfig;
 
 /// A whole scene: the meshes it uses, the materials on them, and where each
 /// instance sits.
@@ -90,7 +91,7 @@ impl Scene {
             None => self
                 .materials
                 .get(instance.material)
-                .map(|material| &material.tags)
+                .map(|material| &material.config.tags)
                 .unwrap_or(Tags::EMPTY),
         }
     }
@@ -225,8 +226,15 @@ pub enum MeshSource {
     },
 }
 
-/// One material in a scene: the graph, the macro values it was authored
-/// with, the tags it draws under, and how it takes part in shadowing.
+/// One material in a scene: the graph, and the configuration it is
+/// compiled under.
+///
+/// The knobs — macros, model, shadow flags, tags — are one
+/// [`MaterialConfig`] rather than fields here, because they are the same
+/// value the renderer compiles with and the same value codegen reads
+/// ([ADR 0038](../../../docs/adr/0038-a-materials-configuration-is-one-value.md)).
+/// It is `flatten`ed on the wire, so a document written before the
+/// consolidation still loads: the fields sit where they always did.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MaterialEntry {
@@ -235,40 +243,9 @@ pub struct MaterialEntry {
     pub name: String,
     /// The surface graph.
     pub graph: Graph,
-    /// Macro values pinned on top of the graph's own.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub macros: MacroSet,
-    /// What this material *is*, for a pass to select on.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub tags: Tags,
-    /// Whether the shadow passes draw this material.
-    ///
-    /// A property of the material in the same way its tags are — what it
-    /// *is*, not how it is drawn — and on by default, because a material
-    /// nobody thought about should behave like an object.
-    #[cfg_attr(feature = "serde", serde(default = "yes"))]
-    pub cast_shadow: bool,
-    /// Whether this material's shading is attenuated by the shadow maps.
-    ///
-    /// Unlike [`MaterialEntry::cast_shadow`] this one changes the
-    /// generated code: off means the lookup is not compiled at all
-    /// ([ADR 0026](../../../docs/adr/0026-a-material-casts-and-receives-shadows.md)).
-    #[cfg_attr(feature = "serde", serde(default = "yes"))]
-    pub receive_shadow: bool,
-    /// Which lighting model shades this material, by the name its registry
-    /// entry carries, or `None` for the enabled set's default
-    /// ([ADR 0028](../../../docs/adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md)).
-    ///
-    /// A name, never an id: ids belong to the registry, and a document
-    /// that stored them would reshade silently when one was renumbered.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub lighting: Option<String>,
-}
-
-/// The default of both shadow flags. A function because that is the shape
-/// `serde(default = ...)` takes.
-fn yes() -> bool {
-    true
+    /// Everything about this material that is not a node.
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub config: MaterialConfig,
 }
 
 impl MaterialEntry {
@@ -278,36 +255,32 @@ impl MaterialEntry {
         MaterialEntry {
             name: name.into(),
             graph,
-            macros: MacroSet::new(),
-            tags: Tags::from_iter([TAG_OPAQUE]),
-            cast_shadow: true,
-            receive_shadow: true,
-            lighting: None,
+            config: MaterialConfig::default().with_tags(Tags::from_iter([TAG_OPAQUE])),
         }
     }
 
     /// Shade this material with the named lighting model.
     pub fn with_lighting(mut self, model: impl Into<String>) -> Self {
-        self.lighting = Some(model.into());
+        self.config.model = Some(model.into());
         self
     }
 
     /// Set both shadow flags.
     pub fn with_shadows(mut self, cast: bool, receive: bool) -> Self {
-        self.cast_shadow = cast;
-        self.receive_shadow = receive;
+        self.config.cast_shadow = cast;
+        self.config.receive_shadow = receive;
         self
     }
 
     /// Replace the tags.
     pub fn with_tags(mut self, tags: Tags) -> Self {
-        self.tags = tags;
+        self.config.tags = tags;
         self
     }
 
     /// Replace the macro values.
     pub fn with_macros(mut self, macros: MacroSet) -> Self {
-        self.macros = macros;
+        self.config.macros = macros;
         self
     }
 }

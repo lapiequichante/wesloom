@@ -85,22 +85,25 @@ pub struct CodegenOptions {
     /// switch behaviour inside the hand-written ABI modules — so without this
     /// they would compile as "unspecified", i.e. silently off.
     pub base_macros: MacroSet,
-    /// Macro values to sit *above* the graph's own, overriding what it pins.
-    ///
-    /// For values the application decides rather than the graph author: a
-    /// runtime toggle, a quality setting, a debug view. Keeping them here
-    /// rather than writing them into the graph means the graph still holds
-    /// what it was authored with.
-    pub override_macros: MacroSet,
-    /// Which lighting model shades this material, and which set the
+    /// The material's configuration, resolved against the lighting set the
     /// surrounding pipeline enables
-    /// ([`crate::lighting`]).
+    /// ([ADR 0038](../../../docs/adr/0038-a-materials-configuration-is-one-value.md)).
     ///
-    /// The set decides whether the G-buffer stage writes a dispatch id and
-    /// which targets the G-buffer struct carries; the model decides which
-    /// function the generated shading calls. The default is the library's
-    /// default model in a set of one, which needs neither.
-    pub lighting: crate::lighting::MaterialLighting,
+    /// Two of its fields are what codegen reads. Its `macros` sit *above*
+    /// the graph's own, overriding what it pins — for values the
+    /// application decides rather than the graph author: a runtime toggle,
+    /// a quality setting, a debug view. Keeping them here rather than
+    /// writing them into the graph means the graph still holds what it was
+    /// authored with. Its `lighting` decides whether the G-buffer stage
+    /// writes a dispatch id and which targets the G-buffer struct carries,
+    /// and which shading function the generated code calls.
+    ///
+    /// The other two — the cast-shadow flag and the tags — ride along
+    /// because a material's configuration is *one* value: they are a
+    /// selection the renderer makes, not code, and codegen ignores them.
+    /// The default is the library's default model in a set of one, which
+    /// needs neither.
+    pub material: crate::material::ResolvedMaterialConfig,
 }
 
 impl Default for CodegenOptions {
@@ -114,8 +117,7 @@ impl Default for CodegenOptions {
                 .into_iter()
                 .map(|decl| (decl.name.as_str().to_string(), decl.default))
                 .collect(),
-            override_macros: MacroSet::new(),
-            lighting: crate::lighting::MaterialLighting::default(),
+            material: crate::material::ResolvedMaterialConfig::default(),
         }
     }
 }
@@ -198,6 +200,7 @@ pub fn generate(
     // value that turns the feature on (plan2 P12).
     for feature in crate::lighting::FEATURES {
         if options
+            .material
             .lighting
             .features()
             .iter()
@@ -207,7 +210,7 @@ pub fn generate(
         }
     }
     macros.overlay(&graph.effective_macros(registry)?);
-    macros.overlay(&options.override_macros);
+    macros.overlay(&options.material.macros);
 
     // Where every node runs, and where the stages hand values over
     // ([`crate::stages`], plan2 P9). An empty plan — no node shared
@@ -541,8 +544,8 @@ impl Emitter<'_> {
                     // than imported from a fixed module: the call inside
                     // the light loop names the model.
                     let generated = crate::lighting::shade_surface_with(
-                        &crate::lighting::Dispatch::Direct(*self.options.lighting.model()),
-                        self.options.lighting.features(),
+                        &crate::lighting::Dispatch::Direct(*self.options.material.lighting.model()),
+                        self.options.material.lighting.features(),
                         // This module declares the macros in effect itself;
                         // a second declaration would not compile.
                         false,
@@ -558,9 +561,9 @@ impl Emitter<'_> {
                     // generated beside it instead of imported from a fixed
                     // module.
                     let generated = crate::lighting::pack_gbuffer(
-                        self.options.lighting.model(),
-                        self.options.lighting.set(),
-                        self.options.lighting.features(),
+                        self.options.material.lighting.model(),
+                        self.options.material.lighting.set(),
+                        self.options.material.lighting.features(),
                     );
                     for (module, item) in &generated.imports {
                         self.request_import(module, item);
@@ -1544,8 +1547,8 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             gbuffer = abi::GBUFFER_STRUCT,
             material = options.material_fn,
             pack = abi::PACK_GBUFFER_FN,
-            id = if options.lighting.set().dispatches() {
-                format!(", {}u", options.lighting.model)
+            id = if options.material.lighting.set().dispatches() {
+                format!(", {}u", options.material.lighting.model)
             } else {
                 String::new()
             },

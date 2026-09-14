@@ -60,6 +60,12 @@ which is exactly the question a collision raises.
   macro while its pipeline does not carry the channel — is its own named
   error, because that is a demand going silently unanswered.
 
+  Amended by [ADR 0038](0038-a-materials-configuration-is-one-value.md):
+  the field is `MaterialConfig.features` now, and the sharper case is
+  checked where the material is *resolved* rather than at the frame
+  compile — the earliest point the demand exists. The frame compile keeps
+  the plan comparison.
+
 ## Alternatives
 
 * **Extend the model contract** — a `feature` field on `LightingModel`.

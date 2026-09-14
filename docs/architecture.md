@@ -288,8 +288,9 @@ image, with mixed lighting models in the frame.
 
 A *lighting model* is one WXSL function of a fixed signature plus a small
 integer id; a registry entry in `wxsl_core::lighting` names it. A material
-says which model shades it (by name, in `MaterialOptions::lighting` or the
-scene document's `lighting` field); a deferred pipeline enables a
+says which model shades it (by name, in `MaterialConfig::model` — the same
+value whether it came from a scene document or an application); a deferred
+pipeline enables a
 **`LightingSet`**, which decides three things at once:
 
 * the **G-buffer layout** — base targets, plus a scalar id channel when
@@ -452,6 +453,16 @@ are: **`cast_shadow`**, whether the shadow passes draw it, and
 **`receive_shadow`**, whether its shading is attenuated by the maps. The
 first is a selection and changes no generated code; the second is a macro
 and so a variant of its own ([ADR 0026](adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
+
+Both flags, the macro overrides, the model name, the tags and the
+pipeline's feature channels are one value — **`MaterialConfig`**
+(`wxsl_core::material`) — carried from the scene document through
+`Material::with_lighting` into `CodegenOptions`, and resolved in exactly
+one place: `MaterialConfig::resolve` turns a model *name* into an id in the
+enabled set and a `receive_shadow` *flag* into its macro, and the feature
+handshake is checked there rather than a frame later
+([ADR 0038](adr/0038-a-materials-configuration-is-one-value.md)). The next
+per-material knob is a field on it.
 
 ## How a shadow gets there
 
