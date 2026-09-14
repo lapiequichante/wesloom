@@ -18,11 +18,11 @@ use wxsl::render::material::Material;
 use wxsl::render::{Camera, DrawItem, Environment};
 
 mod probe;
-use probe::{close, gpu, no_tonemap, pixel, render_list_in, srgb, Harness, SIZE};
+use probe::{close, gpu, pixel, quantized, render_list_in, Harness, SIZE};
 
-/// `no_tonemap`, plus `flag` turned on.
+/// An otherwise empty macro set with `flag` turned on.
 fn with_flag(flag: &str) -> MacroSet {
-    let mut macros = no_tonemap();
+    let mut macros = MacroSet::new();
     macros.set(flag, MacroValue::Flag(true));
     macros
 }
@@ -103,8 +103,7 @@ fn a_graph_compiled_for_the_previous_frame_reads_the_previous_clock() {
     let Some(gpu) = gpu() else { return };
     let mut harness = Harness::new(gpu);
     let graph = clock_graph(&harness);
-    let now = Material::from_graph_with_macros(&graph, &harness.registry, &no_tonemap())
-        .expect("the graph compiles");
+    let now = Material::from_graph(&graph, &harness.registry).expect("the graph compiles");
     let before = Material::from_graph_with_macros(
         &graph,
         &harness.registry,
@@ -117,11 +116,11 @@ fn a_graph_compiled_for_the_previous_frame_reads_the_previous_clock() {
     let last_frame = shade_in(&mut harness, &before, &environment);
 
     assert!(
-        close(this_frame[1], srgb(0.75)),
+        close(this_frame[1], quantized(0.75)),
         "the ordinary graph reads the current clock: {this_frame:?}"
     );
     assert!(
-        close(last_frame[1], srgb(0.25)),
+        close(last_frame[1], quantized(0.25)),
         "the same graph, one flag on, reads the previous one: {last_frame:?}"
     );
 }
@@ -142,8 +141,7 @@ fn measuring_world_space_from_the_eye_changes_no_pixel_near_the_origin() {
     let mut harness = Harness::new(gpu);
     let mut graph = Graph::new("lit");
     graph.add_node(abi::SURFACE_OUTPUT_ID);
-    let absolute = Material::from_graph_with_macros(&graph, &harness.registry, &no_tonemap())
-        .expect("the graph compiles");
+    let absolute = Material::from_graph(&graph, &harness.registry).expect("the graph compiles");
     let relative = Material::from_graph_with_macros(
         &graph,
         &harness.registry,

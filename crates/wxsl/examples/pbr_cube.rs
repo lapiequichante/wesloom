@@ -53,8 +53,8 @@ use wxsl::render::material::Material;
 use wxsl::render::material::MaterialConfig;
 use wxsl::render::variants;
 use wxsl::render::{
-    Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh, RenderRequest,
-    Renderer, StockPipeline, TargetConfig,
+    compile_pipeline, Camera, DrawItem, DrawList, Environment, InstanceAttributes, Light, Mesh,
+    PipelineConfig, RenderRequest, Renderer, StockPipeline, TargetConfig,
 };
 
 /// The graph used when `--graph` is not given.
@@ -158,6 +158,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 struct Options {
     pipeline: StockPipeline,
+    /// Whether the pass list ends in the `tonemap` effect, which `T`
+    /// toggles by rebuilding it (ADR 0039).
+    tonemap: bool,
     stage: Option<MaterialStage>,
     graph: Option<PathBuf>,
     macros: MacroSet,
@@ -180,6 +183,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             pipeline: StockPipeline::Forward,
+            tonemap: true,
             stage: None,
             graph: None,
             macros: MacroSet::new(),
@@ -386,6 +390,69 @@ fn dump_stage(options: &Options) -> MaterialStage {
         StockPipeline::Forward => MaterialStage::FORWARD_LIT,
         StockPipeline::Deferred => MaterialStage::GBUFFER,
     })
+}
+
+/// A stock pipeline's document with the display transform taken off the
+/// end: what `T` switches to.
+///
+/// Document surgery rather than a second hand-written pipeline, because a
+/// pipeline *is* a document (ADR 0033) and this is what editing one looks
+/// like: find the `tonemap` pass, hand what it was reading straight to
+/// `present`, and drop it and the colour target it read.
+fn without_tonemap(stock: StockPipeline) -> Graph {
+    use wxsl::core::graph::SocketRef;
+    use wxsl::core::pipeline as doc;
+
+    let registry = wxsl::core::pipeline::registry();
+    let mut document = stock.document();
+    let tonemap = document
+        .nodes()
+        .find(|(_, node)| {
+            node.settings.get(doc::SETTING_EFFECT).map(String::as_str) == Some("tonemap")
+        })
+        .map(|(id, _)| id)
+        .expect("every stock document ends in the tonemap pass");
+    // What it read, and who wrote into that.
+    let image = document
+        .edge_into(&SocketRef::new(tonemap, "image"))
+        .expect("the tonemap reads an image")
+        .from
+        .node;
+    let head = document
+        .nodes()
+        .map(|(id, _)| id)
+        .find(|id| {
+            document
+                .edge_into(&SocketRef::new(*id, "into"))
+                .is_some_and(|edge| edge.from.node == image)
+        })
+        .expect("something shades into it");
+    let present = document
+        .edge_from(&SocketRef::new(tonemap, "color"))
+        .expect("the tonemap presents")
+        .to
+        .node;
+
+    document.disconnect(&registry, &SocketRef::new(head, "into"));
+    document.remove_node(&registry, tonemap);
+    document.remove_node(&registry, image);
+    document
+        .wire(&registry, (head, "color"), (present, "surface"))
+        .expect("the head of the chain now presents");
+    document
+}
+
+/// Compile `document` and put `renderer` on it — the two public calls an
+/// application makes to run a pipeline of its own.
+fn set_document(renderer: &mut Renderer, document: &Graph) -> Result<(), String> {
+    let graph = compile_pipeline(
+        document,
+        &wxsl::core::pipeline::registry(),
+        renderer.effects(),
+        &PipelineConfig::new(renderer.target()),
+    )
+    .map_err(|error| error.to_string())?;
+    renderer.set_graph(graph).map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -902,6 +969,29 @@ impl App {
         );
     }
 
+    /// Put the display transform on or off the end of the pass list.
+    ///
+    /// `T` used to flip a macro inside the generated `shade_surface`;
+    /// since ADR 0039 the tonemap is a pass, so the honest toggle is the
+    /// *pipeline* — and what it demonstrates is better for it: the frame
+    /// without it is the same linear radiance, uncurved and unencoded.
+    fn toggle_tonemap(&mut self) {
+        self.options.tonemap = !self.options.tonemap;
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let result = if self.options.tonemap {
+            state.renderer.set_pipeline(self.options.pipeline);
+            Ok(())
+        } else {
+            set_document(&mut state.renderer, &without_tonemap(self.options.pipeline))
+        };
+        if let Err(error) = result {
+            eprintln!("cannot switch the display transform: {error}");
+        }
+        self.report();
+    }
+
     /// Flip a flag macro, or set it if the graph never mentioned it.
     fn toggle_flag(&mut self, name: &str) {
         let current = self
@@ -1149,6 +1239,10 @@ impl App {
                     StockPipeline::Deferred
                 };
                 self.options.pipeline = pipeline;
+                // Switching path asks for the *stock* pass list, which ends
+                // in the display transform — so the toggle comes back on
+                // with it, and `T` turns it off again for the new path.
+                self.options.tonemap = true;
                 if let Some(state) = self.state.as_mut() {
                     // Requested, not set: the missing stages compile on a
                     // worker thread and the swap lands when they are all
@@ -1161,7 +1255,7 @@ impl App {
                 self.report();
             }
             KeyCode::KeyN => self.toggle_flag(abi::FEATURE_DEBUG_NORMALS),
-            KeyCode::KeyT => self.toggle_flag(abi::FEATURE_TONEMAP),
+            KeyCode::KeyT => self.toggle_tonemap(),
             KeyCode::KeyR => self.toggle_flag("wxsl_fbm_ridged"),
             KeyCode::ArrowUp => self.adjust_octaves(1),
             KeyCode::ArrowDown => self.adjust_octaves(-1),

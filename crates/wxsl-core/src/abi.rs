@@ -577,11 +577,6 @@ pub const GBUFFER_BASE_TARGETS: &[GBufferTarget] = &[
 pub fn abi_macros() -> Vec<MacroDef> {
     vec![
         MacroDef::new(
-            FEATURE_TONEMAP,
-            MacroValue::Flag(true),
-            "Apply the filmic tonemap curve before writing the final colour.",
-        ),
-        MacroDef::new(
             FEATURE_DEBUG_NORMALS,
             MacroValue::Flag(false),
             "Shade surfaces as their world-space normal instead of lighting them.",
@@ -604,8 +599,6 @@ pub fn abi_macros() -> Vec<MacroDef> {
     ]
 }
 
-/// Feature flag: tonemap the shaded colour (see [`abi_macros`]).
-pub const FEATURE_TONEMAP: &str = "wxsl_tonemap";
 /// Feature flag: output normals instead of shading (see [`abi_macros`]).
 pub const FEATURE_DEBUG_NORMALS: &str = "wxsl_debug_normals";
 /// Feature flag: sample the shadow maps when shading (see [`abi_macros`]).

@@ -24,7 +24,7 @@ use probe::{declare_as_parameter, gpu, pixel, render_list_in, unlit, SIZE};
 
 /// The macros of a material that turns subsurface on.
 fn subsurface_macros() -> MacroSet {
-    let mut macros = probe::no_tonemap();
+    let mut macros = MacroSet::new();
     macros.set("wxsl_subsurface", MacroValue::Flag(true));
     macros
 }
@@ -71,8 +71,8 @@ fn a_feature_pinning_material_is_matched_or_named() {
     // resolved against: compiled for the empty one, it cannot be drawn
     // under a pipeline that carries the channel, because its G-buffer
     // struct has one field fewer than the pass writes.
-    let stranger = Material::from_graph_with_macros(&graph, &registry, &probe::no_tonemap())
-        .expect("compiles against the empty plan");
+    let stranger =
+        Material::from_graph(&graph, &registry).expect("compiles against the empty plan");
     renderer
         .set_features(&["subsurface"])
         .expect("the feature fits the budget");

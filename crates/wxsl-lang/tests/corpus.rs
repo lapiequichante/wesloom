@@ -276,18 +276,19 @@ fn macro_bindings_change_the_compiled_lighting_pass() {
     let entry = "package::wxsl::lighting_pass";
 
     let default = compile(&modules, entry, &Bindings::new()).expect("compiles");
-    // Tonemapping on by default; turning it off must remove the call.
+    // The shadow lookup is on by default; turning it off must remove the
+    // call, which is the `@if` this test is really about.
     assert!(
-        default.contains("tonemap_filmic"),
-        "expected the tonemap by default"
+        default.contains("shadow_factor"),
+        "expected the shadow lookup by default"
     );
 
     let mut off = Bindings::new();
-    off.insert("wxsl_tonemap".to_string(), Value::Bool(false));
+    off.insert("wxsl_receive_shadows".to_string(), Value::Bool(false));
     let without = compile(&modules, entry, &off).expect("compiles");
     assert!(
-        !without.contains("tonemap_filmic"),
-        "the tonemap survived being switched off"
+        !without.contains("shadow_factor"),
+        "the shadow lookup survived being switched off"
     );
 
     // Debug normals replaces the whole lighting body, so the light loop goes.

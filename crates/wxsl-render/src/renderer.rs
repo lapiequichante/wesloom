@@ -914,8 +914,9 @@ impl Renderer {
                     // An effect has no material graph, but it does have
                     // the macro set the materials were built with — the
                     // lighting pass's shading function has `@if`s of its
-                    // own (tonemapping, the debug-normal view), and every
-                    // effect compiles under the same set.
+                    // own (the debug-normal view, the shadow lookup), so
+                    // it is compiled under the same set. An effect that
+                    // ships its own source is not (see `effect_macros`).
                     let known =
                         self.effects
                             .get(effect)

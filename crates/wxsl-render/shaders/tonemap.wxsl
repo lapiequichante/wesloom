@@ -1,0 +1,40 @@
+//! tonemap — the display transform, as the last pass of a chain.
+//!
+//! One fullscreen pass that takes the linear radiance every earlier pass
+//! wrote, runs the filmic curve over it, and encodes for the display. It
+//! used to be two lines inside the generated `shade_surface`, under a
+//! macro, which put the curve *before* everything that reads the frame:
+//! bloom thresholded on encoded pixels, and the forward and deferred paths
+//! each had to be trusted to encode identically
+//! ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+//!
+//! The curve and the encode are the library's — the same
+//! `package::color` modules a material graph can wire by hand — so there
+//! is one filmic curve in the repo and this pass is the one place it is
+//! applied.
+//!
+//! The render targets are plain (non-`Srgb`) formats, so the encode is
+//! this shader's rather than the GPU's: a chain's intermediate images are
+//! linear HDR and only what reaches the frame's own target is encoded.
+
+import package::color::tonemap_filmic::tonemap_filmic;
+import package::color::linear_to_srgb::linear_to_srgb;
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+@vertex
+fn tonemap_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn tonemap_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    // `textureLoad` rather than a sampler: the pass is one-to-one with the
+    // target it writes, and the pass group binds textures and no sampler.
+    let linear = textureLoad(image, vec2i(position.xy), 0);
+    return vec4f(linear_to_srgb(tonemap_filmic(linear.rgb)), linear.a);
+}

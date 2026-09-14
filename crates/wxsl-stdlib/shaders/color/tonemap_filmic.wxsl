@@ -1,7 +1,8 @@
 // Tonemap (filmic)
 //
 // Filmic curve with a gentle toe, a long shoulder and highlight
-// desaturation. Also what the ABI applies when `wxsl_tonemap` is on.
+// desaturation. Also what the shipped `tonemap` effect applies at the end
+// of a pipeline's chain.
 //
 // Our own curve, not a fit of anyone else's. It is a rational function whose
 // coefficients were chosen so that (a) the toe is close to linear for small

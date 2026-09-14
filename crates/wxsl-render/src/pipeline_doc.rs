@@ -302,7 +302,7 @@ impl core::fmt::Display for PipelineError {
             PipelineError::ColorFromColorlessStage { node, stage } => write!(
                 f,
                 "material pass `{node}` runs stage `{stage}`, which writes no colour — \
-                 leave its colour output unconnected"
+                 leave its colour output and its `into` unconnected"
             ),
             PipelineError::PassWithoutDepth { node } => write!(
                 f,
@@ -656,8 +656,12 @@ impl<'a> Compiler<'a> {
             .map(|edge| edge.from.node)
     }
 
-    /// Where a screen pass's `into` writes: the named resource, or the
-    /// frame's target when `into` is unconnected.
+    /// Where a pass's `into` writes: the named resource, or the frame's
+    /// target when `into` is unconnected.
+    ///
+    /// Shared by screen and colour-writing material passes, so that the
+    /// rule "a chain passes along a resource, and another pass's output is
+    /// nobody's to write" is one rule rather than two.
     fn write_target(&mut self, node: NodeId) -> Result<ResourceId, PipelineError> {
         match self.fed(node, "into") {
             Some(source) => {
@@ -676,14 +680,19 @@ impl<'a> Compiler<'a> {
     }
 
     /// The colour attachment for a target a pass writes: the config's
-    /// clear colour for the frame's target — the one pass writing what the
-    /// user sees — and transparent for an intermediate.
+    /// clear colour, wherever in the chain the colour is being written.
+    ///
+    /// The clear colour belongs to the *frame*, not to one resource. Since
+    /// the display transform became a pass of its own
+    /// ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md))
+    /// what the user sees as the background is whatever the head of the
+    /// chain left where nothing was drawn — the lighting pass `discard`s
+    /// there, and a forward pass never covers the whole screen — so an
+    /// intermediate cleared to transparent would make every chained
+    /// pipeline's background black regardless of the configuration. It is
+    /// read as linear radiance now, like everything else in a chain.
     fn color_attachment(&self, target: ResourceId) -> Attachment {
-        if target == RenderGraph::TARGET {
-            Attachment::clear(RenderGraph::TARGET, self.config.target.clear_color)
-        } else {
-            Attachment::clear(target, wgpu::Color::TRANSPARENT)
-        }
+        Attachment::clear(target, self.config.target.clear_color)
     }
 
     /// Where a pass's depth comes from, what it does to it, and whether it
@@ -764,26 +773,28 @@ impl<'a> Compiler<'a> {
             },
         };
 
-        // Colour: a `forward_lit` pass writes the frame's target through
-        // its colour output; a `gbuffer`-stage pass writes every target
-        // the enabled set requested; every other stage writes no colour.
+        // Colour: a `forward_lit` pass writes where its `into` says — the
+        // frame's target, or a `resource.color` it starts a chain into; a
+        // `gbuffer`-stage pass writes every target the enabled set
+        // requested; every other stage writes no colour.
         let color_wired = self
             .document
             .edge_from(&SocketRef::new(node, "color"))
             .is_some();
+        let into_wired = self.fed(node, "into").is_some();
+        let mut wrote = RenderGraph::TARGET;
         let colors: Vec<Attachment> = match stage.output() {
             abi::StageOutput::Color => {
-                if !color_wired {
+                // A pass whose colour reaches nothing: neither handed on
+                // through `color` nor written into a named target.
+                if !color_wired && !into_wired {
                     return Err(PipelineError::ColorWithoutConsumer { node: name });
                 }
-                // The frame's target is the only thing a material pass
-                // writes directly; a chain passes along a resource, and
-                // another pass's output is nobody's to write.
-                self.target_writers.push(name.clone());
-                vec![self.color_attachment(RenderGraph::TARGET)]
+                wrote = self.write_target(node)?;
+                vec![self.color_attachment(wrote)]
             }
             abi::StageOutput::GBuffer => {
-                if color_wired {
+                if color_wired || into_wired {
                     return Err(PipelineError::ColorFromColorlessStage {
                         node: name,
                         stage: stage.name().to_string(),
@@ -799,7 +810,7 @@ impl<'a> Compiler<'a> {
                     .collect()
             }
             abi::StageOutput::Nothing => {
-                if color_wired {
+                if color_wired || into_wired {
                     return Err(PipelineError::ColorFromColorlessStage {
                         node: name,
                         stage: stage.name().to_string(),
@@ -842,7 +853,7 @@ impl<'a> Compiler<'a> {
             pass = pass.with_depth(depth);
         }
         self.graph.pass(pass);
-        self.pass_colors.insert(node, RenderGraph::TARGET);
+        self.pass_colors.insert(node, wrote);
         Ok(())
     }
 
@@ -1086,7 +1097,7 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
     wire(&mut graph, (scene, "draws"), (shadows, "draws"));
     wire(&mut graph, (lights, "shadows"), (shadows, "into"));
 
-    match stock {
+    let head = match stock {
         StockPipeline::Forward => {
             let depth = graph.add(Node::new(doc::RESOURCE_DEPTH).with_label("forward depth"));
             let prepass = graph.add(
@@ -1095,12 +1106,11 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
                     .with_setting(doc::SETTING_STAGE, "depth_only"),
             );
             let shade = graph.add(Node::new(doc::PASS_GEOMETRY).with_label("forward"));
-            let present = graph.add_node(doc::PRESENT);
             wire(&mut graph, (depth, "depth"), (prepass, "depth"));
             wire(&mut graph, (prepass, "depth"), (shade, "depth"));
             wire(&mut graph, (scene, "draws"), (prepass, "draws"));
             wire(&mut graph, (scene, "draws"), (shade, "draws"));
-            wire(&mut graph, (shade, "color"), (present, "surface"));
+            shade
         }
         StockPipeline::Deferred => {
             let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
@@ -1110,13 +1120,30 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
                     .with_setting(doc::SETTING_STAGE, "gbuffer"),
             );
             let lighting = graph.add(Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
-            let present = graph.add_node(doc::PRESENT);
             wire(&mut graph, (scene, "draws"), (material, "draws"));
             wire(&mut graph, (gbuffer, "gbuffer"), (material, "gbuffer"));
             wire(&mut graph, (gbuffer, "gbuffer"), (lighting, "gbuffer"));
-            wire(&mut graph, (lighting, "color"), (present, "surface"));
+            lighting
         }
-    }
+    };
+    // Every stock pipeline ends in the display transform, so the head of
+    // the chain shades into this rather than into the frame's target
+    // (ADR 0039). Declared after the chain's own targets, because resource
+    // order is what the hand-built reference is compared against.
+    let hdr = graph.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("scene")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let tonemap = graph.add(
+        Node::new(doc::PASS_SCREEN)
+            .with_label("tonemap")
+            .with_setting(doc::SETTING_EFFECT, "tonemap"),
+    );
+    let present = graph.add_node(doc::PRESENT);
+    wire(&mut graph, (hdr, "color"), (head, "into"));
+    wire(&mut graph, (hdr, "color"), (tonemap, "image"));
+    wire(&mut graph, (tonemap, "color"), (present, "surface"));
     graph
 }
 

@@ -41,12 +41,11 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
         * saturate(surface.occlusion);
     lit = lit + surface.emissive;
 
-    var color = lit * scene.exposure;
-    @if(wxsl_tonemap)
-    color = tonemap_filmic(color);
-
-    // The render targets are plain (non-`Srgb`) formats so that the
-    // forward path and the deferred lighting pass encode identically,
-    // which means encoding here rather than leaving it to the GPU.
-    return vec4f(linear_to_srgb(color), saturate(surface.alpha));
+    // Linear radiance, exposed but neither curved nor encoded: the
+    // display transform is one screen effect at the end of the chain, so
+    // both render paths hand the same numbers to the same pass and
+    // anything reading this image in between — a bloom threshold, a
+    // history buffer — reads light rather than pixels
+    // ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+    return vec4f(lit * scene.exposure, saturate(surface.alpha));
 }

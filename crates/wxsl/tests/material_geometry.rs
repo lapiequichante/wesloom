@@ -20,7 +20,7 @@ use wxsl::render::{
 };
 
 mod probe;
-use probe::{close, gpu, pixel, probe_graph, probe_values, render_list, srgb, Harness, SIZE};
+use probe::{close, gpu, pixel, probe_graph, probe_values, quantized, render_list, Harness, SIZE};
 
 /// The probe declared as a per-instance attribute (ADR 0024).
 ///
@@ -125,12 +125,12 @@ fn a_declared_vertex_stream_reaches_the_fragment_stage_interpolated() {
     // rather than flattened to one vertex's value.
     for sample in [left, middle, right] {
         assert!(
-            close(sample[1], srgb(0.25)) && close(sample[2], srgb(0.75)),
+            close(sample[1], quantized(0.25)) && close(sample[2], quantized(0.75)),
             "the stream did not reach the shader: {sample:?}"
         );
     }
     assert!(
-        close(middle[0], srgb(0.5)),
+        close(middle[0], quantized(0.5)),
         "the middle of the plane is not the middle of the gradient: {middle:?}"
     );
     assert!(
@@ -274,7 +274,7 @@ fn a_thousand_instances_read_their_own_tint_from_one_storage_buffer() {
     let front = pixel(&image, SIZE / 2, SIZE / 2);
     let expected = tint_of(COUNT - 1);
     assert!(
-        close(front[0], srgb(expected.x)) && close(front[1], srgb(expected.y)),
+        close(front[0], quantized(expected.x)) && close(front[1], quantized(expected.y)),
         "instance {} did not read its own row: {front:?}",
         COUNT - 1
     );
@@ -290,7 +290,7 @@ fn a_thousand_instances_read_their_own_tint_from_one_storage_buffer() {
     let front = pixel(&image, SIZE / 2, SIZE / 2);
     let expected = tint_of(0);
     assert!(
-        close(front[0], srgb(expected.x)) && close(front[1], srgb(expected.y)),
+        close(front[0], quantized(expected.x)) && close(front[1], quantized(expected.y)),
         "instance 0 did not read its own row: {front:?}"
     );
     // One binding, one upload, one pipeline: a thousand instances differ
@@ -388,7 +388,7 @@ fn two_materials_wanting_two_row_shapes_draw_in_one_frame() {
     let image = render_list(gpu, renderer, target, &draws).expect("the frame renders");
     let front = pixel(&image, SIZE / 2, SIZE / 2);
     assert!(
-        close(front[0], srgb(1.0)) && close(front[1], srgb(0.5)),
+        close(front[0], quantized(1.0)) && close(front[1], quantized(0.5)),
         "the wide material did not read its own row: {front:?}"
     );
     assert_eq!(
@@ -601,7 +601,9 @@ fn a_gltf_mesh_with_a_vertex_colour_stream_drives_a_material() {
     // at every vertex, so no interpolation weight can change the answer.
     let sample = pixel(&image, SIZE / 2, SIZE / 2);
     assert!(
-        close(sample[0], srgb(0.0)) && close(sample[1], srgb(0.5)) && close(sample[2], srgb(0.0)),
+        close(sample[0], quantized(0.0))
+            && close(sample[1], quantized(0.5))
+            && close(sample[2], quantized(0.0)),
         "the file's vertex colour did not reach the shader: {sample:?}"
     );
 }

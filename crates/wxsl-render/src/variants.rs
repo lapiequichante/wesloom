@@ -192,7 +192,7 @@ impl ShaderVariants {
     ) -> VariantKey {
         let mut identity = String::from(effect.id);
         identity.push(';');
-        identity.push_str(&macros.signature());
+        identity.push_str(&effect_macros(effect, macros).signature());
         if effect.shader == EffectShader::Lighting {
             identity.push(';');
             let _ = write!(identity, "{}", set.signature());
@@ -297,6 +297,20 @@ impl MaterialRequest {
     }
 }
 
+/// The macro values an effect's shader is compiled under.
+///
+/// Only the generated lighting pass inherits the materials' set: its text
+/// comes from the same ABI templates a material's does, so it has to be
+/// compiled under the same `@if`s. An effect that ships its own source
+/// declares its own knobs and reads no material's — which is also what
+/// keeps a material macro from recompiling every effect in the chain.
+fn effect_macros(effect: &Effect, macros: &MacroSet) -> MacroSet {
+    match effect.shader {
+        EffectShader::Lighting => macros.clone(),
+        EffectShader::Source { .. } => MacroSet::new(),
+    }
+}
+
 /// Everything needed to compile one effect's shader, owned.
 ///
 /// Owned rather than borrowed so it can be sent to a worker thread: a
@@ -342,7 +356,7 @@ impl EffectRequest {
             label,
             path,
             source,
-            macros: macros.clone(),
+            macros: effect_macros(&effect, macros),
         }
     }
 

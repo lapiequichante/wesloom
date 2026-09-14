@@ -3,11 +3,13 @@
 //! One fullscreen pass over what the previous pass wrote: everything
 //! brighter than `THRESHOLD` is kept (with a soft knee, so the effect
 //! fades in rather than cutting at a line), blurred with a fixed 13-tap
-//! kernel, and added back on top. The input is the sRGB-encoded frame
-//! colour, so the threshold reads as "bright on screen" — the number a
-//! person tunes, even though the physically correct place to threshold
-//! would be before tonemapping. That move waits for tonemap to leave
-//! `shade_surface` (plan.md M7); the effect is one `const` edit from it.
+//! kernel, and added back on top. The input is *linear radiance*, read
+//! before the display transform, which is the physically correct place to
+//! threshold: a highlight glows because it is brighter than white, not
+//! because the curve happened to push it near the top of the encoded
+//! range. That became possible when tonemap left `shade_surface`
+//! ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)),
+//! and it was the one `const` edit below that the old note promised.
 //!
 //! Mounted by the `bloom` effect (`wxsl_render::effect`), whose one
 //! declared input is this file's only binding: the image, at binding 0 of
@@ -18,10 +20,12 @@
 
 @group(3) @binding(0) var image: texture_2d<f32>;
 
-/// Luminance above which a pixel starts to glow.
-const THRESHOLD: f32 = 0.72;
+/// Luminance above which a pixel starts to glow. One, in linear radiance:
+/// diffuse white is the line, and what glows is what is brighter than a
+/// white surface fully lit — which is what "highlight" means.
+const THRESHOLD: f32 = 1.0;
 /// How far above `THRESHOLD` the ramp to "fully kept" runs.
-const KNEE: f32 = 0.25;
+const KNEE: f32 = 0.6;
 /// Texel radius of the kernel's first ring; the second sits at twice it.
 const RADIUS: i32 = 4;
 /// How much of the blurred bright signal is added back.

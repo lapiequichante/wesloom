@@ -526,7 +526,7 @@ in the node format:
 
 | Kind | Becomes | Example |
 |---|---|---|
-| `Flag(bool)` | a WXSL conditional-translation feature (`@if(name)`) | `wxsl_fbm_ridged`, `wxsl_tonemap` |
+| `Flag(bool)` | a WXSL conditional-translation feature (`@if(name)`) | `wxsl_fbm_ridged`, `wxsl_debug_normals` |
 | `Int` / `Float` | a `const` the declaring module carries | `WXSL_FBM_OCTAVES` |
 
 A macro is declared, with a default, by the WXSL module that uses it —

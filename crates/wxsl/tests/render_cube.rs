@@ -240,9 +240,10 @@ fn both_pipelines_produce_the_same_image() {
         covered(&images[1])
     );
 
-    // Four variants: `depth_only` and `forward_lit` for the forward pass
-    // list, `gbuffer` for the deferred one, plus the lighting pass.
-    assert_eq!(renderer.variant_count(), 4);
+    // Five variants: `depth_only` and `forward_lit` for the forward pass
+    // list, `gbuffer` for the deferred one, the lighting pass, and the
+    // `tonemap` effect both chains end in (ADR 0039).
+    assert_eq!(renderer.variant_count(), 5);
 }
 
 #[test]
@@ -259,12 +260,14 @@ fn switching_pipeline_reuses_cached_shaders() {
         ],
     );
     let stats = renderer.cache_stats();
-    // Four frames over two pipelines: four compiles (three material stages
-    // plus the lighting pass), and the rest served from the cache. The key
-    // holds the *stage*, so the second visit to a pipeline costs nothing.
-    assert_eq!(stats.misses, 4, "{stats:?}");
+    // Four frames over two pipelines: five compiles (three material stages,
+    // the lighting pass and the tonemap effect), and the rest served from
+    // the cache. The key holds the *stage*, so the second visit to a
+    // pipeline costs nothing — and the tonemap, which both pipelines end
+    // in, is compiled once for the two of them.
+    assert_eq!(stats.misses, 5, "{stats:?}");
     assert!(stats.hits >= 4, "{stats:?}");
-    assert_eq!(renderer.variant_count(), 4);
+    assert_eq!(renderer.variant_count(), 5);
 }
 
 #[test]
@@ -284,12 +287,32 @@ fn the_debug_normal_view_round_trips_through_the_gbuffer() {
     );
 
     // A normal-coloured cube has faces of flat, saturated colour: with the
-    // model rotated about Y only, the top face is +Y, i.e. (0.5, 1, 0.5).
+    // model rotated about Y only, the top face is +Y, i.e. (0.5, 1, 0.5)
+    // — as the display transform every stock chain ends in hands it over
+    // (ADR 0039), because the debug view is shaded like everything else.
     let top = pixel(&images[0], SIZE / 2, SIZE / 3);
+    let expected = [displayed(0.5), displayed(1.0), displayed(0.5)];
     assert!(
-        top[1] > 200 && top[0] > 100 && top[0] < 160,
-        "the top face should show a +Y normal, got {top:?}"
+        (0..3).all(|channel| top[channel].abs_diff(expected[channel]) <= 4),
+        "the top face should show a +Y normal, got {top:?}, expected {expected:?}"
     );
+}
+
+/// A linear value as the byte the frame holds it in: the filmic curve the
+/// `tonemap` effect applies, then the sRGB encode.
+///
+/// Spelled out here rather than eyeballed, so a change to the curve fails
+/// as "the tonemap moved" rather than as an inscrutable pixel.
+fn displayed(linear: f32) -> u8 {
+    // `tonemap_filmic`, per channel. Its highlight desaturation only acts
+    // above a luminance of one, which no value this file checks reaches.
+    let mapped = linear * (linear + 0.28) / (linear * (linear + 0.66) + 0.14);
+    let encoded = if mapped <= 0.0031308 {
+        mapped * 12.92
+    } else {
+        1.055 * mapped.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[test]
@@ -342,8 +365,9 @@ fn a_macro_change_compiles_a_new_variant() {
     // Four, not two, because the depth-only module still carries the whole
     // material function: a macro that only changes colour recompiles the
     // depth prepass too. That is the waste M5's partitioning removes, and
-    // the number here is what will drop to two when it does.
-    assert_eq!(renderer.variant_count(), 4);
+    // the number here is what will drop to two when it does. Plus the
+    // tonemap effect, which no material macro touches.
+    assert_eq!(renderer.variant_count(), 5);
     let difference = mean_difference(&images[0], &images[1]);
     assert!(
         difference > 0.0005,
@@ -475,8 +499,8 @@ fn the_depth_prepass_leaves_the_forward_image_alone() {
     // no light is casting; see `pipeline::shadow_passes`.
     assert_eq!(
         graph.passes().len(),
-        wxsl::core::abi::MAX_LIGHTS + 2,
-        "a shadow pass per light, then prepass plus shading pass"
+        wxsl::core::abi::MAX_LIGHTS + 3,
+        "a shadow pass per light, then prepass, shading pass and tonemap"
     );
     assert_eq!(
         renderer.stages(),

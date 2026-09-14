@@ -176,7 +176,7 @@ fn macro_variables_change_the_compiled_shader() {
 
     // Turning the tonemap off drops the curve, and nothing else.
     overrides.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(false));
-    overrides.set(abi::FEATURE_TONEMAP, MacroValue::Flag(false));
+    overrides.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(true));
     let raw = Material::from_graph_with_macros(&graph, &registry, &overrides).unwrap();
     let raw_wgsl = compile(&raw, MaterialStage::FORWARD_LIT).unwrap();
     assert!(!raw_wgsl.contains("tonemap_filmic"), "{raw_wgsl}");

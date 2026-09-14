@@ -144,7 +144,7 @@ fn macro_flag_combinations() -> Vec<Vec<(String, bool)>> {
 fn the_abi_macros_are_exactly_the_flags_the_gate_crosses() {
     let macros = abi::abi_macros();
     let declared: Vec<&str> = macros.iter().map(|def| def.name.as_str()).collect();
-    assert_eq!(declared.len(), 5, "unexpected ABI macro count");
+    assert_eq!(declared.len(), 4, "unexpected ABI macro count");
     for name in declared {
         assert!(
             name.starts_with("wxsl_"),

@@ -32,6 +32,22 @@
     },
     {
       "id": 7,
+      "def": "resource.color",
+      "settings": {
+        "precision": "hdr"
+      },
+      "label": "scene"
+    },
+    {
+      "id": 8,
+      "def": "pass.screen",
+      "settings": {
+        "effect": "tonemap"
+      },
+      "label": "tonemap"
+    },
+    {
+      "id": 9,
       "def": "present"
     }
   ],
@@ -88,11 +104,31 @@
     },
     {
       "from": {
-        "node": 6,
+        "node": 7,
         "socket": "color"
       },
       "to": {
+        "node": 6,
+        "socket": "into"
+      }
+    },
+    {
+      "from": {
         "node": 7,
+        "socket": "color"
+      },
+      "to": {
+        "node": 8,
+        "socket": "image"
+      }
+    },
+    {
+      "from": {
+        "node": 8,
+        "socket": "color"
+      },
+      "to": {
+        "node": 9,
         "socket": "surface"
       }
     }

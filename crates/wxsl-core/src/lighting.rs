@@ -797,8 +797,8 @@ pub enum Dispatch {
 /// it goes through [`abi::LIGHTING_DISPATCH_FN`], whose body is the only
 /// part the dispatch shape changes.
 ///
-/// The macro knobs the loop honours (`wxsl_tonemap`,
-/// `wxsl_debug_normals`, `wxsl_receive_shadows`) are declared here with the
+/// The macro knobs the loop honours (`wxsl_debug_normals`,
+/// `wxsl_receive_shadows`) are declared here with the
 /// ABI's defaults, exactly as `shading.wxsl` used to declare them: a WXSL
 /// module declares the knobs it uses, and the host binds values over the
 /// top.
@@ -848,8 +848,6 @@ pub fn shade_surface_with(
             "package::lighting::ambient_environment",
             "ambient_environment",
         ),
-        ("package::color::linear_to_srgb", "linear_to_srgb"),
-        ("package::color::tonemap_filmic", "tonemap_filmic"),
     ];
 
     let mut out = String::with_capacity(3072);

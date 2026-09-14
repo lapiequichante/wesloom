@@ -4,8 +4,8 @@
     "The node format. `macros` pins macro variables: WXSL_FBM_OCTAVES is a",
     "loop bound inside generative/fbm3.wesl and wxsl_fbm_ridged is an @if",
     "flag in the same file, so changing either recompiles the shader rather",
-    "than switching a runtime branch. wxsl_tonemap and wxsl_debug_normals",
-    "are honoured by the shader ABI itself; they are pinned here to show that",
+    "than switching a runtime branch. wxsl_debug_normals is honoured by the",
+    "shader ABI itself; it is pinned here to show that",
     "any macro name can be set from the format, declared by a node or not.",
     "",
     "Node ids are stable and edges refer to them, so nodes can be added and",
@@ -44,9 +44,6 @@
     },
     "wxsl_fbm_ridged": {
       "flag": false
-    },
-    "wxsl_tonemap": {
-      "flag": true
     },
     "wxsl_debug_normals": {
       "flag": false

@@ -22,7 +22,7 @@ use wxsl::render::material::Material;
 use wxsl::render::DrawItem;
 
 mod probe;
-use probe::{close, gpu, no_tonemap, pixel, render_list, srgb, Harness, SIZE};
+use probe::{close, gpu, pixel, quantized, render_list, Harness, SIZE};
 
 /// Declare `name` as a computed interpolant, and wire `source` into the
 /// node that writes it.
@@ -100,7 +100,7 @@ fn an_interpolant_carries_object_space_into_the_fragment_stage() {
     let right = pixel(&image, SIZE * 5 / 6, SIZE / 2);
     let left = pixel(&image, SIZE / 6, SIZE / 2);
     assert!(
-        close(left[0], srgb(0.0)),
+        close(left[0], quantized(0.0)),
         "negative x clamps to black: {left:?}"
     );
     assert!(
@@ -113,7 +113,7 @@ fn an_interpolant_carries_object_space_into_the_fragment_stage() {
     );
     // Nothing leaks into the other channels: object y and z are zero
     // across a flat plane in its own space.
-    assert!(close(right[1], srgb(0.0)), "y stays zero: {right:?}");
+    assert!(close(right[1], quantized(0.0)), "y stays zero: {right:?}");
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn a_computed_interpolant_and_a_supplied_one_are_read_the_same_way() {
     let shade = harness.shade(&material, None, None);
     for (channel, expected) in shade.iter().zip([0.25, 0.5, 0.75]) {
         assert!(
-            close(*channel, srgb(expected)),
+            close(*channel, quantized(expected)),
             "a constant down an interpolant arrives intact: {shade:?}"
         );
     }
@@ -195,8 +195,8 @@ fn two_interpolants_take_two_locations_and_do_not_cross() {
     // `cool` sorts before `warm`, so it takes the first location. If the
     // two crossed, this reads 0.2 in red and 0.8 in blue.
     let shade = harness.shade(&material, None, None);
-    assert!(close(shade[0], srgb(0.8)), "warm in red: {shade:?}");
-    assert!(close(shade[2], srgb(0.2)), "cool in blue: {shade:?}");
+    assert!(close(shade[0], quantized(0.8)), "warm in red: {shade:?}");
+    assert!(close(shade[2], quantized(0.2)), "cool in blue: {shade:?}");
 }
 
 #[test]
@@ -206,8 +206,7 @@ fn a_material_with_no_interpolants_generates_what_it_always_did() {
     let registry = wxsl::stdlib::registry();
     let mut plain = Graph::new("plain");
     plain.add_node(abi::SURFACE_OUTPUT_ID);
-    let material = Material::from_graph_with_macros(&plain, &registry, &no_tonemap())
-        .expect("the graph compiles");
+    let material = Material::from_graph(&plain, &registry).expect("the graph compiles");
     for stage in abi::MaterialStage::ALL {
         let source = material.wxsl(*stage);
         assert!(
@@ -226,8 +225,7 @@ fn a_stage_with_no_fragment_program_computes_no_interpolant() {
     // the struct, because the interface is per material.
     let registry = wxsl::stdlib::registry();
     let graph = object_position_graph(&registry);
-    let material = Material::from_graph_with_macros(&graph, &registry, &no_tonemap())
-        .expect("the graph compiles");
+    let material = Material::from_graph(&graph, &registry).expect("the graph compiles");
 
     let shading = material.wxsl(abi::MaterialStage::FORWARD_LIT);
     assert!(shading.contains(abi::VARYING_FN_PREFIX));

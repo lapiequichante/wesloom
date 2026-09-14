@@ -12,7 +12,7 @@
 //!
 //! Every graph below drives `emissive` with no lights and no ambient, and
 //! turns the tonemap off. What lands in the framebuffer is then
-//! `srgb(emissive)` and nothing else, so a pixel is a readable answer
+//! `quantized(emissive)` and nothing else, so a pixel is a readable answer
 //! rather than a lighting result to eyeball.
 
 use wxsl::core::abi;
@@ -23,7 +23,9 @@ use wxsl::render::wgpu;
 use wxsl::render::{DrawItem, RenderRequest};
 
 mod probe;
-use probe::{close, declare_as_parameter, gpu, probe_graph, probe_values, srgb, unlit, Harness};
+use probe::{
+    close, declare_as_parameter, gpu, probe_graph, probe_values, quantized, unlit, Harness,
+};
 
 // ---------------------------------------------------------------------
 // Uniform parameters
@@ -67,7 +69,9 @@ fn a_parameter_reaches_the_shader_at_the_value_the_graph_declared() {
         .expect("nothing is unbound");
     let pixel = harness.shade(&material, Some(&bindings), None);
     assert!(
-        close(pixel[0], srgb(0.25)) && close(pixel[1], srgb(0.5)) && close(pixel[2], srgb(0.75)),
+        close(pixel[0], quantized(0.25))
+            && close(pixel[1], quantized(0.5))
+            && close(pixel[2], quantized(0.75)),
         "the declared default did not reach the shader: {pixel:?}"
     );
 }
@@ -99,7 +103,7 @@ fn changing_a_parameter_costs_a_buffer_write_and_not_a_variant() {
             .expect("nothing is unbound");
         let pixel = harness.shade(&material, Some(&bindings), None);
         assert!(
-            close(pixel[0], srgb(level)),
+            close(pixel[0], quantized(level)),
             "step {step} did not reach the shader: {pixel:?}"
         );
     }
@@ -308,7 +312,7 @@ fn a_graph_samples_a_real_texture() {
             corner
                 .iter()
                 .enumerate()
-                .all(|(index, channel)| close(pixel[index], srgb(f32::from(*channel) / 255.0)))
+                .all(|(index, channel)| close(pixel[index], quantized(f32::from(*channel) / 255.0)))
         }),
         "the sampled colour is none of the texture's texels: {pixel:?}"
     );
@@ -420,7 +424,9 @@ fn an_application_uniform_reaches_a_node_without_the_renderer_knowing_what_is_in
     let bindings = harness.bindings(&material);
     let pixel = harness.shade(&material, Some(&bindings), Some(&group));
     assert!(
-        close(pixel[0], srgb(0.9)) && close(pixel[1], srgb(0.2)) && close(pixel[2], srgb(0.4)),
+        close(pixel[0], quantized(0.9))
+            && close(pixel[1], quantized(0.2))
+            && close(pixel[2], quantized(0.4)),
         "the application's own value did not reach the node: {pixel:?}"
     );
 }

@@ -213,6 +213,15 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                     .optional()
                     .with_doc("The depth to clear or test against."),
             )
+            .input(
+                Socket::new("into", ValueType::ColorTarget)
+                    .optional()
+                    .with_doc(
+                        "Where a colour-writing stage writes. Unconnected means the \
+                         frame's own target; wired to a `resource.color`, the pass \
+                         starts an effect chain instead of ending one.",
+                    ),
+            )
             .output(
                 Socket::new("color", ValueType::ColorTarget)
                     .with_doc("What the pass wrote — unconnected for a stage that writes no colour."),

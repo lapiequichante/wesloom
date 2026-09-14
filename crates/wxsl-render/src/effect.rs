@@ -25,11 +25,12 @@
 //!
 //! [`EffectRegistry::shipped`] carries the migrated deferred lighting
 //! pass — the first effect, generated from the enabled lighting set
-//! exactly as it always was — and bloom, the proof that the mechanism is
+//! exactly as it always was — [`TONEMAP`], the display transform every
+//! stock chain now ends in, and bloom, the proof that the mechanism is
 //! real: a post effect over an image input, wired into a pipeline as a
 //! document edit, which is what makes an effect *chain* expressible for
-//! the first time (deferred lighting into a `resource.color`, bloom over
-//! it, bloom's `into` left unconnected so it writes the frame's target).
+//! the first time (shading into a `resource.color`, bloom over it, the
+//! tonemap's `into` left unconnected so *it* writes the frame's target).
 //! Two further effects ship as descriptors but stay out of the registry:
 //! [`BRDF_LUT`] and [`LUT_VIEW`], the execution-policy proof (plan2 P10)
 //! — an application registers them with `Renderer::add_effect` exactly as
@@ -39,6 +40,8 @@ use wxsl_core::abi;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
+/// Module path the shipped tonemap effect's shader is mounted under.
+pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 /// Module path the BRDF-LUT bake's shader is mounted under.
 pub const BRDF_LUT_MODULE: &str = "package::wxsl::brdf_lut";
 /// Module path the LUT viewer's shader is mounted under.
@@ -211,12 +214,40 @@ pub const BLOOM: Effect = Effect {
     inputs: &[EffectInput {
         name: "image",
         kind: EffectInputKind::Image,
-        description: "The image to glow from, in the frame's own encoding.",
+        description: "The image to glow from, as linear radiance.",
     }],
     outputs: &[],
     shader: EffectShader::Source {
         path: BLOOM_MODULE,
         wxsl: include_str!("../shaders/bloom.wxsl"),
+    },
+};
+
+/// Tonemap: the display transform, as the last pass of every stock
+/// chain — the filmic curve and the sRGB encode that used to sit inside
+/// the generated `shade_surface` under a macro
+/// ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+///
+/// Shipped, and in the stock pipelines, because a pipeline that does not
+/// end in one presents linear radiance — correct for a chain that goes on
+/// to another effect, wrong on a screen.
+pub const TONEMAP: Effect = Effect {
+    id: "tonemap",
+    label: "tonemap",
+    description: "Curve linear radiance for the display, and encode it.",
+    kind: EffectKind::Screen {
+        vertex_entry: "tonemap_vs",
+        fragment_entry: "tonemap_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The linear image to tonemap.",
+    }],
+    outputs: &[],
+    shader: EffectShader::Source {
+        path: TONEMAP_MODULE,
+        wxsl: include_str!("../shaders/tonemap.wxsl"),
     },
 };
 
@@ -330,10 +361,11 @@ pub struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    /// The effects this crate ships: the migrated lighting pass and bloom.
+    /// The effects this crate ships: the migrated lighting pass, the
+    /// display transform every stock chain ends in, and bloom.
     pub fn shipped() -> Self {
         EffectRegistry {
-            effects: vec![DEFERRED_LIGHTING, BLOOM],
+            effects: vec![DEFERRED_LIGHTING, TONEMAP, BLOOM],
         }
     }
 
@@ -411,7 +443,7 @@ mod tests {
     #[test]
     fn the_shipped_registry_holds_the_migrated_lighting_pass_and_bloom() {
         let registry = EffectRegistry::shipped();
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 3);
 
         let lighting = registry
             .get("deferred_lighting")
@@ -445,7 +477,7 @@ mod tests {
             ..DEFERRED_LIGHTING
         };
         let registry = EffectRegistry::shipped().with(replacement);
-        assert_eq!(registry.len(), 2, "replacing, not appending");
+        assert_eq!(registry.len(), 3, "replacing, not appending");
         assert_eq!(
             registry
                 .get("deferred_lighting")
@@ -476,6 +508,32 @@ mod tests {
             !wxsl.contains("@binding(1)"),
             "one input, one binding — a second is a drift from the descriptor"
         );
+    }
+
+    #[test]
+    fn the_tonemap_shader_applies_the_librarys_curve_to_its_one_input() {
+        let EffectShader::Source { path: _, wxsl } = TONEMAP.shader else {
+            panic!("the tonemap ships its source");
+        };
+        assert!(
+            wxsl.contains("@group(3) @binding(0) var image:"),
+            "the tonemap binds its one image input"
+        );
+        assert!(!wxsl.contains("@binding(1)"), "one input, one binding");
+        for entry in ["fn tonemap_vs(", "fn tonemap_fs("] {
+            assert!(wxsl.contains(entry), "tonemap.wxsl declares no `{entry}`");
+        }
+        // The curve is the library's, not a second copy of it: there is one
+        // filmic curve in this repo and the effect imports it.
+        for import in [
+            "package::color::tonemap_filmic",
+            "package::color::linear_to_srgb",
+        ] {
+            assert!(
+                wxsl.contains(import),
+                "the tonemap applies the library's `{import}`"
+            );
+        }
     }
 
     #[test]

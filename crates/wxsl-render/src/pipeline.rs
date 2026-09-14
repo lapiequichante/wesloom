@@ -269,26 +269,32 @@ pub struct TargetConfig {
     pub height: u32,
     /// Format of the final colour target.
     ///
-    /// A non-`Srgb` format is expected: the ABI's shading function encodes
-    /// sRGB itself so that the forward path and the deferred lighting pass
-    /// produce identical values (see `wxsl_core::lighting`, which
-    /// generates the shading function).
+    /// A non-`Srgb` format is expected: the `tonemap` effect every stock
+    /// chain ends in encodes sRGB itself, so that the forward path and the
+    /// deferred lighting pass produce identical values
+    /// ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
     pub format: wgpu::TextureFormat,
-    /// Colour to clear to where nothing is drawn.
+    /// Colour to clear to where nothing is drawn, as **linear radiance**.
+    ///
+    /// It is what the head of the chain clears to, so it goes through the
+    /// display transform like everything else drawn — which is why the
+    /// default below is a much smaller number than the near-black it
+    /// produces on screen.
     pub clear_color: wgpu::Color,
 }
 
 impl TargetConfig {
-    /// A config for `width` x `height` in `format`, cleared to a dark grey.
+    /// A config for `width` x `height` in `format`, cleared to a near-black
+    /// with a little blue in it.
     pub fn new(width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         TargetConfig {
             width: width.max(1),
             height: height.max(1),
             format,
             clear_color: wgpu::Color {
-                r: 0.02,
-                g: 0.02,
-                b: 0.03,
+                r: 0.001,
+                g: 0.001,
+                b: 0.0015,
                 a: 1.0,
             },
         }
@@ -374,17 +380,39 @@ pub fn forward_graph(target: TargetConfig) -> RenderGraph {
     let mut graph = RenderGraph::new(target.format);
     shadow_passes(&mut graph);
     let depth = graph.resource(ResourceDesc::color("forward depth", DEPTH_FORMAT));
+    let scene = graph.resource(hdr_chain_target("scene"));
     graph.pass(
         PassDesc::geometry("depth prepass", everything(), MaterialStage::DEPTH_ONLY)
             .with_depth(DepthAttachment::clear(depth, 1.0)),
     );
     graph.pass(
         PassDesc::geometry("forward", everything(), MaterialStage::FORWARD_LIT)
-            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+            .with_color(Attachment::clear(scene, target.clear_color))
             .with_depth(DepthAttachment::load(depth))
             .with_state(PassState::OPAQUE.with_depth_test(wgpu::CompareFunction::LessEqual, false)),
     );
+    graph.pass(display_transform(scene, target));
     graph
+}
+
+/// The colour target the head of a stock chain shades into: full size,
+/// half float, transient — linear radiance for the display transform to
+/// read.
+fn hdr_chain_target(name: &str) -> ResourceDesc {
+    ResourceDesc::color(
+        name,
+        gbuffer_format(abi::GBufferPrecision::HighDynamicRange),
+    )
+    .with_extent(Extent::Viewport { scale: 1.0 })
+}
+
+/// The pass every stock pipeline ends in: the `tonemap` effect over what
+/// the chain wrote, into the frame's own target
+/// ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+fn display_transform(scene: ResourceId, target: TargetConfig) -> PassDesc {
+    PassDesc::screen("tonemap", "tonemap")
+        .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+        .with_reads([Read::current(scene)])
 }
 
 /// The deferred pipeline: write the surface into a G-buffer, then shade it.
@@ -415,6 +443,7 @@ pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGra
         })
         .collect();
     let depth = graph.resource(ResourceDesc::color("gbuffer depth", DEPTH_FORMAT));
+    let scene = graph.resource(hdr_chain_target("scene"));
 
     graph.pass(
         PassDesc::geometry("deferred material", everything(), MaterialStage::GBUFFER)
@@ -430,7 +459,7 @@ pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGra
     );
     graph.pass(
         PassDesc::screen("deferred lighting", "deferred_lighting")
-            .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+            .with_color(Attachment::clear(scene, target.clear_color))
             // Bindings in `abi::GBUFFER_BASE_TARGETS` order, with depth last —
             // the order the generated lighting pass declares them in.
             // Bindings in layout order, with depth last — the order the
@@ -442,6 +471,7 @@ pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGra
                     .map(|id| Read::current(*id)),
             ),
     );
+    graph.pass(display_transform(scene, target));
     graph
 }
 
@@ -826,8 +856,9 @@ mod tests {
     fn the_forward_pipeline_is_a_depth_prepass_and_a_shading_pass() {
         let graph = forward_graph(config());
         // A shadow pass per light slot comes first; the two that make this
-        // pipeline what it is follow.
-        assert_eq!(graph.passes().len(), abi::MAX_LIGHTS + 2);
+        // pipeline what it is follow, and then the display transform every
+        // stock chain ends in (ADR 0039).
+        assert_eq!(graph.passes().len(), abi::MAX_LIGHTS + 3);
 
         let prepass = &graph.passes()[abi::MAX_LIGHTS];
         assert!(matches!(
@@ -858,16 +889,30 @@ mod tests {
             wgpu::CompareFunction::LessEqual
         );
 
-        // Loading the depth the prepass wrote is what orders the two.
+        // The shading pass writes linear radiance into the chain's own
+        // target rather than the frame's; the tonemap pass is what the
+        // frame's target sees.
+        assert_ne!(shading.color[0].resource, RenderGraph::TARGET);
+        let tonemap = &graph.passes()[abi::MAX_LIGHTS + 2];
+        assert!(matches!(
+            &tonemap.kind,
+            PassKind::Screen { effect } if effect == "tonemap"
+        ));
+        assert_eq!(tonemap.color[0].resource, RenderGraph::TARGET);
+        assert_eq!(tonemap.reads.len(), 1, "the image the chain wrote");
+        assert_eq!(tonemap.reads[0].resource, shading.color[0].resource);
+
+        // Loading the depth the prepass wrote is what orders the first
+        // two; reading what the second wrote is what orders the third.
         let schedule = graph.schedule().expect("the forward pass list schedules");
         assert_eq!(
             schedule.order(),
-            (0..abi::MAX_LIGHTS + 2).collect::<Vec<_>>()
+            (0..abi::MAX_LIGHTS + 3).collect::<Vec<_>>()
         );
-        // The shadow maps and the depth buffer: two textures, and the
-        // shadow maps are never handed to anything else because the frame
-        // group holds a view of them all frame.
-        assert_eq!(schedule.slots().len(), 2);
+        // The shadow maps, the depth buffer and the chain's colour target:
+        // three textures, and the shadow maps are never handed to anything
+        // else because the frame group holds a view of them all frame.
+        assert_eq!(schedule.slots().len(), 3);
     }
 
     #[test]
@@ -927,7 +972,8 @@ mod tests {
         let graph = deferred_graph(config(), &default_lighting());
         let material = abi::MAX_LIGHTS;
         let lighting = material + 1;
-        assert_eq!(graph.passes().len(), lighting + 1);
+        let tonemap = lighting + 1;
+        assert_eq!(graph.passes().len(), tonemap + 1);
         assert_eq!(
             graph.passes()[material].color.len(),
             abi::GBUFFER_BASE_TARGETS.len()
@@ -949,8 +995,22 @@ mod tests {
             graph.passes()[lighting].reads.len(),
             abi::GBUFFER_BASE_TARGETS.len() + 1
         );
+        // And the lighting pass shades into the chain, not onto the
+        // frame's target — the display transform is the last word.
+        assert_ne!(
+            graph.passes()[lighting].color[0].resource,
+            RenderGraph::TARGET
+        );
+        assert!(matches!(
+            &graph.passes()[tonemap].kind,
+            PassKind::Screen { effect } if effect == "tonemap"
+        ));
+        assert_eq!(
+            graph.passes()[tonemap].color[0].resource,
+            RenderGraph::TARGET
+        );
         let schedule = graph.schedule().expect("the deferred pass list schedules");
-        assert_eq!(schedule.order(), (0..=lighting).collect::<Vec<_>>());
+        assert_eq!(schedule.order(), (0..=tonemap).collect::<Vec<_>>());
     }
 
     #[test]

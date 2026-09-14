@@ -306,8 +306,8 @@ mod tests {
         graph.add_node(abi::SURFACE_OUTPUT_ID);
         let material = Material::from_graph(&graph, &registry).unwrap();
         assert_eq!(
-            material.macros().get(abi::FEATURE_TONEMAP),
-            Some(MacroValue::Flag(true))
+            material.macros().get(abi::FEATURE_DEBUG_NORMALS),
+            Some(MacroValue::Flag(false))
         );
     }
 
@@ -417,7 +417,7 @@ mod tests {
             .wire(&registry, (reader, "out"), (output, "roughness"))
             .unwrap();
         graph.set_macro("WXSL_TEST_LEVEL", MacroValue::Int(3));
-        graph.set_macro(abi::FEATURE_TONEMAP, MacroValue::Flag(false));
+        graph.set_macro(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(true));
 
         let plain = Material::from_graph(&graph, &registry).unwrap();
         assert_eq!(
@@ -425,21 +425,21 @@ mod tests {
             Some(MacroValue::Int(3))
         );
         assert_eq!(
-            plain.macros().get(abi::FEATURE_TONEMAP),
-            Some(MacroValue::Flag(false))
+            plain.macros().get(abi::FEATURE_DEBUG_NORMALS),
+            Some(MacroValue::Flag(true))
         );
 
         let mut overrides = MacroSet::new();
         overrides.set("WXSL_TEST_LEVEL", MacroValue::Int(9));
-        overrides.set(abi::FEATURE_TONEMAP, MacroValue::Flag(true));
+        overrides.set(abi::FEATURE_DEBUG_NORMALS, MacroValue::Flag(false));
         let overridden = Material::from_graph_with_macros(&graph, &registry, &overrides).unwrap();
         assert_eq!(
             overridden.macros().get("WXSL_TEST_LEVEL"),
             Some(MacroValue::Int(9))
         );
         assert_eq!(
-            overridden.macros().get(abi::FEATURE_TONEMAP),
-            Some(MacroValue::Flag(true))
+            overridden.macros().get(abi::FEATURE_DEBUG_NORMALS),
+            Some(MacroValue::Flag(false))
         );
         // Different macro values must not collide in the variant cache, on
         // any stage.

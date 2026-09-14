@@ -334,7 +334,42 @@ fn minimal_forward_document() -> Graph {
     wire((scene, "draws"), (pass, "draws"));
     wire((depth, "depth"), (pass, "depth"));
     wire((pass, "color"), (present, "surface"));
+    drop(wire);
+    present_through_tonemap(&mut graph, pass, present);
     graph
+}
+
+/// The `tonemap` effect on the end of `graph`'s chain: the display
+/// transform every pipeline that presents to a screen needs
+/// ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+///
+/// `head` is the pass currently writing the frame's target. It is given an
+/// HDR colour target to write instead, and the tonemap reads that and
+/// presents. Three nodes and a rewire, in a demo, because that is exactly
+/// what the stock presets do — a chain is a chain wherever it is built.
+fn present_through_tonemap(graph: &mut Graph, head: NodeId, present: NodeId) {
+    let registry = wxsl::core::pipeline::registry();
+    let hdr = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("linear")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let tonemap = graph.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_label("tonemap")
+            .with_setting(doc::SETTING_EFFECT, "tonemap"),
+    );
+    graph.disconnect(
+        &registry,
+        &wxsl::core::graph::SocketRef::new(present, "surface"),
+    );
+    for (from, to) in [
+        ((hdr, "color"), (head, "into")),
+        ((hdr, "color"), (tonemap, "image")),
+        ((tonemap, "color"), (present, "surface")),
+    ] {
+        graph.wire(&registry, from, to).expect("gallery wiring");
+    }
 }
 
 /// The shipped deferred preset with a bloom chain composed onto it: the
@@ -375,6 +410,11 @@ fn deferred_bloom_document() -> Graph {
     wire((scene_color, "color"), (lighting, "into"));
     wire((scene_color, "color"), (bloom, "image"));
     wire((bloom, "color"), (present, "surface"));
+    drop(wire);
+    // Bloom thresholds *linear* radiance, so it belongs before the display
+    // transform — which is the physically correct order, and the one the
+    // move in ADR 0039 made expressible.
+    present_through_tonemap(&mut graph, bloom, present);
     graph
 }
 

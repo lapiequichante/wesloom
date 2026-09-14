@@ -9,12 +9,13 @@
 //! so they get by test what the mirrors get by construction, and it should
 //! be the *same* test.
 //!
-//! # Why the scene is unlit
+//! # Why the scene is unlit, and why the pipeline is bare
 //!
 //! Every graph here drives `emissive` with no lights and no ambient, and
-//! turns the tonemap off. What lands in the framebuffer is then
-//! `srgb(emissive)` and nothing else, so a pixel is a readable answer
-//! rather than a lighting result to eyeball.
+//! every renderer here presents through [`linear_document`], which is the
+//! stock forward chain without its display transform. What lands in the
+//! framebuffer is then the emissive radiance itself, so a pixel is a
+//! readable answer rather than a lighting result to eyeball.
 #![allow(dead_code)]
 
 use glam::{Mat4, Vec3};
@@ -86,10 +87,48 @@ pub fn unlit() -> Environment {
     }
 }
 
-pub fn no_tonemap() -> MacroSet {
-    let mut macros = MacroSet::new();
-    macros.set(abi::FEATURE_TONEMAP, MacroValue::Flag(false));
-    macros
+/// The probe's own pipeline: shade forward, present, and nothing else.
+///
+/// The stock pipelines end in the `tonemap` effect since ADR 0039 — the
+/// filmic curve and the sRGB encode, which are exactly what a test reading
+/// a number out of a pixel does not want between it and the shader. This
+/// document leaves the display transform off, so what lands in the
+/// framebuffer is the linear radiance `shade_surface` returned, quantized
+/// to eight bits and nothing else.
+///
+/// Not a fourth spelling of "forward": no shadow passes, no depth prepass,
+/// because a probe is one plane facing the camera.
+pub fn linear_document() -> Graph {
+    use wxsl::core::pipeline as doc;
+    let registry = wxsl::core::pipeline::registry();
+    let mut graph = Graph::new("linear");
+    let scene = graph.add_node(doc::SOURCE_SCENE);
+    let depth = graph.add_node(doc::RESOURCE_DEPTH);
+    let shade = graph.add(Node::new(doc::PASS_GEOMETRY).with_label("forward"));
+    let present = graph.add_node(doc::PRESENT);
+    for (from, to) in [
+        ((scene, "draws"), (shade, "draws")),
+        ((depth, "depth"), (shade, "depth")),
+        ((shade, "color"), (present, "surface")),
+    ] {
+        graph.wire(&registry, from, to).expect("the probe's wiring");
+    }
+    graph
+}
+
+/// Put `renderer` on [`linear_document`].
+pub fn present_linear(renderer: &mut Renderer) {
+    let document = linear_document();
+    let graph = wxsl::render::compile_pipeline(
+        &document,
+        &wxsl::core::pipeline::registry(),
+        renderer.effects(),
+        &wxsl::render::PipelineConfig::new(renderer.target()),
+    )
+    .expect("the probe's document compiles");
+    renderer
+        .set_graph(graph)
+        .expect("the probe's pass list runs");
 }
 
 /// Everything one of these tests needs on the GPU, once.
@@ -106,12 +145,13 @@ pub struct Harness {
 impl Harness {
     pub fn new(gpu: GpuContext) -> Self {
         let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             &gpu.device,
             wxsl::stdlib_library(),
             TargetConfig::new(SIZE, SIZE, target.format()),
         )
         .expect("the stdlib library satisfies the ABI");
+        present_linear(&mut renderer);
         // A plane facing the camera: every pixel of it is the same
         // surface, so one sample answers for the whole material.
         let mesh = wxsl::render::Mesh::plane(&gpu.device, 2.0);
@@ -125,8 +165,7 @@ impl Harness {
     }
 
     pub fn material(&self, graph: &Graph) -> Material {
-        Material::from_graph_with_macros(graph, &self.registry, &no_tonemap())
-            .expect("the graph compiles")
+        Material::from_graph(graph, &self.registry).expect("the graph compiles")
     }
 
     pub fn bindings(&mut self, material: &Material) -> MaterialBindings {
@@ -218,15 +257,14 @@ pub fn pixel(image: &[u8], x: u32, y: u32) -> [u8; 4] {
     image[index..index + 4].try_into().expect("in bounds")
 }
 
-/// `srgb(value)` as the shader's `linear_to_srgb` computes it, so a test
-/// can say what colour it expects in linear terms.
-pub fn srgb(value: f32) -> u8 {
-    let encoded = if value <= 0.0031308 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
+/// A linear value as the eight-bit byte a probe frame holds it in.
+///
+/// The probe's pipeline presents linear radiance (see [`linear_document`]),
+/// so this is quantization and clamping and nothing else — the encode that
+/// used to sit at the end of `shade_surface` is the `tonemap` effect's now,
+/// and no probe runs it.
+pub fn quantized(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 pub fn close(actual: u8, expected: u8) -> bool {
