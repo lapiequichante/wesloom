@@ -36,7 +36,11 @@ against (ADR 0033 documented that gap honestly: a chain failed in
   migrated lighting pass — the first effect, generated per lighting set
   exactly as before — and **bloom**, whose WXSL lives beside its
   descriptor under `shaders/bloom.wxsl` and is mounted when the variant
-  compiles. `Renderer::add_effect` registers an application's own
+  compiles. *Amended by
+  [ADR 0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md): the
+  shipped registry also holds `tonemap`, the display transform every stock
+  chain ends in, and an effect shipping its own source no longer compiles
+  under the materials' macro set.* `Renderer::add_effect` registers an application's own
   (re-registering an id replaces it). The compiler takes the registry as
   a parameter, so `compile_pipeline` is the one call an application uses
   with its own effects.

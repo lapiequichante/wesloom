@@ -843,6 +843,7 @@ pub fn shade_surface_with(
         ("package::wxsl::bindings", "scene"),
         ("package::wxsl::bindings", "WXSL_MAX_LIGHTS"),
         ("package::wxsl::bindings", "LightSample"),
+        ("package::wxsl::bindings", "environment_brdf"),
         (abi::SHADOW_MODULE, abi::SHADOW_FACTOR_FN),
         (
             "package::lighting::ambient_environment",

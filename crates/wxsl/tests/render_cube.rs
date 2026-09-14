@@ -240,10 +240,11 @@ fn both_pipelines_produce_the_same_image() {
         covered(&images[1])
     );
 
-    // Five variants: `depth_only` and `forward_lit` for the forward pass
-    // list, `gbuffer` for the deferred one, the lighting pass, and the
-    // `tonemap` effect both chains end in (ADR 0039).
-    assert_eq!(renderer.variant_count(), 5);
+    // Six variants: `depth_only` and `forward_lit` for the forward pass
+    // list, `gbuffer` for the deferred one, the lighting pass, the
+    // `tonemap` effect both chains end in, and the environment-BRDF bake
+    // every renderer runs once (ADR 0039).
+    assert_eq!(renderer.variant_count(), 6);
 }
 
 #[test]
@@ -260,14 +261,15 @@ fn switching_pipeline_reuses_cached_shaders() {
         ],
     );
     let stats = renderer.cache_stats();
-    // Four frames over two pipelines: five compiles (three material stages,
-    // the lighting pass and the tonemap effect), and the rest served from
-    // the cache. The key holds the *stage*, so the second visit to a
-    // pipeline costs nothing — and the tonemap, which both pipelines end
-    // in, is compiled once for the two of them.
-    assert_eq!(stats.misses, 5, "{stats:?}");
+    // Four frames over two pipelines: six compiles (three material stages,
+    // the lighting pass, the tonemap effect and the one-time
+    // environment-BRDF bake), and the rest served from the cache. The key
+    // holds the *stage*, so the second visit to a pipeline costs nothing —
+    // and the tonemap, which both pipelines end in, is compiled once for
+    // the two of them.
+    assert_eq!(stats.misses, 6, "{stats:?}");
     assert!(stats.hits >= 4, "{stats:?}");
-    assert_eq!(renderer.variant_count(), 5);
+    assert_eq!(renderer.variant_count(), 6);
 }
 
 #[test]
@@ -366,8 +368,9 @@ fn a_macro_change_compiles_a_new_variant() {
     // material function: a macro that only changes colour recompiles the
     // depth prepass too. That is the waste M5's partitioning removes, and
     // the number here is what will drop to two when it does. Plus the
-    // tonemap effect, which no material macro touches.
-    assert_eq!(renderer.variant_count(), 5);
+    // tonemap effect and the environment-BRDF bake, neither of which any
+    // material macro touches.
+    assert_eq!(renderer.variant_count(), 6);
     let difference = mean_difference(&images[0], &images[1]);
     assert!(
         difference > 0.0005,

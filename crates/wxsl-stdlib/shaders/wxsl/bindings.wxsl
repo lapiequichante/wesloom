@@ -131,6 +131,25 @@ fn frame_time() -> f32 {
 // material's own module (ADR 0024), and the shadow maps are in
 // `shadow.wxsl` with the lookup that reads them.
 
+// The split-sum environment-BRDF table, baked once by the `brdf_lut`
+// compute effect and bound here for the whole frame (ADR 0039). `u` is
+// N.V, `v` is roughness; the texel is the (scale, bias) pair a specular
+// ambient term reduces the environment BRDF to.
+@group(0) @binding(6) var environment_lut: texture_2d<f32>;
+@group(0) @binding(7) var environment_lut_sampler: sampler;
+
+// The environment BRDF for one surface point: multiply F0 by `x` and add
+// `y`, and a mirror-direction irradiance becomes a specular ambient term
+// that knows about roughness and grazing angles.
+//
+// Sampled rather than loaded, at the base level: the table is 64 texels
+// square and smooth, so the hardware's bilinear is the difference between
+// a roughness sweep and a roughness staircase.
+fn environment_brdf(n_dot_v: f32, roughness: f32) -> vec2f {
+    let uv = vec2f(saturate(n_dot_v), saturate(roughness));
+    return textureSampleLevel(environment_lut, environment_lut_sampler, uv, 0.0).xy;
+}
+
 // One light's contribution at a point: unit vector towards the light, and the
 // radiance arriving along it.
 struct LightSample {

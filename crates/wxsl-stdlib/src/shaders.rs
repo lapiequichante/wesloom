@@ -291,7 +291,11 @@ mod tests {
             .filter(|(path, _)| *path == "package::wxsl::bindings")
             .map(|(_, index)| *index)
             .collect();
-        assert_eq!(frame, vec![abi::GROUP_FRAME; 3], "camera, scene, object");
+        assert_eq!(
+            frame,
+            vec![abi::GROUP_FRAME; 5],
+            "camera, scene, object, and the environment-BRDF table and its              sampler (ADR 0039)"
+        );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its
         // bindings are checked against the generated source in

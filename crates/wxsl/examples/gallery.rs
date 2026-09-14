@@ -9,7 +9,10 @@
 //! the plan2 P10–P12 proofs: a compute effect baking the BRDF LUT under
 //! policy `once`, a storage buffer filled by compute and drawn as one
 //! value per column, and the deferred pipeline with the subsurface
-//! feature's channel in its G-buffer. Nothing below touches
+//! feature's channel in its G-buffer. The last, `ibl`, is ADR 0039's: no
+//! lamps at all, so what is in the image is `ambient_environment` reading
+//! the split-sum table the `brdf_lut` bake leaves in the frame group.
+//! Nothing below touches
 //! `wxsl-render`'s source — the bloom pipeline is the shipped deferred
 //! preset's document with two nodes added and one rewired, compiled by
 //! the same public `compile_pipeline` an application would call, and the
@@ -198,6 +201,11 @@ struct Demo {
     key_intensity: f32,
     /// The material features the demo's pipeline enables (plan2 P12).
     features: &'static [&'static str],
+    /// A sky to light the demo by instead of the lights: sky above,
+    /// bounce below, with the lamps switched off. What is left is
+    /// `ambient_environment` alone, and therefore the environment-BRDF
+    /// table it reads (ADR 0039).
+    sky: Option<(Vec3, Vec3)>,
 }
 
 fn demos() -> Vec<Demo> {
@@ -209,6 +217,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "deferred",
@@ -217,6 +226,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "single-pass",
@@ -225,6 +235,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "deferred-bloom",
@@ -235,6 +246,7 @@ fn demos() -> Vec<Demo> {
             // A highlight bright enough to cross bloom's threshold.
             key_intensity: 160.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "bloom-instances",
@@ -243,6 +255,7 @@ fn demos() -> Vec<Demo> {
             instances: 6,
             key_intensity: 160.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "brdf-lut",
@@ -252,6 +265,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "buffer-ramp",
@@ -261,6 +275,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            sky: None,
         },
         Demo {
             name: "subsurface",
@@ -271,6 +286,19 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &["subsurface"],
+            sky: None,
+        },
+        Demo {
+            name: "ibl",
+            blurb: "no lamps at all: a sky, a bounce, and the split-sum BRDF table                     the `brdf_lut` bake leaves in the frame group",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 1,
+            key_intensity: 0.0,
+            features: &[],
+            // Bright enough to be the whole scene, and blue enough that the
+            // specular response is visibly the *sky* rather than the
+            // surface's own colour.
+            sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
         },
     ]
 }
@@ -334,7 +362,8 @@ fn minimal_forward_document() -> Graph {
     wire((scene, "draws"), (pass, "draws"));
     wire((depth, "depth"), (pass, "depth"));
     wire((pass, "color"), (present, "surface"));
-    drop(wire);
+    // `wire` borrows the graph, so its last use has to come before the
+    // helper's own wiring.
     present_through_tonemap(&mut graph, pass, present);
     graph
 }
@@ -410,7 +439,6 @@ fn deferred_bloom_document() -> Graph {
     wire((scene_color, "color"), (lighting, "into"));
     wire((scene_color, "color"), (bloom, "image"));
     wire((bloom, "color"), (present, "surface"));
-    drop(wire);
     // Bloom thresholds *linear* radiance, so it belongs before the display
     // transform — which is the physically correct order, and the one the
     // move in ADR 0039 made expressible.
@@ -467,7 +495,27 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
 // The scene — one PBR cube, the pbr_cube demo's, lit per demo
 // ---------------------------------------------------------------------------
 
-fn demo_environment(aspect: f32, time: f32, key_intensity: f32) -> Environment {
+fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
+    // A sky demo turns the lamps off: what is left in the image is the
+    // ambient term and nothing else, so the roughness and grazing-angle
+    // response it gets out of the baked table is the whole picture.
+    let lights = match demo.sky {
+        Some(_) => Vec::new(),
+        None => vec![
+            // Key: warm and close. The bloom demos turn this up far enough
+            // that the specular highlight crosses the effect's threshold.
+            Light::point(
+                Vec3::new(2.6, 3.0, 2.2),
+                Vec3::new(1.0, 0.86, 0.72),
+                demo.key_intensity,
+            ),
+            Light::point(Vec3::new(-3.0, 1.2, -1.6), Vec3::new(0.5, 0.65, 1.0), 18.0),
+            Light::directional(Vec3::new(-0.4, 0.7, -1.0), Vec3::new(0.7, 0.75, 0.9), 1.1),
+        ],
+    };
+    let (ambient_sky, ambient_ground) = demo
+        .sky
+        .unwrap_or((Vec3::new(0.14, 0.19, 0.28), Vec3::new(0.05, 0.04, 0.035)));
     Environment {
         camera: Camera {
             eye: Vec3::new(2.4, 1.9, 3.2),
@@ -475,19 +523,9 @@ fn demo_environment(aspect: f32, time: f32, key_intensity: f32) -> Environment {
             aspect,
             ..Camera::default()
         },
-        lights: vec![
-            // Key: warm and close. The bloom demos turn this up far enough
-            // that the specular highlight crosses the effect's threshold.
-            Light::point(
-                Vec3::new(2.6, 3.0, 2.2),
-                Vec3::new(1.0, 0.86, 0.72),
-                key_intensity,
-            ),
-            Light::point(Vec3::new(-3.0, 1.2, -1.6), Vec3::new(0.5, 0.65, 1.0), 18.0),
-            Light::directional(Vec3::new(-0.4, 0.7, -1.0), Vec3::new(0.7, 0.75, 0.9), 1.1),
-        ],
-        ambient_sky: Vec3::new(0.14, 0.19, 0.28),
-        ambient_ground: Vec3::new(0.05, 0.04, 0.035),
+        lights,
+        ambient_sky,
+        ambient_ground,
         exposure: 1.0,
         time,
         previous_time: time,
@@ -721,11 +759,7 @@ impl Stage {
         apply(demo, &mut self.renderer)?;
         self.ensure_material(demo.features)?;
         self.tints = instance_tints(demo.instances);
-        let environment = demo_environment(
-            width as f32 / height.max(1) as f32,
-            time,
-            demo.key_intensity,
-        );
+        let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
         let draws = cube_draws(
             &self.mesh,
             &self.material,

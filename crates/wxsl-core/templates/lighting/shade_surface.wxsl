@@ -27,7 +27,10 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
     }
 
     // Ambient stands in for everything the light loop cannot see,
-    // so it is what ambient occlusion attenuates.
+    // so it is what ambient occlusion attenuates. The environment BRDF
+    // comes from the frame's baked table, which is why the ambient
+    // specular knows about grazing angles and roughness rather than
+    // approximating both (ADR 0039).
     lit = lit
         + ambient_environment(
             normal,
@@ -37,6 +40,7 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
             surface.roughness,
             scene.ambient_sky,
             scene.ambient_ground,
+            environment_brdf(saturate(dot(normal, view_direction)), surface.roughness),
         )
         * saturate(surface.occlusion);
     lit = lit + surface.emissive;

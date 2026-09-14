@@ -323,6 +323,12 @@ facade crate's feature set, not about the workspace.
   `MaterialConfig::resolve` is the only place a name becomes an id or a flag
   becomes a macro. A new per-material knob is a field there plus whatever
   `resolve` does with it — never another options struct.
+- Everything a pass writes is **linear radiance** until the shipped
+  `tonemap` effect at the end of the chain, which curves and encodes it
+  (ADR 0039). A pipeline's clear colour is linear radiance too. Don't put
+  a display transform anywhere else, and don't threshold, blend or
+  accumulate against encoded values — if a pass needs to read what an
+  earlier one wrote, it is reading light.
 - A **scene** (`wxsl_core::scene`) is what exists; an **environment**
   (`wxsl_render::environment`) is camera and lights; a **draw list**
   (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a

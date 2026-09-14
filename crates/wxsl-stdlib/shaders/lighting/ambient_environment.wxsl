@@ -1,7 +1,7 @@
 // Ambient environment
 //
-// Analytic hemisphere ambient: sky above, bounce below, with a
-// roughness-aware specular response.
+// Analytic hemisphere ambient: sky above, bounce below, with a split-sum
+// specular response.
 //
 // A cheap stand-in for an image-based environment when there is no cubemap
 // to sample. The environment is modelled as two colours, sky above and
@@ -11,10 +11,17 @@
 // as roughness rises, which is the qualitative behaviour a prefiltered
 // cubemap has.
 //
-// Original implementation; the "roughness blurs the reflection towards the
-// average" idea is the standard split-sum intuition, not copied code.
-
-import package::lighting::fresnel_schlick::fresnel_schlick;
+// What makes it image-based lighting rather than a tint is `env_brdf`: the
+// (scale, bias) pair of the split-sum approximation, which the caller reads
+// out of the baked environment-BRDF table for this surface's N.V and
+// roughness (`environment_brdf` in `wxsl/bindings.wxsl`, ADR 0039). It is
+// what puts the grazing-angle brightening and the roughness falloff on the
+// same footing as the direct specular, instead of a hand-tuned Fresnel
+// fade. Its default, (1, 0), is a caller with no table: F0 straight
+// through, which is what this function did before the table existed.
+//
+// Original implementation; the split-sum factorization is Karis' and is
+// standard, not copied code.
 
 fn ambient_environment(
     normal: vec3f,         // @default 0.0, 1.0, 0.0
@@ -24,18 +31,22 @@ fn ambient_environment(
     roughness: f32,        // @default 0.5
     sky_color: vec3f,      // @default 0.35, 0.45, 0.6
     ground_color: vec3f,   // @default 0.12, 0.1, 0.08
+    env_brdf: vec2f,       // @default 1.0, 0.0
 ) -> vec3f {
     let diffuse_irradiance = mix(ground_color, sky_color, normal.y * 0.5 + 0.5);
     let mirror = reflect(-view_direction, normal);
-    let mirror_irradiance = mix(ground_color, sky_color, mirror.y * 0.5 + 0.5);
+    // A rough surface reflects a wide cone rather than a ray, so it sees
+    // more of the environment's average: the mirror lookup blurs towards
+    // the diffuse irradiance as roughness rises, which is what the higher
+    // mips of a prefiltered cubemap are.
+    let mirror_irradiance = mix(
+        mix(ground_color, sky_color, mirror.y * 0.5 + 0.5),
+        diffuse_irradiance,
+        saturate(roughness),
+    );
 
     let f0 = mix(vec3f(0.04, 0.04, 0.04), base_color, saturate(metallic));
-    let n_dot_v = saturate(dot(normal, view_direction));
-    // A rough surface has a weaker, less saturated horizon response than a
-    // smooth one, so the Fresnel edge is faded by roughness.
-    let fresnel = mix(f0, fresnel_schlick(f0, n_dot_v), 1.0 - saturate(roughness));
-
     let diffuse = base_color * (1.0 - saturate(metallic)) * diffuse_irradiance;
-    let specular = mix(mirror_irradiance, diffuse_irradiance, saturate(roughness)) * fresnel;
+    let specular = mirror_irradiance * (f0 * env_brdf.x + vec3f(env_brdf.y));
     return diffuse + specular;
 }

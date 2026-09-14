@@ -21,7 +21,6 @@
 use glam::{Mat4, Vec3};
 use wxsl::core::abi;
 use wxsl::core::graph::{Graph, Node, NodeId};
-use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeRegistry, Value, ValueType};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;

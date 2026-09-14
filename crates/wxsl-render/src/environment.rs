@@ -606,6 +606,17 @@ pub struct FrameBindings {
     shadow_sampler: wgpu::Sampler,
     /// Kept alive because the views above may be of it.
     _shadow_fallback: wgpu::Texture,
+    /// The environment-BRDF table, baked once into this texture by the
+    /// `brdf_lut` compute effect and read by every `ambient_environment`
+    /// call (ADR 0039). Owned here rather than by a pass list, because it
+    /// is frame-group infrastructure like the shadow maps are.
+    environment_lut: wgpu::Texture,
+    environment_lut_view: wgpu::TextureView,
+    environment_lut_sampler: wgpu::Sampler,
+    /// Whether the bake has run. It runs before the first pass of the
+    /// first frame, so nothing ever samples the table unwritten — the
+    /// flag is what keeps it from running a second time.
+    environment_lut_baked: bool,
     /// One buffer and bind group per *declared attribute* row shape,
     /// keyed by [`BufferLayout::signature`]. The empty shape — a material
     /// declaring none — is always present and is what a pass with no
@@ -707,6 +718,33 @@ impl FrameBindings {
             ..Default::default()
         });
 
+        let environment_lut = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wxsl environment brdf lut"),
+            size: wgpu::Extent3d {
+                width: abi::ENVIRONMENT_LUT_SIZE,
+                height: abi::ENVIRONMENT_LUT_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // The format the bake's `texture_storage_2d` declares.
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let environment_lut_view =
+            environment_lut.create_view(&wgpu::TextureViewDescriptor::default());
+        let environment_lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("wxsl environment lut sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let buffer = |binding: u32, storage: bool, dynamic: bool| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -752,6 +790,22 @@ impl FrameBindings {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_ENVIRONMENT_LUT,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_ENVIRONMENT_SAMPLER,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let mut bindings = FrameBindings {
@@ -765,6 +819,10 @@ impl FrameBindings {
             shadow_placeholder,
             shadow_sampler,
             _shadow_fallback: shadow_fallback,
+            environment_lut,
+            environment_lut_view,
+            environment_lut_sampler,
+            environment_lut_baked: false,
             groups: BTreeMap::new(),
             layout,
         };
@@ -792,6 +850,29 @@ impl FrameBindings {
     /// pass rendering from it binds with.
     pub fn view_offset(&self, view: PassView) -> u32 {
         self.view_stride * view.slot() as u32
+    }
+
+    /// Whether the environment-BRDF table still needs baking.
+    ///
+    /// Answered once: the caller that takes `true` is expected to write
+    /// the table and say so with [`FrameBindings::mark_environment_baked`].
+    pub fn needs_environment_bake(&self) -> bool {
+        !self.environment_lut_baked
+    }
+
+    /// A view of the environment-BRDF table, for the bake to write
+    /// through as a storage texture.
+    pub fn environment_lut_view(&self) -> wgpu::TextureView {
+        self.environment_lut
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Record that the table has been written, so the bake does not run
+    /// again. It is a pure function of its own coordinates, so once is
+    /// exactly right — the same reasoning the `once` execution policy
+    /// applies to the pass form of this bake (ADR 0035).
+    pub fn mark_environment_baked(&mut self) {
+        self.environment_lut_baked = true;
     }
 
     /// Bind `texture` as the shadow maps.
@@ -872,6 +953,14 @@ impl FrameBindings {
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_SHADOW_SAMPLER,
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_ENVIRONMENT_LUT,
+                    resource: wgpu::BindingResource::TextureView(&self.environment_lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_ENVIRONMENT_SAMPLER,
+                    resource: wgpu::BindingResource::Sampler(&self.environment_lut_sampler),
                 },
             ],
         })

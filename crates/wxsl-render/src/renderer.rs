@@ -44,7 +44,7 @@ use crate::draw::{DrawItem, DrawList};
 use crate::effect::{Effect, EffectKind, EffectRegistry};
 use crate::environment::{Environment, FrameBindings, ShadowMaps};
 use crate::error::RenderError;
-use crate::graph::{PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
+use crate::graph::{PassBinding, PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
 use crate::library::ShaderLibrary;
 use crate::material::Material;
 use crate::pass::{DrawSource, PassKind, PassView, Policy};
@@ -685,6 +685,92 @@ impl Renderer {
         Ok(variant.wgsl.clone())
     }
 
+    /// Bake the environment-BRDF table into the frame group, once.
+    ///
+    /// The `brdf_lut` effect's shader, run before the first pass of the
+    /// first frame. It is a pure function of its own coordinates, so once
+    /// is the honest number of times to run it — the same reasoning the
+    /// `once` execution policy applies to the pass form of this bake
+    /// (ADR 0035), here applied to a texture that belongs to the frame
+    /// group rather than to a pass list
+    /// ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+    ///
+    /// Not a pass, because a pipeline *document* cannot yet express a
+    /// compute pass, and the table has to be there for every pipeline —
+    /// including a hand-built one that never heard of it — since every
+    /// material's ambient term reads it.
+    fn bake_environment_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), RenderError> {
+        if !self.bindings.needs_environment_bake() {
+            return Ok(());
+        }
+        let effect = crate::effect::BRDF_LUT;
+        let EffectKind::Compute { entry, workgroups } = effect.kind else {
+            unreachable!("the shipped LUT bake is a compute effect");
+        };
+        let variant = self.variants.effect(
+            device,
+            &self.library,
+            effect,
+            &wxsl_core::macros::MacroSet::new(),
+            &self.config.lighting,
+            &self.config.features,
+        )?;
+
+        // The shape the bake's one `@group(3) @binding(0)` output wants —
+        // the same `PassBinding` a `pass.compute` would have produced, so
+        // the pipeline cache keys it the same way.
+        let format = wgpu::TextureFormat::Rgba16Float;
+        let shape = [PassBinding::StorageTexture {
+            format,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        }];
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("wxsl environment bake"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            }],
+        });
+        let view = self.bindings.environment_lut_view();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wxsl environment bake"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("wxsl environment bake"),
+        });
+        {
+            let pipeline = self
+                .pipelines
+                .compute(device, Some(&layout), &variant, entry, &shape);
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("wxsl environment bake"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(abi::GROUP_PASS, &group, &[]);
+            pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
+        }
+        queue.submit([encoder.finish()]);
+        self.bindings.mark_environment_baked();
+        Ok(())
+    }
+
     /// Render one frame.
     ///
     /// Advances any pipeline swap in flight, compiles whatever variants the
@@ -699,6 +785,7 @@ impl Renderer {
         request: &RenderRequest<'_>,
     ) -> Result<(), RenderError> {
         self.poll_swap(device)?;
+        self.bake_environment_lut(device, queue)?;
         let plan = self.compile_frame(device, request.environment, request.draws)?;
 
         // One row per draw, in every shape the frame's materials asked

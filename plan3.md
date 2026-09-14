@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7 has landed — ADR 0038. The shipped state it starts from is
+Status: P7 and N1 have landed — ADRs 0038 and 0039. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -22,7 +22,7 @@ earlier plans' items did.
 |---|---|---|
 | plan.md | M7 (screen domain), M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
-| ADRs 0034–0037 | the deferred halves each ADR named | queued below as N-items with the ADR that owes them |
+| ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
 
@@ -109,7 +109,7 @@ with feature channels at all. The document is unchanged (the config is
 `flatten`ed, and the one renamed field keeps an alias), which a test
 asserts.
 
-### N1 — The shipped effects complete their halves
+### N1 — The shipped effects complete their halves *(landed, ADR 0039)*
 
 The two moves ADR 0034/0035 wrote down as future work, and the smallest
 visible win on this list:
@@ -135,6 +135,23 @@ visible win on this list:
   curve; a metallic sphere shows sky reflection; the gallery's bloom
   threshold behaves on HDR values.
 * ADR: "Tonemap is an effect, and ambient reads the LUT."
+
+**Landed as written**, with three things the write-up did not anticipate.
+`pass.geometry` needed an optional `into` before a forward pipeline could
+*start* a chain rather than only end one, and the compiler now resolves
+both pass kinds' targets through one rule. The clear colour became linear
+radiance that the head of the chain clears to, because an intermediate
+cleared to transparent would have made every chained pipeline's background
+black. And an effect shipping its own source stopped inheriting the
+materials' macro set, which it never read — keying its cached variant on it
+meant a material macro recompiled every effect in the chain.
+
+The LUT bake is a dispatch the renderer runs once before the first frame
+rather than a `once` *pass*, because a pipeline document cannot express a
+compute pass until N3 and the table has to be in every pipeline's frame
+group. The policy's argument is unchanged; the pass form is still what the
+gallery's `brdf-lut` demo runs. The sky demo is `ibl`: no lamps at all, so
+the image is `ambient_environment` and therefore the table.
 
 ### M7 — The screen domain
 
@@ -533,8 +550,8 @@ none of it knows or cares which backend is underneath.
 1. ~~**P7**~~ — *landed (ADR 0038)*: a day-class consolidation that pays
    immediately and un-threws the options plumbing every later item
    touches.
-2. **N1** — tonemap out, IBL in: small, visible, and it completes the
-   loop ADRs 0034/0035 opened (the LUT gets its reader; bloom gets its
+2. ~~**N1**~~ — *landed (ADR 0039)*: tonemap out, IBL in, which closed
+   the loop ADRs 0034/0035 opened (the LUT has its reader; bloom has its
    honest threshold).
 3. **M7** — the screen domain, the spine of the remaining plan. After it,
    an effect can be a graph, and P5 has a full story to show.

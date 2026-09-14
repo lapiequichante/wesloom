@@ -48,11 +48,12 @@ is signal, don't delete it.
 | [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) | Shader text lives in template files; generators fill holes | Accepted |
 | [0032](0032-stage-analysis-computes-the-cut-between-stages.md) | Stage analysis computes the cut between stages | Accepted |
 | [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md) |
-| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md) |
-| [0035](0035-execution-policies.md) | Execution policies: once, on resize, on demand — and compute effects | Accepted |
+| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md), [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) |
+| [0035](0035-execution-policies.md) | Execution policies: once, on resize, on demand — and compute effects | Accepted, amended by [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) |
 | [0036](0036-buffers-are-graph-resources.md) | Buffers are graph resources, with storage bindings in the pass group | Accepted |
 | [0037](0037-semantic-channels.md) | Semantic channels: G-buffer requests collected with sources, and the material feature | Accepted, amended by [0038](0038-a-materials-configuration-is-one-value.md) |
 | [0038](0038-a-materials-configuration-is-one-value.md) | A material's configuration is one value, resolved once | Accepted |
+| [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) | Tonemap is an effect, and ambient reads the LUT | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

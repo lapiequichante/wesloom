@@ -464,6 +464,36 @@ handshake is checked there rather than a frame later
 ([ADR 0038](adr/0038-a-materials-configuration-is-one-value.md)). The next
 per-material knob is a field on it.
 
+## Where the frame stops being light
+
+Everything a pass writes is **linear radiance** until the last one. The
+generated `shade_surface` returns `lit * scene.exposure` and nothing more;
+the shipped **`tonemap`** effect — one screen pass at the end of every
+stock chain — applies the filmic curve and encodes for the display into the
+frame's own target
+([ADR 0039](adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+
+Three things follow. Both render paths hand the same numbers to the same
+pass, so there is one display transform rather than two that have to
+agree. Anything reading a chain's intermediate reads light — which is why
+bloom thresholds at 1.0, diffuse white, rather than at a number tuned
+against an encoded range. And a pipeline's clear colour is linear radiance
+that the head of the chain clears to, so the background goes through the
+curve like everything drawn.
+
+A pipeline that does not end in the effect presents linear — right for a
+chain that goes on to another effect, wrong on a screen. `pass.geometry`
+has an `into` for the same reason `pass.screen` does: a forward pass can
+start a chain rather than only end one.
+
+The **environment-BRDF table** is the other half of that ADR. The
+`brdf_lut` compute effect's shader bakes the split-sum (scale, bias) table
+once, before the first frame's first pass, into a texture in the frame
+group; `ambient_environment` takes the pair for its surface's N·V and
+roughness and its specular term becomes `irradiance * (F0 * scale +
+bias)`. In the frame group for the shadow maps' reason: one lookup, both
+paths.
+
 ## How a shadow gets there
 
 One depth 2D texture array, one slice per light, in the **frame group**

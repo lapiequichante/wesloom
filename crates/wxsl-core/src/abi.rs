@@ -437,6 +437,34 @@ pub const BINDING_SHADOW_MAPS: u32 = 4;
 /// hard comparisons.
 pub const BINDING_SHADOW_SAMPLER: u32 = 5;
 
+/// [`GROUP_FRAME`] binding of the environment-BRDF LUT.
+///
+/// The split-sum table — `x` is N·V, `y` is roughness, the texel is the
+/// (scale, bias) pair a specular ambient term multiplies `F0` by. In the
+/// frame group for the shadow maps' reason: the forward stage and the
+/// deferred lighting pass shade through the same `ambient_environment`,
+/// so one lookup serves both
+/// ([ADR 0039](../../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+///
+/// Always bound, whether or not anything baked it: a frame whose LUT has
+/// not been written yet reads a (1, 0) placeholder, which is the specular
+/// ambient this library had before the table existed.
+pub const BINDING_ENVIRONMENT_LUT: u32 = 6;
+
+/// [`GROUP_FRAME`] binding of the filtering sampler used with
+/// [`BINDING_ENVIRONMENT_LUT`].
+///
+/// A plain filtering sampler, clamped: the table is smooth and the
+/// lookup wants the hardware's bilinear between texels rather than the
+/// banding a `textureLoad` would give a roughness sweep.
+pub const BINDING_ENVIRONMENT_SAMPLER: u32 = 7;
+
+/// Edge length in texels of the environment-BRDF LUT.
+///
+/// Must match `LUT_SIZE` in `wxsl-render`'s `shaders/brdf_lut.wxsl`, whose
+/// dispatch covers exactly this many texels.
+pub const ENVIRONMENT_LUT_SIZE: u32 = 64;
+
 /// How many lights the scene uniform carries, and therefore how many
 /// slices the shadow map array has.
 ///

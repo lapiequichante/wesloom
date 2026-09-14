@@ -64,7 +64,13 @@ story at all.
   its coordinates — which is *why* `Once` is the honest policy) and
   `LUT_VIEW` (screen, displays it) live in `shaders/` beside bloom's,
   registered by applications and tests with `add_effect`. No stock
-  pipeline reads the LUT yet; the IBL that would is M7's.
+  pipeline reads the LUT yet; the IBL that would is M7's. *Amended by
+  [ADR 0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md): the
+  LUT has its reader now — `ambient_environment` samples it out of the
+  frame group — and the renderer bakes it once before the first frame's
+  first pass rather than as a `Once` pass, because a document cannot
+  express a compute pass yet. The policy's argument is unchanged and the
+  pass form is still what the gallery's `brdf-lut` demo runs.*
 
 ## Alternatives
 
