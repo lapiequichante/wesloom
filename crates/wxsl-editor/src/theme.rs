@@ -350,6 +350,9 @@ impl Theme {
             ValueType::GBuffer => Color::rgb(0.90, 0.75, 0.55),
             ValueType::ColorTarget => Color::rgb(0.95, 0.65, 0.50),
             ValueType::DepthTarget => Color::rgb(0.60, 0.70, 0.95),
+            // A buffer is the compute pass's half of the resource story:
+            // same family, one step greener than the depth it sits beside.
+            ValueType::StorageBuffer => Color::rgb(0.55, 0.85, 0.65),
         }
     }
 

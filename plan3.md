@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1 and M7 have landed — ADRs 0038, 0039 and 0040. The shipped state it starts from is
+Status: P7, N1, M7 and N3 have landed — ADRs 0038, 0039, 0040 and 0041. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -22,7 +22,7 @@ earlier plans' items did.
 |---|---|---|
 | plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
-| ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 | queued below as N-items with the ADR that owes them |
+| ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
 
@@ -217,7 +217,7 @@ instance rows rather than the screen ABI:
   shimmer, and a moving cube blurs.
 * ADR: "Velocity is a stage; TAA is a policy'd chain."
 
-### N3 — Compute and buffers in documents
+### N3 — Compute and buffers in documents *(landed, ADR 0041)*
 
 ADR 0036's deferred half, now that the engine side exists:
 
@@ -239,6 +239,25 @@ ADR 0036's deferred half, now that the engine side exists:
   a hand-built graph, and the ADR 0036 note about `pass.compute` is
   deleted.
 * ADR: "Compute and buffers join the document vocabulary."
+
+**Landed as written**, with the socket-derivation mechanism realized one
+way rather than two. "Grow sockets from its effect's declaration" became
+*one derived definition per compute effect* — `pass.compute.<id>`, built
+by `EffectRegistry::node_defs` and registered into the compile-time
+registry by `document_registry` — rather than instance-dependent sockets
+on one static node, because the registry is already the mechanism for
+"nodes that differ" and a graph-model change to buy per-instance socket
+sets for one node kind was machinery without a second consumer. The
+derived sockets made one structural choice fall out: a declared *output*
+is an input socket, as `into` is on a screen pass — the wire names the
+storage being written, and readers wire from the resource, which is what
+storage *is*. Two things the plan did not name came with the demos: a
+fixed optional `buffer` socket on `pass.screen` (the ramp's reader is a
+*screen* effect, and its one declared buffer input maps onto it by kind —
+two buffer inputs stay the named mistake), and a `size` setting on
+`resource.color` (`64x64` fixed pixels — the LUT bake's target, which no
+fraction of the window spells). Both proofs are documents now; nothing in
+a gallery frame is hand-built Rust.
 
 ### N4 — Effect parameters
 
@@ -572,9 +591,10 @@ none of it knows or cares which backend is underneath.
 3. ~~**M7**~~ — *landed (ADR 0040)*: the screen domain, the screen ABI,
    `EffectShader::Graph`, and a shipped registry whose display transform is
    a graph.
-4. **N3**, then **N4** — compute and buffers in documents, then effect
-   parameters. The vocabulary the canvas will draw should exist before
-   the canvas does, for the same reason P9 ran before P3.
+4. ~~**N3**~~ — *landed (ADR 0041)*: compute and buffers are document
+   nodes, with sockets derived from the effect declaration — then
+   **N4**, effect parameters. The vocabulary the canvas will draw should
+   exist before the canvas does, for the same reason P9 ran before P3.
 5. **P5** — the pipeline canvas, over a finished vocabulary.
 6. **P8** — contracts, before M8's second pipeline shape and before any
    cross-author exchange is invited.

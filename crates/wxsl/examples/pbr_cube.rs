@@ -447,7 +447,10 @@ fn without_tonemap(stock: StockPipeline) -> Graph {
 fn set_document(renderer: &mut Renderer, document: &Graph) -> Result<(), String> {
     let graph = compile_pipeline(
         document,
-        &wxsl::core::pipeline::registry(),
+        // The shipped vocabulary plus a node per registered compute
+        // effect (plan3 N3): a superset of the static registry, so every
+        // document that compiled before still does.
+        &wxsl::render::document_registry(renderer.effects()),
         renderer.effects(),
         &PipelineConfig::new(renderer.target()),
     )

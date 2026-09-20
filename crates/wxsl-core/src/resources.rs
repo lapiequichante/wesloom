@@ -68,7 +68,8 @@ impl ValueType {
             | ValueType::ShadowMaps
             | ValueType::GBuffer
             | ValueType::ColorTarget
-            | ValueType::DepthTarget => return None,
+            | ValueType::DepthTarget
+            | ValueType::StorageBuffer => return None,
         })
     }
 
@@ -93,7 +94,8 @@ impl ValueType {
             | ValueType::ShadowMaps
             | ValueType::GBuffer
             | ValueType::ColorTarget
-            | ValueType::DepthTarget => return None,
+            | ValueType::DepthTarget
+            | ValueType::StorageBuffer => return None,
         })
     }
 

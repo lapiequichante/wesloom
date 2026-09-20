@@ -416,7 +416,8 @@ fn graph_using(
         | ValueType::ShadowMaps
         | ValueType::GBuffer
         | ValueType::ColorTarget
-        | ValueType::DepthTarget => return None,
+        | ValueType::DepthTarget
+        | ValueType::StorageBuffer => return None,
     };
     // A vertex-only node reaches the *vertex* terminal instead: it reads
     // object space, which the fragment stage has not got, and

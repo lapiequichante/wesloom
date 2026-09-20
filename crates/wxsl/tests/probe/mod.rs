@@ -120,7 +120,7 @@ pub fn present_linear(renderer: &mut Renderer) {
     let document = linear_document();
     let graph = wxsl::render::compile_pipeline(
         &document,
-        &wxsl::core::pipeline::registry(),
+        &wxsl::render::document_registry(renderer.effects()),
         renderer.effects(),
         &wxsl::render::PipelineConfig::new(renderer.target()),
     )

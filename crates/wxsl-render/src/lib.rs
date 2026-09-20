@@ -90,9 +90,10 @@ pub use wgpu;
 pub use bindings::{BindingLayouts, MaterialBindings};
 pub use draw::{DrawItem, DrawList, InstanceAttributes};
 pub use effect::{
-    Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectRegistry, EffectShader,
-    BLOOM, BLOOM_MODULE, BRDF_LUT, BRDF_LUT_MODULE, DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE,
-    RAMP_FILL, RAMP_MODULE, RAMP_VIEW, RAMP_VIEW_MODULE,
+    Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectOutputShape,
+    EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE, BRDF_LUT, BRDF_LUT_MODULE,
+    DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE, RAMP_FILL, RAMP_MODULE, RAMP_VIEW,
+    RAMP_VIEW_MODULE,
 };
 pub use environment::{
     Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,
@@ -108,7 +109,7 @@ pub use pass::{
     Persistence, Policy, Read, ResourceDesc, ResourceId,
 };
 pub use pipeline::{PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
-pub use pipeline_doc::{compile as compile_pipeline, PipelineError};
+pub use pipeline_doc::{compile as compile_pipeline, document_registry, PipelineError};
 pub use renderer::{single_draw, RenderRequest, Renderer};
 pub use swap::SwapProgress;
 pub use variants::{ShaderVariant, ShaderVariants};

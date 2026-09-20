@@ -94,6 +94,10 @@ pub enum ValueType {
     /// A pipeline's depth target. A render-graph resource, see
     /// [`Self::DrawQueue`].
     DepthTarget,
+    /// A pipeline's storage buffer, declared by `resource.buffer`, written
+    /// by a compute pass and read back through a pass group. A render-graph
+    /// resource, see [`Self::DrawQueue`].
+    StorageBuffer,
 }
 
 impl ValueType {
@@ -137,6 +141,7 @@ impl ValueType {
         ValueType::GBuffer,
         ValueType::ColorTarget,
         ValueType::DepthTarget,
+        ValueType::StorageBuffer,
     ];
 
     /// The float scalar and vector types, in increasing width.
@@ -195,6 +200,7 @@ impl ValueType {
             ValueType::GBuffer => "gbuffer",
             ValueType::ColorTarget => "color_target",
             ValueType::DepthTarget => "depth_target",
+            ValueType::StorageBuffer => "storage_buffer",
         }
     }
 
@@ -218,6 +224,7 @@ impl ValueType {
                 | ValueType::GBuffer
                 | ValueType::ColorTarget
                 | ValueType::DepthTarget
+                | ValueType::StorageBuffer
         )
     }
 
@@ -331,7 +338,8 @@ impl ValueType {
             | ValueType::ShadowMaps
             | ValueType::GBuffer
             | ValueType::ColorTarget
-            | ValueType::DepthTarget => return None,
+            | ValueType::DepthTarget
+            | ValueType::StorageBuffer => return None,
         })
     }
 
@@ -375,7 +383,8 @@ impl ValueType {
             | ValueType::ShadowMaps
             | ValueType::GBuffer
             | ValueType::ColorTarget
-            | ValueType::DepthTarget => None,
+            | ValueType::DepthTarget
+            | ValueType::StorageBuffer => None,
         }
     }
 }
@@ -552,7 +561,8 @@ impl Value {
             | ValueType::ShadowMaps
             | ValueType::GBuffer
             | ValueType::ColorTarget
-            | ValueType::DepthTarget => return None,
+            | ValueType::DepthTarget
+            | ValueType::StorageBuffer => return None,
         })
     }
 

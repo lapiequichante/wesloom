@@ -163,13 +163,16 @@ from has two spellings, tested to agree
 * **As a document.** A pipeline is a `wxsl_core::graph::Graph` over the
   *pipeline node registry* (`wxsl_core::pipeline`): sources
   (`source.scene`, `source.lights`), resources (`resource.gbuffer`,
-  `resource.color`, `resource.depth`), passes (`pass.geometry`,
-  `pass.shadow`, `pass.screen`) and one `present` terminal. Edges carry
-  render-graph resources (`DrawQueue`, `ColorTarget`, `DepthTarget`,
-  `ShadowMaps`, `GBuffer` — handle types outside `ValueType::ALL`, like
-  the texture sockets). `wxsl_render::pipeline_doc::compile` is a pure
-  function turning the document into a `RenderGraph`; every error names
-  the document node. The two stock pipelines are preset files
+  `resource.color`, `resource.depth`, `resource.buffer`), passes
+  (`pass.geometry`, `pass.shadow`, `pass.screen`, and one
+  `pass.compute.<effect>` per registered compute effect — sockets derived
+  from the effect's declaration, ADR 0041) and one `present` terminal.
+  Edges carry render-graph resources (`DrawQueue`, `ColorTarget`,
+  `DepthTarget`, `ShadowMaps`, `GBuffer`, `StorageBuffer` — handle types
+  outside `ValueType::ALL`, like the texture sockets).
+  `wxsl_render::pipeline_doc::compile` is a pure function turning the
+  document into a `RenderGraph`; every error names the document node. The
+  two stock pipelines are preset files
   (`crates/wxsl-render/assets/presets/*.pipeline.json`) that
   `StockPipeline::graph` loads and compiles.
 * **As hand-built Rust.** `forward_graph` and `deferred_graph` stay as the
@@ -193,8 +196,13 @@ how a pipeline composes; applications register more with
 passes. Compute effects are the same shape with
 [`EffectKind::Compute`](adr/0035-execution-policies.md) — entry point and
 workgroup count on the descriptor, storage writes declared as outputs —
-and the BRDF-LUT and buffer-ramp effects ship beside bloom as the worked
-examples. `cargo run -p wxsl --example gallery -- --screenshot` renders
+and a compute effect joins the document vocabulary as a
+`pass.compute.<effect>` node whose sockets are its declaration
+([ADR 0041](adr/0041-compute-and-buffers-join-the-document-vocabulary.md);
+`document_registry` supplies the derived rows). The BRDF-LUT and
+buffer-ramp demos are documents — a `pass.compute` node and, for the
+ramp, a `resource.buffer` both passes wire from.
+`cargo run -p wxsl --example gallery -- --screenshot` renders
 the stock pipelines, the minimal document, the bloom chain and the
 policy/buffer/channel proofs side by side.
 

@@ -26,11 +26,13 @@
 //! | `source.scene` | a draw list, filtered by tags | the frame's draws |
 //! | `source.lights` | the shadow-map array | its `ResourceDesc` |
 //! | `resource.gbuffer` | the enabled set's G-buffer, depth included | one resource per target, plus depth |
-//! | `resource.color` | a colour target: precision, scale, history | one `ResourceDesc` |
+//! | `resource.color` | a colour target: precision, size, history | one `ResourceDesc` |
 //! | `resource.depth` | a depth target | one `ResourceDesc` |
+//! | `resource.buffer` | a storage buffer: size, history | one `ResourceDesc` |
 //! | `pass.geometry` | a material stage over a draw list | one `PassDesc::geometry` |
 //! | `pass.shadow` | the shadow passes over a draw list | one `PassDesc` per light slot |
 //! | `pass.screen` | a fullscreen effect | one `PassDesc::screen` |
+//! | `pass.compute.<effect>` | a compute effect, sockets from its declaration | one `PassDesc::compute` |
 //! | `present` | what reaches the frame's target | the imported target |
 //!
 //! The fixed shape of the frame is deliberately *not* a knob here: the
@@ -59,6 +61,12 @@ pub const SETTING_SCALE: &str = "scale";
 /// Setting on `resource.color`: how many previous frames stay readable —
 /// `0` is transient, `1` a classic ping-pong.
 pub const SETTING_HISTORY: &str = "history";
+/// Setting on `resource.buffer`: the buffer's size, in bytes.
+pub const SETTING_BYTES: &str = "bytes";
+/// Setting on `resource.color`: `viewport` (the default — sized by
+/// [`SETTING_SCALE`]) or a fixed `64x64` in pixels, for the things whose
+/// size is a fact of their contents, a LUT most of all.
+pub const SETTING_SIZE: &str = "size";
 /// Setting on the pass nodes: how often the pass runs — `per frame` (the
 /// default), `once`, `on resize` or `on demand` (plan2 P10). A pass of
 /// any non-default policy must write only targets that keep no history
@@ -75,22 +83,35 @@ pub const RESOURCE_GBUFFER: &str = "resource.gbuffer";
 pub const RESOURCE_COLOR: &str = "resource.color";
 /// Node id of `resource.depth`.
 pub const RESOURCE_DEPTH: &str = "resource.depth";
+/// Node id of `resource.buffer`.
+pub const RESOURCE_BUFFER: &str = "resource.buffer";
 /// Node id of `pass.geometry`.
 pub const PASS_GEOMETRY: &str = "pass.geometry";
 /// Node id of `pass.shadow`.
 pub const PASS_SHADOW: &str = "pass.shadow";
 /// Node id of `pass.screen`.
 pub const PASS_SCREEN: &str = "pass.screen";
+/// Prefix of the `pass.compute.<effect>` ids — one generated definition
+/// per registered compute effect, whose sockets are the effect's declared
+/// inputs and outputs. A compute effect's wiring cannot sit on a fixed
+/// socket set (an effect that wants two writes wants two output sockets),
+/// so the definition is derived from the declaration it compiles against.
+/// [`crate::node::NodeRegistry`] holds the static vocabulary; the
+/// document compiler's side supplies the generated rows beside it.
+pub const PASS_COMPUTE_PREFIX: &str = "pass.compute.";
 /// Node id of `present`, the document's terminal.
 pub const PRESENT: &str = "present";
 
-/// Every node id the shipped vocabulary defines, in registry order.
+/// Every node id the shipped vocabulary defines, in registry order. The
+/// generated `pass.compute.<effect>` rows are not listed: they exist per
+/// registered effect, beside this table, not in it.
 pub const NODE_IDS: &[&str] = &[
     SOURCE_SCENE,
     SOURCE_LIGHTS,
     RESOURCE_GBUFFER,
     RESOURCE_COLOR,
     RESOURCE_DEPTH,
+    RESOURCE_BUFFER,
     PASS_GEOMETRY,
     PASS_SHADOW,
     PASS_SCREEN,
@@ -164,6 +185,13 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "standard",
             ))
             .setting(text_setting(
+                SETTING_SIZE,
+                "Size",
+                "`viewport` (sized by `scale`, the default) or fixed `64x64` pixels — \
+                 for the things whose size is a fact of their contents, a LUT most of all.",
+                "viewport",
+            ))
+            .setting(text_setting(
                 SETTING_SCALE,
                 "Scale",
                 "Fraction of the frame target's size: 1.0 full, 0.5 half.",
@@ -190,6 +218,29 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "Scale",
                 "Fraction of the frame target's size: 1.0 full, 0.5 half.",
                 "1",
+            ))
+            .document(),
+        NodeDefinition::builder(RESOURCE_BUFFER, "storage buffer")
+            .doc(
+                "A storage buffer: the thing a compute pass writes and any pass's \
+                 shader reads back as `var<storage>`. Its slot is never shared — \
+                 a buffer aliasing bug corrupts a whole block, not a frame region.",
+            )
+            .output(
+                Socket::new("buffer", ValueType::StorageBuffer)
+                    .with_doc("The buffer, of `bytes` bytes."),
+            )
+            .setting(text_setting(
+                SETTING_BYTES,
+                "Bytes",
+                "The buffer's size, in bytes. A read-back buffer wants a multiple of 4.",
+                "1024",
+            ))
+            .setting(text_setting(
+                SETTING_HISTORY,
+                "History",
+                "Previous frames kept readable: 0 transient, 1 ping-pong, n a ring of n+1.",
+                "0",
             ))
             .document(),
         // -- passes ------------------------------------------------------
@@ -262,8 +313,9 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .doc(
                 "A fullscreen pass over what earlier passes wrote. The effect is named by \
                  `effect`; what it reads is what is wired into it — a G-buffer for the \
-                 deferred lighting pass, a colour target for a post effect. With `into` \
-                 unconnected it writes the frame's own target.",
+                 deferred lighting pass, a colour target for a post effect, a storage \
+                 buffer for an effect drawing what compute left. With `into` unconnected \
+                 it writes the frame's own target.",
             )
             .input(
                 Socket::new("gbuffer", ValueType::GBuffer)
@@ -274,6 +326,14 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 Socket::new("image", ValueType::ColorTarget)
                     .optional()
                     .with_doc("A colour input, for a post effect."),
+            )
+            .input(
+                Socket::new("buffer", ValueType::StorageBuffer)
+                    .optional()
+                    .with_doc(
+                        "A storage buffer, for an effect that reads one as `var<storage>` — \
+                         the buffer half of a compute pass's work arriving at the screen.",
+                    ),
             )
             .input(
                 Socket::new("into", ValueType::ColorTarget)

@@ -42,7 +42,8 @@ use wxsl_core::abi;
 use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
 use wxsl_core::error::CodegenError;
 use wxsl_core::graph::Graph;
-use wxsl_core::node::NodeRegistry;
+use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, ValueType};
+use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -86,16 +87,32 @@ pub enum EffectInputKind {
     Buffer,
 }
 
+/// What shape a non-attachment output writes: the socket type a document
+/// wires it through.
+///
+/// The *binding* still comes from the wired resource's shape, in the
+/// pass's `writes`, after every input — the shape here types the socket and
+/// is what the pipeline compiler checks the wiring against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectOutputShape {
+    /// A storage buffer — wired from a `resource.buffer`.
+    Buffer,
+    /// A storage texture, written write-only — wired from a
+    /// `resource.color`, whose format is the storage format.
+    StorageTexture,
+}
+
 /// One output an effect writes that is not an attachment: a compute
 /// effect's storage target.
 ///
-/// Named for palettes and diagnostics; the binding comes from the pass's
-/// `writes`, in this order, after every input. A screen effect writes its
-/// attachment and declares no outputs.
+/// A screen effect writes its attachment and declares no outputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectOutput {
-    /// The name the output goes by.
+    /// The name the output goes by — the `pass.compute.<effect>` output
+    /// socket a document wires.
     pub name: &'static str,
+    /// What shape of thing the output writes.
+    pub shape: EffectOutputShape,
     /// One line for the palette and for error messages.
     pub description: &'static str,
 }
@@ -364,6 +381,7 @@ pub const BRDF_LUT: Effect = Effect {
     inputs: &[],
     outputs: &[EffectOutput {
         name: "lut",
+        shape: EffectOutputShape::StorageTexture,
         description: "The LUT: a 64x64 storage texture of (scale, bias).",
     }],
     shader: EffectShader::Source {
@@ -415,6 +433,7 @@ pub const RAMP_FILL: Effect = Effect {
     inputs: &[],
     outputs: &[EffectOutput {
         name: "ramp",
+        shape: EffectOutputShape::Buffer,
         description: "The buffer: 256 f32 values, a smoothstep ease of the index.",
     }],
     shader: EffectShader::Source {
@@ -518,6 +537,108 @@ impl EffectRegistry {
     pub fn is_empty(&self) -> bool {
         self.effects.is_empty()
     }
+
+    /// The document-vocabulary rows the compute effects add: one
+    /// `pass.compute.<effect>` definition per registered compute effect,
+    /// its sockets the effect's declared inputs and outputs (plan3 N3).
+    ///
+    /// `pass.screen`'s socket set is fixed and maps a declaration onto it
+    /// by kind — that works because a *screen* effect's wiring is the
+    /// frame: one G-buffer, one image, one write. A compute effect's
+    /// wiring is whatever its work needs, so its sockets are derived from
+    /// its own declaration rather than mapped onto a fixed set — the
+    /// mechanism, one level up, that lets an effect want two writes and
+    /// still be a node. Screen effects keep the fixed pass; every shipped
+    /// compute effect joins the vocabulary through this method, and an
+    /// application's join the same way.
+    ///
+    /// A declared *output* is an input socket on the node, as `into` is on
+    /// a screen pass: the wire names the storage being written, and the
+    /// storage — a `resource.color` or `resource.buffer` — is what any
+    /// later reader wires from.
+    pub fn node_defs(&self) -> Vec<NodeDefinition> {
+        self.effects
+            .iter()
+            .filter(|effect| effect.is_compute())
+            .map(|effect| {
+                let mut def = NodeDefinition::builder(
+                    format!("{}{}", doc::PASS_COMPUTE_PREFIX, effect.id),
+                    effect.label,
+                )
+                .doc(format!(
+                    "{} Reads: {}. Writes: {}.",
+                    effect.description,
+                    declarations(
+                        effect
+                            .inputs
+                            .iter()
+                            .map(|input| (input.name, input.description))
+                    ),
+                    declarations(
+                        effect
+                            .outputs
+                            .iter()
+                            .map(|output| (output.name, output.description))
+                    ),
+                ))
+                .setting(policy_setting());
+                for input in effect.inputs {
+                    def = def.input(
+                        Socket::new(input.name, input_socket_type(input.kind))
+                            .with_doc(input.description),
+                    );
+                }
+                for output in effect.outputs {
+                    def = def.input(
+                        Socket::new(output.name, output_socket_type(output.shape))
+                            .with_doc(format!("written: {}", output.description)),
+                    );
+                }
+                def.document()
+            })
+            .collect()
+    }
+}
+
+/// The socket type a declared input wires through.
+fn input_socket_type(kind: EffectInputKind) -> ValueType {
+    match kind {
+        EffectInputKind::GBuffer => ValueType::GBuffer,
+        EffectInputKind::Image => ValueType::ColorTarget,
+        EffectInputKind::Buffer => ValueType::StorageBuffer,
+    }
+}
+
+/// The socket type a declared output wires through.
+fn output_socket_type(shape: EffectOutputShape) -> ValueType {
+    match shape {
+        EffectOutputShape::Buffer => ValueType::StorageBuffer,
+        EffectOutputShape::StorageTexture => ValueType::ColorTarget,
+    }
+}
+
+/// `` `name` (description)`` — `` `ramp` (the buffer, 256 f32 values)`` —
+/// for a compute definition's doc line.
+fn declarations<'a>(declared: impl Iterator<Item = (&'a str, &'a str)>) -> String {
+    let parts: Vec<String> = declared
+        .map(|(name, description)| format!("`{name}` ({description})"))
+        .collect();
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// The `policy` setting every pass node carries.
+fn policy_setting() -> SettingDef {
+    SettingDef::new(
+        SETTING_POLICY,
+        "Policy",
+        "How often the pass runs: per frame, once, on resize or on demand. Only a \
+         pass whose target survives frames may skip.",
+    )
+    .with_default("per frame")
 }
 
 impl std::fmt::Display for EffectRegistry {
@@ -655,5 +776,53 @@ mod tests {
             panic!("the LUT bake is a compute effect");
         };
         assert_eq!(workgroups, [8, 8, 1]);
+    }
+
+    #[test]
+    fn every_compute_effect_grows_a_node_from_its_declaration() {
+        // The document vocabulary is open: a compute effect joins it as a
+        // `pass.compute.<id>` node whose sockets are the declaration. The
+        // LUT bake writes a storage texture through a colour-target
+        // socket; the ramp fill writes a buffer through a storage-buffer
+        // socket; both carry the policy setting every pass node has.
+        let registry = EffectRegistry::empty()
+            .with(BRDF_LUT)
+            .with(RAMP_FILL)
+            .with(TONEMAP);
+        let defs = registry.node_defs();
+        assert_eq!(
+            defs.len(),
+            2,
+            "the compute effects get nodes; the screen effect does not"
+        );
+
+        let bake = defs
+            .iter()
+            .find(|def| def.id == "pass.compute.brdf_lut")
+            .expect("the bake's node");
+        assert_eq!(bake.category, "pass", "grouped with the other passes");
+        let lut_socket = bake.input("lut").expect("the bake's declared output");
+        assert_eq!(lut_socket.ty, ValueType::ColorTarget);
+        assert!(bake.output("lut").is_none(), "a write is wired in, not out");
+        assert!(
+            bake.setting(SETTING_POLICY).is_some(),
+            "the node carries the policy setting"
+        );
+
+        let fill = defs
+            .iter()
+            .find(|def| def.id == "pass.compute.ramp_fill")
+            .expect("the ramp fill's node");
+        let ramp_socket = fill.input("ramp").expect("the buffer socket");
+        assert_eq!(ramp_socket.ty, ValueType::StorageBuffer);
+        assert!(
+            !ramp_socket.optional,
+            "a write declaration is mandatory — the pass must know what it writes"
+        );
+        assert_eq!(
+            fill.inputs.len(),
+            1,
+            "an effect with no declared inputs declares nothing else"
+        );
     }
 }

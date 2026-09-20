@@ -75,7 +75,10 @@ vocabulary would model buffers once rather than fork them in later.
   compute effect's output socket without choosing buffer-or-texture per
   node, and the two proof effects are hand-built-graph demos anyway.
   The engine side is complete; the document node waits for its first
-  document-shaped consumer, the same rule P12 and P7 state.
+  document-shaped consumer, the same rule P12 and P7 state. *(Landed
+  since, with the typing problem answered rather than worked around: a
+  compute effect's sockets are derived from its declaration — see
+  [ADR 0041](0041-compute-and-buffers-join-the-document-vocabulary.md).)*
 
 ## Consequences
 

@@ -50,9 +50,8 @@ use wxsl::core::pipeline as doc;
 use wxsl::render::effect::{BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::{
-    compile_pipeline, Attachment, Camera, DrawItem, DrawList, Environment, Extent,
-    InstanceAttributes, Light, Mesh, PassDesc, PipelineConfig, Policy, Read, RenderGraph,
-    RenderRequest, Renderer, ResourceDesc, StockPipeline, TargetConfig,
+    compile_pipeline, Camera, DrawItem, DrawList, EffectRegistry, Environment, InstanceAttributes,
+    Light, Mesh, PipelineConfig, RenderRequest, Renderer, StockPipeline, TargetConfig,
 };
 
 const USAGE: &str = "\
@@ -169,17 +168,13 @@ impl Options {
 // The demos
 // ---------------------------------------------------------------------------
 
-/// Where a demo's pass list comes from: a stock preset, a document built
-/// here and compiled by the public pipeline compiler, or a hand-built
-/// pass list for the proofs that name effects no document node can wire
-/// yet (compute; ADR 0036's note on `pass.compute`). The hand-built
-/// builders take the frame target's format, as the compiler does — a
-/// window's surface is `Bgra8Unorm` where an offscreen target is
-/// `Rgba8Unorm`, and the graph has to agree with whichever it is handed.
+/// Where a demo's pass list comes from: a stock preset, or a document
+/// built here and compiled by the public pipeline compiler. Every demo is
+/// a document now — the compute proofs included, whose passes are
+/// `pass.compute.<effect>` nodes since plan3 N3.
 enum Pipeline {
     Stock(StockPipeline),
     Document(fn() -> Graph),
-    Graph(fn(wgpu::TextureFormat) -> RenderGraph),
 }
 
 impl Pipeline {
@@ -188,7 +183,6 @@ impl Pipeline {
         match self {
             Pipeline::Stock(stock) => stock.name().to_string(),
             Pipeline::Document(build) => build().name().to_string(),
-            Pipeline::Graph(_) => "hand-built pass list".to_string(),
         }
     }
 }
@@ -264,8 +258,9 @@ fn demos() -> Vec<Demo> {
         Demo {
             name: "brdf-lut",
             blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
-                    and a per-frame view displays it — the execution-policy proof",
-            pipeline: Pipeline::Graph(brdf_lut_graph),
+                    and a per-frame view displays it — the execution-policy proof, \
+                    as a document",
+            pipeline: Pipeline::Document(brdf_lut_document),
             instances: 1,
             key_intensity: 42.0,
             features: &[],
@@ -274,8 +269,9 @@ fn demos() -> Vec<Demo> {
         Demo {
             name: "buffer-ramp",
             blurb: "a compute effect fills a storage buffer and a screen effect reads \
-                    it as storage — buffers are graph resources",
-            pipeline: Pipeline::Graph(buffer_ramp_graph),
+                    it as storage — buffers are graph resources, and the proof compiles \
+                    from a document",
+            pipeline: Pipeline::Document(buffer_ramp_document),
             instances: 1,
             key_intensity: 42.0,
             features: &[],
@@ -365,47 +361,74 @@ fn fxaa_document() -> Graph {
     document
 }
 
-/// The execution-policy proof as a pass list (ADR 0035): a compute effect
+/// The execution-policy proof as a document (ADR 0035): a compute effect
 /// bakes the split-sum environment-BRDF LUT once into a stable target, and
-/// a screen effect displays that target every frame. Hand-built, because a
-/// compute pass has no document node yet.
-fn brdf_lut_graph(format: wgpu::TextureFormat) -> RenderGraph {
-    let mut graph = RenderGraph::new(format);
-    let lut = graph.resource(
-        ResourceDesc::color("brdf lut", wgpu::TextureFormat::Rgba16Float)
-            .with_extent(Extent::Fixed {
-                width: 64,
-                height: 64,
-            })
-            .with_usage(wgpu::TextureUsages::TEXTURE_BINDING)
-            .persistent(0),
+/// a screen effect displays that target every frame. The bake is a
+/// `pass.compute.brdf_lut` node — its `lut` socket is the declaration's,
+/// the target a 64x64 fixed `resource.color`, the policy a setting.
+fn brdf_lut_document() -> Graph {
+    let effects = EffectRegistry::default().with(BRDF_LUT).with(LUT_VIEW);
+    let registry = wxsl::render::document_registry(&effects);
+    let mut document = wxsl_core::pipeline::document("brdf lut");
+    let lut = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("brdf lut")
+            .with_setting(doc::SETTING_PRECISION, "hdr")
+            .with_setting(doc::SETTING_SIZE, "64x64"),
     );
-    graph.pass(
-        PassDesc::compute("lut bake", "brdf_lut")
-            .with_write(lut)
-            .with_policy(Policy::Once),
+    let bake = document.add(
+        wxsl::core::graph::Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX))
+            .with_label("lut bake")
+            .with_setting(doc::SETTING_POLICY, "once"),
     );
-    graph.pass(
-        PassDesc::screen("lut view", "lut_view")
-            .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
-            .with_reads([Read::current(lut)]),
+    let view = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_label("lut view")
+            .with_setting(doc::SETTING_EFFECT, "lut_view"),
     );
-    graph
+    let present = document.add_node(doc::PRESENT);
+    for (from, to) in [
+        ((lut, "color"), (bake, "lut")),
+        ((lut, "color"), (view, "image")),
+        ((view, "color"), (present, "surface")),
+    ] {
+        document.wire(&registry, from, to).expect("lut wiring");
+    }
+    document
 }
 
-/// The buffer proof as a pass list (ADR 0036): a compute effect fills a
+/// The buffer proof as a document (ADR 0036): a compute effect fills a
 /// 256-entry storage buffer, a screen effect reads it as storage and draws
-/// it, one value per column.
-fn buffer_ramp_graph(format: wgpu::TextureFormat) -> RenderGraph {
-    let mut graph = RenderGraph::new(format);
-    let ramp = graph.resource(ResourceDesc::buffer("ramp", 256 * 4));
-    graph.pass(PassDesc::compute("fill ramp", "ramp_fill").with_write(ramp));
-    graph.pass(
-        PassDesc::screen("show ramp", "ramp_view")
-            .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
-            .with_reads([Read::current(ramp)]),
+/// it, one value per column. The buffer is a `resource.buffer` both passes
+/// wire from — the write declared on the compute node's `ramp` socket, the
+/// read on the screen pass's `buffer` socket.
+fn buffer_ramp_document() -> Graph {
+    let effects = EffectRegistry::default().with(RAMP_FILL).with(RAMP_VIEW);
+    let registry = wxsl::render::document_registry(&effects);
+    let mut document = wxsl_core::pipeline::document("buffer ramp");
+    let ramp = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_BUFFER)
+            .with_label("ramp")
+            .with_setting(doc::SETTING_BYTES, "1024"),
     );
-    graph
+    let fill = document.add(
+        wxsl::core::graph::Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX))
+            .with_label("fill ramp"),
+    );
+    let view = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_label("show ramp")
+            .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+    );
+    let present = document.add_node(doc::PRESENT);
+    for (from, to) in [
+        ((ramp, "buffer"), (fill, "ramp")),
+        ((ramp, "buffer"), (view, "buffer")),
+        ((view, "color"), (present, "surface")),
+    ] {
+        document.wire(&registry, from, to).expect("ramp wiring");
+    }
+    document
 }
 
 /// The minimal pipeline there is: a scene, one lit material pass with a
@@ -529,7 +552,12 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
             let document = build();
             let graph = compile_pipeline(
                 &document,
-                &wxsl::core::pipeline::registry(),
+                // The registry documents validate against: the shipped
+                // vocabulary plus a `pass.compute.<effect>` node per
+                // registered compute effect (plan3 N3). A superset of the
+                // static registry, so every document that compiled before
+                // still does.
+                &wxsl::render::document_registry(renderer.effects()),
                 renderer.effects(),
                 &PipelineConfig::new(renderer.target()),
             )
@@ -541,12 +569,6 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
             })?;
             renderer
                 .set_graph(graph)
-                .map_err(|error| format!("the `{}` pass list does not run: {error}", demo.name))?;
-            Ok(())
-        }
-        Pipeline::Graph(build) => {
-            renderer
-                .set_graph(build(renderer.target().format))
                 .map_err(|error| format!("the `{}` pass list does not run: {error}", demo.name))?;
             Ok(())
         }

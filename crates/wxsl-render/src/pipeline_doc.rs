@@ -89,6 +89,22 @@ pub enum PipelineError {
         /// The ids that exist.
         known: Vec<String>,
     },
+    /// `resource.color` names a size that is neither `viewport` nor
+    /// `WxH` pixels.
+    UnknownSize {
+        /// The resource node.
+        node: String,
+        /// The size it named.
+        size: String,
+    },
+    /// `resource.buffer` names a size that is not a positive number of
+    /// bytes.
+    BadBufferSize {
+        /// The resource node.
+        node: String,
+        /// The value that would not do.
+        value: String,
+    },
     /// `pass.geometry` names a stage that is not a material stage a
     /// document can draw. The shadow stage is among these on purpose: the
     /// shadow passes come from `pass.shadow`, which expands to one pass
@@ -235,6 +251,13 @@ pub enum PipelineError {
         /// The rendered collision.
         error: String,
     },
+    /// A pass writes into another pass's output. A pass writes where it
+    /// is told, and another pass's output is not a target anybody owns —
+    /// the compute spelling of the screen rule.
+    WriteIntoPassOutput {
+        /// The pass doing the writing.
+        node: String,
+    },
 }
 
 impl core::fmt::Display for PipelineError {
@@ -247,9 +270,19 @@ impl core::fmt::Display for PipelineError {
                 known,
             } => write!(
                 f,
-                "screen pass `{node}` runs `{effect}`, which is not an effect this \
+                "pass `{node}` runs `{effect}`, which is not an effect this \
                  renderer knows (it knows: {})",
                 known.join(", ")
+            ),
+            PipelineError::UnknownSize { node, size } => write!(
+                f,
+                "colour target `{node}` asks for size `{size}`, which is not one — \
+                 `viewport`, or fixed pixels as `64x64`"
+            ),
+            PipelineError::BadBufferSize { node, value } => write!(
+                f,
+                "buffer `{node}` asks for `{value}` bytes, which is not a size — \
+                 a storage buffer needs a positive number of bytes"
             ),
             PipelineError::UnknownStage { node, stage }
                 if stage == MaterialStage::SHADOW.name() =>
@@ -379,11 +412,32 @@ impl core::fmt::Display for PipelineError {
             PipelineError::ChannelCollision { node, error } => {
                 write!(f, "the G-buffer of `{node}` cannot be built: {error}")
             }
+            PipelineError::WriteIntoPassOutput { node } => write!(
+                f,
+                "pass `{node}` writes into another pass's output; wire a \
+                 `resource.color` or `resource.buffer` into it instead — a \
+                 resource is the thing a chain passes along"
+            ),
         }
     }
 }
 
 impl std::error::Error for PipelineError {}
+
+/// The node registry a pipeline document validates against: the shipped
+/// vocabulary plus one `pass.compute.<effect>` row per registered compute
+/// effect (plan3 N3).
+///
+/// A document that names a compute node has to have been *validated*
+/// against that effect's derived sockets — the graph model's typing is
+/// what keeps a `resource.buffer` out of an image socket — so the rows an
+/// [`EffectRegistry`] implies belong in the registry the document is
+/// checked with, and this is how they get there.
+pub fn document_registry(effects: &EffectRegistry) -> NodeRegistry {
+    let mut registry = wxsl_core::pipeline::registry();
+    registry.register_all(effects.node_defs());
+    registry
+}
 
 /// Compile a pipeline document into a pass list.
 ///
@@ -436,6 +490,8 @@ struct Compiler<'a> {
     colors: HashMap<NodeId, ResourceId>,
     /// `resource.depth` node → engine resource.
     depths: HashMap<NodeId, ResourceId>,
+    /// `resource.buffer` node → engine resource.
+    buffers: HashMap<NodeId, ResourceId>,
     /// What each pass node's `color` output stands for.
     pass_colors: HashMap<NodeId, ResourceId>,
     /// What each pass node's `depth` output stands for.
@@ -465,6 +521,7 @@ impl<'a> Compiler<'a> {
             gbuffers: HashMap::new(),
             colors: HashMap::new(),
             depths: HashMap::new(),
+            buffers: HashMap::new(),
             pass_colors: HashMap::new(),
             pass_depths: HashMap::new(),
             shadow_source: None,
@@ -499,6 +556,7 @@ impl<'a> Compiler<'a> {
                 Some(doc::RESOURCE_GBUFFER) => self.declare_gbuffer(*node)?,
                 Some(doc::RESOURCE_COLOR) => self.declare_color(*node)?,
                 Some(doc::RESOURCE_DEPTH) => self.declare_depth(*node)?,
+                Some(doc::RESOURCE_BUFFER) => self.declare_buffer(*node)?,
                 _ => {}
             }
         }
@@ -507,11 +565,17 @@ impl<'a> Compiler<'a> {
         // built them in, and only a tie-break for the scheduler anyway.
         let mut presents: Vec<NodeId> = Vec::new();
         for node in &nodes {
-            match self.kind(*node) {
+            // Copied out: the compute arm names the pass to `self`, and a
+            // `&str` out of `kind` would still be holding the borrow.
+            let kind = self.kind(*node).map(str::to_string);
+            match kind.as_deref() {
                 Some(doc::PASS_GEOMETRY) => self.geometry_pass(*node)?,
                 Some(doc::PASS_SHADOW) => self.shadow_passes(*node)?,
                 Some(doc::PASS_SCREEN) => self.screen_pass(*node)?,
                 Some(doc::PRESENT) => presents.push(*node),
+                Some(other) if other.starts_with(doc::PASS_COMPUTE_PREFIX) => {
+                    self.compute_pass(*node, other)?;
+                }
                 _ => {}
             }
         }
@@ -586,10 +650,35 @@ impl<'a> Compiler<'a> {
                 precision: precision_text,
             }
         })?;
-        let scale = self.number(node, doc::SETTING_SCALE)?;
+        // `viewport` sizes with the frame (the `scale` setting); anything
+        // spelled `WxH` is fixed pixels — the LUTs and atlases whose size
+        // is a fact of their contents, not of the window.
+        let size_text = self.setting(node, doc::SETTING_SIZE);
+        let extent = if size_text.trim().eq_ignore_ascii_case("viewport") {
+            Extent::Viewport {
+                scale: self.number(node, doc::SETTING_SCALE)?,
+            }
+        } else {
+            let (width, height) = size_text.trim().split_once(['x', 'X']).ok_or_else(|| {
+                PipelineError::UnknownSize {
+                    node: name.clone(),
+                    size: size_text.clone(),
+                }
+            })?;
+            let (width, height) = (width.trim(), height.trim());
+            let (width, height): (u32, u32) = match (width.parse(), height.parse()) {
+                (Ok(width), Ok(height)) => (width, height),
+                _ => {
+                    return Err(PipelineError::UnknownSize {
+                        node: name.clone(),
+                        size: size_text.clone(),
+                    })
+                }
+            };
+            Extent::Fixed { width, height }
+        };
         let history = self.number(node, doc::SETTING_HISTORY)? as u32;
-        let mut desc = ResourceDesc::color(name, gbuffer_format(precision))
-            .with_extent(Extent::Viewport { scale });
+        let mut desc = ResourceDesc::color(name, gbuffer_format(precision)).with_extent(extent);
         desc.persistence = if history == 0 {
             Persistence::Transient
         } else {
@@ -607,6 +696,38 @@ impl<'a> Compiler<'a> {
                 .with_extent(Extent::Viewport { scale }),
         );
         self.depths.insert(node, id);
+        Ok(())
+    }
+
+    /// A storage buffer: `bytes` big, persistent when `history` says so.
+    /// The scheduler treats it as a resource that never aliases and orders
+    /// the passes around it, exactly as it does for attachments — the
+    /// document adds nothing the engine did not already reason about.
+    fn declare_buffer(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let bytes_text = self.setting(node, doc::SETTING_BYTES);
+        let bytes: u64 = bytes_text
+            .trim()
+            .parse()
+            .map_err(|_| PipelineError::BadBufferSize {
+                node: name.clone(),
+                value: bytes_text.clone(),
+            })?;
+        if bytes == 0 {
+            return Err(PipelineError::BadBufferSize {
+                node: name.clone(),
+                value: bytes_text,
+            });
+        }
+        let history = self.number(node, doc::SETTING_HISTORY)? as u32;
+        let mut desc = ResourceDesc::buffer(name, bytes);
+        desc.persistence = if history == 0 {
+            Persistence::Transient
+        } else {
+            Persistence::Persistent { history }
+        };
+        let id = self.graph.resource(desc);
+        self.buffers.insert(node, id);
         Ok(())
     }
 
@@ -654,6 +775,15 @@ impl<'a> Compiler<'a> {
         self.document
             .edge_into(&SocketRef::new(node, socket))
             .map(|edge| edge.from.node)
+    }
+
+    /// The node an input is fed from *and* the output socket it is fed
+    /// through — the socket name is what identifies one of a compute
+    /// pass's several declared outputs.
+    fn fed_via(&self, node: NodeId, socket: &str) -> Option<(NodeId, String)> {
+        self.document
+            .edge_into(&SocketRef::new(node, socket))
+            .map(|edge| (edge.from.node, edge.from.socket.clone()))
     }
 
     /// Where a pass's `into` writes: the named resource, or the frame's
@@ -905,6 +1035,7 @@ impl<'a> Compiler<'a> {
         // an image is exactly one. A wired socket the effect does not
         // declare is the mirror mistake and gets the same named error.
         let mut reads: Vec<Read> = Vec::new();
+        let mut buffer_socket_taken = false;
         for input in effect.inputs {
             match input.kind {
                 EffectInputKind::GBuffer => match self.fed(node, "gbuffer") {
@@ -943,20 +1074,33 @@ impl<'a> Compiler<'a> {
                     }
                 },
                 EffectInputKind::Buffer => {
-                    // No document socket carries a buffer yet — the pass
-                    // node's vocabulary has `gbuffer`, `image` and `into`,
-                    // and a `pass.compute` node waits for its first
-                    // document-shaped consumer (plan2 P11). A buffer input
-                    // is wired by building the pass list by hand.
-                    return Err(PipelineError::EffectInputMismatch {
-                        node: name.clone(),
-                        effect: effect.id.to_string(),
-                        reason: format!(
-                            "{} — but buffer inputs have no document socket yet; \
-                             wire this effect into a hand-built pass list",
-                            input.description
-                        ),
-                    });
+                    // The declared buffer inputs ride the one `buffer`
+                    // socket, as the images ride `image` — the socket set
+                    // is fixed, so a second buffer input is the named
+                    // mistake rather than a socket nobody could draw.
+                    if buffer_socket_taken {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but a screen pass has one `buffer` socket, \
+                                 and an earlier declared input took it",
+                                input.description
+                            ),
+                        });
+                    }
+                    let Some(source) = self.fed(node, "buffer") else {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but nothing is wired into `buffer`",
+                                input.description
+                            ),
+                        });
+                    };
+                    reads.push(Read::current(self.storage_source(source, &effect)?));
+                    buffer_socket_taken = true;
                 }
             }
         }
@@ -975,6 +1119,21 @@ impl<'a> Compiler<'a> {
                 });
             }
         }
+        if !effect
+            .inputs
+            .iter()
+            .any(|input| input.kind == EffectInputKind::Buffer)
+            && self.fed(node, "buffer").is_some()
+        {
+            return Err(PipelineError::EffectInputMismatch {
+                node: name.clone(),
+                effect: effect.id.to_string(),
+                reason: format!(
+                    "a storage buffer is wired into it, which `{}` does not take",
+                    effect.id
+                ),
+            });
+        }
 
         let target = self.write_target(node)?;
         let policy = self.policy(node)?;
@@ -991,6 +1150,101 @@ impl<'a> Compiler<'a> {
                 .with_policy(policy),
         );
         self.pass_colors.insert(node, target);
+        Ok(())
+    }
+
+    /// A compute pass: dispatch an effect that writes storage.
+    ///
+    /// The node is a `pass.compute.<effect>` definition derived from the
+    /// effect's declaration, so its sockets *are* the contract — what the
+    /// graph model typed as fed or unfed is exactly what the effect
+    /// declared. Reads and writes resolve socket by socket, in declaration
+    /// order, which is the order the shader declares its `@group(3)`
+    /// bindings in and the order the pass group binds.
+    ///
+    /// A declared *output* is an input socket on the node, as `into` is on
+    /// a screen pass: the wire names the storage being written, and the
+    /// storage — the resource — is what any reader wires from. Compute to
+    /// screen through a buffer is one `resource.buffer` feeding two passes,
+    /// which is the same shape as a colour chain through `resource.color`.
+    fn compute_pass(&mut self, node: NodeId, def_id: &str) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let effect_id = &def_id[doc::PASS_COMPUTE_PREFIX.len()..];
+        let known: Vec<String> = self.effects.ids();
+        let effect = self
+            .effects
+            .get(effect_id)
+            .ok_or_else(|| PipelineError::UnknownEffect {
+                node: name.clone(),
+                effect: effect_id.to_string(),
+                known,
+            })?;
+
+        // Reads first: one pass-group binding per declared input, in the
+        // declared order. The generated definition made every input
+        // mandatory, so a validated document has each socket fed.
+        let mut reads: Vec<Read> = Vec::new();
+        for input in effect.inputs {
+            let (source, _) = self
+                .fed_via(node, input.name)
+                .expect("a validated document's compute pass has every declared input fed");
+            reads.push(match input.kind {
+                EffectInputKind::GBuffer => {
+                    let (targets, depth) = &self.gbuffers[&source];
+                    reads.extend(
+                        targets
+                            .iter()
+                            .copied()
+                            .chain(core::iter::once(*depth))
+                            .map(Read::current),
+                    );
+                    continue;
+                }
+                EffectInputKind::Image => Read::current(self.image_source(source, node)?),
+                EffectInputKind::Buffer => Read::current(self.storage_source(source, &effect)?),
+            });
+        }
+
+        // Then writes: one storage resource per declared output, a
+        // `resource.color` for a storage texture or a `resource.buffer`
+        // for a buffer. Another pass's output is nobody's to write — the
+        // screen rule, at the compute pass's other end.
+        let mut writes: Vec<ResourceId> = Vec::new();
+        for output in effect.outputs {
+            let Some((source, _)) = self.fed_via(node, output.name) else {
+                return Err(PipelineError::EffectInputMismatch {
+                    node: name.clone(),
+                    effect: effect.id.to_string(),
+                    reason: format!(
+                        "{} — but nothing is wired into its `{}` output",
+                        output.description, output.name
+                    ),
+                });
+            };
+            let resource = match self.kind(source) {
+                Some(doc::RESOURCE_COLOR) => self.colors[&source],
+                Some(doc::RESOURCE_BUFFER) => self.buffers[&source],
+                Some(_) => return Err(PipelineError::WriteIntoPassOutput { node: name }),
+                None => unreachable!("the edge's producer is in the document"),
+            };
+            writes.push(resource);
+        }
+
+        let policy = self.policy(node)?;
+        // A pass that skips frames writes stable storage, or the scheduler
+        // names the mistake — a `once` bake into a `resource.color` or
+        // `resource.buffer` is promoted here, just as a chain's colour
+        // target is for a screen pass.
+        if policy != Policy::PerFrame {
+            for resource in &writes {
+                self.graph.make_stable_storage(*resource);
+            }
+        }
+        let mut pass = PassDesc::compute(name, effect.id).with_reads(reads);
+        for resource in writes {
+            pass = pass.with_write(resource);
+        }
+        self.graph.pass(pass.with_policy(policy));
         Ok(())
     }
 
@@ -1014,6 +1268,25 @@ impl<'a> Compiler<'a> {
             other => unreachable!(
                 "typing only lets a `resource.color` or a material pass produce a \
                  colour target, not {other:?}"
+            ),
+        }
+    }
+
+    /// The resource a buffer input stands for: a `resource.buffer`. The
+    /// only producer of a storage buffer in the document vocabulary —
+    /// storage is the resource's, and every reader wires from it, compute
+    /// or screen.
+    fn storage_source(
+        &self,
+        source: NodeId,
+        effect: &crate::effect::Effect,
+    ) -> Result<ResourceId, PipelineError> {
+        match self.kind(source) {
+            Some(doc::RESOURCE_BUFFER) => Ok(self.buffers[&source]),
+            other => unreachable!(
+                "typing only lets a `resource.buffer` feed a buffer socket, not \
+                 {other:?} — and `{}` was wired from one",
+                effect.id
             ),
         }
     }
@@ -1197,6 +1470,7 @@ mod tests {
                             }
                     }
                     (PassKind::Screen { effect: x }, PassKind::Screen { effect: y }) => x == y,
+                    (PassKind::Compute { effect: x }, PassKind::Compute { effect: y }) => x == y,
                     _ => false,
                 }
             }
@@ -1971,6 +2245,270 @@ mod tests {
             error.to_string().contains("accumulation"),
             "the orphan is named by its document label: {error}"
         );
+    }
+    // -- compute passes and buffers (plan3 N3) ----------------------------
+
+    use crate::effect::{BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW};
+    use crate::pass::ResourceShape;
+
+    /// The effects the buffer-ramp documents below compile against.
+    fn ramp_effects() -> EffectRegistry {
+        EffectRegistry::shipped().with(RAMP_FILL).with(RAMP_VIEW)
+    }
+
+    /// The buffer proof as a document: a `resource.buffer`, a
+    /// `pass.compute.ramp_fill` writing it, a `pass.screen` running
+    /// `ramp_view` reading it back through its `buffer` socket, present.
+    /// Both passes wire from the resource — the write is a declaration on
+    /// the compute node, the read a wire on the screen one.
+    fn ramp_document() -> Graph {
+        let registry = document_registry(&ramp_effects());
+        let mut graph = wxsl_core::pipeline::document("buffer ramp");
+        let buffer = graph.add(
+            Node::new(doc::RESOURCE_BUFFER)
+                .with_label("ramp")
+                .with_setting(doc::SETTING_BYTES, "1024"),
+        );
+        let fill = graph.add(
+            Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill ramp"),
+        );
+        let view = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("show ramp")
+                .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((buffer, "buffer"), (fill, "ramp")),
+            ((buffer, "buffer"), (view, "buffer")),
+            ((view, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("ramp wiring");
+        }
+        graph
+    }
+
+    /// The same proof as a hand-built pass list — the reference the
+    /// document must compile to. The clear colour is the config's, because
+    /// the screen pass writes the frame's target and the clear belongs to
+    /// the frame (ADR 0039).
+    fn ramp_graph() -> RenderGraph {
+        let mut graph = RenderGraph::new(target().format);
+        let ramp = graph.resource(ResourceDesc::buffer("ramp", 1024));
+        graph.pass(PassDesc::compute("fill ramp", "ramp_fill").with_write(ramp));
+        graph.pass(
+            PassDesc::screen("show ramp", "ramp_view")
+                .with_color(Attachment::clear(
+                    RenderGraph::TARGET,
+                    config().target.clear_color,
+                ))
+                .with_reads([Read::current(ramp)]),
+        );
+        graph
+    }
+
+    #[test]
+    fn the_ramp_document_compiles_to_the_hand_built_pass_list() {
+        let document = ramp_document();
+        let compiled = compile(
+            &document,
+            &document_registry(&ramp_effects()),
+            &ramp_effects(),
+            &config(),
+        )
+        .expect("compiles");
+        let hand_built = ramp_graph();
+        assert!(
+            same_graph(&compiled, &hand_built),
+            "compiled:\n{compiled:#?}\nhand built:\n{hand_built:#?}"
+        );
+        // And it schedules like it: the compute pass orders before the
+        // screen pass through the buffer, the never-aliased resource.
+        let a = compiled.schedule().expect("the compiled list schedules");
+        let b = hand_built
+            .schedule()
+            .expect("the hand-built list schedules");
+        assert_eq!(a.order(), b.order());
+        assert_eq!(a.slots(), b.slots());
+    }
+
+    #[test]
+    fn a_compute_pass_by_an_unknown_effect_is_a_named_error() {
+        // The node definition exists — the registry was built from a
+        // registry that had the effect — but the compile is handed an
+        // effect registry that does not: the document outlived the
+        // registration that made it.
+        let document = ramp_document();
+        let registry = document_registry(&ramp_effects());
+        let known = crate::effect::EffectRegistry::shipped();
+        match compile(&document, &registry, &known, &config()) {
+            Err(PipelineError::UnknownEffect { effect, .. }) => {
+                assert_eq!(effect, "ramp_fill");
+            }
+            other => panic!("expected an unknown effect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_buffer_declares_its_bytes_and_its_history() {
+        let effects = ramp_effects();
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("ring");
+        let buffer = graph.add(
+            Node::new(doc::RESOURCE_BUFFER)
+                .with_label("ring")
+                .with_setting(doc::SETTING_BYTES, "4096")
+                .with_setting(doc::SETTING_HISTORY, "1"),
+        );
+        let fill = graph
+            .add(Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill"));
+        let view = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("view")
+                .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((buffer, "buffer"), (fill, "ramp")),
+            ((buffer, "buffer"), (view, "buffer")),
+            ((view, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("ring wiring");
+        }
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let ring = compiled
+            .resources()
+            .iter()
+            .find(|desc| desc.label == "ring")
+            .expect("the buffer is declared");
+        assert_eq!(
+            ring.shape,
+            ResourceShape::Buffer {
+                size: 4096,
+                usage: wgpu::BufferUsages::empty(),
+            }
+        );
+        assert_eq!(ring.persistence, Persistence::Persistent { history: 1 });
+    }
+
+    #[test]
+    fn a_buffer_of_no_bytes_is_a_named_error() {
+        let registry = document_registry(&ramp_effects());
+        let mut graph = ramp_document();
+        let buffer = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_BUFFER)
+            .map(|(id, _)| id)
+            .expect("the ramp has a buffer");
+        graph.set_setting(buffer, doc::SETTING_BYTES, "0");
+        match compile(&graph, &registry, &ramp_effects(), &config()) {
+            Err(PipelineError::BadBufferSize { node, value }) => {
+                assert_eq!(node, "ramp");
+                assert_eq!(value, "0");
+            }
+            other => panic!("expected a buffer size error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_fixed_size_target_and_an_once_bake_make_the_lut_demo_a_document() {
+        // The brdf-lut gallery demo, as a document: a 64x64 fixed HDR
+        // target, a `once` compute bake writing it, a view presenting it.
+        // Fixed size is the setting the hand-built list needed
+        // `Extent::Fixed` for; `once` is the policy setting.
+        let effects = EffectRegistry::shipped()
+            .with(crate::effect::BRDF_LUT)
+            .with(LUT_VIEW);
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("lut");
+        let lut = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("brdf lut")
+                .with_setting(doc::SETTING_PRECISION, "hdr")
+                .with_setting(doc::SETTING_SIZE, "64x64"),
+        );
+        let bake = graph.add(
+            Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX))
+                .with_label("lut bake")
+                .with_setting(doc::SETTING_POLICY, "once"),
+        );
+        let view = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("lut view")
+                .with_setting(doc::SETTING_EFFECT, "lut_view"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((lut, "color"), (bake, "lut")),
+            ((lut, "color"), (view, "image")),
+            ((view, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("lut wiring");
+        }
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let desc = compiled
+            .resources()
+            .iter()
+            .find(|desc| desc.label == "brdf lut")
+            .expect("the lut is declared");
+        assert_eq!(
+            desc.shape,
+            ResourceShape::Texture {
+                extent: Extent::Fixed {
+                    width: 64,
+                    height: 64
+                },
+                dimension: Dimension::D2,
+                layers: 1,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::empty(),
+            }
+        );
+        // `once` promoted the target to stable storage — the scheduler's
+        // rule for a pass that skips frames, derived by the compiler.
+        assert_eq!(desc.persistence, Persistence::Persistent { history: 0 });
+        compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn a_compute_pass_writing_another_passs_output_is_a_named_error() {
+        // The bake's `lut` socket takes a colour target, and a screen
+        // pass's colour output *is* one as far as typing can tell — so
+        // the graph model passes it and the compiler names it: another
+        // pass's output is not storage anybody owns.
+        let effects = EffectRegistry::shipped().with(BRDF_LUT).with(LUT_VIEW);
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("wrong end");
+        let lut = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("brdf lut")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let view = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("view")
+                .with_setting(doc::SETTING_EFFECT, "lut_view"),
+        );
+        let bake = graph
+            .add(Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX)).with_label("bake"));
+        let present = graph.add_node(doc::PRESENT);
+        // The view reads the lut and presents; the bake's `lut` write is
+        // wired from the *screen pass's* colour output.
+        for (from, to) in [
+            ((lut, "color"), (view, "image")),
+            ((view, "color"), (bake, "lut")),
+            ((view, "color"), (present, "surface")),
+        ] {
+            graph
+                .wire(&registry, from, to)
+                .expect("typing allows it; the compiler is what refuses");
+        }
+        match compile(&graph, &registry, &effects, &config()) {
+            Err(PipelineError::WriteIntoPassOutput { node }) => {
+                assert_eq!(node, "bake");
+            }
+            other => panic!("expected a write-into-pass error, got {other:?}"),
+        }
     }
 }
 
