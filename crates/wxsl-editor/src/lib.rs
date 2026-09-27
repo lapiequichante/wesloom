@@ -2,7 +2,9 @@
 //!
 //! Build a shader graph by hand: see every node, link and unlink them, add
 //! new ones from the library, and watch the material, the WXSL it generates
-//! and the WGSL that compiles to, all update as you go.
+//! and the WGSL that compiles to, all update as you go. A second canvas
+//! ([`pipeline`]) edits the *pipeline* the preview runs through — the
+//! document compiled live onto the same renderer.
 //!
 //! The editor **draws itself with `wxsl-render`**
 //! ([ADR 0013](../../../docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)):
@@ -62,6 +64,7 @@
 //! | [`canvas`] | the pan/zoom node canvas: layout, links, hit-testing, dragging |
 //! | [`highlight`] | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
 //! | [`palette`] | searching the node library |
+//! | [`pipeline`] | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
 //! | [`preview`] | the offscreen material preview, and the compiled WXSL and WGSL |
 //! | [`ui`] | the immediate-mode layer: identity, interaction, widgets |
 //! | [`widgets`] | editors for the values a socket can carry, and the colour picker |
@@ -90,8 +93,9 @@
 //!
 //! Worth knowing before reaching for it: there is no undo history, no
 //! clipboard (that needs a platform dependency this crate does not have), no
-//! multi-graph tabs, and no box selection. None of these are hard; they are
-//! simply not there yet.
+//! tabs over several *materials*, and no box selection. (The pipeline canvas
+//! is a second document with its own state, not a tab.) None of these are
+//! hard; they are simply not there yet.
 
 #![warn(missing_docs)]
 
@@ -99,6 +103,7 @@ pub mod app;
 pub mod canvas;
 pub mod highlight;
 pub mod palette;
+pub mod pipeline;
 pub mod preview;
 pub mod theme;
 pub mod ui;
@@ -107,5 +112,6 @@ pub mod widgets;
 pub use app::{CodeTab, Editor, EditorConfig};
 pub use canvas::{Canvas, View};
 pub use palette::NodePicker;
+pub use pipeline::{CanvasMode, PipelineCanvas, PipelineTab};
 pub use preview::{Preview, PreviewStatus};
 pub use theme::{Theme, ThemeMode};

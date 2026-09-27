@@ -23,6 +23,11 @@ pub struct Match {
     pub category: String,
     /// How well it matched: higher is better.
     pub score: i32,
+    /// A setting the placed node should arrive with, for a row that stands
+    /// for more than a bare definition: the pipeline palette's effect rows
+    /// place a `pass.screen` with the effect already named, so dropping
+    /// "bloom" needs no trip to the inspector to type its id.
+    pub preset: Option<(String, String)>,
 }
 
 /// Score `query` against one definition, or `None` if it does not match.
@@ -31,7 +36,11 @@ pub struct Match {
 /// the query, an id that starts with it, a label that contains it, an id that
 /// contains it, the documentation. Shorter matches win ties, because a query
 /// is more likely to have meant `add` than `add_weighted`.
-fn score(query: &str, id: &str, label: &str, doc: &str) -> Option<i32> {
+///
+/// Crate-visible because the pipeline canvas searches a second source with
+/// the same ranking — its effect registry — and two rankings for two
+/// palettes is how their orders drift apart.
+pub(crate) fn score(query: &str, id: &str, label: &str, doc: &str) -> Option<i32> {
     if query.is_empty() {
         return Some(0);
     }
@@ -135,6 +144,7 @@ impl NodePicker {
                     label: definition.label.clone(),
                     category: definition.category.clone(),
                     score,
+                    preset: None,
                 })
             })
             .collect();

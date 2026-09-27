@@ -239,7 +239,11 @@ facade crate's feature set, not about the workspace.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
-  input event leaves it drawing, and that the two MSDF backends agree. Skips
+  input event leaves it drawing, and that the two MSDF backends agree.
+  Also the pipeline canvas (ADR 0043): the deferred preset opened in the
+  editor's second canvas, a bloom drop landing in the *running* pass list
+  exactly one pass longer, a parameter move on it compiling nothing, and
+  the stock pass list coming back with the material canvas. Skips
   with no adapter, like `render_cube`.
 - `cargo run -p wxsl --example pbr_cube -- --headless` — the fastest way
   to see whether a change to the ABI or the pipelines still produces a
@@ -287,6 +291,11 @@ facade crate's feature set, not about the workspace.
   the hand-built `forward_graph`/`deferred_graph` are the reference the
   preset-parity tests compile against, nothing more. A document error
   names the document node; the scheduler's checks stay as the last line.
+  The editor's pipeline canvas edits these same documents and compiles
+  them live onto the preview's renderer — one editor, one renderer, a
+  mode rather than a second editor (ADR 0043); a screen effect appears in
+  its palette as a `pass.screen` row with the `effect` preset, never as a
+  derived node.
 - An **effect** is data (ADR 0034, extended to compute by ADR 0035): a
   `wxsl_render::effect::Effect` row — declared inputs and outputs in
   pass-group binding order, screen or compute entry points, and its

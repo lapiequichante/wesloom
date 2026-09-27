@@ -96,6 +96,10 @@ pub struct Preview {
     /// Whether a pipeline swap is in flight, so that the code panel can be
     /// refreshed the frame it lands rather than a frame late.
     swapping: bool,
+    /// The material canvas's stock pipeline choice, remembered across
+    /// visits to the pipeline canvas — the renderer holds it while it
+    /// holds a stock pass list, and *not* while a document is installed.
+    stock: StockPipeline,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
     angle: f32,
@@ -149,6 +153,7 @@ impl Preview {
             wgsl_highlight: Vec::new(),
             status: PreviewStatus::Empty,
             swapping: false,
+            stock: StockPipeline::default(),
             spinning: true,
             angle: 0.6,
         })
@@ -184,11 +189,73 @@ impl Preview {
         &self.status
     }
 
-    /// The pipeline the preview is drawn with.
+    /// The pipeline the material preview is drawn with.
+    ///
+    /// The material canvas's own choice, remembered across visits to the
+    /// pipeline canvas: while a pipeline document is installed the
+    /// renderer has no stock pipeline, and this is what coming back
+    /// restores.
     pub fn pipeline(&self) -> StockPipeline {
-        // The preview never installs a pass list of its own, so there is
-        // always a stock one.
-        self.renderer.pipeline().unwrap_or_default()
+        self.stock
+    }
+
+    /// The effects this renderer can run — what the pipeline canvas's
+    /// palette offers beside the document vocabulary, and what its
+    /// documents compile against.
+    pub fn effects(&self) -> &wxsl_render::effect::EffectRegistry {
+        self.renderer.effects()
+    }
+
+    /// The knobs the renderer's pass lists are built under: the config a
+    /// pipeline document compiles against, and the channel plan the
+    /// pipeline inspector draws.
+    pub fn pipeline_config(&self) -> &wxsl_render::PipelineConfig {
+        self.renderer.pipeline_config()
+    }
+
+    /// The pass list currently running — what the pipeline canvas's
+    /// passes panel lists.
+    pub fn render_graph(&self) -> &wxsl_render::RenderGraph {
+        self.renderer.render_graph()
+    }
+
+    /// Run a pipeline document's compiled pass list, now.
+    ///
+    /// The pipeline canvas's compile loop ends here. Nothing about the
+    /// *material* changes; the same draw list renders through whatever
+    /// pass list is installed, which is the whole point of a pipeline
+    /// being data.
+    pub fn install_document(&mut self, graph: wxsl_render::RenderGraph) -> Result<(), RenderError> {
+        self.renderer.set_graph(graph)
+    }
+
+    /// Tune one of the running pipeline's effect parameters — the pass
+    /// label is the document node's, the parameter's name the effect
+    /// descriptor's (ADR 0042). A buffer write the next frame presents,
+    /// which is why the canvas's sliders cost no recompile.
+    pub fn set_pass_param(
+        &mut self,
+        pass: &str,
+        name: &str,
+        value: wxsl_core::node::Value,
+    ) -> Result<(), RenderError> {
+        self.renderer.set_pass_param(pass, name, value)
+    }
+
+    /// The current value of one pass parameter, for a slider to start
+    /// from.
+    pub fn pass_param(&self, pass: &str, name: &str) -> Option<wxsl_core::node::Value> {
+        self.renderer.pass_param(pass, name)
+    }
+
+    /// Back to the stock pipeline the material canvas chose.
+    ///
+    /// What leaving the pipeline canvas means: the two canvases share one
+    /// renderer, so each puts back what it expects before the other's
+    /// next frame.
+    pub fn restore_stock(&mut self) {
+        self.renderer.set_pipeline(self.stock);
+        self.swapping = false;
     }
 
     /// How far a requested pipeline swap has got, or `None` when none is
@@ -222,6 +289,9 @@ impl Preview {
     /// while the missing stages compile — the editor is exactly the place
     /// where a frozen frame on a button press is most obvious.
     pub fn set_pipeline(&mut self, device: &wgpu::Device, pipeline: StockPipeline) {
+        // The material canvas's choice, whether or not the swap has to
+        // wait: it is what leaving the pipeline canvas restores.
+        self.stock = pipeline;
         let requested = match self.material.as_ref() {
             Some(material) => self
                 .renderer

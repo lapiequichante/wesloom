@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3 and N4 have landed — ADRs 0038 through 0042. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4 and P5 have landed — ADRs 0038 through 0043. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -21,7 +21,7 @@ earlier plans' items did.
 | From | Still open | Reshaped by |
 |---|---|---|
 | plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
-| plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
+| plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
@@ -302,7 +302,7 @@ bloom's threshold eleven times with `cache_stats().misses` and
 `pipeline_count()` unmoved; the gallery's `bloom-tuned` demo is the same
 document as `deferred-bloom`, one `set_pass_param` apart.
 
-### P5 — The pipeline canvas
+### P5 — The pipeline canvas *(landed, ADR 0043)*
 
 The editor's second canvas, over the pipeline registry — plan2's own
 guard rail: "a pipeline graph is a second canvas over the same model, not
@@ -322,6 +322,27 @@ runs the real renderer, so a pipeline edit is live by construction.
   a bloom node dropped onto the deferred preset, live.
 * ADR: probably none (no new boundary) — unless the two-canvas state
   model wants one, as plan2-architecture noted.
+
+**Landed as written**, and the two-canvas state model did want its ADR —
+[0043](docs/adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md)
+records it: the canvas is a *mode* over the one editor and the one
+renderer, the edit loop is validate → compile → `set_graph` against the
+renderer's own config (new `Renderer::pipeline_config`), a failed compile
+keeps the last good pass list running, and leaving restores the stock
+pipeline the material canvas chose. The palette is `document_registry`
+(with its derived compute rows) plus one row per *screen* effect — a
+`pass.screen` with the `effect` setting preset, palette-level sugar
+rather than a derived node, because a screen effect's wiring is the
+frame's. The bottom panel lists the compiled **passes** off the running
+renderer; the inspector keeps the settings rows, adds the selected
+effect's declared parameters as live sliders — N4's queued face, a move
+a buffer write and not a recompile — and the G-buffer plan with sources
+and the attachment budget as a bar, P12's data with its face. The
+done-when is a GPU test: the deferred preset opened in the canvas, the
+bloom edit made through `pipeline_graph_mut`, and the running pass list
+exactly one `bloom` pass longer; the `editor --pipeline --screenshot`
+run shows the whole thing. The `P` key and a toolbar toggle switch
+canvases.
 
 ### P8 — Identity and contracts
 
@@ -620,7 +641,10 @@ none of it knows or cares which backend is underneath.
    ~~**N4**~~, *landed (ADR 0042)*, effect parameters. The vocabulary the
    canvas will draw should exist before the canvas does, for the same
    reason P9 ran before P3.
-5. **P5** — the pipeline canvas, over a finished vocabulary.
+5. ~~**P5**~~ — *landed (ADR 0043)*: the pipeline canvas, over the
+   finished vocabulary — a mode, not an editor; the document compiles
+   onto the preview's renderer on every edit, and the bloom drop on the
+   deferred preset is a GPU test.
 6. **P8** — contracts, before M8's second pipeline shape and before any
    cross-author exchange is invited.
 7. **N5** (bake), **N2** (motion/TAA) — independent of each other; bake

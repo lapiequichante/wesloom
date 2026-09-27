@@ -510,3 +510,138 @@ fn clicking_the_theme_button_toggles_light_and_dark() {
         "a second click should switch back"
     );
 }
+
+#[test]
+fn the_pipeline_canvas_edits_the_pipeline_live() {
+    // The done-when of plan3 P5: the deferred preset, opened in the
+    // editor's second canvas, gains a bloom pass by edit, and the preview
+    // runs it — no window between "the document changed" and "the
+    // renderer runs it", because the canvas compiles onto the same
+    // renderer the preview draws with. The drop itself is the same edit
+    // `wxsl-editor::pipeline`'s device-free tests make; this one goes
+    // through the editor's own API and lands on a real device.
+    use wxsl::core::graph::SocketRef;
+    use wxsl::core::pipeline as doc;
+    use wxsl::editor::CanvasMode;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+
+    // Onto the pipeline canvas: it opens on the deferred preset and
+    // compiles it onto the preview's renderer at the next frame.
+    editor.set_canvas_mode(CanvasMode::Pipeline);
+    frame(&gpu, &mut editor, &target, 0.016);
+    assert!(
+        editor.pipeline_status().is_empty(),
+        "the deferred preset compiles: {:?}",
+        editor.pipeline_status()
+    );
+    let passes_before = editor.preview().render_graph().passes().len();
+
+    // The bloom drop: a `pass.screen` with its effect named, a resource
+    // for it to write into, and the tonemap's image wire picked up and
+    // re-dropped on the new pass's output.
+    let registry = wxsl::render::document_registry(editor.preview().effects());
+    {
+        let graph = editor.pipeline_graph_mut();
+        let tonemap = graph
+            .nodes()
+            .find(|(_, node)| node.label.as_deref() == Some("tonemap"))
+            .map(|(id, _)| id)
+            .expect("the preset ends in tonemap");
+        let scene = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+            .map(|(id, _)| id)
+            .expect("the preset has an intermediate target");
+
+        let bloom = graph.add_node(doc::PASS_SCREEN);
+        graph.set_setting(bloom, doc::SETTING_EFFECT, "bloom");
+        if let Some(node) = graph.node_mut(bloom) {
+            node.label = Some("bloom".to_string());
+        }
+        let bloomed = graph.add_node(doc::RESOURCE_COLOR);
+        graph.set_setting(bloomed, doc::SETTING_PRECISION, "hdr");
+        graph
+            .wire(&registry, (scene, "color"), (bloom, "image"))
+            .expect("bloom takes an image");
+        graph
+            .wire(&registry, (bloomed, "color"), (bloom, "into"))
+            .expect("bloom writes the new resource");
+        graph.disconnect(&registry, &SocketRef::new(tonemap, "image"));
+        graph
+            .wire(&registry, (bloomed, "color"), (tonemap, "image"))
+            .expect("tonemap takes bloom's output");
+    }
+    frame(&gpu, &mut editor, &target, 0.032);
+
+    assert!(
+        editor.pipeline_status().is_empty(),
+        "the edited document compiles: {:?}",
+        editor.pipeline_status()
+    );
+    let passes = editor.preview().render_graph().passes();
+    assert!(
+        passes.iter().any(|pass| pass.label == "bloom"),
+        "the running pass list runs bloom: {:?}",
+        passes.iter().map(|pass| &pass.label).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        passes.len(),
+        passes_before + 1,
+        "a bloom drop adds exactly one pass"
+    );
+
+    // And the frame is still a picture: the mesh renders through the
+    // edited pass list, and the material document was untouched.
+    let pixels = frame(&gpu, &mut editor, &target, 0.048);
+    assert!(
+        painted_pixels(&pixels) > 10_000,
+        "the pipeline canvas drew nothing"
+    );
+    assert!(editor.preview().status().is_ok());
+    assert_eq!(editor.canvas_mode(), CanvasMode::Pipeline);
+
+    // The parameter face (ADR 0042): the installed block starts at the
+    // declared defaults, and a slider move — what the inspector's editors
+    // drive — is a buffer write, compiling nothing.
+    use wxsl::core::node::Value;
+    assert_eq!(
+        editor.preview().pass_param("bloom", "threshold"),
+        Some(Value::F32(1.0)),
+        "the block starts at the descriptor's defaults"
+    );
+    let variants_before = editor.preview().variant_stats().0;
+    editor
+        .set_pass_param("bloom", "threshold", Value::F32(0.5))
+        .expect("bloom declares a threshold");
+    frame(&gpu, &mut editor, &target, 0.056);
+    assert_eq!(
+        editor.preview().pass_param("bloom", "threshold"),
+        Some(Value::F32(0.5)),
+        "the move is visible through the same offsets"
+    );
+    assert_eq!(
+        editor.preview().variant_stats().0,
+        variants_before,
+        "a slider move compiles nothing"
+    );
+
+    // Back to the material canvas: the stock pipeline the material chose
+    // comes back, which is what lets the two canvases share one renderer.
+    editor.set_canvas_mode(CanvasMode::Material);
+    frame(&gpu, &mut editor, &target, 0.064);
+    assert!(editor.preview().status().is_ok());
+    assert!(
+        !editor
+            .preview()
+            .render_graph()
+            .passes()
+            .iter()
+            .any(|pass| pass.label == "bloom"),
+        "the stock pass list came back with the material canvas"
+    );
+}

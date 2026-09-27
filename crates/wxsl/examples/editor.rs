@@ -14,6 +14,7 @@
 //! cargo run --example editor -- --font C:/Windows/Fonts/segoeui.ttf
 //! cargo run --example editor -- --list-fonts           # what it would pick
 //! cargo run --example editor -- --screenshot out.png   # one frame, no window
+//! cargo run --example editor -- --pipeline             # open the pipeline canvas
 //! ```
 //!
 //! # Fonts
@@ -26,9 +27,14 @@
 //!
 //! # Keys
 //!
-//! `F`/`D` render path · `M` preview mesh · `G` MSDF backend · `A` add a node
-//! · `R` frame the graph · `Space` pause the spin · `Ctrl+S` save ·
-//! `Delete` remove the selection · `Esc` quit.
+//! `P` material/pipeline canvas · `F`/`D` render path · `M` preview mesh ·
+//! `G` MSDF backend · `A` add a node · `R` frame the graph · `Space` pause
+//! the spin · `Ctrl+S` save · `Delete` remove the selection · `Esc` quit.
+//!
+//! The pipeline canvas (plan3 P5) opens on the deferred preset and compiles
+//! on every edit onto the same renderer the preview runs — so dropping a
+//! `pass.screen` node onto it, wiring it, and naming an effect changes what
+//! the preview's mesh is drawn through, live.
 //!
 //! # Pointer
 //!
@@ -49,7 +55,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::core::graph::Graph;
-use wxsl::editor::{Editor, EditorConfig};
+use wxsl::editor::{CanvasMode, Editor, EditorConfig};
 use wxsl::render::gpu::GpuContext;
 use wxsl::render::ui::input::{Key, Modifiers, MouseButton, UiEvent};
 use wxsl::render::ui::{MsdfBackend, UiTarget};
@@ -66,6 +72,8 @@ USAGE:
 
 OPTIONS:
     --graph <FILE>        Graph to open, in the node format (default: the shipped demo)
+    --pipeline            Start on the pipeline canvas (the deferred preset,
+                          compiled live; Ctrl+S there saves edited.pipeline.json)
     --font <FILE>         Proportional font for the interface
     --mono <FILE>         Monospaced font for the code panels
     --msdf <cpu|gpu>      Which MSDF backend generates glyphs (default: gpu)
@@ -76,13 +84,14 @@ OPTIONS:
     -h, --help            Print this help
 
 KEYS:
-    F / D        forward / deferred render path
+    P            material / pipeline canvas
+    F / D        forward / deferred render path (material canvas)
     M            cycle the preview mesh
     G            switch the MSDF backend (cpu <-> gpu)
     A            add a node at the middle of the canvas
     R            frame the whole graph
     Space        pause the preview's spin
-    Ctrl+S       save the graph
+    Ctrl+S       save the active document
     Delete       delete the selected nodes
     Esc          quit
 
@@ -188,6 +197,12 @@ fn screenshot(
     if let Some(node) = output {
         editor.select([node]);
     }
+    // After the selection: entering the pipeline mode replaces the centre
+    // canvas wholesale, and the selection that matters there is the first
+    // frame's compile.
+    if options.pipeline {
+        editor.set_canvas_mode(CanvasMode::Pipeline);
+    }
 
     // Three frames: the first fills the glyph atlas and compiles the
     // material, and the preview needs one more to have something to spin.
@@ -226,9 +241,16 @@ fn screenshot(
         "wrote {} ({width}x{height}, msdf {}, {})",
         path.display(),
         options.msdf.name(),
-        match editor.preview().status() {
-            wxsl::editor::PreviewStatus::Ok => "the graph compiles".to_string(),
-            other => format!("{other:?}"),
+        if options.pipeline {
+            match editor.pipeline_status() {
+                [] => "the document compiles".to_string(),
+                errors => format!("{} compile error(s)", errors.len()),
+            }
+        } else {
+            match editor.preview().status() {
+                wxsl::editor::PreviewStatus::Ok => "the graph compiles".to_string(),
+                other => format!("{other:?}"),
+            }
         }
     );
     Ok(())
@@ -240,6 +262,7 @@ fn screenshot(
 
 struct Options {
     graph: Option<PathBuf>,
+    pipeline: bool,
     ui_font: Option<PathBuf>,
     mono_font: Option<PathBuf>,
     msdf: MsdfBackend,
@@ -254,6 +277,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             graph: None,
+            pipeline: false,
             ui_font: None,
             mono_font: None,
             // Matches `EditorConfig::new`'s own default: the editor always
@@ -280,6 +304,7 @@ impl Options {
             };
             match argument.as_str() {
                 "--graph" => options.graph = Some(PathBuf::from(value()?)),
+                "--pipeline" => options.pipeline = true,
                 "--font" => options.ui_font = Some(PathBuf::from(value()?)),
                 "--mono" => options.mono_font = Some(PathBuf::from(value()?)),
                 "--msdf" => {
@@ -528,6 +553,9 @@ impl App {
         config.scale = scale;
 
         let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
+        if self.options.pipeline {
+            editor.set_canvas_mode(CanvasMode::Pipeline);
+        }
         let size = window.inner_size();
         // The editor learns the viewport from events, so it needs the first
         // one before it can lay anything out.
@@ -602,17 +630,42 @@ impl App {
         state.gpu.queue.present(frame);
     }
 
-    /// Save the graph back to where it came from.
+    /// Save the active document back to where it came from.
+    ///
+    /// The pipeline document is a graph in the same node format, so it
+    /// saves by the same serializer — to its own default, because a
+    /// pipeline is not a material and overwriting the material's file
+    /// with one would be a prank.
     fn save(&mut self) {
-        let path = self
-            .options
-            .graph
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("edited.wxsl.json"));
+        let pipeline = self
+            .state
+            .as_ref()
+            .map(|state| state.editor.canvas_mode() == CanvasMode::Pipeline)
+            .unwrap_or(false);
+        let path = if pipeline {
+            PathBuf::from("edited.pipeline.json")
+        } else {
+            self.options
+                .graph
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("edited.wxsl.json"))
+        };
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        match serde_json::to_string_pretty(state.editor.graph()) {
+        let json = if pipeline {
+            state
+                .editor
+                .pipeline_graph()
+                .map(serde_json::to_string_pretty)
+        } else {
+            Some(serde_json::to_string_pretty(state.editor.graph()))
+        };
+        let json = match json {
+            Some(json) => json,
+            None => return,
+        };
+        match json {
             Ok(json) => match std::fs::write(&path, json) {
                 Ok(()) => {
                     state.editor.mark_saved();

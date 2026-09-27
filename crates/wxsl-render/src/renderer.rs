@@ -263,6 +263,17 @@ impl Renderer {
             .collect()
     }
 
+    /// Every knob this renderer's pass lists are built under — target,
+    /// lighting set, features — as one read-only value. A pipeline
+    /// document compiled against this config is the document this
+    /// renderer runs, which is what makes the editor's pipeline canvas a
+    /// preview by construction rather than by promise: it compiles
+    /// against what it sees here and hands the result to
+    /// [`Renderer::set_graph`].
+    pub fn pipeline_config(&self) -> &PipelineConfig {
+        &self.config
+    }
+
     /// The screen effects this renderer can run.
     pub fn effects(&self) -> &EffectRegistry {
         &self.effects

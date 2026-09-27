@@ -98,10 +98,11 @@ from bytes the application supplies), `text` (the glyph cache and shaping),
 **`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `canvas`
 (the pan/zoom node canvas: layout, links, hit-testing, dragging), `highlight`
 (colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer), `palette`
-(searching the node library), `preview` (the offscreen material preview and
-the compiled WXSL and WGSL), `ui` (the immediate-mode layer: identity,
-interaction, widgets), `widgets` (editors per socket type, and the colour
-picker), `theme`.
+(searching the node library), `pipeline` (the second canvas: the pipeline
+document, compiled live onto the same renderer — ADR 0043), `preview` (the
+offscreen material preview and the compiled WXSL and WGSL), `ui` (the
+immediate-mode layer: identity, interaction, widgets), `widgets` (editors
+per socket type, and the colour picker), `theme`.
 
 **`wxsl`** — feature-gated re-exports, plus `stdlib_library()`, the one
 line that hands the node library's WXSL to the renderer.
@@ -793,7 +794,18 @@ And the editor, which is the same graph with somewhere to edit it:
 ```sh
 cargo run -p wxsl --features editor --example editor
 cargo run -p wxsl --features editor --example editor -- --screenshot out.png
+cargo run -p wxsl --features editor --example editor -- --pipeline   # the pipeline canvas, ADR 0043
 ```
+
+The `--pipeline` canvas is the second one: the deferred preset as a
+document, edited live — an edit validates, compiles through the public
+compiler against the renderer's own config, and lands with `set_graph`,
+so the preview runs the edited pass list the same frame. The palette is
+the document vocabulary plus one row per screen effect (a `pass.screen`
+with the effect already named); the bottom panel lists the compiled
+passes; the inspector shows a selected node's settings, its effect's
+parameters as sliders (ADR 0042's face — a move is a buffer write, not a
+recompile), and the G-buffer channel plan against the attachment budget.
 
 Test coverage worth knowing about, since it is what keeps the two halves of
 the shader ABI honest:
@@ -809,7 +821,10 @@ the shader ABI honest:
   recompiles, that a path switch produces different WGSL, that a frame of
   every input event leaves it drawing — and that both MSDF backends produce
   the same interface, which is what keeps the CPU generator and the compute
-  shader honest. Also skips with no adapter.
+  shader honest. Also the pipeline canvas: the deferred preset opened, a
+  bloom drop landing in the running pass list, a parameter move compiling
+  nothing, and the stock pass list restored on the way back. Also skips
+  with no adapter.
 
 ## See also
 

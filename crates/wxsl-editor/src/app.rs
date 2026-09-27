@@ -29,7 +29,7 @@ use glam::Vec2;
 use wxsl_core::abi;
 use wxsl_core::graph::{Graph, NodeId};
 use wxsl_core::macros::MacroDef;
-use wxsl_core::node::{GraphDomain, NodeRegistry, ValueType};
+use wxsl_core::node::{NodeRegistry, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, UiEvent};
 use wxsl_render::ui::text::{GlyphCache, TextOptions};
@@ -37,7 +37,8 @@ use wxsl_render::ui::{Atlas, Font, InputState, MsdfBackend, MsdfGenerator, UiRen
 use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
-use crate::palette::NodePicker;
+use crate::palette::{Match, NodePicker};
+use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
 use crate::theme::Theme;
 use crate::ui::{Align, Id, Ui, UiState};
@@ -145,6 +146,14 @@ pub struct Editor {
     /// Where the node canvas landed on the last drawn frame. `Rect::NOTHING`
     /// until the first frame runs.
     last_canvas_rect: Rect,
+    /// Which canvas the panels and shortcuts point at.
+    mode: CanvasMode,
+    /// The pipeline canvas, opened on the deferred preset the first time
+    /// it is asked for. `None` until then, so a session that never
+    /// switches never builds one.
+    pipeline: Option<PipelineCanvas>,
+    /// Which bottom panel is showing while the pipeline canvas is up.
+    pipeline_tab: PipelineTab,
 }
 
 impl Editor {
@@ -200,6 +209,9 @@ impl Editor {
             backend: msdf_backend,
             library,
             last_canvas_rect: Rect::NOTHING,
+            mode: CanvasMode::default(),
+            pipeline: None,
+            pipeline_tab: PipelineTab::default(),
         })
     }
 
@@ -242,6 +254,79 @@ impl Editor {
     /// rectangle, and only a frame knows that.
     pub fn fit_next_frame(&mut self) {
         self.first_frame = true;
+    }
+
+    /// Which canvas the panels and shortcuts are pointed at.
+    pub fn canvas_mode(&self) -> CanvasMode {
+        self.mode
+    }
+
+    /// Point the editor at the other canvas.
+    ///
+    /// Entering the pipeline mode opens it on the deferred preset the
+    /// first time — the starting point a bloom drop edits — and compiles
+    /// it onto the preview's renderer at the next frame. Leaving restores
+    /// the stock pipeline the material canvas chose, so the two canvases
+    /// share one renderer without surprising each other.
+    pub fn set_canvas_mode(&mut self, mode: CanvasMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        match mode {
+            CanvasMode::Pipeline => {
+                self.pipeline
+                    .get_or_insert_with(|| PipelineCanvas::open_on_preset(StockPipeline::Deferred))
+                    .dirty = true;
+                self.message = "pipeline canvas — the document compiles on every edit".to_string();
+            }
+            CanvasMode::Material => {
+                self.preview.restore_stock();
+                self.message = format!(
+                    "material canvas — pipeline: {}",
+                    self.preview.pipeline().name()
+                );
+            }
+        }
+    }
+
+    /// The pipeline document, if the canvas has been opened.
+    pub fn pipeline_graph(&self) -> Option<&Graph> {
+        self.pipeline.as_ref().map(|state| &state.graph)
+    }
+
+    /// The pipeline document, for a caller that wants to change it — an
+    /// application's own edit. Opening the canvas if it has never been
+    /// opened. Marks it for recompilation; the next frame compiles the
+    /// document onto the preview's renderer.
+    pub fn pipeline_graph_mut(&mut self) -> &mut Graph {
+        self.set_canvas_mode(CanvasMode::Pipeline);
+        self.pipeline
+            .as_mut()
+            .expect("pipeline mode opens the canvas")
+            .graph_mut()
+    }
+
+    /// The pipeline document's last compile errors; empty means the
+    /// document is running.
+    pub fn pipeline_status(&self) -> &[String] {
+        self.pipeline
+            .as_ref()
+            .map(|state| state.errors.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Tune one of the running pipeline's effect parameters — the same
+    /// channel the pipeline inspector's sliders drive (ADR 0042). The
+    /// pass is addressed by its label, the parameter by the effect
+    /// descriptor's name; a move is a buffer write, and compiles nothing.
+    pub fn set_pass_param(
+        &mut self,
+        pass: &str,
+        name: &str,
+        value: wxsl_core::node::Value,
+    ) -> Result<(), RenderError> {
+        self.preview.set_pass_param(pass, name, value)
     }
 
     /// Where the node canvas was on the last drawn frame, in physical
@@ -350,6 +435,32 @@ impl Editor {
                 .rebuild(device, &self.graph, &self.registry, &macros);
             self.dirty = false;
         }
+        // The pipeline canvas's compile-on-edit loop: an edit last frame —
+        // or the canvas having just been opened — compiles here, against
+        // the config the renderer is actually running, and the frame
+        // below renders the result. That ordering is what makes a
+        // pipeline edit live by construction rather than by promise.
+        if self.mode == CanvasMode::Pipeline {
+            if let Some(state) = self.pipeline.as_mut() {
+                if state.dirty {
+                    state.dirty = false;
+                    state.registry =
+                        wxsl_render::pipeline_doc::document_registry(self.preview.effects());
+                    let (errors, graph) = pipeline::compile(
+                        &state.graph,
+                        &state.registry,
+                        self.preview.effects(),
+                        self.preview.pipeline_config(),
+                    );
+                    state.errors = errors;
+                    if let Some(graph) = graph {
+                        if let Err(error) = self.preview.install_document(graph) {
+                            state.errors = vec![error.to_string()];
+                        }
+                    }
+                }
+            }
+        }
         self.preview.render(device, queue, dt, time as f32)?;
 
         self.ui.draw.clear();
@@ -380,52 +491,199 @@ impl Editor {
         self.last_canvas_rect = canvas_rect;
 
         // -- panels ------------------------------------------------------
+        // The pipeline canvas reuses every one of these panels; what
+        // differs per mode is the document they are over and the two
+        // panels whose content is mode's own (the palette's rows, the
+        // bottom panel's tabs).
+        let pipeline_mode = self.mode == CanvasMode::Pipeline;
         let mut requests = Requests::default();
-        toolbar_panel(
-            &mut ui,
-            toolbar,
-            &mut requests,
-            &self.preview,
-            self.backend,
-            &mut self.graph,
-        );
 
-        let canvas_response =
-            self.canvas
+        let canvas_response = if pipeline_mode {
+            let state = self
+                .pipeline
+                .as_mut()
+                .expect("pipeline mode opened the canvas");
+            let response =
+                state
+                    .canvas
+                    .show(&mut ui, canvas_rect, &mut state.graph, &state.registry);
+            if state.fit_pending {
+                state
+                    .canvas
+                    .fit_to_graph(&state.graph, &state.registry, canvas_rect, &theme);
+                state.fit_pending = false;
+            }
+            response
+        } else {
+            let response = self
+                .canvas
                 .show(&mut ui, canvas_rect, &mut self.graph, &self.registry);
-        if self.first_frame {
-            self.canvas
-                .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
-            self.first_frame = false;
+            if self.first_frame {
+                self.canvas
+                    .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
+                self.first_frame = false;
+            }
+            response
+        };
+
+        if pipeline_mode {
+            toolbar_panel(
+                &mut ui,
+                toolbar,
+                &mut requests,
+                &self.preview,
+                self.backend,
+                self.mode,
+                &mut self
+                    .pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas")
+                    .graph,
+            );
+        } else {
+            toolbar_panel(
+                &mut ui,
+                toolbar,
+                &mut requests,
+                &self.preview,
+                self.backend,
+                self.mode,
+                &mut self.graph,
+            );
         }
 
-        palette_panel(
-            &mut ui,
-            palette,
-            &mut self.picker,
-            &self.registry,
-            self.graph.domain(),
-            &mut requests,
-        );
-        inspector_panel(
-            &mut ui,
-            inspector,
-            &self.preview,
-            &mut self.graph,
-            &self.registry,
-            self.canvas.selected_node(),
-            &mut requests,
-        );
-        let tab = code_panel(&mut ui, code, self.tab, &self.preview);
-        status_bar(
-            &mut ui,
-            status,
-            &self.graph,
-            &self.preview,
-            self.backend,
-            &self.message,
-            self.modified,
-        );
+        // The palette's rows and categories, computed per mode: the
+        // material registry filtered by the graph's domain, or the
+        // document registry plus one row per screen effect.
+        let (matches, categories, node_count) = if pipeline_mode {
+            let state = self
+                .pipeline
+                .as_ref()
+                .expect("pipeline mode opened the canvas");
+            (
+                pipeline::palette_matches(&state.picker, &state.registry, self.preview.effects()),
+                pipeline::palette_categories(&state.registry, self.preview.effects()),
+                state.registry.len(),
+            )
+        } else {
+            (
+                self.picker
+                    .matches(&self.registry, self.graph.domain(), 200),
+                self.registry
+                    .categories_in(self.graph.domain())
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                self.registry.len(),
+            )
+        };
+        if pipeline_mode {
+            let state = self
+                .pipeline
+                .as_mut()
+                .expect("pipeline mode opened the canvas");
+            palette_panel(
+                &mut ui,
+                palette,
+                &mut state.picker,
+                matches,
+                &categories,
+                node_count,
+                &mut requests,
+            );
+        } else {
+            palette_panel(
+                &mut ui,
+                palette,
+                &mut self.picker,
+                matches,
+                &categories,
+                node_count,
+                &mut requests,
+            );
+        }
+
+        if pipeline_mode {
+            let state = self
+                .pipeline
+                .as_mut()
+                .expect("pipeline mode opened the canvas");
+            pipeline::inspector_panel(
+                &mut ui,
+                inspector,
+                state,
+                &mut self.preview,
+                state.canvas.selected_node(),
+                &mut requests,
+            );
+        } else {
+            inspector_panel(
+                &mut ui,
+                inspector,
+                &self.preview,
+                &mut self.graph,
+                &self.registry,
+                self.canvas.selected_node(),
+                &mut requests,
+            );
+        }
+
+        if pipeline_mode {
+            // Field-level, not `self.pipeline_status()`: the interface
+            // holds a borrow of `self.ui`, and a `&self` method would
+            // overlap it.
+            let errors = self
+                .pipeline
+                .as_ref()
+                .map(|state| state.errors.as_slice())
+                .unwrap_or(&[]);
+            self.pipeline_tab =
+                pipeline::passes_panel(&mut ui, code, self.pipeline_tab, &self.preview, errors);
+        } else {
+            self.tab = code_panel(&mut ui, code, self.tab, &self.preview);
+        }
+        if pipeline_mode {
+            let state = self
+                .pipeline
+                .as_ref()
+                .expect("pipeline mode opened the canvas");
+            let document = StatusBarDocument {
+                text: format!(
+                    "{} nodes · {} links · {} passes",
+                    state.graph.node_count(),
+                    state.graph.edges().len(),
+                    self.preview.render_graph().passes().len(),
+                ),
+                healthy: state.errors.is_empty(),
+            };
+            status_bar(
+                &mut ui,
+                status,
+                &document,
+                &self.preview,
+                self.backend,
+                &self.message,
+                self.modified,
+            );
+        } else {
+            let document = StatusBarDocument {
+                text: format!(
+                    "{} nodes · {} links",
+                    self.graph.node_count(),
+                    self.graph.edges().len(),
+                ),
+                healthy: self.preview.status().is_ok(),
+            };
+            status_bar(
+                &mut ui,
+                status,
+                &document,
+                &self.preview,
+                self.backend,
+                &self.message,
+                self.modified,
+            );
+        }
 
         // -- drag ghost ---------------------------------------------------
         // Drawn last (and so on top, and unclipped by any panel's own
@@ -464,11 +722,19 @@ impl Editor {
 
         // -- shortcuts ---------------------------------------------------
         if !ui.state.is_editing() {
-            if ui.input.key_pressed_plain(Key::Char('f')) {
-                requests.pipeline = Some(StockPipeline::Forward);
+            // The stock pipelines are the material canvas's knobs; the
+            // pipeline canvas's document *is* the pipeline, so the keys
+            // would lie there.
+            if !pipeline_mode {
+                if ui.input.key_pressed_plain(Key::Char('f')) {
+                    requests.pipeline = Some(StockPipeline::Forward);
+                }
+                if ui.input.key_pressed_plain(Key::Char('d')) {
+                    requests.pipeline = Some(StockPipeline::Deferred);
+                }
             }
-            if ui.input.key_pressed_plain(Key::Char('d')) {
-                requests.pipeline = Some(StockPipeline::Deferred);
+            if ui.input.key_pressed_plain(Key::Char('p')) {
+                requests.mode = Some(self.mode.other());
             }
             if ui.input.key_pressed_plain(Key::Char('m')) {
                 requests.mesh = Some(self.preview.mesh_kind().next());
@@ -477,8 +743,17 @@ impl Editor {
                 requests.backend = Some(self.backend.toggled());
             }
             if ui.input.key_pressed_plain(Key::Char('a')) {
-                requests.add_at =
-                    Some(self.canvas.view.to_graph(canvas_rect, canvas_rect.center()));
+                let at = canvas_rect.center();
+                requests.add_at = Some(if pipeline_mode {
+                    self.pipeline
+                        .as_ref()
+                        .expect("pipeline mode opened the canvas")
+                        .canvas
+                        .view
+                        .to_graph(canvas_rect, at)
+                } else {
+                    self.canvas.view.to_graph(canvas_rect, at)
+                });
             }
             if ui.input.key_pressed_plain(Key::Char('r')) {
                 requests.fit = true;
@@ -493,46 +768,117 @@ impl Editor {
         ui.end_frame();
 
         // -- apply -------------------------------------------------------
-        self.tab = tab;
         if let Some(message) = canvas_response.message {
             self.message = message;
         }
         if canvas_response.changed {
-            self.dirty = true;
+            if pipeline_mode {
+                self.pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas")
+                    .dirty = true;
+            } else {
+                self.dirty = true;
+            }
             self.modified = true;
         }
         if requests.add_at_center {
-            requests.add_at = Some(self.canvas.view.to_graph(canvas_rect, canvas_rect.center()));
+            let at = canvas_rect.center();
+            requests.add_at = Some(if pipeline_mode {
+                self.pipeline
+                    .as_ref()
+                    .expect("pipeline mode opened the canvas")
+                    .canvas
+                    .view
+                    .to_graph(canvas_rect, at)
+            } else {
+                self.canvas.view.to_graph(canvas_rect, at)
+            });
         }
         if let Some(delta) = requests.spin_drag {
             self.preview.drag(delta);
         }
         if let Some(at) = canvas_response.add_node_at.or(requests.add_at) {
-            self.picker.open_at(at);
+            if pipeline_mode {
+                self.pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas")
+                    .picker
+                    .open_at(at);
+            } else {
+                self.picker.open_at(at);
+            }
             self.ui.focus_text(Id::new("palette.search"), "");
             self.message = "pick a node to add".to_string();
         }
-        if let Some(definition) = requests.add_definition {
-            let at = resolve_add_position(
-                requests.drop_screen_point,
-                canvas_rect,
-                &self.canvas.view,
-                self.picker.target,
-            );
-            let id = canvas::place_new_node(&mut self.graph, &self.registry, &definition, at);
-            self.canvas.selection = vec![id];
-            self.picker.close();
+        if let Some(add) = requests.add.take() {
+            let (view, picker_target) = if pipeline_mode {
+                let state = self
+                    .pipeline
+                    .as_ref()
+                    .expect("pipeline mode opened the canvas");
+                (&state.canvas.view, state.picker.target)
+            } else {
+                (&self.canvas.view, self.picker.target)
+            };
+            let at =
+                resolve_add_position(requests.drop_screen_point, canvas_rect, view, picker_target);
+            let (definition, preset) = (add.definition, add.preset);
+            if pipeline_mode {
+                let state = self
+                    .pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas");
+                let id = canvas::place_new_node(&mut state.graph, &state.registry, &definition, at);
+                if let Some((name, value)) = preset {
+                    state.graph.set_setting(id, name, value);
+                }
+                state.canvas.selection = vec![id];
+                state.picker.close();
+                state.dirty = true;
+            } else {
+                let id = canvas::place_new_node(&mut self.graph, &self.registry, &definition, at);
+                if let Some((name, value)) = preset {
+                    self.graph.set_setting(id, name, value);
+                }
+                self.canvas.selection = vec![id];
+                self.picker.close();
+                self.dirty = true;
+            }
             self.ui.clear_focus();
-            self.dirty = true;
             self.modified = true;
             self.message = format!("added {definition}");
         }
         if requests.changed_graph {
-            self.dirty = true;
+            if pipeline_mode {
+                self.pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas")
+                    .dirty = true;
+            } else {
+                self.dirty = true;
+            }
             self.modified = true;
         }
         if requests.changed_metadata {
             self.modified = true;
+        }
+        if let Some(mode) = requests.mode {
+            self.set_canvas_mode(mode);
+        }
+        if requests.fit {
+            if pipeline_mode {
+                let state = self
+                    .pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas");
+                state
+                    .canvas
+                    .fit_to_graph(&state.graph, &state.registry, canvas_rect, &theme);
+            } else {
+                self.canvas
+                    .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
+            }
         }
         if let Some(pipeline) = requests.pipeline {
             self.preview.set_pipeline(device, pipeline);
@@ -573,41 +919,54 @@ impl Editor {
 ///
 /// Collected rather than applied in place, because a widget deep in a panel
 /// holds a borrow of the interface and the graph, and half of these need the
-/// device or the preview.
+/// device or the preview. Crate-visible because the pipeline canvas's
+/// panels (its inspector above all) ask through the same channel.
 #[derive(Default)]
-struct Requests {
-    pipeline: Option<StockPipeline>,
-    mesh: Option<MeshKind>,
-    backend: Option<MsdfBackend>,
+pub(crate) struct Requests {
+    pub(crate) pipeline: Option<StockPipeline>,
+    pub(crate) mesh: Option<MeshKind>,
+    pub(crate) backend: Option<MsdfBackend>,
+    /// Switch which canvas the panels point at.
+    pub(crate) mode: Option<CanvasMode>,
     /// Open the palette to add a node at this graph-space point.
-    add_at: Option<Vec2>,
+    pub(crate) add_at: Option<Vec2>,
     /// Open the palette to add a node in the middle of the canvas, wherever
     /// that is — a widget outside the canvas does not know.
-    add_at_center: bool,
-    add_definition: Option<String>,
-    /// Where `add_definition` was let go, in screen pixels — a palette row
-    /// is a drag source, and this is where the drag ended up. `None` when
-    /// the node was requested some other way (Enter in the search box, the
+    pub(crate) add_at_center: bool,
+    /// A node a palette row asked for.
+    pub(crate) add: Option<AddNode>,
+    /// Where the row was let go, in screen pixels — a palette row is a
+    /// drag source, and this is where the drag ended up. `None` when the
+    /// node was requested some other way (Enter in the search box, the
     /// toolbar button), in which case the existing `picker.target`/canvas
     /// centre fallback applies.
-    drop_screen_point: Option<Vec2>,
+    pub(crate) drop_screen_point: Option<Vec2>,
     /// A palette row is being dragged this frame; its label, for the ghost
     /// that follows the pointer.
-    dragging_definition: Option<String>,
-    changed_graph: bool,
+    pub(crate) dragging_definition: Option<String>,
+    pub(crate) changed_graph: bool,
     /// Something worth saving changed that the shader does not depend on —
     /// a node's name or its colour. Marks the document modified without
     /// paying for a recompile.
-    changed_metadata: bool,
-    toggle_spin: bool,
-    toggle_theme: bool,
+    pub(crate) changed_metadata: bool,
+    pub(crate) toggle_spin: bool,
+    pub(crate) toggle_theme: bool,
     /// Turn the preview by this many pixels of drag.
-    spin_drag: Option<f32>,
-    fit: bool,
+    pub(crate) spin_drag: Option<f32>,
+    pub(crate) fit: bool,
     /// Show this in the status bar instead of building a message at the
     /// apply site — for a widget (the inspector's generic-type picker) whose
     /// outcome depends on what it did, not just that it ran.
-    message: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+/// A node a palette row asked for: the definition to place, and — for the
+/// pipeline palette's effect rows — a setting it should arrive with, so
+/// dropping "bloom" is a `pass.screen` that already names its effect.
+#[derive(Clone)]
+pub(crate) struct AddNode {
+    pub(crate) definition: String,
+    pub(crate) preset: Option<(String, String)>,
 }
 
 /// Where to add a node requested by `requests.add_definition`.
@@ -636,12 +995,19 @@ fn resolve_add_position(
 }
 
 /// The toolbar: what the graph is, and how it is being shown.
+///
+/// The canvas toggle comes first — the two documents are the editor's
+/// biggest fact — then the active document's name, then the knobs that
+/// still apply. The stock-pipeline buttons are the material canvas's:
+/// when the pipeline canvas is up, the document *is* the pipeline, and a
+/// "forward" button over it would lie.
 fn toolbar_panel(
     ui: &mut Ui<'_>,
     rect: Rect,
     requests: &mut Requests,
     preview: &Preview,
     backend: MsdfBackend,
+    mode: CanvasMode,
     graph: &mut Graph,
 ) {
     let theme = *ui.theme();
@@ -675,6 +1041,28 @@ fn toolbar_panel(
 
     let mut cursor = row;
 
+    // Which canvas is up: two buttons, the active one accented.
+    for candidate in CanvasMode::ALL {
+        let label = candidate.name();
+        let width = (ui.measure_ui(label).x + metrics.padding * 2.0).max(48.0);
+        let (mode_rect, rest) = cursor.split_left(width);
+        cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
+        let fill = (*candidate == mode).then_some(theme.palette.accent);
+        if ui
+            .button_colored(
+                Id::new("toolbar.mode").with(*candidate as u64),
+                mode_rect,
+                label,
+                fill,
+            )
+            .clicked
+            && *candidate != mode
+        {
+            requests.mode = Some(*candidate);
+        }
+    }
+    cursor = Rect::from_min_max(cursor.min + Vec2::new(gap, 0.0), cursor.max);
+
     // The graph's name, editable.
     let (name_rect, rest) = cursor.split_left(180.0 * theme.scale);
     let mut name = graph.name().to_string();
@@ -696,17 +1084,19 @@ fn toolbar_panel(
             .clicked
     };
 
-    for pipeline in StockPipeline::ALL {
-        let label = pipeline.name();
-        let on = preview.pipeline() == *pipeline;
-        if button(
-            ui,
-            &mut cursor,
-            &format!("toolbar.pipeline.{label}"),
-            label,
-            on,
-        ) {
-            requests.pipeline = Some(*pipeline);
+    if mode == CanvasMode::Material {
+        for pipeline in StockPipeline::ALL {
+            let label = pipeline.name();
+            let on = preview.pipeline() == *pipeline;
+            if button(
+                ui,
+                &mut cursor,
+                &format!("toolbar.pipeline.{label}"),
+                label,
+                on,
+            ) {
+                requests.pipeline = Some(*pipeline);
+            }
         }
     }
     let mesh_label = format!("mesh: {}", preview.mesh_kind().name());
@@ -735,12 +1125,19 @@ fn toolbar_panel(
 }
 
 /// The palette: search the node library, and add one.
+///
+/// The rows and categories arrive precomputed, because the two canvases
+/// search different sources: the material registry filtered by the graph's
+/// domain, and the pipeline registry plus its effect rows. The panel
+/// itself — search box, category filter, list, drag source — is one piece
+/// of widget vocabulary serving both.
 fn palette_panel(
     ui: &mut Ui<'_>,
     rect: Rect,
     picker: &mut NodePicker,
-    registry: &NodeRegistry,
-    domain: GraphDomain,
+    matches: Vec<Match>,
+    categories: &[String],
+    node_count: usize,
     requests: &mut Requests,
 ) {
     let theme = *ui.theme();
@@ -748,7 +1145,7 @@ fn palette_panel(
     let title = if picker.open {
         "nodes — pick one to add".to_string()
     } else {
-        format!("nodes ({})", registry.len())
+        format!("nodes ({node_count})")
     };
     let inner = ui.panel(rect, Some(&title));
     if picker.open && ui.input.key_pressed(Key::Escape) {
@@ -765,12 +1162,12 @@ fn palette_panel(
 
     // Category filter: one row of buttons that wraps.
     let mut cursor = Vec2::new(rest.min.x, rest.min.y + metrics.row_gap);
-    // The categories of what this canvas can hold, not of the whole
-    // registry: an empty category filter is worse than no filter (ADR 0040).
-    let categories = registry.categories_in(domain);
+    // The categories the caller decided this canvas can hold, not of the
+    // whole registry: an empty category filter is worse than no filter
+    // (ADR 0040).
     let button_height = metrics.row_height * 0.85;
     for (index, category) in std::iter::once("all")
-        .chain(categories.iter().copied())
+        .chain(categories.iter().map(String::as_str))
         .enumerate()
     {
         let width = ui.measure_ui(category).x + metrics.padding;
@@ -814,7 +1211,6 @@ fn palette_panel(
         return;
     }
 
-    let matches = picker.matches(registry, domain, 200);
     // Only show a highlight once the keyboard is actually driving the list:
     // otherwise the first row looks selected in a palette nobody has touched.
     let searching = ui.state.focus() == Some(Id::new("palette.search"));
@@ -830,7 +1226,10 @@ fn palette_panel(
         }
         if ui.input.key_pressed(Key::Enter) {
             if let Some(found) = picker.highlighted(&matches) {
-                requests.add_definition = Some(found.id.clone());
+                requests.add = Some(AddNode {
+                    definition: found.id.clone(),
+                    preset: found.preset.clone(),
+                });
             }
         }
     }
@@ -873,7 +1272,10 @@ fn palette_panel(
             requests.dragging_definition = Some(found.label.clone());
         }
         if response.drag_released {
-            requests.add_definition = Some(found.id.clone());
+            requests.add = Some(AddNode {
+                definition: found.id.clone(),
+                preset: found.preset.clone(),
+            });
             requests.drop_screen_point = Some(ui.input.pointer_or_zero());
         }
         let (label_rect, id_rect) = row.shrink(3.0).split_top(row.height() * 0.55);
@@ -1406,11 +1808,22 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
     tab
 }
 
+/// What the status bar says about the active document, and whether its
+/// own compile is healthy — the material's when the material canvas is
+/// up, the pipeline document's when it is not, so a broken document
+/// colours the bar even while the last good pass list is still rendering.
+struct StatusBarDocument {
+    /// The document half of the left side: nodes, links, and — for a
+    /// pipeline — the passes it compiled to.
+    text: String,
+    healthy: bool,
+}
+
 /// The status bar: the numbers worth watching while editing.
 fn status_bar(
     ui: &mut Ui<'_>,
     rect: Rect,
-    graph: &Graph,
+    document: &StatusBarDocument,
     preview: &Preview,
     backend: MsdfBackend,
     message: &str,
@@ -1423,9 +1836,8 @@ fn status_bar(
     let (variants, cache) = preview.variant_stats();
     let glyphs = ui.state.fonts.stats();
     let left = format!(
-        "{} nodes · {} links · {variants} variants ({} hits, {} compiles) · {} glyphs · msdf {} · atlas {:.0}%",
-        graph.node_count(),
-        graph.edges().len(),
+        "{} · {variants} variants ({} hits, {} compiles) · {} glyphs · msdf {} · atlas {:.0}%",
+        document.text,
         cache.hits,
         cache.misses,
         glyphs.fields,
@@ -1434,7 +1846,7 @@ fn status_bar(
     );
     ui.small_label(inner, &left, theme.palette.text_dim, Align::Left);
 
-    let color = if preview.status().is_ok() {
+    let color = if document.healthy {
         theme.palette.text_dim
     } else {
         theme.palette.error
