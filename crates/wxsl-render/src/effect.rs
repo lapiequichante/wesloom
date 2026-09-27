@@ -21,6 +21,15 @@
 //! per input in the same order. The lighting effect shades a G-buffer —
 //! one texture per layout target, then depth; bloom takes one image.
 //!
+//! [`Effect::parameters`] is the tunable half of the same contract
+//! ([ADR 0042](../../../docs/adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md)):
+//! name and default per knob, laid out by `wxsl-core`'s uniform-layout
+//! computer into one block the pass group binds after the inputs and the
+//! outputs. The struct the shader reads is *generated* from the
+//! declaration and prepended to the module when it compiles — the
+//! material parameters' one-spelling rule, pass-level — and the variant
+//! key folds the layout, never the values, so a slider is a buffer write.
+//!
 //! # The shipped effects
 //!
 //! [`EffectRegistry::shipped`] carries the migrated deferred lighting
@@ -42,8 +51,10 @@ use wxsl_core::abi;
 use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
 use wxsl_core::error::CodegenError;
 use wxsl_core::graph::Graph;
-use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, ValueType};
+use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, Value, ValueType};
 use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
+use wxsl_core::resources::BufferLayout;
+use wxsl_core::wxsl::WxslIdent;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -115,6 +126,31 @@ pub struct EffectOutput {
     pub shape: EffectOutputShape,
     /// One line for the palette and for error messages.
     pub description: &'static str,
+}
+
+/// One parameter an effect declares: a uniform the host can change without
+/// a recompile — the material parameter's story, pass-level (plan3 N4).
+///
+/// The `name` is the struct field the shader reads and how the host
+/// addresses the value; the `default` is both the starting value a fresh
+/// buffer is filled with and the parameter's *type* — `Value` carries one
+/// and implies the other, which is one less way for a descriptor row to
+/// disagree with itself. Bloom's `THRESHOLD` was the `const` this exists to
+/// retire: a re-tune used to be a new descriptor row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectParameter {
+    /// The field name in the generated struct, and how the host sets it.
+    /// A WGSL identifier — it becomes one.
+    pub name: &'static str,
+    /// The starting value, and the type by implication.
+    pub default: Value,
+}
+
+impl EffectParameter {
+    /// The parameter's type.
+    pub fn ty(&self) -> ValueType {
+        self.default.ty()
+    }
 }
 
 /// What work an effect does, and therefore which entry points a `wgpu`
@@ -221,6 +257,12 @@ pub struct Effect {
     /// The non-attachment writes, in pass-group binding order after the
     /// inputs — a compute effect's storage targets.
     pub outputs: &'static [EffectOutput],
+    /// The uniform parameters the host can tune at runtime, laid out by
+    /// [`Effect::param_layout`] into one uniform block at the pass group's
+    /// next binding after the inputs and the outputs
+    /// ([ADR 0042](../../../docs/adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md)).
+    /// Empty for every effect that has no knobs.
+    pub parameters: &'static [EffectParameter],
     /// Where the shader text comes from.
     pub shader: EffectShader,
 }
@@ -257,6 +299,7 @@ impl Effect {
             },
             inputs: SCREEN_GRAPH_INPUTS,
             outputs: &[],
+            parameters: &[],
             shader: EffectShader::Graph {
                 graph: Arc::new(graph),
                 wxsl: Arc::from(generated.source),
@@ -282,6 +325,60 @@ impl Effect {
     /// it dispatches rather than draws.
     pub fn is_compute(&self) -> bool {
         matches!(self.kind, EffectKind::Compute { .. })
+    }
+
+    /// The parameters, laid out for the uniform block the pass group
+    /// binds: one field per declared parameter, under the same WGSL
+    /// uniform rules every host-shared buffer here follows.
+    ///
+    /// This is ADR 0023's layout computer with its second customer: the
+    /// offsets are computed here and nowhere else — the shader's struct is
+    /// *generated from it* ([`Effect::params_header`]) and the host writes
+    /// *through it*, so there are not two spellings to drift apart. The
+    /// signature of the result is what a variant key folds, and it holds
+    /// names, types and offsets — never values, or every slider would be
+    /// a recompile again.
+    ///
+    /// A parameter's name has to be a WGSL identifier, because it becomes
+    /// a struct field; the descriptor rows are static, reviewed data, so a
+    /// name that is not one is a bug at rest and said so where it sits.
+    pub(crate) fn param_layout(&self) -> BufferLayout {
+        let fields = self.parameters.iter().map(|parameter| {
+            (
+                WxslIdent::new(parameter.name).unwrap_or_else(|| {
+                    panic!(
+                        "effect `{}` declares parameter `{}`, which is not a WGSL identifier",
+                        self.id, parameter.name
+                    )
+                }),
+                parameter.ty(),
+            )
+        });
+        BufferLayout::uniform(fields)
+    }
+
+    /// The WGSL declaring the parameter block — struct and `var<uniform>`
+    /// at the pass group's next binding after the inputs and the outputs —
+    /// or an empty string for an effect with no parameters.
+    ///
+    /// Prepended to the module when the variant compiles, so the effect's
+    /// file reads `params.threshold` and never states the struct itself:
+    /// the descriptor is the one declaration, and this text is its shadow.
+    pub(crate) fn params_header(&self) -> String {
+        if self.parameters.is_empty() {
+            return String::new();
+        }
+        let layout = self.param_layout();
+        let mut header = layout.wgsl_struct(&format!("{}_params", self.id));
+        let _ = std::fmt::Write::write_fmt(
+            &mut header,
+            format_args!(
+                "@group(3) @binding({}) var<uniform> params: {}_params;\n",
+                self.inputs.len() + self.outputs.len(),
+                self.id
+            ),
+        );
+        header
     }
 }
 
@@ -310,12 +407,16 @@ pub const DEFERRED_LIGHTING: Effect = Effect {
         description: "The G-buffer to shade: every target, then depth.",
     }],
     outputs: &[],
+    parameters: &[],
     shader: EffectShader::Lighting,
 };
 
 /// Bloom: glow for the bright parts of an image, the proof that effects
 /// are real units — one descriptor row, one shader file, and any pipeline
-/// document can wire it into a chain.
+/// document can wire it into a chain. The first effect with parameters
+/// (ADR 0042): the three knobs its shader used to `const` into itself are
+/// the descriptor's declaration now, at the same values, so a re-tune is
+/// a buffer write instead of a new row.
 pub const BLOOM: Effect = Effect {
     id: "bloom",
     label: "bloom",
@@ -330,6 +431,25 @@ pub const BLOOM: Effect = Effect {
         description: "The image to glow from, as linear radiance.",
     }],
     outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "threshold",
+            // In linear radiance: diffuse white is the line, and what glows
+            // is what is brighter than a white surface fully lit — which is
+            // what "highlight" means.
+            default: Value::F32(1.0),
+        },
+        EffectParameter {
+            name: "knee",
+            // How far above `threshold` the ramp to "fully kept" runs.
+            default: Value::F32(0.6),
+        },
+        EffectParameter {
+            name: "strength",
+            // How much of the blurred bright signal is added back.
+            default: Value::F32(0.85),
+        },
+    ],
     shader: EffectShader::Source {
         path: BLOOM_MODULE,
         wxsl: include_str!("../shaders/bloom.wxsl"),
@@ -358,6 +478,7 @@ pub const TONEMAP: Effect = Effect {
         description: "The linear image to tonemap.",
     }],
     outputs: &[],
+    parameters: &[],
     shader: EffectShader::Source {
         path: TONEMAP_MODULE,
         wxsl: include_str!("../shaders/tonemap.wxsl"),
@@ -384,6 +505,7 @@ pub const BRDF_LUT: Effect = Effect {
         shape: EffectOutputShape::StorageTexture,
         description: "The LUT: a 64x64 storage texture of (scale, bias).",
     }],
+    parameters: &[],
     shader: EffectShader::Source {
         path: BRDF_LUT_MODULE,
         wxsl: include_str!("../shaders/brdf_lut.wxsl"),
@@ -407,6 +529,7 @@ pub const LUT_VIEW: Effect = Effect {
         description: "The image to display.",
     }],
     outputs: &[],
+    parameters: &[],
     shader: EffectShader::Source {
         path: LUT_VIEW_MODULE,
         wxsl: include_str!("../shaders/lut_view.wxsl"),
@@ -436,6 +559,7 @@ pub const RAMP_FILL: Effect = Effect {
         shape: EffectOutputShape::Buffer,
         description: "The buffer: 256 f32 values, a smoothstep ease of the index.",
     }],
+    parameters: &[],
     shader: EffectShader::Source {
         path: RAMP_MODULE,
         wxsl: include_str!("../shaders/ramp.wxsl"),
@@ -459,6 +583,7 @@ pub const RAMP_VIEW: Effect = Effect {
         description: "The buffer to draw, read as storage.",
     }],
     outputs: &[],
+    parameters: &[],
     shader: EffectShader::Source {
         path: RAMP_VIEW_MODULE,
         wxsl: include_str!("../shaders/ramp_view.wxsl"),
@@ -776,6 +901,124 @@ mod tests {
             panic!("the LUT bake is a compute effect");
         };
         assert_eq!(workgroups, [8, 8, 1]);
+    }
+
+    #[test]
+    fn bloom_declares_its_knobs_and_the_shader_reads_them_without_stating_them() {
+        // The parameter half of the descriptor-vs-shader contract, checked
+        // where a change to either side fails in seconds: the descriptor
+        // names three f32 knobs with the values the shader's `const`s used
+        // to carry, and the file reads them through the generated `params`
+        // struct without declaring it — the struct is the declaration's
+        // shadow, and a second copy of it in the file is drift.
+        assert_eq!(
+            BLOOM
+                .parameters
+                .iter()
+                .map(|parameter| (parameter.name, parameter.ty()))
+                .collect::<Vec<_>>(),
+            [
+                ("threshold", ValueType::F32),
+                ("knee", ValueType::F32),
+                ("strength", ValueType::F32),
+            ]
+        );
+        let EffectShader::Source { path: _, wxsl } = BLOOM.shader else {
+            panic!("bloom ships its source");
+        };
+        for knob in ["params.threshold", "params.knee", "params.strength"] {
+            assert!(wxsl.contains(knob), "bloom.wxsl reads `{knob}`");
+        }
+        assert!(
+            !wxsl.contains("var<uniform>"),
+            "the file must not state the block the descriptor declares"
+        );
+        assert!(
+            !wxsl.contains("const THRESHOLD"),
+            "the const this retired stays retired"
+        );
+        // Every other shipped effect declares no knobs, so nothing about
+        // them moves.
+        for effect in [
+            DEFERRED_LIGHTING,
+            TONEMAP,
+            BRDF_LUT,
+            LUT_VIEW,
+            RAMP_FILL,
+            RAMP_VIEW,
+        ] {
+            assert!(
+                effect.parameters.is_empty(),
+                "`{}` grew knobs silently",
+                effect.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_parameter_header_declares_the_struct_at_the_next_binding() {
+        // One f32 input, no outputs — so the uniform block lands at
+        // binding 1, after the inputs and the outputs, and the struct name
+        // is the effect's to own.
+        let header = BLOOM.params_header();
+        assert!(header.contains("struct bloom_params {"), "{header}");
+        assert!(
+            header.contains("@group(3) @binding(1) var<uniform> params: bloom_params;"),
+            "{header}"
+        );
+        // Laid out by the same computer every host-shared buffer follows,
+        // so the size is the uniform address space's answer for three
+        // f32s.
+        assert_eq!(BLOOM.param_layout().size(), 16);
+        // And an effect with no parameters generates nothing at all, so
+        // its module compiles byte-for-byte as it did.
+        assert!(TONEMAP.params_header().is_empty());
+        assert!(TONEMAP.param_layout().is_empty());
+    }
+
+    #[test]
+    fn the_parameter_layout_folds_names_and_types_never_values() {
+        // The material parameters' precedent, pass-level: two descriptors
+        // that differ only in a default are one layout and therefore one
+        // variant — the default is what a fresh *buffer* starts at, not
+        // what the shader was compiled with — while a different type is a
+        // different shader.
+        let retuned = Effect {
+            parameters: &[
+                EffectParameter {
+                    name: "threshold",
+                    default: Value::F32(0.5),
+                },
+                EffectParameter {
+                    name: "knee",
+                    default: Value::F32(0.6),
+                },
+                EffectParameter {
+                    name: "strength",
+                    default: Value::F32(0.85),
+                },
+            ],
+            ..BLOOM
+        };
+        assert_eq!(BLOOM.param_layout(), retuned.param_layout());
+        let widened = Effect {
+            parameters: &[
+                EffectParameter {
+                    name: "threshold",
+                    default: Value::Vec2([1.0, 1.0]),
+                },
+                EffectParameter {
+                    name: "knee",
+                    default: Value::F32(0.6),
+                },
+                EffectParameter {
+                    name: "strength",
+                    default: Value::F32(0.85),
+                },
+            ],
+            ..BLOOM
+        };
+        assert_ne!(BLOOM.param_layout(), widened.param_layout());
     }
 
     #[test]

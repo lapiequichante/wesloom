@@ -101,6 +101,10 @@ name = "buffer_resources"
 required-features = ["render", "stdlib"]
 
 [[test]]
+name = "effect_params"
+required-features = ["render", "stdlib"]
+
+[[test]]
 name = "execution_policies"
 required-features = ["render", "stdlib"]
 

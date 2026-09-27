@@ -56,6 +56,7 @@ is signal, don't delete it.
 | [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) | Tonemap is an effect, and ambient reads the LUT | Accepted, amended by [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
 | [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) | Screen-domain graphs: postprocess is a material over the frame | Accepted |
 | [0041](0041-compute-and-buffers-join-the-document-vocabulary.md) | Compute and buffers join the document vocabulary, with sockets derived from the effect declaration | Accepted |
+| [0042](0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md) | Effect parameters are uniforms, and the descriptor declares them | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

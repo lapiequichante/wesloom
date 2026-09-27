@@ -38,6 +38,8 @@ use std::sync::Arc;
 
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::lighting::LightingSet;
+use wxsl_core::node::Value;
+use wxsl_core::resources::BufferLayout;
 
 use crate::bindings::{BindingLayouts, MaterialBindings};
 use crate::draw::{DrawItem, DrawList};
@@ -106,6 +108,23 @@ pub struct Renderer {
     /// document author gave the pass, which is the name an application
     /// knows.
     demanded: HashSet<String>,
+    /// One uniform block per pass whose effect declares parameters
+    /// (plan3 N4), keyed by pass label — the same name [`mark_pass`] and
+    /// the run counts go by. Values survive a pass-list change under the
+    /// same label, so a document edit does not silently reset a tuned
+    /// knob; a changed layout is what starts a block over.
+    pass_params: HashMap<String, PassParamBlock>,
+}
+
+/// One pass's effect parameters: the layout the descriptor declared, the
+/// host-side values written through it, and the uniform buffer they are
+/// uploaded to. The buffer is created at the next upload, because the
+/// values are synced where the pass list lands and no device is there.
+struct PassParamBlock {
+    layout: BufferLayout,
+    data: Vec<u8>,
+    buffer: Option<wgpu::Buffer>,
+    dirty: bool,
 }
 
 impl Renderer {
@@ -143,6 +162,7 @@ impl Renderer {
             runs: vec![0; pass_count],
             last_run: vec![(u64::MAX, (0, 0)); pass_count],
             demanded: HashSet::new(),
+            pass_params: HashMap::new(),
             config,
         })
     }
@@ -286,10 +306,119 @@ impl Renderer {
     }
 
     /// Fresh run bookkeeping for a new pass list: nothing has run, every
-    /// `once` and `on resize` pass is due.
+    /// `once` and `on resize` pass is due. The effect-parameter blocks are
+    /// synced here too, because this is the one place every path a new
+    /// pass list arrives by already goes through.
     fn reset_runs(&mut self) {
         self.runs = vec![0; self.graph.passes().len()];
         self.last_run = vec![(u64::MAX, (0, 0)); self.graph.passes().len()];
+        self.sync_pass_params();
+    }
+
+    /// One parameter block per pass whose effect declares parameters,
+    /// keyed by pass label, with values starting at the descriptor's
+    /// declared defaults — a pipeline renders as authored before the
+    /// application has set anything, which is the material parameters'
+    /// rule again. Re-created only when the declaration's *layout*
+    /// changes, so a re-registered effect that kept its knobs keeps its
+    /// values; a block whose pass is gone is dropped.
+    ///
+    /// Device-free on purpose: values are host data, and keeping this off
+    /// the device lets it run where the pass list lands rather than where
+    /// a frame does. The uniform buffer itself is created at the next
+    /// upload.
+    fn sync_pass_params(&mut self) {
+        for pass in self.graph.passes() {
+            let effect_id = match &pass.kind {
+                PassKind::Screen { effect } | PassKind::Compute { effect } => effect,
+                PassKind::Geometry { .. } => continue,
+            };
+            let Some(known) = self.effects.get(effect_id) else {
+                // `compile_frame` reports the unknown effect by name; the
+                // parameter blocks are not the place for it.
+                continue;
+            };
+            if known.parameters.is_empty() {
+                continue;
+            }
+            let layout = known.param_layout();
+            let stale = self
+                .pass_params
+                .get(&pass.label)
+                .is_none_or(|existing| existing.layout.signature() != layout.signature());
+            if stale {
+                let defaults = known
+                    .parameters
+                    .iter()
+                    .map(|parameter| (parameter.name.to_string(), parameter.default))
+                    .collect();
+                let data = layout.filled(&defaults);
+                self.pass_params.insert(
+                    pass.label.clone(),
+                    PassParamBlock {
+                        layout,
+                        data,
+                        buffer: None,
+                        dirty: true,
+                    },
+                );
+            }
+        }
+        self.pass_params
+            .retain(|label, _| self.graph.passes().iter().any(|pass| pass.label == *label));
+    }
+
+    /// Set one of the parameters the effect behind the pass labelled
+    /// `pass` declares. The name is the pass's label — the same name
+    /// [`mark_pass`] and [`pass_run_count`] go by — and the parameter's
+    /// name is the descriptor's.
+    ///
+    /// A buffer write and nothing else: no variant is recompiled, no
+    /// pipeline is rebuilt, and `cache_stats()` does not move, which is
+    /// the whole point of a parameter being a uniform instead of a
+    /// `const` (ADR 0042). The GPU sees the new value at the next
+    /// [`Renderer::render`].
+    pub fn set_pass_param(
+        &mut self,
+        pass: &str,
+        name: &str,
+        value: Value,
+    ) -> Result<(), RenderError> {
+        let Some(block) = self.pass_params.get_mut(pass) else {
+            return Err(RenderError::EffectParameter {
+                pass: pass.to_string(),
+                name: name.to_string(),
+                reason: "this pass runs no effect with parameters (or there is no such pass); \
+                         the label is the pass's, spelled as `mark_pass` spells it"
+                    .to_string(),
+            });
+        };
+        block
+            .layout
+            .write(&mut block.data, name, value)
+            .map_err(|reason| RenderError::EffectParameter {
+                pass: pass.to_string(),
+                name: name.to_string(),
+                reason: reason.to_string(),
+            })?;
+        block.dirty = true;
+        Ok(())
+    }
+
+    /// The current value of one pass parameter, read back through the
+    /// same offsets [`Renderer::set_pass_param`] wrote it at — what a
+    /// slider shows.
+    pub fn pass_param(&self, pass: &str, name: &str) -> Option<Value> {
+        let block = self.pass_params.get(pass)?;
+        block.layout.read(&block.data, name)
+    }
+
+    /// The parameters the pass labelled `pass` can be tuned by, laid out,
+    /// or `None` when its effect declares none. A caller enumerating
+    /// sliders wants this beside the defaults on
+    /// [`Renderer::effects`].
+    pub fn pass_parameter_layout(&self, pass: &str) -> Option<&BufferLayout> {
+        Some(&self.pass_params.get(pass)?.layout)
     }
 
     /// The stock pipeline in use, or `None` when an application supplied
@@ -799,6 +928,26 @@ impl Renderer {
             &request.draws.transforms(),
             &rows,
         );
+        // The pass parameters, for the passes whose effects declare any:
+        // a block's buffer exists from its first upload on, and what
+        // changed since last frame is what gets written. Eight slider
+        // moves cost eight buffer writes and no compile — that is the
+        // point of a parameter being a uniform (ADR 0042).
+        for block in self.pass_params.values_mut() {
+            if block.buffer.is_none() {
+                block.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("wxsl effect params"),
+                    size: block.data.len() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                block.dirty = true;
+            }
+            if let (true, Some(buffer)) = (block.dirty, block.buffer.as_ref()) {
+                queue.write_buffer(buffer, 0, &block.data);
+                block.dirty = false;
+            }
+        }
         self.pool
             .configure(device, &self.schedule, self.config.target);
         // After the pool, because this is the one resource read from
@@ -839,7 +988,8 @@ impl Renderer {
 
         // Destructured so the recording closure can hold the pipeline
         // cache mutably while the graph, the pool and the effect registry
-        // are borrowed alongside it.
+        // are borrowed alongside it. The parameter blocks are borrowed
+        // beside them, by label, for the graph's pass groups.
         let Renderer {
             bindings,
             layouts,
@@ -850,6 +1000,7 @@ impl Renderer {
             effects,
             ..
         } = self;
+        let pass_params = &self.pass_params;
 
         // A pass drawing *into* the shadow maps must not also have them
         // bound, so which of the two frame groups it gets is decided from
@@ -865,6 +1016,14 @@ impl Renderer {
             pool,
             &[(RenderGraph::TARGET, request.view)],
             &|index| run[index],
+            &|pass| {
+                pass_params.get(&pass.label).and_then(|block| {
+                    block
+                        .buffer
+                        .as_ref()
+                        .map(|buffer| (buffer, block.layout.size()))
+                })
+            },
             |pass, encoder| {
                 let shadows = match shadow_maps {
                     Some(maps) if pass.desc.written().any(|id| id == maps) => ShadowMaps::Detached,

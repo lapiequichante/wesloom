@@ -80,9 +80,10 @@ function nodes `build.rs` derived from the sources).
 
 **`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
 `wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
-`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs and
-outputs, screen or compute entry points, shader source — the registry a
-pass names into, plan2 P4/P10), `library` (`ShaderLibrary`),
+`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs,
+outputs and parameters, screen or compute entry points, shader source —
+the registry a pass names into, plan2 P4/P10, ADR 0042), `library`
+(`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `renderer` (the front end that hides the path switch), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
@@ -201,10 +202,17 @@ and a compute effect joins the document vocabulary as a
 ([ADR 0041](adr/0041-compute-and-buffers-join-the-document-vocabulary.md);
 `document_registry` supplies the derived rows). The BRDF-LUT and
 buffer-ramp demos are documents — a `pass.compute` node and, for the
-ramp, a `resource.buffer` both passes wire from.
+ramp, a `resource.buffer` both passes wire from. An effect can declare
+**parameters** ([ADR 0042](adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md))
+— one `{ name, default }` per knob; the layout is computed by
+`wxsl_core::resources`, the shader's struct is generated from it and
+prepended to the module, and the uniform block rides the pass group as
+the binding after the inputs and the outputs. Values are host state per
+pass label — `Renderer::set_pass_param` writes, the next frame presents,
+and nothing recompiles; the variant key folds the layout, never a value.
 `cargo run -p wxsl --example gallery -- --screenshot` renders
-the stock pipelines, the minimal document, the bloom chain and the
-policy/buffer/channel proofs side by side.
+the stock pipelines, the minimal document, the bloom chain (as authored
+and tuned live), and the policy/buffer/channel proofs side by side.
 
 A pass also carries a **policy** — `per frame`, `once`, `on resize` or
 `on demand` (plan2 P10). The renderer's frame loop honours it: a pass
@@ -336,7 +344,7 @@ higher-numbered groups when a lower one is rebound.
 | 0 | `frame` | per frame | Camera, scene lighting, the instance transform buffer |
 | 1 | `material` | per material | A graph's uniform parameters, textures and samplers, all of them declared by the graph |
 | 2 | `user` | per material | Nothing wxsl binds. A material may *declare* the block it expects here; the application fills it |
-| 3 | `pass` | per pass | Whatever a pass declares it reads: the G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
+| 3 | `pass` | per pass | Whatever a pass declares it reads, then its effect's uniform parameters (ADR 0042): the G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
 
 Instance transforms share the frame group despite changing per draw, as one
 read-only storage buffer: one binding and one upload serve the whole frame,
@@ -352,7 +360,9 @@ while a graph still has to compile for either path.
 [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
 
 The pass group is no longer hand-written per pipeline: it is built from a
-pass's `reads`, in declaration order, at bindings 0..n. The deferred
+pass's `reads`, in declaration order, at bindings 0..n — then a pass's
+non-attachment writes, then one uniform block of the pass's effect
+parameters when its effect declares any (ADR 0042). The deferred
 lighting pass's G-buffer bindings are what that produces for the deferred
 pass list, and a screen effect's inputs will be what it produces later.
 

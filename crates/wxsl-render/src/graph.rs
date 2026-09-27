@@ -838,11 +838,13 @@ pub struct ResourcePool {
     slots: Vec<Slot>,
     layout: Vec<SlotDesc>,
     target: Option<TargetConfig>,
-    // Keyed on what the bind group *is* — the shapes and the physical
-    // slots — rather than on which pass asked for it: two passes that agree
-    // on both would build the identical bind group, and a pass index would
-    // go stale the moment the pass list changed.
-    bind_groups: HashMap<(Vec<PassBinding>, Vec<usize>), wgpu::BindGroup>,
+    // Keyed on what the bind group *is* — the shapes, the physical slots
+    // and, when the pass has effect parameters, its label's hash — rather
+    // than on which pass asked for it: two passes that agree on all of it
+    // would build the identical bind group, and a pass index would go
+    // stale the moment the pass list changed.
+    #[allow(clippy::type_complexity)]
+    bind_groups: HashMap<(Vec<PassBinding>, Vec<usize>, Option<u64>), wgpu::BindGroup>,
     bind_layouts: HashMap<Vec<PassBinding>, wgpu::BindGroupLayout>,
     frame: u64,
     generation: u64,
@@ -890,6 +892,16 @@ pub enum PassBinding {
         read_only: bool,
         /// The buffer's size in bytes.
         size: u64,
+    },
+    /// A uniform block of the pass's effect parameters (plan3 N4), bound
+    /// after the reads and the writes — the next binding the effect's
+    /// shader reaches. The buffer behind it is not a pooled resource: its
+    /// *contents* are host state that changes without the pass list
+    /// changing, so the caller hands the actual buffer in and it joins
+    /// this shape only as a size.
+    Uniform {
+        /// The block's size in bytes, already a multiple of 16.
+        size: u32,
     },
 }
 
@@ -1089,12 +1101,15 @@ impl RenderGraph {
     /// index), whether the pass runs this frame at all — the execution
     /// policies' hook (plan2 P10): a pass it returns `false` for is not
     /// recorded and leaves whatever its last run wrote behind, which the
-    /// scheduler's stable-storage rule makes safe. `body` issues the
-    /// actual work: the graph has opened the pass, resolved its
-    /// attachments and bound nothing, because which bind groups a draw
-    /// needs is the caller's business, not the scheduler's.
+    /// scheduler's stable-storage rule makes safe. `params` hands over the
+    /// pass's effect-parameter block — the uniform buffer and its size —
+    /// for a pass whose effect declares parameters; the graph knows
+    /// neither effects nor their buffers, so the caller resolves both.
+    /// `body` issues the actual work: the graph has opened the pass,
+    /// resolved its attachments and bound nothing, because which bind
+    /// groups a draw needs is the caller's business, not the scheduler's.
     #[allow(clippy::too_many_arguments)]
-    pub fn record<F>(
+    pub fn record<'s, F>(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1102,6 +1117,10 @@ impl RenderGraph {
         pool: &mut ResourcePool,
         imports: &[(ResourceId, &wgpu::TextureView)],
         run: &dyn Fn(usize) -> bool,
+        // The buffer a pass's parameters live in borrows from the
+        // *caller's* state, so its lifetime rides on this call's borrow of
+        // `params`, not on the pass description's.
+        params: &(dyn Fn(&PassDesc) -> Option<(&'s wgpu::Buffer, u32)> + 's),
         mut body: F,
     ) -> Result<(), RenderError>
     where
@@ -1128,7 +1147,7 @@ impl RenderGraph {
             // lighting pass samples is exactly this, and so is a screen
             // effect's input; there is nothing pass-specific left to write.
             let (pass_bindings, pass_layout, pass_bind_group) =
-                self.pass_group(device, pool, schedule, pass)?;
+                self.pass_group(device, pool, schedule, pass, params(pass))?;
 
             let color_formats: Vec<Option<wgpu::ColorTargetState>> = pass
                 .color
@@ -1258,33 +1277,15 @@ impl RenderGraph {
         }
     }
 
-    /// Build (or reuse) the pass group's layout and bind group.
-    ///
-    /// The group is the pass's declared contract in binding order: every
-    /// read (a texture or, later, a buffer), then every non-attachment
-    /// write (a compute effect's storage target). Effects declare their
-    /// inputs and outputs in the same order, which is what makes the
-    /// shader and the group meet without either knowing the other
-    /// (plan2 P4/P10).
-    #[allow(clippy::type_complexity)]
-    fn pass_group(
-        &self,
-        device: &wgpu::Device,
-        pool: &mut ResourcePool,
-        schedule: &Schedule,
-        pass: &PassDesc,
-    ) -> Result<
-        (
-            Vec<PassBinding>,
-            Option<wgpu::BindGroupLayout>,
-            Option<wgpu::BindGroup>,
-        ),
-        RenderError,
-    > {
-        if pass.reads.is_empty() && pass.writes.is_empty() {
-            return Ok((Vec::new(), None, None));
-        }
-        let mut kinds: Vec<PassBinding> = Vec::with_capacity(pass.reads.len() + pass.writes.len());
+    /// The pass group's binding shapes, in binding order: every read, then
+    /// every non-attachment write, then — when the pass's effect declares
+    /// parameters — the uniform block at the next binding. Device-free,
+    /// because a shape is data: this is what the layout, the bind group
+    /// and the pipeline caches are all keyed on.
+    fn pass_binding_kinds(&self, pass: &PassDesc, params: Option<u32>) -> Vec<PassBinding> {
+        let mut kinds: Vec<PassBinding> = Vec::with_capacity(
+            pass.reads.len() + pass.writes.len() + usize::from(params.is_some()),
+        );
         for read in &pass.reads {
             kinds.push(match self.resources[read.resource.index()].shape {
                 ResourceShape::Texture {
@@ -1315,6 +1316,42 @@ impl RenderGraph {
                 },
             });
         }
+        if let Some(size) = params {
+            kinds.push(PassBinding::Uniform { size });
+        }
+        kinds
+    }
+
+    /// Build (or reuse) the pass group's layout and bind group.
+    ///
+    /// The group is the pass's declared contract in binding order: every
+    /// read (a texture or, later, a buffer), then every non-attachment
+    /// write (a compute effect's storage target), then the pass's effect
+    /// parameters as one uniform block when it declares any. Effects
+    /// declare their inputs, outputs and parameters in the same order,
+    /// which is what makes the shader and the group meet without either
+    /// knowing the other (plan2 P4/P10, plan3 N4).
+    #[allow(clippy::type_complexity)]
+    fn pass_group(
+        &self,
+        device: &wgpu::Device,
+        pool: &mut ResourcePool,
+        schedule: &Schedule,
+        pass: &PassDesc,
+        params: Option<(&wgpu::Buffer, u32)>,
+    ) -> Result<
+        (
+            Vec<PassBinding>,
+            Option<wgpu::BindGroupLayout>,
+            Option<wgpu::BindGroup>,
+        ),
+        RenderError,
+    > {
+        let params_key = params.map(|(_, _)| wxsl_core::wxsl::stable_hash(pass.label.as_bytes()));
+        if pass.reads.is_empty() && pass.writes.is_empty() && params.is_none() {
+            return Ok((Vec::new(), None, None));
+        }
+        let kinds = self.pass_binding_kinds(pass, params.map(|(_, size)| size));
 
         let layout = pool
             .bind_layouts
@@ -1363,6 +1400,18 @@ impl RenderGraph {
                                     min_binding_size: wgpu::BufferSize::new(size),
                                 },
                             ),
+                            // The effect parameters: written by the host
+                            // between frames, read by whatever stage the
+                            // effect runs — so visible to both, unlike a
+                            // storage write which only compute may do.
+                            PassBinding::Uniform { size } => (
+                                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                                wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: wgpu::BufferSize::new(u64::from(size)),
+                                },
+                            ),
                         };
                         wgpu::BindGroupLayoutEntry {
                             binding: binding as u32,
@@ -1380,7 +1429,8 @@ impl RenderGraph {
             .clone();
 
         // Reads go to their ring slot at their history; writes to this
-        // frame's slot of what they write.
+        // frame's slot of what they write. The parameter block has no slot
+        // — its buffer came in with the pass.
         let slots: Vec<usize> = pass
             .reads
             .iter()
@@ -1394,35 +1444,46 @@ impl RenderGraph {
             .ok_or_else(|| RenderError::MissingImport {
                 resource: pass.label.clone(),
             })?;
-        let key = (kinds.clone(), slots.clone());
+        // The label in the key: two passes with the same shapes and the
+        // same slots but different parameter buffers must not share a bind
+        // group, and the label — unique per pass, the name its author
+        // knows — is what tells them apart.
+        let key = (kinds.clone(), slots.clone(), params_key);
         if let Some(existing) = pool.bind_groups.get(&key) {
             return Ok((kinds, Some(layout), Some(existing.clone())));
         }
-        let entries: Vec<wgpu::BindGroupEntry> = slots
-            .iter()
-            .enumerate()
-            .map(|(binding, slot)| {
-                // The binding's kind decides how the slot is bound — and
-                // the kind is where the pass declared it, so the two
-                // cannot disagree.
-                let resource = match kinds[binding] {
-                    PassBinding::Texture { .. } | PassBinding::StorageTexture { .. } => {
-                        wgpu::BindingResource::TextureView(pool.view(*slot))
-                    }
-                    PassBinding::Buffer { .. } => {
-                        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: pool.slot_buffer(*slot),
-                            offset: 0,
-                            size: None,
-                        })
-                    }
-                };
-                wgpu::BindGroupEntry {
-                    binding: binding as u32,
-                    resource,
+        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(kinds.len());
+        let mut slots = slots.iter();
+        for (binding, kind) in kinds.iter().enumerate() {
+            // The binding's kind decides how the entry is bound — and the
+            // kind is where the pass declared it, so the two cannot
+            // disagree. Only the parameter block binds something that did
+            // not come from a slot.
+            let resource = match *kind {
+                PassBinding::Texture { .. } | PassBinding::StorageTexture { .. } => {
+                    wgpu::BindingResource::TextureView(
+                        pool.view(*slots.next().expect("a slot per texture binding")),
+                    )
                 }
-            })
-            .collect();
+                PassBinding::Buffer { .. } => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: pool.slot_buffer(*slots.next().expect("a slot per buffer binding")),
+                    offset: 0,
+                    size: None,
+                }),
+                PassBinding::Uniform { .. } => {
+                    let (buffer, _) = params.expect("a buffer per uniform binding");
+                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer,
+                        offset: 0,
+                        size: None,
+                    })
+                }
+            };
+            entries.push(wgpu::BindGroupEntry {
+                binding: binding as u32,
+                resource,
+            });
+        }
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&pass.label),
             layout: &layout,
@@ -1458,6 +1519,25 @@ mod tests {
     fn writer(label: &str, target: ResourceId) -> PassDesc {
         PassDesc::screen(label, "deferred_lighting")
             .with_color(Attachment::clear(target, wgpu::Color::BLACK))
+    }
+
+    #[test]
+    fn an_effect_parameter_block_joins_the_group_after_the_reads_and_writes() {
+        // The descriptor's order — inputs, outputs, parameters — is the
+        // binding order, so the uniform block lands at the next binding
+        // after whatever the pass reads and writes, and its size is the
+        // layout's (plan3 N4).
+        let mut graph = RenderGraph::new(COLOR);
+        let image = graph.resource(ResourceDesc::color("image", COLOR));
+        let pass = PassDesc::screen("bloom", "bloom").with_reads([Read::current(image)]);
+
+        let plain = graph.pass_binding_kinds(&pass, None);
+        assert_eq!(plain.len(), 1, "no parameters, no block");
+        assert!(matches!(plain[0], PassBinding::Texture { .. }));
+
+        let tuned = graph.pass_binding_kinds(&pass, Some(16));
+        assert_eq!(tuned[0], plain[0], "the block must not renumber the reads");
+        assert_eq!(tuned[1], PassBinding::Uniform { size: 16 });
     }
 
     #[test]

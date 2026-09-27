@@ -193,6 +193,14 @@ impl ShaderVariants {
         let mut identity = String::from(effect.id);
         identity.push(';');
         identity.push_str(&effect_macros(effect, macros).signature());
+        // The parameter *layout* — names, types, offsets — never a value:
+        // the struct the shader reads is generated from the declaration,
+        // so a different layout is a different module, while a different
+        // default only changes what a fresh buffer starts at. This is the
+        // material parameters' rule (ADR 0023), pass-level, and it is what
+        // keeps a slider a buffer write instead of a recompile.
+        identity.push_str(";params=");
+        identity.push_str(&effect.param_layout().signature());
         // A graph-authored effect's text is not `&'static` and not implied
         // by its id: two effects registered under one id at different times
         // are two shaders, and the cache has to tell them apart by what
@@ -332,9 +340,10 @@ pub struct EffectRequest {
     pub label: String,
     /// The module path the shader is mounted at and compiled from.
     pub path: &'static str,
-    /// The shader text: the effect's own, or the lighting pass generated
-    /// for the enabled set — owned either way, so this can go to a worker
-    /// thread.
+    /// The shader text: the effect's own with the generated parameter
+    /// block prepended when it declares any, or the lighting pass
+    /// generated for the enabled set — owned either way, so this can go
+    /// to a worker thread.
     pub source: Cow<'static, str>,
     /// The macro values to bind.
     pub macros: MacroSet,
@@ -354,6 +363,16 @@ impl EffectRequest {
                 abi::LIGHTING_PASS_MODULE,
                 Cow::Owned(wxsl_core::lighting::lighting_pass_source(set, features)),
             ),
+        };
+        // The parameter block is the declaration's shadow, prepended so
+        // the module's own text reads `params.…` without stating the
+        // struct (ADR 0042). An effect with no parameters compiles
+        // byte-for-byte as it did.
+        let header = effect.params_header();
+        let source = if header.is_empty() {
+            source
+        } else {
+            Cow::Owned(format!("{header}{}", source))
         };
         let label = match effect.shader {
             EffectShader::Lighting => format!("{} ({})", effect.label, set.signature()),
@@ -461,6 +480,73 @@ fn bindings(macros: &MacroSet) -> wxsl_lang::Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_effects_variant_key_folds_the_parameter_layout_and_not_the_defaults() {
+        // The pass-level restatement of the material rule: a re-tune is a
+        // buffer write, so two descriptors under one id that differ only
+        // in a default are one variant, while a different layout is a
+        // different module (the struct the shader reads is generated from
+        // the declaration).
+        let macros = MacroSet::new();
+        let set = LightingSet::default();
+        let retuned = Effect {
+            parameters: &[
+                crate::effect::EffectParameter {
+                    name: "threshold",
+                    default: wxsl_core::node::Value::F32(0.5),
+                },
+                crate::effect::EffectParameter {
+                    name: "knee",
+                    default: wxsl_core::node::Value::F32(0.6),
+                },
+                crate::effect::EffectParameter {
+                    name: "strength",
+                    default: wxsl_core::node::Value::F32(0.85),
+                },
+            ],
+            ..crate::effect::BLOOM
+        };
+        assert_eq!(
+            ShaderVariants::effect_key(&crate::effect::BLOOM, &macros, &set, &[]),
+            ShaderVariants::effect_key(&retuned, &macros, &set, &[]),
+            "a different default must not be a different shader"
+        );
+        assert_ne!(
+            ShaderVariants::effect_key(&crate::effect::BLOOM, &macros, &set, &[]),
+            ShaderVariants::effect_key(&crate::effect::TONEMAP, &macros, &set, &[]),
+        );
+    }
+
+    #[test]
+    fn an_effects_request_carries_the_generated_parameter_block() {
+        // Prepended, not imported: one module, the struct sitting before
+        // the file's own text, and the var at the binding after the one
+        // input.
+        let request = EffectRequest::new(
+            crate::effect::BLOOM,
+            &MacroSet::new(),
+            &LightingSet::default(),
+            &[],
+        );
+        assert!(request.source.starts_with("struct bloom_params {"),);
+        assert!(request
+            .source
+            .contains("@group(3) @binding(1) var<uniform> params:"));
+        assert!(
+            request.source.contains("fn bloom_fs("),
+            "{:40}",
+            request.source
+        );
+        // And an effect with no parameters asks for no text of its own.
+        let plain = EffectRequest::new(
+            crate::effect::TONEMAP,
+            &MacroSet::new(),
+            &LightingSet::default(),
+            &[],
+        );
+        assert!(plain.source.starts_with("//! tonemap"));
+    }
 
     #[test]
     fn a_missing_module_is_reported_by_name() {

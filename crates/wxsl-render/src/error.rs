@@ -76,6 +76,18 @@ pub enum RenderError {
         /// What `wxsl-core`'s layout objected to.
         reason: String,
     },
+    /// An *effect* parameter could not be written on the pass labelled
+    /// `pass`: the pass runs no effect with parameters, or the name is
+    /// not one its descriptor declares, or the value is the wrong type.
+    /// The pass-level twin of [`RenderError::MaterialParameter`].
+    EffectParameter {
+        /// The pass that was addressed, by its label.
+        pass: String,
+        /// The parameter that was addressed.
+        name: String,
+        /// What the layout objected to, or that there was no layout.
+        reason: String,
+    },
     /// A texture or sampler was bound under a name the material's graph
     /// does not declare. Almost always a typo against the `name` setting
     /// on a `texture.*` node.
@@ -247,6 +259,9 @@ impl fmt::Display for RenderError {
             }
             RenderError::MaterialParameter { name, reason } => {
                 write!(f, "cannot set parameter `{name}`: {reason}")
+            }
+            RenderError::EffectParameter { pass, name, reason } => {
+                write!(f, "cannot set parameter `{name}` on pass `{pass}`: {reason}")
             }
             RenderError::VertexStreamLength {
                 mesh,

@@ -13,23 +13,23 @@
 //!
 //! Mounted by the `bloom` effect (`wxsl_render::effect`), whose one
 //! declared input is this file's only binding: the image, at binding 0 of
-//! the pass group. The taps are whole texels and the loads clamp to zero
-//! off the edge (WebGPU defines out-of-bounds `textureLoad`), because the
-//! pass group binds textures and no sampler — a sampler would be a second
-//! binding shape for every pass to carry for the one effect that filters.
+//! the pass group. Its three knobs — `threshold`, `knee`, `strength` —
+//! are uniforms declared by the descriptor and bound by the pass group at
+//! the next binding after the inputs, in a struct generated from that
+//! declaration (ADR 0042); this file reads `params.…` and states no
+//! struct of its own, because the declaration is the descriptor's and a
+//! second copy of it here would be drift. The kernel's *shape* stays
+//! `const` — the taps and their weights are the effect's structure, not
+//! its tuning surface. The taps are whole texels and the loads clamp to
+//! zero off the edge (WebGPU defines out-of-bounds `textureLoad`),
+//! because the pass group binds textures and no sampler — a sampler would
+//! be a second binding shape for every pass to carry for the one effect
+//! that filters.
 
 @group(3) @binding(0) var image: texture_2d<f32>;
 
-/// Luminance above which a pixel starts to glow. One, in linear radiance:
-/// diffuse white is the line, and what glows is what is brighter than a
-/// white surface fully lit — which is what "highlight" means.
-const THRESHOLD: f32 = 1.0;
-/// How far above `THRESHOLD` the ramp to "fully kept" runs.
-const KNEE: f32 = 0.6;
 /// Texel radius of the kernel's first ring; the second sits at twice it.
 const RADIUS: i32 = 4;
-/// How much of the blurred bright signal is added back.
-const STRENGTH: f32 = 0.85;
 
 /// The kernel's taps, in texels: an inner ring at `RADIUS`, an outer one
 /// at twice it, and the diagonals between — thirteen loads covering a
@@ -52,10 +52,13 @@ const WEIGHTS: array<f32, 13> = array(
 
 /// The part of `color` that glows: everything at or under the threshold
 /// contributes nothing, and the knee eases it in so a highlight crossing
-/// the line brightens the glow instead of popping it.
+/// the line brightens the glow instead of popping it. The threshold is
+/// linear radiance — diffuse white is the line, and what glows is what is
+/// brighter than a white surface fully lit, which is what "highlight"
+/// means.
 fn bright_pass(color: vec3f) -> vec3f {
     let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
-    let kept = smoothstep(THRESHOLD, THRESHOLD + KNEE, luminance);
+    let kept = smoothstep(params.threshold, params.threshold + params.knee, luminance);
     return color * kept;
 }
 
@@ -79,5 +82,5 @@ fn bloom_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         blur += bright_pass(sample) * WEIGHTS[tap + 1];
     }
     let base = textureLoad(image, pixel, 0).rgb;
-    return vec4f(base + blur * STRENGTH, 1.0);
+    return vec4f(base + blur * params.strength, 1.0);
 }

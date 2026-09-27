@@ -75,7 +75,9 @@ against (ADR 0033 documented that gap honestly: a chain failed in
   like a macro, and a parameter block wants the buffer plumbing P11
   gives graph resources. Until then a "re-tune" is a new `Effect` row
   with a different mounted source, which `EffectRegistry::add` already
-  supports by id.
+  supports by id. *(Landed since, with the plumbing P11 promised and the
+  layout machine ADR 0023 promised:
+  [ADR 0042](0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md).)*
 
 ## Consequences
 

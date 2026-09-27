@@ -224,6 +224,13 @@ facade crate's feature set, not about the workspace.
   buffer, a screen effect reads it as storage and draws it, and the
   picture's direction proves the data arrived through the pass group.
   Skips with no adapter.
+- `cargo test -p wxsl --test effect_params` — effect parameters on a real
+  device (ADR 0042): a parameter set through `set_pass_param` on the pass
+  label moves bloom's threshold at the next frame and moves it back, and
+  eleven moves leave `cache_stats().misses` and `pipeline_count()`
+  untouched; the declared defaults render as authored, and a tuned value
+  survives the pass list being replaced under the same label. Skips with
+  no adapter.
 - `cargo test -p wxsl --test semantic_channels` — the feature handshake
   end to end (ADR 0037): a material pinning `wxsl_subsurface` under a
   pipeline without the channel, a material resolved against another plan,
@@ -239,7 +246,8 @@ facade crate's feature set, not about the workspace.
   picture. Writes a PNG per path and reports how far apart they are.
 - `cargo run -p wxsl --example gallery -- --screenshot` — every pipeline
   in one command: the stock presets, the minimal document, the
-  deferred-plus-bloom chain, and the policy/buffer/channel proofs
+  deferred-plus-bloom chain (as authored and again with its parameters
+  tuned live, ADR 0042), and the policy/buffer/channel proofs
   (BRDF-LUT bake, buffer ramp, subsurface channels), one PNG each plus a
   contact sheet, or all of them live in one window without the flag. The
   fastest way to see whether a *pipeline* change (presets, effects, the
@@ -287,7 +295,14 @@ facade crate's feature set, not about the workspace.
   compiler validates wiring against `inputs`, and the descriptor-vs-shader
   contract (bindings, entries) is pinned by tests in `effect.rs`. Adding
   an effect is a row and a file, never a `PassKind` arm — `ScreenShader`
-  was deleted for exactly that reason, don't grow one back.
+  was deleted for exactly that reason, don't grow one back. Its
+  **parameters** are uniforms the descriptor declares (ADR 0042): one
+  `{ name, default }` row per knob, the layout computed by
+  `wxsl_core::resources`, the shader's struct generated from it (the file
+  reads `params.<name>` and states no struct), and the host tuning it
+  live through `Renderer::set_pass_param` on the pass label. A knob the
+  host tunes at runtime is a parameter; one that is the effect's
+  *structure* — bloom's kernel taps — stays a `const`.
 - A pass's **policy** (`wxsl_render::pass::Policy`, ADR 0035) says how
   often it runs. A non-default policy may only write stable storage —
   the scheduler checks — so a skipped pass leaves exactly its last

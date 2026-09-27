@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7 and N3 have landed — ADRs 0038, 0039, 0040 and 0041. The shipped state it starts from is
+Status: P7, N1, M7, N3 and N4 have landed — ADRs 0038 through 0042. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -22,7 +22,7 @@ earlier plans' items did.
 |---|---|---|
 | plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | P5 (pipeline canvas), ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
-| ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 | queued below as N-items with the ADR that owes them |
+| ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
 
@@ -66,12 +66,11 @@ earlier plans' items did.
   column rather than a rewrite — what the engine cannot lower to
   ES 3.0 is a short, named list, each with a fallback decided in the
   item rather than discovered in a browser console.
-* **The document vocabulary has known holes, not mysteries.** A compute
-  pass has no document node (ADR 0036 records why); an effect cannot
-  declare a second image input (`pass.screen`'s socket set is fixed);
-  effect knobs are `const`s rather than uniforms (ADR 0034 deferred them
-  pending P11's buffers — which have since landed). Each is an N-item
-  below.
+* **The document vocabulary has known holes, not mysteries.** ~~A compute
+  pass has no document node (ADR 0036 records why)~~ — closed by N3; an
+  effect cannot declare a second image input (`pass.screen`'s socket set
+  is fixed); ~~effect knobs are `const`s rather than uniforms~~ — closed
+  by N4. Each is an N-item below.
 
 ## Proposals
 
@@ -259,7 +258,7 @@ two buffer inputs stay the named mistake), and a `size` setting on
 fraction of the window spells). Both proofs are documents now; nothing in
 a gallery frame is hand-built Rust.
 
-### N4 — Effect parameters
+### N4 — Effect parameters *(landed, ADR 0042)*
 
 Bloom's `THRESHOLD` and `STRENGTH` are `const`s; a "re-tune" is a new
 descriptor row (ADR 0034 said so out loud). P11's buffers exist now, so:
@@ -277,6 +276,31 @@ descriptor row (ADR 0034 said so out loud). P11's buffers exist now, so:
 * Done when: a slider moves bloom's threshold live, no recompile,
   `cache_stats` unmoved.
 * ADR: "Effect parameters are uniforms; the descriptor declares them."
+
+**Landed as written**, with the mechanism arriving one way and the face
+waiting for its canvas. The declaration is `Effect.parameters` — name and
+default per knob, the default a `Value` that implies the type — and the
+layout is ADR 0023's uniform-layout computer with the second customer its
+own ADR said was waiting: the shader's struct is *generated* from it and
+prepended to the module at compile time, so a knob's file reads
+`params.threshold` and states no struct of its own. The variant key folds
+the layout's signature, never a value, as the plan required. Values live
+per pass, keyed by the label — the one name `mark_pass` had already
+established for addressing a pass — behind
+`Renderer::set_pass_param`/`pass_param`; the buffer rides the pass group
+as one appended `Uniform` binding, visible to compute too, so a compute
+effect can take a knob without spending ADR 0035's frame-group question.
+The slider itself has no face yet — the canvas that draws it is P5's, and
+the three calls above are everything it needs. Two things the plan did
+not name: the pass bind group's cache key grew the pass label for
+parameterized passes (two same-shaped passes with different buffers must
+not share a bind group), and the gallery's bloom documents owed an `hdr`
+`scene` target since ADR 0039 — an 8-bit intermediate clamps linear
+radiance at exactly the default threshold, so the highlight the demo is
+about could not exist until the value was honest. The GPU test moves
+bloom's threshold eleven times with `cache_stats().misses` and
+`pipeline_count()` unmoved; the gallery's `bloom-tuned` demo is the same
+document as `deferred-bloom`, one `set_pass_param` apart.
 
 ### P5 — The pipeline canvas
 
@@ -593,8 +617,9 @@ none of it knows or cares which backend is underneath.
    a graph.
 4. ~~**N3**~~ — *landed (ADR 0041)*: compute and buffers are document
    nodes, with sockets derived from the effect declaration — then
-   **N4**, effect parameters. The vocabulary the canvas will draw should
-   exist before the canvas does, for the same reason P9 ran before P3.
+   ~~**N4**~~, *landed (ADR 0042)*, effect parameters. The vocabulary the
+   canvas will draw should exist before the canvas does, for the same
+   reason P9 ran before P3.
 5. **P5** — the pipeline canvas, over a finished vocabulary.
 6. **P8** — contracts, before M8's second pipeline shape and before any
    cross-author exchange is invited.

@@ -708,6 +708,7 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
                 &mut pool,
                 &[],
                 &|_| true,
+                &|_| None,
                 |_, _| Ok(()),
             )
             .expect("records");

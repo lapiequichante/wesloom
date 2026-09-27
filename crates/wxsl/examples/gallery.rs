@@ -15,7 +15,9 @@
 //! tenth, `fxaa`, is ADR 0040's: the stock forward chain with an
 //! anti-aliasing pass appended, where *both* screen effects in it — the
 //! anti-aliaser and the display transform every other demo also presents
-//! through — are node graphs rather than shader files.
+//! through — are node graphs rather than shader files. The eleventh,
+//! `bloom-tuned`, is ADR 0042's: the same bloom chain with its parameters
+//! tuned through `set_pass_param` — a buffer write, no recompile.
 //! Nothing below touches
 //! `wxsl-render`'s source — the bloom pipeline is the shipped deferred
 //! preset's document with two nodes added and one rewired, compiled by
@@ -204,6 +206,10 @@ struct Demo {
     /// `ambient_environment` alone, and therefore the environment-BRDF
     /// table it reads (ADR 0039).
     sky: Option<(Vec3, Vec3)>,
+    /// The demo's effect-parameter overrides, as (pass label, parameter,
+    /// value) — applied through `Renderer::set_pass_param` once the pass
+    /// list is set. What an editor canvas's sliders would drive (ADR 0042).
+    params: &'static [(&'static str, &'static str, f32)],
 }
 
 fn demos() -> Vec<Demo> {
@@ -216,6 +222,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "deferred",
@@ -225,6 +232,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "single-pass",
@@ -234,6 +242,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "deferred-bloom",
@@ -245,6 +254,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 160.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "bloom-instances",
@@ -254,6 +264,22 @@ fn demos() -> Vec<Demo> {
             key_intensity: 160.0,
             features: &[],
             sky: None,
+            params: &[],
+        },
+        Demo {
+            name: "bloom-tuned",
+            blurb: "the same chain with bloom's parameters tuned live — set_pass_param \
+                    on the pass label moves threshold and strength with no recompile; \
+                    the sliders an editor canvas draws are this call",
+            pipeline: Pipeline::Document(deferred_bloom_document),
+            instances: 1,
+            key_intensity: 160.0,
+            features: &[],
+            sky: None,
+            // The threshold below the lit surface's radiance, so the whole
+            // scene glows, and the strength above one, so the glow leads —
+            // visibly not the default image, from the same document.
+            params: &[("bloom", "threshold", 0.35), ("bloom", "strength", 1.6)],
         },
         Demo {
             name: "brdf-lut",
@@ -265,6 +291,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "buffer-ramp",
@@ -276,6 +303,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "subsurface",
@@ -287,6 +315,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &["subsurface"],
             sky: None,
+            params: &[],
         },
         Demo {
             name: "ibl",
@@ -299,6 +328,7 @@ fn demos() -> Vec<Demo> {
             // specular response is visibly the *sky* rather than the
             // surface's own colour.
             sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
+            params: &[],
         },
         Demo {
             name: "fxaa",
@@ -308,6 +338,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 42.0,
             features: &[],
             sky: None,
+            params: &[],
         },
     ]
 }
@@ -503,8 +534,15 @@ fn deferred_bloom_document() -> Graph {
             .with_label("deferred material")
             .with_setting(doc::SETTING_STAGE, "gbuffer"),
     );
-    let scene_color =
-        graph.add(wxsl::core::graph::Node::new(doc::RESOURCE_COLOR).with_label("scene"));
+    // HDR on purpose: bloom thresholds *linear radiance*, and the
+    // highlight it is for is brighter than white — an 8-bit intermediate
+    // would clamp it to exactly the threshold and the glow would be a
+    // rumour. The same honesty the `linear` target before the tonemap has.
+    let scene_color = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("scene")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
     let lighting =
         graph.add(wxsl::core::graph::Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
     let bloom = graph.add(
@@ -546,7 +584,6 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     match &demo.pipeline {
         Pipeline::Stock(stock) => {
             renderer.set_pipeline(*stock);
-            Ok(())
         }
         Pipeline::Document(build) => {
             let document = build();
@@ -570,9 +607,22 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
             renderer
                 .set_graph(graph)
                 .map_err(|error| format!("the `{}` pass list does not run: {error}", demo.name))?;
-            Ok(())
         }
     }
+    // The demo's parameter overrides, through the same call an editor
+    // canvas's sliders would drive — the GPU sees them at the next frame,
+    // and nothing recompiles (ADR 0042).
+    for (pass, name, value) in demo.params {
+        renderer
+            .set_pass_param(pass, name, Value::F32(*value))
+            .map_err(|error| {
+                format!(
+                    "the `{}` demo could not tune `{name}` on `{pass}`: {error}",
+                    demo.name
+                )
+            })?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
