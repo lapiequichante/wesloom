@@ -559,7 +559,7 @@ fn the_pipeline_canvas_edits_the_pipeline_live() {
             .expect("the preset has an intermediate target");
 
         let bloom = graph.add_node(doc::PASS_SCREEN);
-        graph.set_setting(bloom, doc::SETTING_EFFECT, "bloom");
+        graph.set_setting(bloom, doc::SETTING_EFFECT, "wxsl.bloom");
         if let Some(node) = graph.node_mut(bloom) {
             node.label = Some("bloom".to_string());
         }

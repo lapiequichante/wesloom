@@ -410,7 +410,7 @@ fn hdr_chain_target(name: &str) -> ResourceDesc {
 /// the chain wrote, into the frame's own target
 /// ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
 fn display_transform(scene: ResourceId, target: TargetConfig) -> PassDesc {
-    PassDesc::screen("tonemap", "tonemap")
+    PassDesc::screen("tonemap", "wxsl.tonemap")
         .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
         .with_reads([Read::current(scene)])
 }
@@ -458,7 +458,7 @@ pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGra
             .with_depth(DepthAttachment::clear(depth, 1.0)),
     );
     graph.pass(
-        PassDesc::screen("deferred lighting", "deferred_lighting")
+        PassDesc::screen("deferred lighting", "wxsl.deferred_lighting")
             .with_color(Attachment::clear(scene, target.clear_color))
             // Bindings in `abi::GBUFFER_BASE_TARGETS` order, with depth last —
             // the order the generated lighting pass declares them in.
@@ -896,7 +896,7 @@ mod tests {
         let tonemap = &graph.passes()[abi::MAX_LIGHTS + 2];
         assert!(matches!(
             &tonemap.kind,
-            PassKind::Screen { effect } if effect == "tonemap"
+            PassKind::Screen { effect } if effect == "wxsl.tonemap"
         ));
         assert_eq!(tonemap.color[0].resource, RenderGraph::TARGET);
         assert_eq!(tonemap.reads.len(), 1, "the image the chain wrote");
@@ -987,7 +987,7 @@ mod tests {
         ));
         assert!(matches!(
             &graph.passes()[lighting].kind,
-            PassKind::Screen { effect } if effect == "deferred_lighting"
+            PassKind::Screen { effect } if effect == "wxsl.deferred_lighting"
         ));
         // The lighting pass reads every G-buffer target plus depth, and
         // those reads are what order it after the material pass.
@@ -1003,7 +1003,7 @@ mod tests {
         );
         assert!(matches!(
             &graph.passes()[tonemap].kind,
-            PassKind::Screen { effect } if effect == "tonemap"
+            PassKind::Screen { effect } if effect == "wxsl.tonemap"
         ));
         assert_eq!(
             graph.passes()[tonemap].color[0].resource,
@@ -1045,7 +1045,8 @@ mod tests {
         fn model(name: &str) -> wxsl_core::lighting::LightingModel {
             *wxsl_core::lighting::DEFAULT_MODELS
                 .iter()
-                .find(|model| model.name == name)
+                // Bare spellings resolve against the shipped package.
+                .find(|model| model.name == wxsl_core::identity::resolve(name).as_ref())
                 .expect("a shipped model")
         }
         fn cost(set: LightingSet) -> u32 {

@@ -46,7 +46,7 @@ use wxsl_render::effect::{Effect, EffectRegistry};
 ///
 /// `tonemap` replaces the shipped descriptor under the same id, which is
 /// what makes this a claim rather than a demonstration: every stock
-/// pipeline goes on naming `tonemap` and gets a graph.
+/// pipeline goes on naming `wxsl.tonemap` and gets a graph.
 pub fn registry(registry: &NodeRegistry) -> Result<EffectRegistry, CodegenError> {
     Ok(EffectRegistry::shipped()
         .with(tonemap(registry)?)
@@ -56,7 +56,7 @@ pub fn registry(registry: &NodeRegistry) -> Result<EffectRegistry, CodegenError>
 /// The display transform, as a graph: load the image, curve it, encode it.
 pub fn tonemap(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
     Effect::from_graph(
-        "tonemap",
+        "wxsl.tonemap",
         "tonemap",
         "Curve linear radiance for the display, and encode it. Authored as a graph.",
         tonemap_graph(registry),
@@ -68,7 +68,7 @@ pub fn tonemap(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
 /// image, at this pixel's uv and texel size.
 pub fn fxaa(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
     Effect::from_graph(
-        "fxaa",
+        "wxsl.fxaa",
         "FXAA",
         "Soften luminance edges without touching anything else.",
         fxaa_graph(registry),

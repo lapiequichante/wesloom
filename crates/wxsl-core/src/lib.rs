@@ -73,6 +73,7 @@ pub mod abi;
 pub mod codegen;
 pub mod error;
 pub mod graph;
+pub mod identity;
 pub mod lighting;
 pub mod macros;
 pub mod material;

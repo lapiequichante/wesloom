@@ -529,7 +529,7 @@ mod tests {
             &LightingSet::default(),
             &[],
         );
-        assert!(request.source.starts_with("struct bloom_params {"),);
+        assert!(request.source.starts_with("struct wxsl_bloom_params {"),);
         assert!(request
             .source
             .contains("@group(3) @binding(1) var<uniform> params:"));

@@ -23,6 +23,18 @@ use crate::node::{
     Domains, GenericParam, GraphDomain, NodeDefinition, SettingDef, Socket, Value, ValueType,
 };
 
+/// The revision of this ABI — and of the document vocabulary built on it —
+/// that serialized documents pin.
+///
+/// A document's `abi` field names the revision it was written against; a
+/// reader whose [`Self::REVISION`] differs refuses the document by name
+/// rather than second-guessing what its node ids, sockets or macros meant.
+/// Rename a socket, retire a node id a document can store, or change what
+/// a setting value means, and this is the number that moves. One number
+/// covers all three document kinds (node format, scene, pipeline) because
+/// they share one vocabulary and drift together.
+pub const REVISION: u32 = 1;
+
 /// Module holding [`CONTEXT_STRUCT`], [`SURFACE_STRUCT`] and
 /// [`DEFAULT_SURFACE_FN`].
 pub const SURFACE_MODULE: &str = "package::wxsl::surface";

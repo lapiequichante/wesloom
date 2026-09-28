@@ -212,7 +212,11 @@ facade crate's feature set, not about the workspace.
   lighting-into-a-resource-then-bloom document compiles and schedules,
   both spellings of "what bloom reads" agree, and the un-compilable
   chain shapes (`ImageFromPass`, an input the effect does not declare)
-  are named errors.
+  are named errors. And the **capability contract** tests (ADR 0044):
+  the setup's published capabilities, the check that reports *every*
+  scene mismatch by name, and the document-version rules — absent
+  version fields read as this build's, a newer one is refused by name,
+  saves stamp both.
 - `cargo test -p wxsl --test execution_policies` — the policies on a real
   device (ADR 0035): a `once` compute bake (the BRDF LUT) records once and
   its output is what later frames show, a pool reallocation bakes it
@@ -235,7 +239,10 @@ facade crate's feature set, not about the workspace.
   end to end (ADR 0037): a material pinning `wxsl_subsurface` under a
   pipeline without the channel, a material resolved against another plan,
   and the matched pair — each the named error or the picture it should
-  be. Skips with no adapter.
+  be. Also the load-time half of the contract (ADR 0044): a scene whose
+  material pins the channel is refused at `SceneResources::load_with_plan`
+  — before anything is built, every mismatch named — and loads under the
+  plan that carries it. Skips with no adapter.
 - `cargo test -p wxsl --features editor --test editor_frame` — drives the
   editor for several frames on a real device: that it draws, that editing
   recompiles, that a path switch changes the WGSL, that a frame of every
@@ -347,6 +354,18 @@ facade crate's feature set, not about the workspace.
   `MaterialConfig::resolve` is the only place a name becomes an id or a flag
   becomes a macro. A new per-material knob is a field there plus whatever
   `resolve` does with it — never another options struct.
+- Registry ids are **namespaced `package.name`** (`math.add`, `wxsl.bloom`,
+  `wxsl.pbr` — the first segment owns the name; `wxsl_core::identity` is
+  the rule, ADR 0044). A *registration* without a package is refused —
+  `NodeRegistry::register` and `EffectRegistry::add` panic,
+  `LightingSet::new` returns a named error — while a *document* may spell
+  shipped ids bare, which resolve against `wxsl.`. Every serialized
+  document (node format, scene, pipeline) carries `version` and `abi`:
+  absent reads as this build's, a newer one is refused by name at parse,
+  and saves stamp both. A scene is checked against the setup it will run
+  under — `RenderSetup::check`, or `SceneResources::load_with_plan`,
+  which does it before anything is built — and *every* mismatch is
+  reported, by name, not the first one.
 - Everything a pass writes is **linear radiance** until the shipped
   `tonemap` effect at the end of the chain, which curves and encodes it
   (ADR 0039). A pipeline's clear colour is linear radiance too. Don't put
@@ -404,6 +423,12 @@ facade crate's feature set, not about the workspace.
   document with two nodes added and one rewired, compiled by the public
   `compile_pipeline` — the copyable example of ADR 0034's chains and of
   "a pipeline is a document edit".
+- `crates/wxsl/examples/scene_check.rs` — the capability contract run
+  (ADR 0044): a scene document checked against the deferred setup before
+  anything is built, the mismatch named, and — with `--screenshot` — the
+  same scene loaded and rendered under the plan that carries its channel.
+  Its scene, `crates/wxsl/assets/scene_check.scene.json`, is the copyable
+  scene document, as `pbr_cube.wxsl.json` is for the node format.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it. The pipeline documents under
   `crates/wxsl-render/assets/presets/` are the same format over the

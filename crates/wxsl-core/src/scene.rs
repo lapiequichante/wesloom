@@ -29,6 +29,13 @@ use crate::graph::Graph;
 use crate::macros::MacroSet;
 use crate::material::MaterialConfig;
 
+/// The scene document's schema version, stamped into every serialized
+/// scene's `version` field and checked on load, exactly like the node
+/// format's ([`crate::graph::SCHEMA_VERSION`]). The ABI the scene's
+/// material vocabulary is written against is pinned separately, by the
+/// `abi` field, against [`crate::abi::REVISION`].
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// A whole scene: the meshes it uses, the materials on them, and where each
 /// instance sits.
 ///
@@ -37,6 +44,10 @@ use crate::material::MaterialConfig;
 /// [`Scene::validate`] is what catches an index that points nowhere.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "wire::WireScene", into = "wire::WireScene")
+)]
 pub struct Scene {
     /// Name of the scene, for a title bar or a file listing.
     #[cfg_attr(feature = "serde", serde(default))]
@@ -724,6 +735,81 @@ impl Parser<'_> {
     }
 }
 
+#[cfg(feature = "serde")]
+mod wire {
+    //! The on-disk shape of a [`super::Scene`] — the scene itself plus the
+    //! two version fields every serialized document carries. Kept separate
+    //! from the in-memory type so the version check runs in one place (the
+    //! `try_from` conversion serde calls after parsing) and the model never
+    //! carries file-format state.
+
+    use serde::{Deserialize, Serialize};
+
+    use super::{Instance, MaterialEntry, MeshEntry, Scene, SCHEMA_VERSION};
+    use crate::abi;
+    use crate::error::check_document_version;
+
+    /// What an absent `version` field means: the file was written before
+    /// versioning, and its shape is this build's.
+    fn default_version() -> u32 {
+        SCHEMA_VERSION
+    }
+
+    /// What an absent `abi` field means: the file predates the pin, and
+    /// its vocabulary is this build's.
+    fn default_abi() -> u32 {
+        crate::abi::REVISION
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) struct WireScene {
+        /// The document format version this file was written as; absent in
+        /// files from before versioning, which read as this build's.
+        #[serde(default = "default_version")]
+        pub version: u32,
+        /// The [`abi::REVISION`] the document pins.
+        #[serde(default = "default_abi")]
+        pub abi: u32,
+        #[serde(default)]
+        pub name: String,
+        #[serde(default)]
+        pub meshes: Vec<MeshEntry>,
+        #[serde(default)]
+        pub materials: Vec<MaterialEntry>,
+        #[serde(default)]
+        pub instances: Vec<Instance>,
+    }
+
+    impl From<Scene> for WireScene {
+        fn from(scene: Scene) -> Self {
+            WireScene {
+                version: SCHEMA_VERSION,
+                abi: abi::REVISION,
+                name: scene.name,
+                meshes: scene.meshes,
+                materials: scene.materials,
+                instances: scene.instances,
+            }
+        }
+    }
+
+    impl TryFrom<WireScene> for Scene {
+        // A `String`, because serde's `try_from` support turns whatever the
+        // conversion says into the parse error the caller already handles.
+        type Error = String;
+
+        fn try_from(wire: WireScene) -> Result<Self, Self::Error> {
+            check_document_version(wire.version, wire.abi, "scene")?;
+            Ok(Scene {
+                name: wire.name,
+                meshes: wire.meshes,
+                materials: wire.materials,
+                instances: wire.instances,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,5 +925,58 @@ mod tests {
         // And the tag lookup still answers, rather than indexing out of
         // bounds on a scene someone is halfway through editing.
         assert!(scene.instance_tags(&scene.instances[0]).is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod document_versions {
+    //! The scene document's version fields, under the same rules as the
+    //! node format's — absent means this build's, newer is refused by
+    //! name, saves stamp both.
+
+    use super::*;
+
+    fn scene_text(fields: &str) -> String {
+        let comma = if fields.is_empty() { "" } else { ", " };
+        format!(
+            r#"{{"name": "scene"{comma}{fields}, "meshes": [], "materials": [], "instances": []}}"#
+        )
+    }
+
+    #[test]
+    fn a_scene_without_version_fields_reads_as_this_build_wrote_it() {
+        let scene: Scene = serde_json::from_str(&scene_text("")).expect("parses");
+        assert_eq!(scene.name, "scene");
+    }
+
+    #[test]
+    fn a_newer_schema_version_is_refused_by_name() {
+        let error = serde_json::from_str::<Scene>(&scene_text(r#""version": 99, "abi": 1"#))
+            .expect_err("refused");
+        assert!(
+            error
+                .to_string()
+                .contains("scene document has schema version 99"),
+            "the refusal names the kind and both versions: {error}"
+        );
+    }
+
+    #[test]
+    fn a_scene_pinning_another_abi_is_refused_by_name() {
+        let error = serde_json::from_str::<Scene>(&scene_text(r#""version": 1, "abi": 7"#))
+            .expect_err("refused");
+        assert!(
+            error.to_string().contains("ABI revision 7"),
+            "the refusal names both revisions: {error}"
+        );
+    }
+
+    #[test]
+    fn a_saved_scene_stamps_its_version_and_abi() {
+        let text = serde_json::to_string(&Scene::new("stamped")).expect("serializes");
+        assert!(
+            text.contains(r#""version":1"#) && text.contains(r#""abi":1"#),
+            "the stamp is on the wire: {text}"
+        );
     }
 }

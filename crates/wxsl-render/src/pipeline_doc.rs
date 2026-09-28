@@ -1411,7 +1411,7 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
     let tonemap = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("tonemap")
-            .with_setting(doc::SETTING_EFFECT, "tonemap"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
     );
     let present = graph.add_node(doc::PRESENT);
     wire(&mut graph, (hdr, "color"), (head, "into"));
@@ -1656,7 +1656,7 @@ mod tests {
                 known,
             } => {
                 assert_eq!(effect, "blur");
-                assert!(known.iter().any(|id| id == "deferred_lighting"));
+                assert!(known.iter().any(|id| id == "wxsl.deferred_lighting"));
                 assert!(!node.is_empty());
             }
             other => panic!("expected an unknown-effect error, got {other:?}"),
@@ -2062,12 +2062,12 @@ mod tests {
         let lighting = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("deferred lighting")
-                .with_setting(doc::SETTING_EFFECT, "deferred_lighting"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.deferred_lighting"),
         );
         let bloom = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("bloom")
-                .with_setting(doc::SETTING_EFFECT, "bloom"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.bloom"),
         );
         let present = graph.add_node(doc::PRESENT);
         let wire = |graph: &mut Graph, from: (NodeId, &str), to: (NodeId, &str)| {
@@ -2133,7 +2133,9 @@ mod tests {
                 abi::GBUFFER_BASE_TARGETS.len() + 1
             );
             let bloom_pass = &compiled.passes()[bloom];
-            assert!(matches!(&bloom_pass.kind, PassKind::Screen { effect } if effect == "bloom"));
+            assert!(
+                matches!(&bloom_pass.kind, PassKind::Screen { effect } if effect == "wxsl.bloom")
+            );
             assert_eq!(bloom_pass.reads.len(), 1, "one image input, one read");
             assert_eq!(bloom_pass.reads[0].resource, scene_color);
             assert_eq!(bloom_pass.color.len(), 1);
@@ -2152,7 +2154,7 @@ mod tests {
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let lighting = graph.add_node(doc::PASS_SCREEN);
         let bloom =
-            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.bloom"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
             ((gbuffer, "gbuffer"), (lighting, "gbuffer")),
@@ -2179,7 +2181,7 @@ mod tests {
         let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
         let color = graph.add_node(doc::RESOURCE_COLOR);
         let bloom =
-            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.bloom"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
             ((gbuffer, "gbuffer"), (bloom, "gbuffer")),
@@ -2190,7 +2192,7 @@ mod tests {
         }
         match errors_of(&graph, &config()) {
             PipelineError::EffectInputMismatch { effect, reason, .. } => {
-                assert_eq!(effect, "bloom");
+                assert_eq!(effect, "wxsl.bloom");
                 assert!(reason.contains("G-buffer"), "{reason}");
             }
             other => panic!("expected an input mismatch, got {other:?}"),
@@ -2212,7 +2214,7 @@ mod tests {
         // target in a chain actually compiles since P4 — and the compiled
         // descriptor is the assertion, not a hand-mirrored one.
         let bloom =
-            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "bloom"));
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.bloom"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
             ((color, "color"), (bloom, "image")),
@@ -2270,12 +2272,13 @@ mod tests {
                 .with_setting(doc::SETTING_BYTES, "1024"),
         );
         let fill = graph.add(
-            Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill ramp"),
+            Node::new(format!("{}wxsl.ramp_fill", doc::PASS_COMPUTE_PREFIX))
+                .with_label("fill ramp"),
         );
         let view = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("show ramp")
-                .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.ramp_view"),
         );
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
@@ -2295,9 +2298,9 @@ mod tests {
     fn ramp_graph() -> RenderGraph {
         let mut graph = RenderGraph::new(target().format);
         let ramp = graph.resource(ResourceDesc::buffer("ramp", 1024));
-        graph.pass(PassDesc::compute("fill ramp", "ramp_fill").with_write(ramp));
+        graph.pass(PassDesc::compute("fill ramp", "wxsl.ramp_fill").with_write(ramp));
         graph.pass(
-            PassDesc::screen("show ramp", "ramp_view")
+            PassDesc::screen("show ramp", "wxsl.ramp_view")
                 .with_color(Attachment::clear(
                     RenderGraph::TARGET,
                     config().target.clear_color,
@@ -2343,7 +2346,7 @@ mod tests {
         let known = crate::effect::EffectRegistry::shipped();
         match compile(&document, &registry, &known, &config()) {
             Err(PipelineError::UnknownEffect { effect, .. }) => {
-                assert_eq!(effect, "ramp_fill");
+                assert_eq!(effect, "wxsl.ramp_fill");
             }
             other => panic!("expected an unknown effect, got {other:?}"),
         }
@@ -2360,12 +2363,13 @@ mod tests {
                 .with_setting(doc::SETTING_BYTES, "4096")
                 .with_setting(doc::SETTING_HISTORY, "1"),
         );
-        let fill = graph
-            .add(Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill"));
+        let fill = graph.add(
+            Node::new(format!("{}wxsl.ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill"),
+        );
         let view = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("view")
-                .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.ramp_view"),
         );
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
@@ -2428,14 +2432,14 @@ mod tests {
                 .with_setting(doc::SETTING_SIZE, "64x64"),
         );
         let bake = graph.add(
-            Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX))
+            Node::new(format!("{}wxsl.brdf_lut", doc::PASS_COMPUTE_PREFIX))
                 .with_label("lut bake")
                 .with_setting(doc::SETTING_POLICY, "once"),
         );
         let view = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("lut view")
-                .with_setting(doc::SETTING_EFFECT, "lut_view"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.lut_view"),
         );
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
@@ -2487,10 +2491,11 @@ mod tests {
         let view = graph.add(
             Node::new(doc::PASS_SCREEN)
                 .with_label("view")
-                .with_setting(doc::SETTING_EFFECT, "lut_view"),
+                .with_setting(doc::SETTING_EFFECT, "wxsl.lut_view"),
         );
-        let bake = graph
-            .add(Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX)).with_label("bake"));
+        let bake = graph.add(
+            Node::new(format!("{}wxsl.brdf_lut", doc::PASS_COMPUTE_PREFIX)).with_label("bake"),
+        );
         let present = graph.add_node(doc::PRESENT);
         // The view reads the lut and presents; the bake's `lut` write is
         // wired from the *screen pass's* colour output.

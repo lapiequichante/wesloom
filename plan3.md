@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4 and P5 have landed — ADRs 0038 through 0043. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5 and P8 have landed — ADRs 0038 through 0044. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -21,7 +21,7 @@ earlier plans' items did.
 | From | Still open | Reshaped by |
 |---|---|---|
 | plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
-| plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, P8 (identity/contracts) | P10–P12 — the vocabulary they were waiting for exists |
+| plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, ~~P8 (identity/contracts)~~ — landed, ADR 0044 | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
 ## What changed shape since the plans were written
@@ -344,7 +344,7 @@ exactly one `bloom` pass longer; the `editor --pipeline --screenshot`
 run shows the whole thing. The `P` key and a toolbar toggle switch
 canvases.
 
-### P8 — Identity and contracts
+### P8 — Identity and contracts *(landed, ADR 0044)*
 
 Namespaced ids (`package::name`) for nodes, effects and models, with the
 registries rejecting un-namespaced registrations from outside the shipped
@@ -361,6 +361,32 @@ are just not published as one value.
 * Done when: a scene authored against a pipeline whose plan lacks its
   feature says so at load, by name, before anything is built.
 * ADR: "Identity, versions, and the capability check."
+
+Landed as written, with one spelling decision and one honest break. The
+namespace separator is the *dot*, not `::` — node ids were already dotted
+(`math.add`), `::` is WXSL module-path syntax, and a second `::` layer
+would collide with the first — so the shipped effects and models moved
+under `wxsl.` (`wxsl.bloom`, `wxsl.pbr`) while a *document* may still
+spell shipped ids bare, resolving against the package, which keeps every
+document already written meaningful. Registration is where namespacing is
+enforced: the registries refuse an un-namespaced id, and the rule's first
+customer was the shipped set itself — the pipeline vocabulary's `present`
+node became `output.present`, so a pipeline document saved by the canvas
+before this item needs that one rename. Every serialized document (the
+node format and pipeline documents share one wire shape; the scene has its
+own) now carries `version` and `abi` — absent reads as this build's, a
+newer one is refused by name at parse, saves stamp both, and the check
+lives in the wire types' `try_from`, so no parse call site changed. The
+capability metadata is `wxsl_render::setup`: `RenderSetup` (pipeline
+document + effects + config — the three facts a renderer is given),
+`capabilities()` publishing stages/plan/lighting/effects as one value,
+and `check(&scene, &registry)` returning *every* `Incompatibility` by
+name — the shared `check_scene` runs inside `SceneResources::load_with_plan`
+before the first mesh upload, as a `LoadError::Incompatible` listing. The
+done-when is a GPU test in `semantic_channels`: the scene is refused at
+load, by name, and loads under the plan that carries the channel;
+`cargo run -p wxsl --example scene_check -- --screenshot` runs the whole
+item from a command line.
 
 ### N5 — Bake passes (plan.md's M9)
 
@@ -645,8 +671,8 @@ none of it knows or cares which backend is underneath.
    finished vocabulary — a mode, not an editor; the document compiles
    onto the preview's renderer on every edit, and the bloom drop on the
    deferred preset is a GPU test.
-6. **P8** — contracts, before M8's second pipeline shape and before any
-   cross-author exchange is invited.
+6. ~~**P8**~~ — *landed (ADR 0044)*: contracts, before M8's second pipeline
+   shape and before any cross-author exchange is invited.
 7. **N5** (bake), **N2** (motion/TAA) — independent of each other; bake
    reuses the policy machinery, motion adds the Velocity stage.
 8. **M8** (peeling) — the largest remaining render feature, and the one

@@ -24,6 +24,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::identity;
 use crate::macros::MacroDef;
 use crate::wxsl::{stable_hash, write_f32, ModulePath, WxslIdent};
 
@@ -1920,7 +1921,23 @@ impl NodeRegistry {
     }
 
     /// Register `def`, returning the definition it replaced, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `def`'s id carries no package segment: registry ids are
+    /// `package.name` (the shipped vocabulary's packages are its
+    /// categories, `math.add`), and an un-namespaced registration is how
+    /// two libraries' nodes end up unable to share a registry. See
+    /// [`crate::identity`]. Registering over an existing id is fine — the
+    /// previous definition is returned, and replacing one is the supported
+    /// way to override the shipped set.
     pub fn register(&mut self, def: NodeDefinition) -> Option<Arc<NodeDefinition>> {
+        assert!(
+            identity::is_namespaced(&def.id),
+            "node definition `{}` has no package segment — ids are `package.name` \
+             (e.g. `math.add`); put it in a package of its own",
+            def.id,
+        );
         self.defs.insert(def.id.clone(), Arc::new(def))
     }
 
@@ -1929,7 +1946,8 @@ impl NodeRegistry {
     /// # Panics
     ///
     /// Panics on a duplicate id: two definitions claiming the same name would
-    /// make a serialized graph's meaning depend on registration order.
+    /// make a serialized graph's meaning depend on registration order. Also
+    /// panics under [`Self::register`]'s rule: an id must be namespaced.
     pub fn register_all(&mut self, defs: impl IntoIterator<Item = NodeDefinition>) {
         for def in defs {
             let id = def.id.clone();

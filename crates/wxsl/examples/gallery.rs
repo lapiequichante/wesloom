@@ -361,7 +361,11 @@ fn fxaa_document() -> Graph {
     let tonemap = document
         .nodes()
         .find(|(_, node)| {
-            node.settings.get(doc::SETTING_EFFECT).map(String::as_str) == Some("tonemap")
+            node.settings
+                .get(doc::SETTING_EFFECT)
+                .is_some_and(|spelled| {
+                    wxsl::core::identity::resolve(spelled).as_ref() == "wxsl.tonemap"
+                })
         })
         .map(|(id, _)| id)
         .expect("every stock document ends in the tonemap pass");
@@ -379,7 +383,7 @@ fn fxaa_document() -> Graph {
     let fxaa = document.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("fxaa")
-            .with_setting(doc::SETTING_EFFECT, "fxaa"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.fxaa"),
     );
     document.disconnect(&registry, &SocketRef::new(present, "surface"));
     for (from, to) in [
@@ -408,14 +412,14 @@ fn brdf_lut_document() -> Graph {
             .with_setting(doc::SETTING_SIZE, "64x64"),
     );
     let bake = document.add(
-        wxsl::core::graph::Node::new(format!("{}brdf_lut", doc::PASS_COMPUTE_PREFIX))
+        wxsl::core::graph::Node::new(format!("{}wxsl.brdf_lut", doc::PASS_COMPUTE_PREFIX))
             .with_label("lut bake")
             .with_setting(doc::SETTING_POLICY, "once"),
     );
     let view = document.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("lut view")
-            .with_setting(doc::SETTING_EFFECT, "lut_view"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.lut_view"),
     );
     let present = document.add_node(doc::PRESENT);
     for (from, to) in [
@@ -443,13 +447,13 @@ fn buffer_ramp_document() -> Graph {
             .with_setting(doc::SETTING_BYTES, "1024"),
     );
     let fill = document.add(
-        wxsl::core::graph::Node::new(format!("{}ramp_fill", doc::PASS_COMPUTE_PREFIX))
+        wxsl::core::graph::Node::new(format!("{}wxsl.ramp_fill", doc::PASS_COMPUTE_PREFIX))
             .with_label("fill ramp"),
     );
     let view = document.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("show ramp")
-            .with_setting(doc::SETTING_EFFECT, "ramp_view"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.ramp_view"),
     );
     let present = document.add_node(doc::PRESENT);
     for (from, to) in [
@@ -502,7 +506,7 @@ fn present_through_tonemap(graph: &mut Graph, head: NodeId, present: NodeId) {
     let tonemap = graph.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("tonemap")
-            .with_setting(doc::SETTING_EFFECT, "tonemap"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
     );
     graph.disconnect(
         &registry,
@@ -548,7 +552,7 @@ fn deferred_bloom_document() -> Graph {
     let bloom = graph.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("bloom")
-            .with_setting(doc::SETTING_EFFECT, "bloom"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.bloom"),
     );
     let present = graph.add_node(doc::PRESENT);
     let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {

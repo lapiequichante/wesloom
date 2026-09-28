@@ -217,7 +217,10 @@ impl Options {
                 wxsl::core::lighting::DEFAULT_MODELS
                     .iter()
                     .copied()
-                    .find(|model| model.name == name.as_str())
+                    // Bare spellings resolve against the shipped package.
+                    .find(|model| {
+                        model.name == wxsl::core::identity::resolve(name.as_str()).as_ref()
+                    })
                     .ok_or_else(|| {
                         format!(
                             "unknown lighting model `{name}` (shipped: {})",
@@ -408,7 +411,11 @@ fn without_tonemap(stock: StockPipeline) -> Graph {
     let tonemap = document
         .nodes()
         .find(|(_, node)| {
-            node.settings.get(doc::SETTING_EFFECT).map(String::as_str) == Some("tonemap")
+            node.settings
+                .get(doc::SETTING_EFFECT)
+                .is_some_and(|spelled| {
+                    wxsl::core::identity::resolve(spelled).as_ref() == "wxsl.tonemap"
+                })
         })
         .map(|(id, _)| id)
         .expect("every stock document ends in the tonemap pass");

@@ -55,6 +55,7 @@ use core::fmt;
 use std::fmt::Write as _;
 
 use crate::abi::{self, GBufferPrecision, GBufferTarget};
+use crate::identity;
 use crate::wxsl::stable_hash;
 
 /// The field name of the G-buffer target carrying the dispatch id.
@@ -358,6 +359,15 @@ pub enum LightingError {
         /// The contested name.
         name: String,
     },
+    /// An entry's name carries no package segment. Names are
+    /// `package.name` (`wxsl.pbr`); a set assembled from more than one
+    /// library's models cannot tell two bare `toon`s apart, so a
+    /// registration says who owns the name
+    /// ([`crate::identity`], ADR 0044).
+    UnnamespacedModel {
+        /// The name that was refused.
+        name: String,
+    },
     /// The set is empty, which no pipeline can draw with.
     Empty,
     /// A material names a model the set does not enable.
@@ -402,6 +412,12 @@ impl fmt::Display for LightingError {
             LightingError::DuplicateName { name } => {
                 write!(f, "two lighting models are named `{name}`")
             }
+            LightingError::UnnamespacedModel { name } => write!(
+                f,
+                "lighting model `{name}` has no package segment — names are \
+                 `package.name` (the shipped models live under `wxsl.`); put it \
+                 in a package of its own"
+            ),
             LightingError::Empty => write!(f, "a lighting model set cannot be empty"),
             LightingError::UnknownModel { name } => {
                 write!(f, "no lighting model named `{name}` is enabled")
@@ -464,6 +480,13 @@ impl LightingSet {
             return Err(LightingError::Empty);
         }
         models.sort_by_key(|model| model.id);
+        for model in &models {
+            if !identity::is_namespaced(model.name) {
+                return Err(LightingError::UnnamespacedModel {
+                    name: model.name.to_string(),
+                });
+            }
+        }
         for (index, model) in models.iter().enumerate() {
             if models
                 .iter()
@@ -526,9 +549,15 @@ impl LightingSet {
         self.models.iter().find(|model| model.id == id)
     }
 
-    /// The model named `name`, as a scene document spells it.
+    /// The model named `name`, as a scene document spells it: a name with
+    /// a package is taken as written, a bare one resolves against the
+    /// shipped package — `pbr` means `wxsl.pbr`, which is what every
+    /// scene written before namespacing meant.
     pub fn by_name(&self, name: &str) -> Option<&LightingModel> {
-        self.models.iter().find(|model| model.name == name)
+        let resolved = identity::resolve(name);
+        self.models
+            .iter()
+            .find(|model| model.name == resolved.as_ref())
     }
 
     /// The model a material gets when it does not name one: the lowest id.
@@ -615,7 +644,7 @@ impl LightingSet {
 pub const DEFAULT_MODELS: &[LightingModel] = &[
     LightingModel {
         id: 0,
-        name: "lambert",
+        name: "wxsl.lambert",
         module: "package::lighting::models::lambert",
         function: "lighting_lambert",
         extra: None,
@@ -623,7 +652,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
     },
     LightingModel {
         id: 1,
-        name: "phong",
+        name: "wxsl.phong",
         module: "package::lighting::models::phong",
         function: "lighting_phong",
         extra: None,
@@ -631,7 +660,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
     },
     LightingModel {
         id: 2,
-        name: "pbr",
+        name: "wxsl.pbr",
         module: "package::lighting::models::pbr",
         function: "lighting_pbr",
         extra: None,
@@ -639,7 +668,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
     },
     LightingModel {
         id: 3,
-        name: "clearcoat",
+        name: "wxsl.clearcoat",
         module: "package::lighting::models::clearcoat",
         function: "lighting_clearcoat",
         extra: Some(ModelExtra {
@@ -1307,21 +1336,34 @@ mod tests {
 
     #[test]
     fn a_set_is_sorted_by_id_and_rejects_collisions() {
-        let set = LightingSet::new([model(2, "b"), model(0, "a")]).unwrap();
+        let set = LightingSet::new([model(2, "lib.b"), model(0, "lib.a")]).unwrap();
         assert_eq!(
             set.models().iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![0, 2]
         );
-        assert_eq!(set.default_model().name, "a", "lowest id is the default");
+        assert_eq!(
+            set.default_model().name,
+            "lib.a",
+            "lowest id is the default"
+        );
 
         assert_eq!(
-            LightingSet::new([model(1, "a"), model(1, "b")]).unwrap_err(),
+            LightingSet::new([model(1, "lib.a"), model(1, "lib.b")]).unwrap_err(),
             LightingError::DuplicateId { id: 1 }
         );
         assert_eq!(
-            LightingSet::new([model(0, "same"), model(1, "same")]).unwrap_err(),
+            LightingSet::new([model(0, "lib.same"), model(1, "lib.same")]).unwrap_err(),
             LightingError::DuplicateName {
-                name: "same".to_string()
+                name: "lib.same".to_string()
+            }
+        );
+        // A name with no package is refused at registration: a set
+        // assembled from more than one library cannot tell two bare
+        // `toon`s apart (ADR 0044).
+        assert_eq!(
+            LightingSet::new([model(0, "toon")]).unwrap_err(),
+            LightingError::UnnamespacedModel {
+                name: "toon".to_string()
             }
         );
         assert_eq!(LightingSet::new([]).unwrap_err(), LightingError::Empty);
@@ -1423,7 +1465,7 @@ mod tests {
         // different model's target stays zeroed.
         let coat = DEFAULT_MODELS
             .iter()
-            .find(|m| m.name == "clearcoat")
+            .find(|m| m.name == "wxsl.clearcoat")
             .unwrap();
         let coated = pack_gbuffer(coat, &set, &[]);
         // The pair-precision target takes the leading components of the
@@ -1536,7 +1578,12 @@ mod tests {
                 second,
             }) => {
                 assert_eq!(field, "clearcoat");
-                assert_eq!(first, ChannelSource::Model { name: "clearcoat" });
+                assert_eq!(
+                    first,
+                    ChannelSource::Model {
+                        name: "wxsl.clearcoat"
+                    }
+                );
                 assert_eq!(second, ChannelSource::Feature { name: "subsurface" });
             }
             other => panic!("expected a channel collision, got {other:?}"),

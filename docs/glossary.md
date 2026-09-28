@@ -181,6 +181,18 @@ License 3.0.0 (not MIT/Apache). `wxsl` does not depend on or port it —
 see [ADR 0007](adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
 for why `wxsl-stdlib` is an original library instead.
 
+**Package** — the first, owning segment of a registry id: `math.add`,
+`wxsl.bloom`, `wxsl.pbr`. The shipped effects and models live under
+`wxsl.`; a document may spell shipped ids bare (`bloom` means
+`wxsl.bloom`), a registration may not. See
+[ADR 0044](adr/0044-identity-versions-and-the-capability-check.md).
+
+**Capability check** — the device-free comparison of a scene against the
+setup it will run under (`wxsl_render::setup`): a setup publishes its
+capabilities — stages, channel plan, lighting set, effects — and the check
+reports every mismatch by name, at load, before anything is built. See
+[ADR 0044](adr/0044-identity-versions-and-the-capability-check.md).
+
 **ADR** — Architecture Decision Record; see `docs/adr/README.md`.
 
 **Facade crate** — `wxsl`, the crate most consumers depend on directly;

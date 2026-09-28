@@ -1,4 +1,6 @@
 {
+  "version": 1,
+  "abi": 1,
   "name": "forward",
   "domain": "document",
   "nodes": [
@@ -44,13 +46,13 @@
       "id": 8,
       "def": "pass.screen",
       "settings": {
-        "effect": "tonemap"
+        "effect": "wxsl.tonemap"
       },
       "label": "tonemap"
     },
     {
       "id": 9,
-      "def": "present"
+      "def": "output.present"
     }
   ],
   "edges": [

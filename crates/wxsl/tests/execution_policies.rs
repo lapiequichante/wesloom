@@ -182,7 +182,7 @@ fn the_document_policy_setting_reaches_the_pass_list() {
     let lighting = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("lighting")
-            .with_setting(doc::SETTING_EFFECT, "deferred_lighting"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.deferred_lighting"),
     );
     let stable = graph.add(
         Node::new(doc::RESOURCE_COLOR)
@@ -192,13 +192,13 @@ fn the_document_policy_setting_reaches_the_pass_list() {
     let once = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("once view")
-            .with_setting(doc::SETTING_EFFECT, "lut_view")
+            .with_setting(doc::SETTING_EFFECT, "wxsl.lut_view")
             .with_setting(doc::SETTING_POLICY, "once"),
     );
     let every = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("every frame")
-            .with_setting(doc::SETTING_EFFECT, "lut_view"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.lut_view"),
     );
     let present = graph.add_node(doc::PRESENT);
     for (from, to) in [

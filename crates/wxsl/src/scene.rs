@@ -23,6 +23,7 @@ use wxsl_render::draw::{DrawItem, DrawList, InstanceAttributes};
 use wxsl_render::material::Material;
 use wxsl_render::mesh::Mesh;
 use wxsl_render::renderer::Renderer;
+use wxsl_render::setup::{check_scene, Incompatibility};
 use wxsl_render::RenderError;
 use wxsl_render::{glam, wgpu};
 
@@ -97,6 +98,11 @@ impl SceneResources {
     /// generated for (plan2 P12, ADR 0037). The renderer must be running
     /// the same pair — `set_lighting` and `set_features` — and a material
     /// resolved against another plan is a named error at the first frame.
+    ///
+    /// The capability check ([`check_scene`], ADR 0044) runs before
+    /// anything is built: every way the scene does not fit the plan is
+    /// returned by name, so a scene whose second material also mismatches
+    /// is refused once, completely, with no mesh uploaded on its behalf.
     pub fn load_with_plan(
         device: &wgpu::Device,
         scene: &Scene,
@@ -108,6 +114,10 @@ impl SceneResources {
         let invalid = scene.validate();
         if !invalid.is_empty() {
             return Err(LoadError::Invalid(invalid));
+        }
+        let incompatible = check_scene(scene, registry, lighting, features);
+        if !incompatible.is_empty() {
+            return Err(LoadError::Incompatible(incompatible));
         }
 
         let mut meshes = Vec::with_capacity(scene.meshes.len());
@@ -315,6 +325,11 @@ fn load_file(
 pub enum LoadError {
     /// The document names indices that do not exist.
     Invalid(Vec<SceneError>),
+    /// The scene does not fit the plan it was loaded under — a feature a
+    /// material pins that the plan does not carry, a model the lighting
+    /// set does not enable — every mismatch named, before anything built
+    /// (ADR 0044).
+    Incompatible(Vec<Incompatibility>),
     /// A material's graph would not compile.
     Material {
         /// Which material.
@@ -344,6 +359,13 @@ impl core::fmt::Display for LoadError {
                 }
                 Ok(())
             }
+            LoadError::Incompatible(incompatibilities) => {
+                writeln!(f, "the scene does not fit this pipeline:")?;
+                for incompatibility in incompatibilities {
+                    writeln!(f, "  {incompatibility}")?;
+                }
+                Ok(())
+            }
             LoadError::Material { material, error } => {
                 write!(f, "cannot compile material `{material}`: {error}")
             }
@@ -361,7 +383,7 @@ impl std::error::Error for LoadError {
             LoadError::Material { error, .. }
             | LoadError::Bindings { error, .. }
             | LoadError::Render(error) => Some(error),
-            LoadError::Invalid(_) => None,
+            LoadError::Invalid(_) | LoadError::Incompatible(_) => None,
         }
     }
 }

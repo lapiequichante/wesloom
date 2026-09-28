@@ -16,7 +16,9 @@ use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::{NodeRegistry, Value, ValueType};
 use wxsl::render::gpu::OffscreenTarget;
 use wxsl::render::material::MaterialConfig;
+use wxsl::render::setup::Incompatibility;
 use wxsl::render::{DrawItem, Material, RenderError, TargetConfig};
+use wxsl::scene::LoadError;
 
 mod probe;
 
@@ -125,4 +127,68 @@ fn a_feature_pinning_material_is_matched_or_named() {
         centre[0] > 20 || centre[1] > 20 || centre[2] > 20,
         "the surface shades: {centre:?}"
     );
+}
+
+/// The load-time half of the same contract
+/// ([ADR 0044](../../../docs/adr/0044-identity-versions-and-the-capability-check.md)):
+/// a scene authored against a plan is checked before anything is built, so
+/// a feature its material pins but the plan does not carry is refused at
+/// load, by name — not discovered one material per attempt at the compile
+/// step, and not at the first frame.
+#[test]
+fn a_scene_that_needs_a_missing_channel_says_so_at_load() {
+    let Some(gpu) = gpu() else { return };
+    let registry: NodeRegistry = wxsl::stdlib::registry();
+    let graph = probe::probe_graph(
+        &registry,
+        ValueType::F32,
+        Value::F32(0.375),
+        &declare_as_parameter,
+    );
+
+    let mut scene = wxsl::core::scene::Scene::new("subsurface");
+    scene.add_mesh(wxsl::core::scene::MeshEntry::new(
+        "cube",
+        wxsl::core::scene::MeshSource::Cube { size: 1.0 },
+    ));
+    let mut paint = wxsl::core::scene::MaterialEntry::new("skin", graph);
+    paint.config.macros = subsurface_macros();
+    scene.add_material(paint);
+    scene.add_instance(wxsl::core::scene::Instance::new(0, 0));
+
+    let lighting = wxsl::core::lighting::LightingSet::default();
+
+    // The plan without the channel: the whole scene is refused at once.
+    let Err(error) = wxsl::scene::SceneResources::load_with_plan(
+        &gpu.device,
+        &scene,
+        &registry,
+        None,
+        &lighting,
+        &[],
+    ) else {
+        panic!("expected the load to refuse the scene; it loaded instead");
+    };
+    let LoadError::Incompatible(found) = error else {
+        panic!("expected the mismatch to be reported, got {error}");
+    };
+    assert_eq!(found.len(), 1, "one mismatch, named completely: {found:?}");
+    assert!(matches!(
+        &found[0],
+        Incompatibility::Feature { material, feature, .. }
+            if material == "skin" && feature == &"subsurface"
+    ));
+
+    // The same scene under the plan that carries the channel loads.
+    let features =
+        wxsl::core::lighting::feature_requests(&["subsurface"]).expect("subsurface ships");
+    wxsl::scene::SceneResources::load_with_plan(
+        &gpu.device,
+        &scene,
+        &registry,
+        None,
+        &lighting,
+        &features,
+    )
+    .expect("the matched scene loads, and only now builds");
 }

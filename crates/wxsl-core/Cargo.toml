@@ -12,6 +12,9 @@ license.workspace = true
 [dependencies]
 serde = { workspace = true, optional = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [features]
 default = ["serde"]
 # Serialization of the graph model: the node format graphs are saved in, and

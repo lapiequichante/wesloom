@@ -99,8 +99,10 @@ pub const PASS_SCREEN: &str = "pass.screen";
 /// [`crate::node::NodeRegistry`] holds the static vocabulary; the
 /// document compiler's side supplies the generated rows beside it.
 pub const PASS_COMPUTE_PREFIX: &str = "pass.compute.";
-/// Node id of `present`, the document's terminal.
-pub const PRESENT: &str = "present";
+/// Node id of `present`, the document's terminal — named into the
+/// `output` package like the ABI's own outputs, every registry id carrying
+/// a package segment ([`crate::identity`], ADR 0044).
+pub const PRESENT: &str = "output.present";
 
 /// Every node id the shipped vocabulary defines, in registry order. The
 /// generated `pass.compute.<effect>` rows are not listed: they exist per
@@ -348,7 +350,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 SETTING_EFFECT,
                 "Effect",
                 "Which screen effect the pass runs.",
-                "deferred_lighting",
+                "wxsl.deferred_lighting",
             ))
             .setting(text_setting(
                 SETTING_POLICY,

@@ -833,7 +833,7 @@ mod tests {
         assert_eq!(bloom.id, doc::PASS_SCREEN);
         assert_eq!(
             bloom.preset,
-            Some((doc::SETTING_EFFECT.to_string(), "bloom".to_string())),
+            Some((doc::SETTING_EFFECT.to_string(), "wxsl.bloom".to_string())),
             "the row arrives with its effect named"
         );
 

@@ -45,7 +45,7 @@ fn bloom_document() -> Graph {
     let bloom = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("bloom")
-            .with_setting(doc::SETTING_EFFECT, "bloom"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.bloom"),
     );
     let linear = graph.add(
         Node::new(doc::RESOURCE_COLOR)
@@ -55,7 +55,7 @@ fn bloom_document() -> Graph {
     let tonemap = graph.add(
         Node::new(doc::PASS_SCREEN)
             .with_label("tonemap")
-            .with_setting(doc::SETTING_EFFECT, "tonemap"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
     );
     let present = graph.add_node(doc::PRESENT);
     let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {

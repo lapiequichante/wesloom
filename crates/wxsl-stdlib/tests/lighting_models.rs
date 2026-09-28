@@ -77,7 +77,8 @@ fn compile_generated_with(
 fn model(name: &str) -> lighting::LightingModel {
     *lighting::DEFAULT_MODELS
         .iter()
-        .find(|model| model.name == name)
+        // Bare spellings resolve against the shipped package.
+        .find(|model| model.name == wxsl_core::identity::resolve(name).as_ref())
         .unwrap_or_else(|| panic!("no shipped model named {name}"))
 }
 
@@ -275,7 +276,7 @@ fn the_generated_lighting_pass_compiles_with_a_feature_channel() {
     let packed = lighting::pack_gbuffer(
         lighting::DEFAULT_MODELS
             .iter()
-            .find(|model| model.name == "pbr")
+            .find(|model| model.name == "wxsl.pbr")
             .expect("the default model"),
         &lighting::LightingSet::default(),
         &features,

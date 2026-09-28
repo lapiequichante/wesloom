@@ -32,9 +32,9 @@ fn a_compute_written_buffer_reaches_a_screen_pass_through_the_pass_group() {
 
     let mut graph = RenderGraph::new(target.format());
     let ramp = graph.resource(ResourceDesc::buffer("ramp", 256 * 4));
-    graph.pass(PassDesc::compute("fill ramp", "ramp_fill").with_write(ramp));
+    graph.pass(PassDesc::compute("fill ramp", "wxsl.ramp_fill").with_write(ramp));
     graph.pass(
-        PassDesc::screen("show ramp", "ramp_view")
+        PassDesc::screen("show ramp", "wxsl.ramp_view")
             .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
             .with_reads([Read::current(ramp)]),
     );
@@ -94,7 +94,7 @@ fn the_buffer_ramp_compiles_from_a_document_and_reaches_the_screen() {
     );
     let fill = document.add(
         wxsl::core::graph::Node::new(format!(
-            "{}ramp_fill",
+            "{}wxsl.ramp_fill",
             wxsl::core::pipeline::PASS_COMPUTE_PREFIX
         ))
         .with_label("fill ramp"),
@@ -102,7 +102,7 @@ fn the_buffer_ramp_compiles_from_a_document_and_reaches_the_screen() {
     let view = document.add(
         wxsl::core::graph::Node::new(wxsl::core::pipeline::PASS_SCREEN)
             .with_label("show ramp")
-            .with_setting(wxsl::core::pipeline::SETTING_EFFECT, "ramp_view"),
+            .with_setting(wxsl::core::pipeline::SETTING_EFFECT, "wxsl.ramp_view"),
     );
     let present = document.add_node(wxsl::core::pipeline::PRESENT);
     for (from, to) in [

@@ -239,12 +239,20 @@ impl Node {
     }
 }
 
+/// The node format's schema version — the same wire shape also carries the
+/// pipeline documents, so one number covers both. Stamped into every
+/// serialized graph's `version` field and checked on load (a *newer*
+/// version than this build knows is a named parse error); the ABI a
+/// document's vocabulary is written against is pinned separately, by the
+/// `abi` field, against [`crate::abi::REVISION`].
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// A typed, acyclic shader node graph.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(from = "wire::WireGraph", into = "wire::WireGraph")
+    serde(try_from = "wire::WireGraph", into = "wire::WireGraph")
 )]
 pub struct Graph {
     name: String,
@@ -2633,8 +2641,24 @@ mod wire {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{AttributeDecl, Edge, Graph, GraphDomain, Node, NodeId, UserBlockDecl};
+    use super::{
+        AttributeDecl, Edge, Graph, GraphDomain, Node, NodeId, UserBlockDecl, SCHEMA_VERSION,
+    };
+    use crate::abi;
+    use crate::error::check_document_version;
     use crate::macros::MacroSet;
+
+    /// What an absent `version` field means: the file was written before
+    /// versioning, and its shape is this build's.
+    fn default_version() -> u32 {
+        super::SCHEMA_VERSION
+    }
+
+    /// What an absent `abi` field means: the file predates the pin, and
+    /// its vocabulary is this build's.
+    fn default_abi() -> u32 {
+        crate::abi::REVISION
+    }
 
     #[derive(Serialize, Deserialize)]
     pub(super) struct WireNode {
@@ -2645,6 +2669,14 @@ mod wire {
 
     #[derive(Serialize, Deserialize)]
     pub(super) struct WireGraph {
+        /// The document format version this file was written as; absent in
+        /// files from before versioning, which read as this build's.
+        #[serde(default = "default_version")]
+        pub version: u32,
+        /// The [`abi::REVISION`] the document pins: what its node ids,
+        /// sockets and macros are written against.
+        #[serde(default = "default_abi")]
+        pub abi: u32,
         #[serde(default)]
         pub name: String,
         #[serde(default, skip_serializing_if = "GraphDomain::is_surface")]
@@ -2664,6 +2696,8 @@ mod wire {
     impl From<Graph> for WireGraph {
         fn from(graph: Graph) -> Self {
             WireGraph {
+                version: SCHEMA_VERSION,
+                abi: abi::REVISION,
                 name: graph.name,
                 domain: graph.domain,
                 macros: graph.macros,
@@ -2679,15 +2713,21 @@ mod wire {
         }
     }
 
-    impl From<WireGraph> for Graph {
-        fn from(wire: WireGraph) -> Self {
+    impl TryFrom<WireGraph> for Graph {
+        // A `String`, because serde's `try_from` support turns whatever the
+        // conversion says into the parse error the caller already handles;
+        // the message is the named diagnostic.
+        type Error = String;
+
+        fn try_from(wire: WireGraph) -> Result<Self, Self::Error> {
+            check_document_version(wire.version, wire.abi, "graph")?;
             let nodes: BTreeMap<NodeId, Node> = wire
                 .nodes
                 .into_iter()
                 .map(|entry| (entry.id, entry.node))
                 .collect();
             let next_id = nodes.keys().map(|id| id.0).max().unwrap_or(0) + 1;
-            Graph {
+            Ok(Graph {
                 name: wire.name,
                 domain: wire.domain,
                 nodes,
@@ -2696,7 +2736,7 @@ mod wire {
                 user_block: wire.user_block,
                 attributes: wire.attributes,
                 next_id,
-            }
+            })
         }
     }
 }
@@ -3589,5 +3629,53 @@ mod tests {
         let mut graph = Graph::new("g");
         graph.add(Node::new("test.required").with_param("must", Value::F32(0.25)));
         graph.validate(&registry).unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod document_versions {
+    //! The two version fields every serialized document carries: absent
+    //! means this build's, a newer schema is refused by name, and anything
+    //! this crate writes stamps both.
+
+    use super::*;
+
+    #[test]
+    fn a_document_without_version_fields_reads_as_this_build_wrote_it() {
+        let graph: Graph = serde_json::from_str(r#"{"name": "old", "nodes": [], "edges": []}"#)
+            .expect("a pre-versioning document parses");
+        assert_eq!(graph.name(), "old");
+    }
+
+    #[test]
+    fn a_newer_schema_version_is_refused_by_name() {
+        let error = serde_json::from_str::<Graph>(
+            r#"{"version": 99, "abi": 1, "name": "from the future"}"#,
+        )
+        .expect_err("refused");
+        assert!(
+            error.to_string().contains("schema version 99"),
+            "the refusal names both versions: {error}"
+        );
+    }
+
+    #[test]
+    fn a_document_pinning_another_abi_is_refused_by_name() {
+        let error =
+            serde_json::from_str::<Graph>(r#"{"version": 1, "abi": 7, "name": "another ABI"}"#)
+                .expect_err("refused");
+        assert!(
+            error.to_string().contains("ABI revision 7"),
+            "the refusal names both revisions: {error}"
+        );
+    }
+
+    #[test]
+    fn a_saved_document_stamps_its_version_and_abi() {
+        let text = serde_json::to_string(&Graph::new("stamped")).expect("serializes");
+        assert!(
+            text.contains(r#""version":1"#) && text.contains(r#""abi":1"#),
+            "the stamp is on the wire: {text}"
+        );
     }
 }

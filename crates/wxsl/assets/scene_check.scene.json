@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "abi": 1,
+  "name": "subsurface check",
+  "//": [
+    "The scene document, with the two version fields every serialized",
+    "document carries (ADR 0044): `version` is the format's schema version",
+    "and `abi` is the ABI revision the vocabulary is written against.",
+    "Both may be omitted — files from before versioning read as this",
+    "build's — and a file pinning a *newer* one is refused by name.",
+    "",
+    "The material's graph pins `wxsl_subsurface`, which asks the pipeline",
+    "for the subsurface feature channel. `scene_check` checks the scene",
+    "against a setup without it and shows the refusal, then again with it."
+  ],
+  "meshes": [
+    {
+      "name": "cube",
+      "source": { "kind": "cube", "size": 1.0 }
+    }
+  ],
+  "materials": [
+    {
+      "name": "skin",
+      "graph": {
+        "name": "skin",
+        "macros": {
+          "wxsl_subsurface": { "flag": true }
+        },
+        "nodes": [
+          { "id": 1, "def": "output.surface" }
+        ],
+        "edges": []
+      }
+    }
+  ],
+  "instances": [
+    { "mesh": 0, "material": 0 }
+  ]
+}

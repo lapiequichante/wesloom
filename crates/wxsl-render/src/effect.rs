@@ -51,6 +51,7 @@ use wxsl_core::abi;
 use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
 use wxsl_core::error::CodegenError;
 use wxsl_core::graph::Graph;
+use wxsl_core::identity;
 use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, Value, ValueType};
 use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
 use wxsl_core::resources::BufferLayout;
@@ -368,14 +369,16 @@ impl Effect {
         if self.parameters.is_empty() {
             return String::new();
         }
+        // The id carries a package segment (`wxsl.bloom`) the shader
+        // cannot spell; the struct names the package with an underscore.
+        let name = self.id.replace('.', "_");
         let layout = self.param_layout();
-        let mut header = layout.wgsl_struct(&format!("{}_params", self.id));
+        let mut header = layout.wgsl_struct(&format!("{name}_params"));
         let _ = std::fmt::Write::write_fmt(
             &mut header,
             format_args!(
-                "@group(3) @binding({}) var<uniform> params: {}_params;\n",
+                "@group(3) @binding({}) var<uniform> params: {name}_params;\n",
                 self.inputs.len() + self.outputs.len(),
-                self.id
             ),
         );
         header
@@ -394,7 +397,7 @@ const SCREEN_GRAPH_INPUTS: &[EffectInput] = &[EffectInput {
 /// of the hardcoded enum it was reachable only through. Its generated
 /// module and its bindings are byte-for-byte what they were.
 pub const DEFERRED_LIGHTING: Effect = Effect {
-    id: "deferred_lighting",
+    id: "wxsl.deferred_lighting",
     label: "deferred lighting",
     description: "Shade the G-buffer with the enabled lighting models.",
     kind: EffectKind::Screen {
@@ -418,7 +421,7 @@ pub const DEFERRED_LIGHTING: Effect = Effect {
 /// the descriptor's declaration now, at the same values, so a re-tune is
 /// a buffer write instead of a new row.
 pub const BLOOM: Effect = Effect {
-    id: "bloom",
+    id: "wxsl.bloom",
     label: "bloom",
     description: "Blur the bright parts of an image and add them back: glow.",
     kind: EffectKind::Screen {
@@ -465,7 +468,7 @@ pub const BLOOM: Effect = Effect {
 /// end in one presents linear radiance — correct for a chain that goes on
 /// to another effect, wrong on a screen.
 pub const TONEMAP: Effect = Effect {
-    id: "tonemap",
+    id: "wxsl.tonemap",
     label: "tonemap",
     description: "Curve linear radiance for the display, and encode it.",
     kind: EffectKind::Screen {
@@ -492,7 +495,7 @@ pub const TONEMAP: Effect = Effect {
 /// `once`-policy compute effect. Its shader is a pure function of its
 /// coordinates, which is why `once` is the honest policy for it.
 pub const BRDF_LUT: Effect = Effect {
-    id: "brdf_lut",
+    id: "wxsl.brdf_lut",
     label: "BRDF LUT",
     description: "Bake the split-sum environment-BRDF LUT, once.",
     kind: EffectKind::Compute {
@@ -516,7 +519,7 @@ pub const BRDF_LUT: Effect = Effect {
 /// screen half of the [`BRDF_LUT`] proof, and how a demo or a test looks
 /// at what a once-only bake left behind.
 pub const LUT_VIEW: Effect = Effect {
-    id: "lut_view",
+    id: "wxsl.lut_view",
     label: "LUT view",
     description: "Draw one image across the frame's target.",
     kind: EffectKind::Screen {
@@ -546,7 +549,7 @@ pub const RAMP_VIEW_MODULE: &str = "package::wxsl::ramp_view";
 /// descriptor an application registers rather than a shipped pass — and
 /// the smallest complete example of a buffer-writing effect.
 pub const RAMP_FILL: Effect = Effect {
-    id: "ramp_fill",
+    id: "wxsl.ramp_fill",
     label: "ramp fill",
     description: "Fill a storage buffer with an eased ramp, one f32 per entry.",
     kind: EffectKind::Compute {
@@ -570,7 +573,7 @@ pub const RAMP_FILL: Effect = Effect {
 /// value per screen column — the half that proves a fragment stage can
 /// consume what a compute pass wrote, with no texture in between.
 pub const RAMP_VIEW: Effect = Effect {
-    id: "ramp_view",
+    id: "wxsl.ramp_view",
     label: "ramp view",
     description: "Draw a storage buffer as one value per screen column.",
     kind: EffectKind::Screen {
@@ -620,7 +623,22 @@ impl EffectRegistry {
     /// Register `effect`, replacing any effect already registered under
     /// the same id — an application overriding a shipped effect is the
     /// same gesture as adding a new one.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the id carries no package segment: effect ids are
+    /// `package.name` (`wxsl.bloom`), and an un-namespaced registration is
+    /// how two libraries' effects end up unable to share a registry.
+    /// Documents may still spell shipped ids bare — [`Self::get`] resolves
+    /// `bloom` to `wxsl.bloom` — but a registration says who owns the
+    /// name. See [`wxsl_core::identity`].
     pub fn add(&mut self, effect: Effect) {
+        assert!(
+            identity::is_namespaced(effect.id),
+            "effect `{}` has no package segment — ids are `package.name` \
+             (the shipped effects live under `wxsl.`); put it in a package of its own",
+            effect.id,
+        );
         match self.effects.iter().position(|known| known.id == effect.id) {
             Some(at) => self.effects[at] = effect,
             None => self.effects.push(effect),
@@ -633,9 +651,16 @@ impl EffectRegistry {
         self
     }
 
-    /// The effect named by `id`, as documents name them.
+    /// The effect named by `id`, as documents name them: an id with a
+    /// package is taken as written, a bare one resolves against the
+    /// shipped package — `bloom` means `wxsl.bloom`, which is what every
+    /// document written before namespacing meant.
     pub fn get(&self, id: &str) -> Option<Effect> {
-        self.effects.iter().find(|effect| effect.id == id).cloned()
+        let resolved = identity::resolve(id);
+        self.effects
+            .iter()
+            .find(|effect| effect.id == resolved.as_ref())
+            .cloned()
     }
 
     /// Every registered effect, in registration order — what a palette
@@ -961,9 +986,9 @@ mod tests {
         // binding 1, after the inputs and the outputs, and the struct name
         // is the effect's to own.
         let header = BLOOM.params_header();
-        assert!(header.contains("struct bloom_params {"), "{header}");
+        assert!(header.contains("struct wxsl_bloom_params {"), "{header}");
         assert!(
-            header.contains("@group(3) @binding(1) var<uniform> params: bloom_params;"),
+            header.contains("@group(3) @binding(1) var<uniform> params: wxsl_bloom_params;"),
             "{header}"
         );
         // Laid out by the same computer every host-shared buffer follows,
@@ -1041,7 +1066,7 @@ mod tests {
 
         let bake = defs
             .iter()
-            .find(|def| def.id == "pass.compute.brdf_lut")
+            .find(|def| def.id == "pass.compute.wxsl.brdf_lut")
             .expect("the bake's node");
         assert_eq!(bake.category, "pass", "grouped with the other passes");
         let lut_socket = bake.input("lut").expect("the bake's declared output");
@@ -1054,7 +1079,7 @@ mod tests {
 
         let fill = defs
             .iter()
-            .find(|def| def.id == "pass.compute.ramp_fill")
+            .find(|def| def.id == "pass.compute.wxsl.ramp_fill")
             .expect("the ramp fill's node");
         let ramp_socket = fill.input("ramp").expect("the buffer socket");
         assert_eq!(ramp_socket.ty, ValueType::StorageBuffer);

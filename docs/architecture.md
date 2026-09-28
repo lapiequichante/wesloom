@@ -85,7 +85,9 @@ outputs and parameters, screen or compute entry points, shader source —
 the registry a pass names into, plan2 P4/P10, ADR 0042), `library`
 (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
-variant cache), `renderer` (the front end that hides the path switch), `scene` (camera,
+variant cache), `renderer` (the front end that hides the path switch),
+`setup` (the capability contract: a setup's published capabilities and the
+device-free check against a scene, ADR 0044), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
 `gpu` (device setup, offscreen rendering and readback), `error`, and `ui` —
 the 2D layer with nothing to do with materials (ADR 0013): `draw` (the
@@ -168,7 +170,11 @@ from has two spellings, tested to agree
   `resource.color`, `resource.depth`, `resource.buffer`), passes
   (`pass.geometry`, `pass.shadow`, `pass.screen`, and one
   `pass.compute.<effect>` per registered compute effect — sockets derived
-  from the effect's declaration, ADR 0041) and one `present` terminal.
+  from the effect's declaration, ADR 0041) and one `output.present`
+  terminal. Every serialized document — this, the node format, the scene —
+  carries a `version` and the `abi` revision its vocabulary is written
+  against: absent reads as this build's, a newer one is refused by name at
+  parse (ADR 0044).
   Edges carry render-graph resources (`DrawQueue`, `ColorTarget`,
   `DepthTarget`, `ShadowMaps`, `GBuffer`, `StorageBuffer` — handle types
   outside `ValueType::ALL`, like the texture sockets).

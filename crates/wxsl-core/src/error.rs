@@ -725,3 +725,36 @@ impl From<GraphErrors> for CodegenError {
         CodegenError::Invalid(value)
     }
 }
+
+/// Check a document's pinned versions against what this build reads.
+///
+/// Every serialized document kind — node format, scene, pipeline — carries
+/// a `version` (its wire schema) and an `abi` (the [`crate::abi::REVISION`]
+/// its vocabulary is written against). Both default to 1, which is what a
+/// file from before versioning means, so existing documents parse
+/// unchanged. A *newer* version than this build knows is refused rather
+/// than guessed at; so is an ABI revision other than the one this build
+/// implements, because a revision bump is exactly a change in what stored
+/// names mean. The `kind` is the document's own word for itself ("graph",
+/// "scene") so the error names it.
+///
+/// The error is a `String` because the check runs inside the wire types'
+/// `try_from` conversions, where serde folds whatever the conversion says
+/// into the parse error the caller already handles.
+pub(crate) fn check_document_version(version: u32, abi: u32, kind: &str) -> Result<(), String> {
+    let schema = crate::graph::SCHEMA_VERSION;
+    if version > schema {
+        return Err(format!(
+            "{kind} document has schema version {version}, but this build reads \
+             version {schema} — upgrade wxsl to load it"
+        ));
+    }
+    if abi != crate::abi::REVISION {
+        return Err(format!(
+            "{kind} document pins ABI revision {abi}, but this build implements \
+             revision {} — the document was written against a different shader ABI",
+            crate::abi::REVISION,
+        ));
+    }
+    Ok(())
+}
