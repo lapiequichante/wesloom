@@ -59,6 +59,7 @@ is signal, don't delete it.
 | [0042](0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md) | Effect parameters are uniforms, and the descriptor declares them | Accepted |
 | [0043](0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md) | The pipeline canvas is a mode, and it compiles on every edit | Accepted |
 | [0044](0044-identity-versions-and-the-capability-check.md) | Identity is namespaced, documents pin versions, and the capability check runs before anything is built | Accepted |
+| [0045](0045-a-bake-is-an-effect-over-a-material-subgraph.md) | A bake is an effect over a material subgraph, and the table is the material's | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

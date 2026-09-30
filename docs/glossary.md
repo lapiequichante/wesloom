@@ -193,6 +193,16 @@ capabilities — stages, channel plan, lighting set, effects — and the check
 reports every mismatch by name, at load, before anything is built. See
 [ADR 0044](adr/0044-identity-versions-and-the-capability-check.md).
 
+**Bake** — a part of a material precomputed into a small 2D table and
+sampled back: the material graph declares "bake *this node's* output",
+the table's shader is generated from that subgraph and runs as an
+ordinary compute pass (`once`, or `on demand` with `mark_pass`), and the
+material either samples the table or evaluates the subgraph inline — the
+toggle changes cost, not image. The table is host-owned: the pass list
+writes through it as an imported resource, the material samples it like
+any texture of its own. See
+[ADR 0045](adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md).
+
 **ADR** — Architecture Decision Record; see `docs/adr/README.md`.
 
 **Facade crate** — `wxsl`, the crate most consumers depend on directly;

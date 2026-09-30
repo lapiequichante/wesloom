@@ -258,8 +258,9 @@ facade crate's feature set, not about the workspace.
 - `cargo run -p wxsl --example gallery -- --screenshot` — every pipeline
   in one command: the stock presets, the minimal document, the
   deferred-plus-bloom chain (as authored and again with its parameters
-  tuned live, ADR 0042), and the policy/buffer/channel proofs
-  (BRDF-LUT bake, buffer ramp, subsurface channels), one PNG each plus a
+  tuned live, ADR 0042), the policy/buffer/channel proofs
+  (BRDF-LUT bake, buffer ramp, subsurface channels), the bake demo (ADR
+  0045), and the fxaa chain (ADR 0040), one PNG each plus a
   contact sheet, or all of them live in one window without the flag. The
   fastest way to see whether a *pipeline* change (presets, effects, the
   compiler) still renders — and the working example of composing a
@@ -340,6 +341,20 @@ facade crate's feature set, not about the workspace.
   `shading.wxsl`. Materials name models by name, not id; the G-buffer's
   byte budget is checked in `Renderer::set_lighting`, and the cost table
   in `pipeline::gbuffer_bytes_per_sample` mirrors the spec's numbers.
+- A **bake** is a graph-level declaration (`Graph::declare_bake`,
+  ADR 0045): "bake this node's output through this table" — never a node
+  of its own, so the graph reads the same under both arms of the toggle
+  (`MaterialConfig.bakes`, on by default). The effect is
+  `Effect::from_bake`, generated from the subgraph at registration; the
+  table is *host-owned* — created beside the material, bound like any
+  ADR 0023 texture, handed to the renderer with
+  `Renderer::import_resource` — and the pipeline writes it through a
+  `resource.color` with `imported: true`, labelled with the
+  declaration's texture name. The cone may read `input.uv` and nothing
+  else (a bake is a pure function of where it is sampled); the cone
+  belongs to the bake alone; and the bake pass is declared **before**
+  the pass that samples it, because the material's sample is a
+  dependency the scheduler cannot see.
 - A **material feature** is a row in `wxsl_core::lighting::FEATURES` plus
   a `.wxsl` module under `shaders/wxsl/features/` (ADR 0037): the second
   source of G-buffer channels, tagged in the collected
@@ -422,7 +437,11 @@ facade crate's feature set, not about the workspace.
   contact sheet. Its deferred-bloom demos are the shipped preset's
   document with two nodes added and one rewired, compiled by the public
   `compile_pipeline` — the copyable example of ADR 0034's chains and of
-  "a pipeline is a document edit".
+  "a pipeline is a document edit". The `bake` demo (ADR 0045) is the
+  whole of a bake from a command line: the material document
+  (`assets/bake_term.wxsl.json`, with its declaration commented) compiled
+  into both the effect's shader and the material, the table created and
+  imported by the host, the pass `once` in the pipeline document.
 - `crates/wxsl/examples/scene_check.rs` — the capability contract run
   (ADR 0044): a scene document checked against the deferred setup before
   anything is built, the mismatch named, and — with `--screenshot` — the

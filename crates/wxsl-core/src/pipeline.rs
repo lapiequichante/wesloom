@@ -67,6 +67,12 @@ pub const SETTING_BYTES: &str = "bytes";
 /// [`SETTING_SCALE`]) or a fixed `64x64` in pixels, for the things whose
 /// size is a fact of their contents, a LUT most of all.
 pub const SETTING_SIZE: &str = "size";
+/// Setting on `resource.color`: `true` declares the target as *imported* —
+/// a texture the host owns (a bake table above all: the scene's materials
+/// created it and sample it) that the pass list only writes through. An
+/// imported target is sized by whoever created it, so the size settings
+/// have nothing to say.
+pub const SETTING_IMPORTED: &str = "imported";
 /// Setting on the pass nodes: how often the pass runs — `per frame` (the
 /// default), `once`, `on resize` or `on demand` (plan2 P10). A pass of
 /// any non-default policy must write only targets that keep no history
@@ -204,6 +210,14 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "History",
                 "Previous frames kept readable: 0 transient, 1 ping-pong, n a ring of n+1.",
                 "0",
+            ))
+            .setting(text_setting(
+                SETTING_IMPORTED,
+                "Imported",
+                "`true` if the host owns the texture — a bake table the scene's \
+                 materials created and sample. Its label must match the bake's, \
+                 and the size settings say nothing.",
+                "false",
             ))
             .document(),
         NodeDefinition::builder(RESOURCE_DEPTH, "depth target")

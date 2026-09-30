@@ -430,6 +430,12 @@ pub struct ResourceBinding {
     pub ty: ValueType,
     /// The `@binding(N)` within `abi::GROUP_MATERIAL`.
     pub binding: u32,
+    /// The bake this resource is the table *of*, when it is one — which is
+    /// how a host tells a bake's texture (created, written by the bake
+    /// pass, and sampled back) from an application-supplied picture it
+    /// must be given
+    /// ([ADR 0045](../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+    pub bake: Option<crate::graph::BakeDecl>,
 }
 
 /// The uniform block a material *requires the application to supply*, in

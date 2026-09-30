@@ -49,6 +49,7 @@ use crate::error::RenderError;
 use crate::graph::{PassBinding, PassEncoder, RecordedPass, RenderGraph, ResourcePool, Schedule};
 use crate::library::ShaderLibrary;
 use crate::material::Material;
+use crate::pass::ResourceId;
 use crate::pass::{DrawSource, PassKind, PassView, Policy};
 use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
@@ -114,6 +115,13 @@ pub struct Renderer {
     /// same label, so a document edit does not silently reset a tuned
     /// knob; a changed layout is what starts a block over.
     pass_params: HashMap<String, PassParamBlock>,
+    /// Views the *host* owns, keyed by the resource label the current pass
+    /// list declares them under — a bake table most of all
+    /// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)):
+    /// the material created it and samples it, and the graph only writes
+    /// it. Unlike the pool's own textures these survive a reallocation,
+    /// because they were never the pool's to lose.
+    imports: Vec<(String, wgpu::TextureView)>,
 }
 
 /// One pass's effect parameters: the layout the descriptor declared, the
@@ -163,6 +171,7 @@ impl Renderer {
             last_run: vec![(u64::MAX, (0, 0)); pass_count],
             demanded: HashSet::new(),
             pass_params: HashMap::new(),
+            imports: Vec::new(),
             config,
         })
     }
@@ -301,6 +310,31 @@ impl Renderer {
     /// pass list is mid-swap still applies to the pass in the *new* list.
     pub fn mark_pass(&mut self, label: &str) {
         self.demanded.insert(label.to_string());
+    }
+
+    /// Hand the renderer a view the *host* owns, for the imported resource
+    /// labelled `label` — a bake table most of all
+    /// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)):
+    /// the material created the texture and samples it, and the pass list
+    /// only writes through it, so it rides the frame as an import rather
+    /// than living in the pool.
+    ///
+    /// The label is the resource's, which is the name the scene's bake
+    /// declaration and the pipeline's `resource.color` agree on. Replacing
+    /// the view under one label is allowed; supplying one the current pass
+    /// list declares nothing about is an error at the next frame, by name.
+    /// A view survives a pass-list swap, because whatever owns it outlives
+    /// both.
+    pub fn import_resource(&mut self, label: impl Into<String>, view: wgpu::TextureView) {
+        let label = label.into();
+        self.imports.retain(|(existing, _)| *existing != label);
+        self.imports.push((label, view));
+    }
+
+    /// Drop the view supplied for `label`, if there is one — the other
+    /// half of unloading whatever created it.
+    pub fn remove_import(&mut self, label: &str) {
+        self.imports.retain(|(existing, _)| *existing != label);
     }
 
     /// How many times the pass labelled `label` has actually run since
@@ -997,6 +1031,22 @@ impl Renderer {
             }
         }
 
+        // The host-owned imports, resolved against the current pass list
+        // before the field borrows below: a label nothing declares is an
+        // error by name, because the thing that supplied the view and the
+        // thing that writes the resource have to agree that the resource
+        // exists.
+        let mut imports: Vec<(ResourceId, &wgpu::TextureView)> =
+            vec![(RenderGraph::TARGET, request.view)];
+        for (label, view) in &self.imports {
+            let Some(id) = self.graph.resource_by_label(label) else {
+                return Err(RenderError::UnknownResource {
+                    name: label.clone(),
+                });
+            };
+            imports.push((id, view));
+        }
+
         // Destructured so the recording closure can hold the pipeline
         // cache mutably while the graph, the pool and the effect registry
         // are borrowed alongside it. The parameter blocks are borrowed
@@ -1025,7 +1075,7 @@ impl Renderer {
             &mut encoder,
             schedule,
             pool,
-            &[(RenderGraph::TARGET, request.view)],
+            &imports,
             &|index| run[index],
             &|pass| {
                 pass_params.get(&pass.label).and_then(|block| {

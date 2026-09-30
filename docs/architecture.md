@@ -64,8 +64,9 @@ comment is the detailed version.
 
 **`wxsl-core`** — `node` (value types, sockets, `WeslFunction`
 descriptors, `NodeDefinition`, the registry), `graph` (nodes, edges,
-validation, traversal, the serialized node format), `codegen` (graph → WXSL,
-plus the generated macro module), `macros` (macro variables), `abi` (the
+validation, traversal, the serialized node format — and the bake
+declarations, ADR 0045), `codegen` (graph → WXSL: materials, screen
+effects, and `generate_bake` for a subgraph as a bake module), `macros` (macro variables), `abi` (the
 shader ABI's names and field tables), `lighting` (the lighting-model
 registry, and the shading function, G-buffer pack and lighting pass
 generated from a set of models), `stages` (the stage analysis, plan2 P9),
@@ -82,7 +83,8 @@ function nodes `build.rs` derived from the sources).
 `wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
 `RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs,
 outputs and parameters, screen or compute entry points, shader source —
-the registry a pass names into, plan2 P4/P10, ADR 0042), `library`
+the registry a pass names into, plan2 P4/P10, ADR 0042; `Effect::from_bake`
+generates one from a material subgraph, ADR 0045), `library`
 (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `renderer` (the front end that hides the path switch),
@@ -219,13 +221,24 @@ pass label — `Renderer::set_pass_param` writes, the next frame presents,
 and nothing recompiles; the variant key folds the layout, never a value.
 `cargo run -p wxsl --example gallery -- --screenshot` renders
 the stock pipelines, the minimal document, the bloom chain (as authored
-and tuned live), and the policy/buffer/channel proofs side by side.
+and tuned live), the policy/buffer/channel proofs, the bake demo (ADR
+0045) and the fxaa chain side by side.
 
 A pass also carries a **policy** — `per frame`, `once`, `on resize` or
 `on demand` (plan2 P10). The renderer's frame loop honours it: a pass
 whose target survives frames may skip, and what it last wrote is what a
 later frame reads. `Renderer::pass_run_count` and `mark_pass` are the
 observable halves.
+
+**Bakes** ([ADR 0045](adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md))
+run on the same rails: the effect is generated from the material
+subgraph, the pass is a `pass.compute` node with a policy, and the table
+it writes is an *imported* resource the host owns — created beside the
+material that samples it, handed to the renderer with
+`Renderer::import_resource` under the declaration's name. A bake pass
+must be declared before the pass that samples its table: the material's
+sample is a dependency the scheduler cannot see, and declaration order is
+its tie-break.
 
 `RenderGraph::schedule` is a pure function and is tested without a device.
 It orders the passes by what they read and write (never by declaration

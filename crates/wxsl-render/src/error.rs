@@ -189,6 +189,15 @@ pub enum RenderError {
         /// The resource's label.
         resource: String,
     },
+    /// A view was supplied for a resource the current pass list declares
+    /// nothing about — the other half of [`RenderError::MissingImport`]:
+    /// the graph wanted a view nobody gave it, this is a view nobody's
+    /// graph wants. Whatever created the texture was unloaded (or never
+    /// loaded) while the pass list stayed.
+    UnknownResource {
+        /// The label the view was supplied under.
+        name: String,
+    },
     /// A geometry file could not be read.
     ///
     /// Only reachable with the `gltf` feature; the variant exists either
@@ -334,6 +343,11 @@ impl fmt::Display for RenderError {
             RenderError::MissingImport { resource } => write!(
                 f,
                 "no view was supplied for the imported resource `{resource}`"
+            ),
+            RenderError::UnknownResource { name } => write!(
+                f,
+                "a view was supplied for resource `{name}`, which the current \
+                 pass list does not declare"
             ),
             RenderError::Import { path, reason } => {
                 write!(f, "cannot import `{path}`: {reason}")

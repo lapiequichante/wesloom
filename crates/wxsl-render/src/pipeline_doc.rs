@@ -97,6 +97,17 @@ pub enum PipelineError {
         /// The size it named.
         size: String,
     },
+    /// An imported `resource.color` — a texture the host owns — was also
+    /// given a size. Whoever created the texture sized it; a document
+    /// saying both would only ever be obeyed on one.
+    ImportedTargetSized {
+        /// The resource node.
+        node: String,
+        /// The size setting that says nothing here.
+        setting: String,
+        /// The value it carries.
+        value: String,
+    },
     /// `resource.buffer` names a size that is not a positive number of
     /// bytes.
     BadBufferSize {
@@ -278,6 +289,16 @@ impl core::fmt::Display for PipelineError {
                 f,
                 "colour target `{node}` asks for size `{size}`, which is not one — \
                  `viewport`, or fixed pixels as `64x64`"
+            ),
+            PipelineError::ImportedTargetSized {
+                node,
+                setting,
+                value,
+            } => write!(
+                f,
+                "colour target `{node}` is imported — the host owns the texture — \
+                 so its `{setting}` setting (`{value}`) says nothing; whoever \
+                 created the texture sized it"
             ),
             PipelineError::BadBufferSize { node, value } => write!(
                 f,
@@ -650,6 +671,43 @@ impl<'a> Compiler<'a> {
                 precision: precision_text,
             }
         })?;
+
+        // An imported target is the host's: sized by whoever created it,
+        // so the size settings have nothing to say and are refused rather
+        // than ignored — a document that says both would only ever be
+        // obeyed on one of them.
+        if self
+            .setting(node, doc::SETTING_IMPORTED)
+            .trim()
+            .eq_ignore_ascii_case("true")
+        {
+            let size_text = self.setting(node, doc::SETTING_SIZE);
+            let scale = self.setting(node, doc::SETTING_SCALE);
+            let history = self.setting(node, doc::SETTING_HISTORY);
+            let conflicted = [
+                (
+                    !size_text.trim().eq_ignore_ascii_case("viewport"),
+                    ("size", size_text),
+                ),
+                (scale.trim() != "1", ("scale", scale)),
+                (history.trim() != "0", ("history", history)),
+            ];
+            for (conflict, (setting, value)) in conflicted {
+                if conflict {
+                    return Err(PipelineError::ImportedTargetSized {
+                        node: name.clone(),
+                        setting: setting.to_string(),
+                        value: value.trim().to_string(),
+                    });
+                }
+            }
+            let id = self
+                .graph
+                .resource(ResourceDesc::imported(name, gbuffer_format(precision)));
+            self.colors.insert(node, id);
+            return Ok(());
+        }
+
         // `viewport` sizes with the frame (the `scale` setting); anything
         // spelled `WxH` is fixed pixels — the LUTs and atlases whose size
         // is a fact of their contents, not of the window.
@@ -2472,6 +2530,70 @@ mod tests {
         // rule for a pass that skips frames, derived by the compiler.
         assert_eq!(desc.persistence, Persistence::Persistent { history: 0 });
         compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn an_imported_target_is_the_hosts_and_refuses_a_size() {
+        // A bake table: the host (the scene's material) created the
+        // texture and samples it; the pass list only writes through it.
+        // `imported` says so — the table is nobody's to allocate here —
+        // and the size settings, which would size a texture this document
+        // never sees created, are refused rather than ignored.
+        let effects = EffectRegistry::shipped().with(crate::effect::BRDF_LUT);
+
+        let document = |sized: bool| {
+            let registry = document_registry(&effects);
+            let mut graph = wxsl_core::pipeline::document("imported table");
+            let table = graph.add(
+                Node::new(doc::RESOURCE_COLOR)
+                    .with_label("roughness_bake")
+                    .with_setting(doc::SETTING_PRECISION, "hdr")
+                    .with_setting(doc::SETTING_IMPORTED, "true"),
+            );
+            if sized {
+                graph.set_setting(table, doc::SETTING_SIZE, "64x64");
+            }
+            let bake = graph.add(
+                Node::new(format!("{}wxsl.brdf_lut", doc::PASS_COMPUTE_PREFIX))
+                    .with_label("table bake")
+                    .with_setting(doc::SETTING_POLICY, "once"),
+            );
+            let view = graph.add(
+                Node::new(doc::PASS_SCREEN)
+                    .with_label("view")
+                    .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
+            );
+            let present = graph.add_node(doc::PRESENT);
+            for (from, to) in [
+                ((table, "color"), (bake, "lut")),
+                ((table, "color"), (view, "image")),
+                ((view, "color"), (present, "surface")),
+            ] {
+                graph.wire(&registry, from, to).expect("table wiring");
+            }
+            (registry, graph)
+        };
+
+        let (registry, graph) = document(false);
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let desc = compiled
+            .resources()
+            .iter()
+            .find(|desc| desc.label == "roughness_bake")
+            .expect("the table is declared");
+        assert!(desc.imported, "the table is the host's, not the pool's");
+        // The scheduler's stable-storage rule holds by ownership: a `once`
+        // pass writing the host's texture is fine, because the texture
+        // cannot have moved under it.
+        compiled.schedule().expect("schedules");
+
+        let (registry, sized) = document(true);
+        let error = compile(&sized, &registry, &effects, &config())
+            .expect_err("an imported target is not this document's to size");
+        assert!(
+            error.to_string().contains("roughness_bake") && error.to_string().contains("`size`"),
+            "{error}"
+        );
     }
 
     #[test]

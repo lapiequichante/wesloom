@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5 and P8 have landed — ADRs 0038 through 0044. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8 and N5 have landed — ADRs 0038 through 0045. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -20,7 +20,7 @@ earlier plans' items did.
 
 | From | Still open | Reshaped by |
 |---|---|---|
-| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), M9 (bake), M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
+| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, ~~P8 (identity/contracts)~~ — landed, ADR 0044 | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
@@ -388,7 +388,7 @@ load, by name, and loads under the plan that carries the channel;
 `cargo run -p wxsl --example scene_check -- --screenshot` runs the whole
 item from a command line.
 
-### N5 — Bake passes (plan.md's M9)
+### N5 — Bake passes (plan.md's M9) *(landed, ADR 0045)*
 
 Precompute part of a material into a texture and sample it back:
 
@@ -406,6 +406,36 @@ Precompute part of a material into a texture and sample it back:
 * Done when: an expensive noise-driven PBR term bakes to a texture, and
   toggling the bake changes cost but not image (plan.md's own bar).
 * ADR: "A bake is an effect over a material subgraph."
+
+**Landed as written**, with the "baked node" realized one way up — the
+declaration, not the node. A bake is `Graph::declare_bake`: "bake *this*
+node's output through this table" — a claim about an existing node, so
+the graph reads identically under both arms of the toggle, which is what
+"toggling costs no edit" actually demanded (a `bake.sample` node would
+have re-parented the cone and doubled the authoring for the inline arm).
+`Effect::from_bake` generates the compute shader from the subgraph at
+registration — purity checked there, and the rule is one line: the cone
+reads `input.uv` and nothing else, because a bake is a pure function of
+where it is sampled. Invalidation is the Policy machinery verbatim: the
+demo is `once`, the GPU test also runs `on demand` with `mark_pass` and
+shows a re-bake of a pure cone moving the run count and not the image.
+The one thing the plan could not have named: ownership of the table.
+The material's, decided here — created beside the material (ADR 0023
+texture), sampled in group 1, and written by the pass list through a
+`resource.color` with the new `imported` setting, exempt from the
+stable-storage rule because a host-owned texture cannot have moved under
+a skipped pass. Toggle is `MaterialConfig.bakes` (on by default); when
+it is on, the cone is *not emitted* — the material module is smaller by
+the whole subgraph, which is the honest reading of "changes cost". The
+done-when is `bake_passes.rs`: both arms rendered under the same lights,
+mean difference 0.0016; the gallery's `bake` demo is a twelve-octave
+noise term on a metal cube, and
+`assets/bake_term.wxsl.json` is the copyable material document. Two
+soundness rules came with the stand-in, both named errors: the cone
+belongs to the bake alone, and the vertex stage may not reach the baked
+node. One authoring rule the scheduler forces: the bake pass is declared
+before the pass that samples its table, because the material's sample is
+a dependency the scheduler cannot see.
 
 ### M8 — Depth peeling
 
@@ -673,8 +703,9 @@ none of it knows or cares which backend is underneath.
    deferred preset is a GPU test.
 6. ~~**P8**~~ — *landed (ADR 0044)*: contracts, before M8's second pipeline
    shape and before any cross-author exchange is invited.
-7. **N5** (bake), **N2** (motion/TAA) — independent of each other; bake
-   reuses the policy machinery, motion adds the Velocity stage.
+7. ~~**N5**~~ — *landed (ADR 0045)*: the bake, over the policy machinery
+   and the effect seam that were already there — then **N2** (motion/TAA),
+   which adds the Velocity stage.
 8. **M8** (peeling) — the largest remaining render feature, and the one
    that wants P8's contracts published first.
 9. **N6** (the subsurface model), **N7** (lighting scale) — feature work

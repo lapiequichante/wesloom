@@ -267,6 +267,17 @@ pub enum GraphError {
         /// What was wrong with them.
         reason: String,
     },
+    /// A bake declaration is not usable: a bad texture name, a node it
+    /// does not name or cannot stand in for, a type a texel cannot store.
+    /// Named after the texture the declaration goes by, which is its
+    /// identity
+    /// ([ADR 0045](../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+    InvalidBake {
+        /// The declaration's texture name.
+        texture: String,
+        /// What was wrong with it.
+        reason: String,
+    },
     /// More than one terminal node of a kind that allows only one.
     DuplicateOutput {
         /// The kind, by its registry id.
@@ -459,6 +470,9 @@ impl fmt::Display for GraphError {
             ),
             GraphError::InvalidAttribute { reason } => {
                 write!(f, "the attribute declarations are unusable: {reason}")
+            }
+            GraphError::InvalidBake { texture, reason } => {
+                write!(f, "the bake `{texture}` is unusable: {reason}")
             }
             GraphError::DuplicateOutput { kind, nodes } => write!(
                 f,

@@ -262,6 +262,7 @@ pub struct Graph {
     macros: MacroSet,
     user_block: Option<UserBlockDecl>,
     attributes: Vec<AttributeDecl>,
+    bakes: Vec<BakeDecl>,
     next_id: u32,
 }
 
@@ -426,6 +427,86 @@ fn vertex_attribute_reason(ty: ValueType) -> Option<String> {
     }
 }
 
+/// One part of a material the author wants *precomputed*: the subgraph
+/// feeding one node's output, evaluated per texel of a small 2D table and
+/// sampled back at the surface's uv
+/// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+///
+/// A graph-level declaration, like [`AttributeDecl`] and for the same
+/// reason: it is a claim *about a node* rather than a node of its own —
+/// "bake this term" — and it has to stay stated and checkable while the
+/// branch it names is half-wired, exactly as an attribute declaration
+/// does. The node keeps its own semantics; what the declaration changes is
+/// which of two ways its value reaches the surface, and that switch is the
+/// material configuration's `bakes` flag, not an edit here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
+pub struct BakeDecl {
+    /// The node whose output subgraph is baked. Its *other* output
+    /// sockets, if it has any, must be unused — the bake replaces the
+    /// node wholesale when it is active.
+    pub node: NodeId,
+    /// Which of the node's output sockets is baked, or `None` for the
+    /// first — the common case, a one-output node like `generative.fbm3`.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub socket: Option<String>,
+    /// The name the bake table goes by: what the host binds the texture
+    /// by, what the pipeline's `resource.color` is *labelled*, and the
+    /// `@group(1)` variable the generated sample reads. A WGSL identifier;
+    /// the sampler beside it is `{texture}_sampler`.
+    pub texture: String,
+    /// The bake table's size, in pixels. Fixed, like a LUT's: the value is
+    /// a fact of the subgraph, not of the window.
+    pub size: [u32; 2],
+    /// The table's precision — `standard` (8-bit) or `hdr` (half float),
+    /// the two precisions a write-only storage target can carry. The
+    /// pipeline's `resource.color` for this texture must spell the same
+    /// one.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "default_bake_precision", with = "bake_precision")
+    )]
+    pub precision: crate::abi::GBufferPrecision,
+}
+
+/// What a [`BakeDecl`] defaults to: `hdr`, the same default a `resource.color`
+/// carries, because the two must agree and half float is the honest
+/// starting point for a value that may exceed 0..1.
+fn default_bake_precision() -> crate::abi::GBufferPrecision {
+    crate::abi::GBufferPrecision::HighDynamicRange
+}
+
+/// [`BakeDecl::precision`] on the wire, as the [`GBufferPrecision::name`]
+/// every document spells precisions with.
+#[cfg(feature = "serde")]
+mod bake_precision {
+    use crate::abi::GBufferPrecision;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        precision: &GBufferPrecision,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(precision.name())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<GBufferPrecision, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        crate::abi::GBufferPrecision::parse(&text)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown precision `{text}`")))
+    }
+}
+
 /// The uniform block a graph declares it expects the *application* to
 /// supply, in `abi::GROUP_USER`.
 ///
@@ -518,6 +599,7 @@ impl Graph {
             macros: MacroSet::new(),
             user_block: None,
             attributes: Vec::new(),
+            bakes: Vec::new(),
             next_id: 1,
         }
     }
@@ -767,6 +849,38 @@ impl Graph {
         self.attributes = attributes;
     }
 
+    /// Every bake declaration, in declaration order.
+    pub fn bakes(&self) -> &[BakeDecl] {
+        &self.bakes
+    }
+
+    /// The bake declaration naming `texture`, if there is one — how
+    /// [`crate::codegen`] and the renderer address a bake without knowing
+    /// node ids: by the name its table goes by.
+    pub fn bake(&self, texture: &str) -> Option<&BakeDecl> {
+        self.bakes
+            .iter()
+            .find(|decl| decl.texture.trim() == texture.trim())
+    }
+
+    /// Declare a bake. Replaces the declaration naming the same texture,
+    /// if one is there — the texture name is the bake's identity, and two
+    /// decls sharing one would be two tables under one binding.
+    pub fn declare_bake(&mut self, decl: BakeDecl) {
+        self.bakes
+            .retain(|existing| existing.texture != decl.texture);
+        self.bakes.push(decl);
+    }
+
+    /// Drop the bake declaration naming `texture`.
+    pub fn remove_bake(&mut self, texture: &str) -> Option<BakeDecl> {
+        let index = self
+            .bakes
+            .iter()
+            .position(|decl| decl.texture.trim() == texture.trim())?;
+        Some(self.bakes.remove(index))
+    }
+
     /// Pin `node`'s setting `name`. Unlike [`Graph::setting`] this does not
     /// check the definition declares it — [`Graph::validate`] reports a
     /// setting that matches nothing.
@@ -840,7 +954,7 @@ impl Graph {
     ) -> MaterialInterface {
         let mut params: Vec<(WxslIdent, ValueType)> = Vec::new();
         let mut defaults: BTreeMap<String, Value> = BTreeMap::new();
-        let mut resources: Vec<(WxslIdent, ValueType)> = Vec::new();
+        let mut resources: Vec<(WxslIdent, ValueType, Option<BakeDecl>)> = Vec::new();
         let mut reads_user = false;
 
         for &id in reachable {
@@ -887,8 +1001,8 @@ impl Graph {
                     ) else {
                         continue;
                     };
-                    if !resources.iter().any(|(existing, _)| *existing == name) {
-                        resources.push((name, socket.ty));
+                    if !resources.iter().any(|(existing, _, _)| *existing == name) {
+                        resources.push((name, socket.ty, None));
                     }
                 }
                 NodeBody::UserRead => reads_user = true,
@@ -896,17 +1010,48 @@ impl Graph {
             }
         }
 
+        // The bake tables, each as a texture and its own sampler — the
+        // declaration supplies both names, so the host can create and
+        // bind them without knowing the node ids. Only bakes whose node is
+        // reachable join in, exactly as for a parked `texture.texture_2d`:
+        // a parked branch declares nothing, and emits nothing.
+        for decl in &self.bakes {
+            if !reachable.contains(&decl.node) {
+                continue;
+            }
+            let (Some(texture), Some(sampler)) = (
+                WxslIdent::new(decl.texture.trim()),
+                WxslIdent::new(&format!("{}_sampler", decl.texture.trim())),
+            ) else {
+                // Malformed names are `validate`'s to report; the interface
+                // skips them the way it skips a declaring node with an
+                // unusable name.
+                continue;
+            };
+            if !resources
+                .iter()
+                .any(|(existing, _, _)| *existing == texture)
+            {
+                // The sampler is the bake's too: a host binding a bake's
+                // resources looks for the flag, and both halves of one
+                // table should answer to it.
+                resources.push((texture, ValueType::Texture2d, Some(decl.clone())));
+                resources.push((sampler, ValueType::Sampler, Some(decl.clone())));
+            }
+        }
+
         // Name order, so adding a texture cannot renumber the ones already
         // there — a binding index that moves is a bind group that has to
         // be rebuilt for no reason.
-        resources.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        resources.sort_by(|(a, _, _), (b, _, _)| a.as_str().cmp(b.as_str()));
         let resources = resources
             .into_iter()
             .enumerate()
-            .map(|(index, (name, ty))| ResourceBinding {
+            .map(|(index, (name, ty, bake))| ResourceBinding {
                 name,
                 ty,
                 binding: abi::MATERIAL_RESOURCE_BINDING_BASE + index as u32,
+                bake,
             })
             .collect();
 
@@ -2086,6 +2231,7 @@ impl Graph {
     fn check_declarations(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
         self.check_user_block(errors);
         self.check_attributes(errors);
+        self.check_bakes(registry, errors);
         self.check_outputs(registry, errors);
         // One name is one binding, so two nodes naming the same parameter
         // are the same parameter — which is a feature, as long as they
@@ -2444,6 +2590,131 @@ impl Graph {
         }
     }
 
+    /// The bake declarations, independent of whether any output reaches
+    /// the named node — like the attributes, a declaration that is unusable
+    /// says so when it is written rather than when something first bakes.
+    fn check_bakes(&self, registry: &NodeRegistry, errors: &mut Vec<GraphError>) {
+        let mut invalid = |decl: &BakeDecl, reason: String| {
+            errors.push(GraphError::InvalidBake {
+                texture: decl.texture.clone(),
+                reason,
+            })
+        };
+        let mut seen_nodes: BTreeSet<NodeId> = BTreeSet::new();
+        for decl in &self.bakes {
+            if WxslIdent::new(decl.texture.trim()).is_none() {
+                invalid(
+                    decl,
+                    format!("`{}` is not a valid WXSL identifier", decl.texture),
+                );
+                continue;
+            }
+            if decl.size[0] == 0 || decl.size[1] == 0 {
+                invalid(decl, "the bake table's size has a zero side".to_string());
+            }
+            match decl.precision {
+                // A bake writes its table through a write-only storage
+                // binding, and these are the two colour precisions that
+                // can. (`scalar` and `pair` are R8Unorm and Rg16Float,
+                // which no baseline device stores into.)
+                crate::abi::GBufferPrecision::Normalized
+                | crate::abi::GBufferPrecision::HighDynamicRange => {}
+                other => invalid(
+                    decl,
+                    format!(
+                        "precision `{}` cannot be a bake target — a bake \
+                         writes through storage, so it is `standard` or `hdr`",
+                        other.name()
+                    ),
+                ),
+            }
+            if !seen_nodes.insert(decl.node) {
+                invalid(decl, "the node is baked twice".to_string());
+            }
+            let Some(instance) = self.nodes.get(&decl.node) else {
+                invalid(decl, "names a node the graph does not contain".to_string());
+                continue;
+            };
+            let Some(def) = registry.get(&instance.def) else {
+                // Already reported as `UnknownDefinition`; the bake has
+                // nothing of its own to add.
+                continue;
+            };
+            let socket_name = decl.socket.as_deref().map(str::trim).unwrap_or(
+                def.outputs
+                    .first()
+                    .map(|socket| socket.name.as_str())
+                    .unwrap_or(""),
+            );
+            let Some(socket) = def
+                .outputs
+                .iter()
+                .find(|socket| socket.name.as_str() == socket_name)
+            else {
+                invalid(
+                    decl,
+                    format!(
+                        "node {} has no output socket `{socket_name}` to bake",
+                        decl.node
+                    ),
+                );
+                continue;
+            };
+            if !matches!(
+                socket.ty,
+                ValueType::F32 | ValueType::Vec2 | ValueType::Vec3 | ValueType::Vec4
+            ) {
+                invalid(
+                    decl,
+                    format!(
+                        "bakes `{}`, and a bake table stores one value per \
+                         texel: a float or a float vector",
+                        socket.ty
+                    ),
+                );
+            }
+            // The bake replaces the node wholesale when it is active, so
+            // anything else reading its other outputs would read nothing.
+            for other in &def.outputs {
+                if other.name == socket.name {
+                    continue;
+                }
+                if self
+                    .edge_from(&SocketRef::new(decl.node, other.name.as_str()))
+                    .is_some()
+                {
+                    invalid(
+                        decl,
+                        format!(
+                            "node {} also feeds something from `{}` — a bake \
+                             stands in for the whole node, so its other outputs \
+                             must be unused",
+                            decl.node, other.name
+                        ),
+                    );
+                }
+            }
+            // A bake table and a texture node under one name would be two
+            // resources at one binding.
+            let collides = self.nodes().any(|(id, instance)| {
+                instance.def.starts_with("texture.")
+                    && self
+                        .setting(registry, id, crate::node::SETTING_NAME)
+                        .is_some_and(|name| name.trim() == decl.texture.trim())
+            });
+            if collides {
+                invalid(
+                    decl,
+                    format!(
+                        "`{}` is also the name of a declared texture — one name \
+                         is one binding",
+                        decl.texture
+                    ),
+                );
+            }
+        }
+    }
+
     /// The application block's own declaration, independent of whether any
     /// node reads it: a graph that carries an unusable one should say so
     /// when it is written, not when something first reads it.
@@ -2642,7 +2913,8 @@ mod wire {
     use serde::{Deserialize, Serialize};
 
     use super::{
-        AttributeDecl, Edge, Graph, GraphDomain, Node, NodeId, UserBlockDecl, SCHEMA_VERSION,
+        AttributeDecl, BakeDecl, Edge, Graph, GraphDomain, Node, NodeId, UserBlockDecl,
+        SCHEMA_VERSION,
     };
     use crate::abi;
     use crate::error::check_document_version;
@@ -2687,6 +2959,8 @@ mod wire {
         pub user_block: Option<UserBlockDecl>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub attributes: Vec<AttributeDecl>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub bakes: Vec<BakeDecl>,
         #[serde(default)]
         pub nodes: Vec<WireNode>,
         #[serde(default)]
@@ -2703,6 +2977,7 @@ mod wire {
                 macros: graph.macros,
                 user_block: graph.user_block,
                 attributes: graph.attributes,
+                bakes: graph.bakes,
                 nodes: graph
                     .nodes
                     .into_iter()
@@ -2735,6 +3010,7 @@ mod wire {
                 macros: wire.macros,
                 user_block: wire.user_block,
                 attributes: wire.attributes,
+                bakes: wire.bakes,
                 next_id,
             })
         }
@@ -3630,6 +3906,63 @@ mod tests {
         graph.add(Node::new("test.required").with_param("must", Value::F32(0.25)));
         graph.validate(&registry).unwrap();
     }
+
+    // -- bake declarations (ADR 0045) ------------------------------------
+
+    fn bake_of(node: NodeId, texture: &str) -> BakeDecl {
+        BakeDecl {
+            node,
+            socket: None,
+            texture: texture.to_string(),
+            size: [64, 64],
+            precision: crate::abi::GBufferPrecision::HighDynamicRange,
+        }
+    }
+
+    #[test]
+    fn a_bake_naming_a_socket_the_node_lacks_is_reported() {
+        let registry = registry();
+        let mut graph = Graph::new("baked");
+        let term = graph.add_node("test.vec");
+        // A declaration is validated against the *registry's* shape of the
+        // node, not the wiring: an unknown socket is refused by name, and
+        // so is a texture name nothing downstream could spell.
+        let mut wrong = bake_of(term, "normal_bake");
+        wrong.socket = Some("no_such_socket".to_string());
+        graph.declare_bake(wrong);
+        let mut unnamed = bake_of(term, "not an identifier");
+        unnamed.node = graph.add_node("test.vec");
+        graph.declare_bake(unnamed);
+        let errors = graph
+            .validate(&registry)
+            .expect_err("the bake names a socket that is not there");
+        let message = errors.to_string();
+        assert!(
+            message.contains("normal_bake")
+                && message.contains("no output socket `no_such_socket`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("not an identifier") && message.contains("WXSL identifier"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn one_node_cannot_stand_in_for_two_bakes() {
+        let registry = registry();
+        let mut graph = Graph::new("shared");
+        let term = graph.add_node("test.vec");
+        graph.declare_bake(bake_of(term, "normal_bake"));
+        graph.declare_bake(bake_of(term, "other_bake"));
+        let errors = graph
+            .validate(&registry)
+            .expect_err("one node cannot stand in for two bakes");
+        assert!(
+            errors.to_string().contains("other_bake") && errors.to_string().contains("baked twice"),
+            "{errors}"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
@@ -3677,5 +4010,36 @@ mod document_versions {
             text.contains(r#""version":1"#) && text.contains(r#""abi":1"#),
             "the stamp is on the wire: {text}"
         );
+    }
+
+    #[test]
+    fn a_bake_declaration_round_trips_through_the_wire() {
+        let mut graph = Graph::new("baked");
+        let term = graph.add_node("math.multiply.f32");
+        graph.declare_bake(BakeDecl {
+            node: term,
+            socket: None,
+            texture: "roughness_bake".to_string(),
+            size: [256, 128],
+            precision: crate::abi::GBufferPrecision::Normalized,
+        });
+        let text = serde_json::to_string(&graph).expect("serializes");
+        // Absent default fields stay off the wire, and the precision
+        // travels as the name every document spells it with.
+        assert!(
+            text.contains(r#""bakes":[{"node":1,"texture":"roughness_bake""#)
+                && text.contains(r#""size":[256,128]"#)
+                && text.contains(r#""precision":"standard""#),
+            "{text}"
+        );
+        let mut back: Graph = serde_json::from_str(&text).expect("parses back");
+        let decl = back.bake("roughness_bake").expect("the bake survived");
+        assert_eq!(decl.node, term);
+        assert_eq!(decl.size, [256, 128]);
+        assert_eq!(decl.precision, crate::abi::GBufferPrecision::Normalized);
+        // And the declaration is addressable the way codegen and the
+        // renderer address it: by the texture's name.
+        assert!(back.remove_bake("roughness_bake").is_some());
+        assert!(back.bake("roughness_bake").is_none());
     }
 }

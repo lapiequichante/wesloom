@@ -210,6 +210,11 @@ struct Demo {
     /// value) — applied through `Renderer::set_pass_param` once the pass
     /// list is set. What an editor canvas's sliders would drive (ADR 0042).
     params: &'static [(&'static str, &'static str, f32)],
+    /// A material graph of the demo's own, instead of the shared PBR cube
+    /// — one demo, `bake`, needs a material that *declares a bake* (ADR
+    /// 0045). `None` is the shared cube, and every other demo's image
+    /// comes from it unchanged.
+    material: Option<fn() -> Graph>,
 }
 
 fn demos() -> Vec<Demo> {
@@ -223,6 +228,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "deferred",
@@ -233,6 +239,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "single-pass",
@@ -243,6 +250,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "deferred-bloom",
@@ -255,6 +263,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "bloom-instances",
@@ -265,6 +274,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "bloom-tuned",
@@ -280,6 +290,7 @@ fn demos() -> Vec<Demo> {
             // scene glows, and the strength above one, so the glow leads —
             // visibly not the default image, from the same document.
             params: &[("bloom", "threshold", 0.35), ("bloom", "strength", 1.6)],
+            material: None,
         },
         Demo {
             name: "brdf-lut",
@@ -292,6 +303,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "buffer-ramp",
@@ -304,6 +316,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "subsurface",
@@ -316,6 +329,7 @@ fn demos() -> Vec<Demo> {
             features: &["subsurface"],
             sky: None,
             params: &[],
+            material: None,
         },
         Demo {
             name: "ibl",
@@ -329,6 +343,20 @@ fn demos() -> Vec<Demo> {
             // surface's own colour.
             sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
             params: &[],
+            material: None,
+        },
+        Demo {
+            name: "bake",
+            blurb: "a twelve-octave noise term baked to a 256x256 table once (policy: \
+                    once) and sampled back — ADR 0045's toggle: baked and inline \
+                    draw the same picture, and only the cost moves",
+            pipeline: Pipeline::Document(bake_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            sky: None,
+            params: &[],
+            material: Some(bake_material_graph),
         },
         Demo {
             name: "fxaa",
@@ -339,6 +367,7 @@ fn demos() -> Vec<Demo> {
             features: &[],
             sky: None,
             params: &[],
+            material: None,
         },
     ]
 }
@@ -466,6 +495,92 @@ fn buffer_ramp_document() -> Graph {
     document
 }
 
+/// The bake demo's material: the graph is a document, `bake_term.wxsl.json`
+/// — the same move `pbr_cube` makes, plus the `bakes` declaration that says
+/// node 5's value becomes a table ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+/// `Stage` compiles the *same parsed graph* into the effect's shader and
+/// the material, which is the point: one authoring, two compilations.
+fn bake_material_graph() -> Graph {
+    let graph: Graph = serde_json::from_str(include_str!("../assets/bake_term.wxsl.json"))
+        .expect("the bake material document parses");
+    graph
+        .validate(&wxsl::stdlib::registry())
+        .expect("the bake material document validates");
+    graph
+}
+
+/// The bake demo's pipeline: the deferred chain, with the bake — an
+/// imported colour target labelled with the declaration's texture name and
+/// a `pass.compute.<effect>` node writing it under policy `once` — added
+/// *before* the material pass. That placement is not style: the material
+/// samples the table through its own bind group, which is a dependency the
+/// scheduler cannot see, and declaration order is its tie-break. A bake
+/// written after the pass that samples it would feed it an empty table for
+/// one frame ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+/// The effect itself is `Stage::new`'s, generated from the material
+/// subgraph; a document names it by id like any other.
+fn bake_document() -> Graph {
+    let bake = bake_effect();
+    let effects = EffectRegistry::default().with(bake);
+    let registry = wxsl::render::document_registry(&effects);
+    let mut graph = wxsl_core::pipeline::document("deferred + bake");
+    let scene = graph.add_node(doc::SOURCE_SCENE);
+    let lights = graph.add_node(doc::SOURCE_LIGHTS);
+    let shadows = graph.add_node(doc::PASS_SHADOW);
+    let table = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("roughness_bake")
+            .with_setting(doc::SETTING_PRECISION, "hdr")
+            .with_setting(doc::SETTING_IMPORTED, "true"),
+    );
+    let bake_pass = graph.add(
+        wxsl::core::graph::Node::new(format!("{}demo.bake_roughness", doc::PASS_COMPUTE_PREFIX))
+            .with_label("roughness bake")
+            .with_setting(doc::SETTING_POLICY, "once"),
+    );
+    let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+    let material = graph.add(
+        wxsl::core::graph::Node::new(doc::PASS_GEOMETRY)
+            .with_label("deferred material")
+            .with_setting(doc::SETTING_STAGE, "gbuffer"),
+    );
+    let lighting =
+        graph.add(wxsl::core::graph::Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
+    let present = graph.add_node(doc::PRESENT);
+    let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {
+        graph.wire(&registry, from, to).expect("bake demo wiring");
+    };
+    wire((scene, "draws"), (shadows, "draws"));
+    wire((lights, "shadows"), (shadows, "into"));
+    wire((table, "color"), (bake_pass, "bake"));
+    wire((scene, "draws"), (material, "draws"));
+    wire((gbuffer, "gbuffer"), (material, "gbuffer"));
+    wire((gbuffer, "gbuffer"), (lighting, "gbuffer"));
+    wire((lighting, "color"), (present, "surface"));
+    // The head pass is redirected into an HDR target and presents through
+    // the display transform, exactly as every stock chain ends.
+    present_through_tonemap(&mut graph, lighting, present);
+    graph
+}
+
+/// The bake effect, generated from the material subgraph — what
+/// `Stage::new` registers on the renderer and `bake_document` names. One
+/// generation here, one in `Stage::new`: both cheap, both from the same
+/// declaration, and the variant cache keys on the source's hash so there
+/// is no question of them disagreeing.
+fn bake_effect() -> wxsl::render::effect::Effect {
+    wxsl::render::effect::Effect::from_bake(
+        "demo.bake_roughness",
+        "roughness bake",
+        "Evaluate the material's baked term over its 256x256 table.",
+        &bake_material_graph(),
+        "roughness_bake",
+        &wxsl::core::macros::MacroSet::new(),
+        &wxsl::stdlib::registry(),
+    )
+    .expect("the bake material generates its effect")
+}
+
 /// The minimal pipeline there is: a scene, one lit material pass with a
 /// depth target of its own, present. Three nodes and a resource — what a
 /// pipeline document looks like with everything optional left out.
@@ -584,6 +699,12 @@ fn deferred_bloom_document() -> Graph {
 fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     if renderer.features() != demo.features {
         renderer.set_features(demo.features)?;
+    }
+    // The bake table's view rides only with its demo: the next pass list
+    // declares no such resource, and a view nothing declares is an error
+    // by name — so the demo that owns it takes it back when it leaves.
+    if demo.material.is_none() {
+        renderer.remove_import("roughness_bake");
     }
     match &demo.pipeline {
         Pipeline::Stock(stock) => {
@@ -750,6 +871,72 @@ fn demo_bindings(
     Ok(bindings)
 }
 
+impl BakeStage {
+    /// Parse the bake material, compile it, create the table its
+    /// declaration names — the host owns the texture; the pass list only
+    /// writes through it — and bind the material's declared resources to
+    /// it. The declaration is the one place size and precision live, so
+    /// the texture is created from it and the pipeline's `resource.color`
+    /// is expected to agree.
+    fn new(gpu: &GpuContext, renderer: &mut Renderer) -> Result<Self, Box<dyn Error>> {
+        let graph = bake_material_graph();
+        let decl = graph
+            .bake("roughness_bake")
+            .expect("the demo material declares its table");
+        let material = wxsl::render::Material::with_lighting(
+            &graph,
+            &wxsl::stdlib::registry(),
+            &wxsl::render::material::MaterialConfig::default(),
+            renderer.lighting(),
+        )?;
+        let format = wxsl::render::gbuffer_format(decl.precision);
+        let [width, height] = decl.size;
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("roughness bake table"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            // Written by the bake pass as storage, sampled by the material
+            // as a texture — one texture, both halves of the bake.
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("roughness bake sampler"),
+            // The domain is 0..1 — the table covers exactly that — so an
+            // out-of-range uv clamps to the edge rather than tiling noise
+            // that was never baked.
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let mut bindings = renderer.material_bindings(&gpu.device, &material);
+        for resource in &material.interface().resources {
+            let name = resource.name.as_str();
+            if resource.bake.is_some() && resource.ty == wxsl::core::node::ValueType::Sampler {
+                bindings.set_sampler(name, &sampler)?;
+            } else if resource.bake.is_some() {
+                bindings.set_texture(name, &view)?;
+            }
+        }
+        bindings.upload(&gpu.device, &gpu.queue)?;
+        Ok(BakeStage {
+            material,
+            bindings,
+            view,
+        })
+    }
+}
+
 /// One distinct tint per copy, hue-swept; a single copy stays white, the
 /// identity for the graph's multiply.
 fn instance_tints(count: u32) -> Vec<InstanceAttributes> {
@@ -813,6 +1000,22 @@ struct Stage {
     sampler: wgpu::Sampler,
     /// The feature set the current material was resolved against.
     material_features: &'static [&'static str],
+    /// The bake demo's own material and the table its bake pass writes
+    /// through (ADR 0045): the graph is parsed once, the effect and the
+    /// material are compiled from it, the texture is the *material's*
+    /// (the host creates and owns it; the pass list only writes through
+    /// it), and the view rides the renderer as an import under the
+    /// declaration's name.
+    bake: Option<BakeStage>,
+}
+
+/// The bake demo's half of the stage. The view is kept because the import
+/// it feeds is *per demo*: the demos before and after take the view back
+/// (`apply` removes it), and each bake frame hands it over again.
+struct BakeStage {
+    material: wxsl::render::Material,
+    bindings: wxsl::render::MaterialBindings,
+    view: wgpu::TextureView,
 }
 
 impl Stage {
@@ -838,6 +1041,11 @@ impl Stage {
         let nodes = wxsl::stdlib::registry();
         renderer.add_effect(wxsl::effects::tonemap(&nodes)?);
         renderer.add_effect(wxsl::effects::fxaa(&nodes)?);
+        // The bake effect is generated from the material subgraph (ADR
+        // 0045) — registration is where generation happens, so a cone that
+        // reads something a bake cannot evaluate is a failure here rather
+        // than at the first frame.
+        renderer.add_effect(bake_effect());
         let mesh = Mesh::cube(&gpu.device, 1.6);
         let (texture, sampler) = demo_texture(&gpu.device, &gpu.queue);
         let bindings = demo_bindings(
@@ -848,6 +1056,7 @@ impl Stage {
             &texture,
             &sampler,
         )?;
+        let bake = BakeStage::new(&gpu, &mut renderer)?;
         Ok(Stage {
             gpu,
             renderer,
@@ -859,6 +1068,7 @@ impl Stage {
             texture,
             sampler,
             material_features: &[],
+            bake: Some(bake),
         })
     }
 
@@ -906,14 +1116,25 @@ impl Stage {
         self.ensure_material(demo.features)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
-        let draws = cube_draws(
-            &self.mesh,
-            &self.material,
-            &self.bindings,
-            &self.tints,
-            demo.instances,
-            time,
-        );
+        // A demo with a material of its own draws it; every other demo
+        // draws the shared cube. The bake material declares no per-instance
+        // attributes, so its tints are empty and one copy draws.
+        let (material, bindings, tints, instances) = if demo.material.is_some() {
+            let bake = self.bake.as_ref().expect("the bake stage was built");
+            // The table's view rides with its demo: every other demo took
+            // it back, and a view nothing declares is an error by name.
+            self.renderer
+                .import_resource("roughness_bake", bake.view.clone());
+            (&bake.material, &bake.bindings, &[][..], 1)
+        } else {
+            (
+                &self.material,
+                &self.bindings,
+                &self.tints[..],
+                demo.instances,
+            )
+        };
+        let draws = cube_draws(&self.mesh, material, bindings, tints, instances, time);
         self.renderer.render(
             &self.gpu.device,
             &self.gpu.queue,

@@ -1326,6 +1326,32 @@ pub const SOCKET_SCREEN_COLOR: &str = "color";
 /// The input socket [`SCREEN_OUTPUT_ID`] takes its alpha on.
 pub const SOCKET_SCREEN_ALPHA: &str = "alpha";
 
+// ---------------------------------------------------------------------------
+// The bake ABI
+// ---------------------------------------------------------------------------
+
+/// Module a generated *bake* module is mounted at — the shader an effect
+/// generated from a material subgraph compiles as
+/// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+///
+/// The bake's twin of [`SCREEN_MODULE`]: nominal (nothing imports the root
+/// module), but it names in a profile or an error what would otherwise be
+/// an anonymous source.
+pub const BAKE_MODULE: &str = "package::bake";
+/// Name of the function a bake's subgraph compiles into: the cone's value
+/// at one point of the bake domain.
+pub const BAKE_VALUE_FN: &str = "wxsl_bake_value";
+/// The compute entry point of a generated bake module: one dispatch over
+/// the bake target, evaluating [`BAKE_VALUE_FN`] at each texel centre.
+pub const BAKE_ENTRY: &str = "wxsl_bake";
+/// The write-only storage texture a bake module writes, at binding 0 of
+/// [`GROUP_PASS`] — the shape every `EffectOutputShape::StorageTexture`
+/// output takes, and the only one a bake declares.
+pub const BAKE_TARGET_VAR: &str = "wxsl_bake_target";
+/// Workgroup edge of a bake dispatch. A bake target is a 2D table, so one
+/// 8×8 workgroup covers it, guarded by the target's own extent.
+pub const BAKE_WORKGROUP_SIZE: u32 = 8;
+
 /// The screen domain's terminal: what one fullscreen pass writes.
 ///
 /// Two optional inputs and no more. A material's output node has seven

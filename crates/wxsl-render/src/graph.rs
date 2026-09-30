@@ -118,6 +118,18 @@ impl RenderGraph {
         &self.resources
     }
 
+    /// The resource labelled `label`, if one is declared.
+    ///
+    /// How the renderer matches a host-supplied view to the imported
+    /// resource it is a view *of* — by name, the same name the scene's
+    /// bake declaration and the pipeline's `resource.color` agree on.
+    pub fn resource_by_label(&self, label: &str) -> Option<ResourceId> {
+        self.resources
+            .iter()
+            .position(|desc| desc.label == label)
+            .map(|index| ResourceId(index as u32))
+    }
+
     /// The passes, in declaration order.
     pub fn passes(&self) -> &[PassDesc] {
         &self.passes
@@ -257,7 +269,17 @@ impl RenderGraph {
             if pass.policy != Policy::PerFrame {
                 for id in pass.written() {
                     let desc = &self.resources[id.index()];
-                    let stable = matches!(desc.persistence, Persistence::Persistent { history: 0 });
+                    // An imported resource *other than the frame's own
+                    // target* is stable in the strongest sense the rule is
+                    // about: nobody here can reallocate it. The host owns
+                    // the texture (a bake table most of all), so a skipped
+                    // pass leaves its last write on a texture that cannot
+                    // have moved — the rule's purpose holds by ownership
+                    // rather than by the pool's ring. The target is
+                    // imported too, but it is re-presented every frame by
+                    // definition and is the frame's, not the host's.
+                    let stable = (desc.imported && id != RenderGraph::TARGET)
+                        || matches!(desc.persistence, Persistence::Persistent { history: 0 });
                     if !stable {
                         return Err(GraphError::PolicyNeedsStableStorage {
                             pass: pass.label.clone(),
@@ -1147,7 +1169,7 @@ impl RenderGraph {
             // lighting pass samples is exactly this, and so is a screen
             // effect's input; there is nothing pass-specific left to write.
             let (pass_bindings, pass_layout, pass_bind_group) =
-                self.pass_group(device, pool, schedule, pass, params(pass))?;
+                self.pass_group(device, pool, schedule, pass, params(pass), imports)?;
 
             let color_formats: Vec<Option<wgpu::ColorTargetState>> = pass
                 .color
@@ -1339,6 +1361,7 @@ impl RenderGraph {
         schedule: &Schedule,
         pass: &PassDesc,
         params: Option<(&wgpu::Buffer, u32)>,
+        imports: &[(ResourceId, &wgpu::TextureView)],
     ) -> Result<
         (
             Vec<PassBinding>,
@@ -1429,44 +1452,102 @@ impl RenderGraph {
             .clone();
 
         // Reads go to their ring slot at their history; writes to this
-        // frame's slot of what they write. The parameter block has no slot
-        // — its buffer came in with the pass.
-        let slots: Vec<usize> = pass
-            .reads
+        // frame's slot of what they write — unless the resource is
+        // imported, which has no slot because nobody here allocated it:
+        // it binds the view the host handed over (a bake table above all,
+        // ADR 0045). The parameter block has no slot either — its buffer
+        // came in with the pass.
+        // Reads go to their ring slot at their history; writes to this
+        // frame's slot of what they write — unless the resource is
+        // imported, which has no slot because nobody here allocated it: it
+        // binds the view the host handed over (a bake table above all,
+        // ADR 0045). The parameter block has no slot either — its buffer
+        // came in with the pass.
+        let imported_view = |resource: ResourceId| -> Option<&wgpu::TextureView> {
+            self.resources[resource.index()]
+                .imported
+                .then(|| {
+                    imports
+                        .iter()
+                        .find(|(imported, _)| *imported == resource)
+                        .map(|(_, view)| *view)
+                })
+                .flatten()
+        };
+        let mut sources: Vec<Result<usize, &wgpu::TextureView>> =
+            Vec::with_capacity(pass.reads.len() + pass.writes.len());
+        let mut any_imported = false;
+        for read in &pass.reads {
+            match imported_view(read.resource) {
+                Some(view) => {
+                    any_imported = true;
+                    sources.push(Err(view));
+                }
+                None => match schedule.slot(read.resource, pool.frame, read.history) {
+                    Some(slot) => sources.push(Ok(slot)),
+                    None => {
+                        return Err(RenderError::MissingImport {
+                            resource: pass.label.clone(),
+                        })
+                    }
+                },
+            }
+        }
+        for write in &pass.writes {
+            match imported_view(*write) {
+                Some(view) => {
+                    any_imported = true;
+                    sources.push(Err(view));
+                }
+                None => match schedule.slot(*write, pool.frame, 0) {
+                    Some(slot) => sources.push(Ok(slot)),
+                    None => {
+                        return Err(RenderError::MissingImport {
+                            resource: pass.label.clone(),
+                        })
+                    }
+                },
+            }
+        }
+        // The cache key carries slots only, and a slot cannot name a view
+        // the host owns — so a group holding an import is built fresh
+        // whenever it is due. That is cheap by construction: the group is
+        // only built when the pass runs, and a bake runs once or on
+        // demand. Every other pass is keyed as before: two passes with
+        // the same shapes and the same slots but different parameter
+        // buffers must not share a group, and the label — unique per pass,
+        // the name its author knows — is what tells them apart.
+        let slots: Vec<usize> = sources
             .iter()
-            .map(|read| schedule.slot(read.resource, pool.frame, read.history))
-            .chain(
-                pass.writes
-                    .iter()
-                    .map(|write| schedule.slot(*write, pool.frame, 0)),
-            )
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| RenderError::MissingImport {
-                resource: pass.label.clone(),
-            })?;
-        // The label in the key: two passes with the same shapes and the
-        // same slots but different parameter buffers must not share a bind
-        // group, and the label — unique per pass, the name its author
-        // knows — is what tells them apart.
-        let key = (kinds.clone(), slots.clone(), params_key);
-        if let Some(existing) = pool.bind_groups.get(&key) {
-            return Ok((kinds, Some(layout), Some(existing.clone())));
+            .map(|source| source.as_ref().copied().unwrap_or(usize::MAX))
+            .collect();
+        let key = (kinds.clone(), slots, params_key);
+        if !any_imported {
+            if let Some(existing) = pool.bind_groups.get(&key) {
+                return Ok((kinds, Some(layout), Some(existing.clone())));
+            }
         }
         let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(kinds.len());
-        let mut slots = slots.iter();
+        let mut sources = sources.into_iter();
         for (binding, kind) in kinds.iter().enumerate() {
             // The binding's kind decides how the entry is bound — and the
             // kind is where the pass declared it, so the two cannot
             // disagree. Only the parameter block binds something that did
-            // not come from a slot.
+            // not come from a slot or an import.
             let resource = match *kind {
                 PassBinding::Texture { .. } | PassBinding::StorageTexture { .. } => {
-                    wgpu::BindingResource::TextureView(
-                        pool.view(*slots.next().expect("a slot per texture binding")),
-                    )
+                    match sources.next().expect("a source per texture binding") {
+                        Ok(slot) => wgpu::BindingResource::TextureView(pool.view(slot)),
+                        Err(view) => wgpu::BindingResource::TextureView(view),
+                    }
                 }
                 PassBinding::Buffer { .. } => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: pool.slot_buffer(*slots.next().expect("a slot per buffer binding")),
+                    buffer: pool.slot_buffer(
+                        sources
+                            .next()
+                            .expect("a source per buffer binding")
+                            .expect("a buffer source is a slot"),
+                    ),
                     offset: 0,
                     size: None,
                 }),

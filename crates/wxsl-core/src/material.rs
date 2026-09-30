@@ -84,6 +84,21 @@ pub struct MaterialConfig {
     /// What this material *is*, for a pass's tag expression to select on.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tags: Tags,
+    /// Whether the graph's bake declarations are *consumed* as bakes — the
+    /// sampled table — or evaluated inline, the subgraph in the material
+    /// module
+    /// ([ADR 0045](../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+    ///
+    /// This is the toggle the bake's done-when speaks of: flipping it
+    /// changes what the material costs (the baked arm's module is smaller
+    /// by the whole subgraph) and not what it looks like, because the bake
+    /// is the same value at every texel centre. It needs no edit: the
+    /// declaration stays in the graph, and both arms compile from it. On
+    /// by default — a declaration expresses the intent to bake — and it
+    /// rides [`MaterialConfig`] because a material's configuration is one
+    /// value ([ADR 0038]).
+    #[cfg_attr(feature = "serde", serde(default = "yes"))]
+    pub bakes: bool,
     /// The feature channels the surrounding *pipeline* carries, which this
     /// material's G-buffer struct is generated for (plan2 P12, ADR 0037).
     ///
@@ -111,6 +126,7 @@ impl Default for MaterialConfig {
             cast_shadow: true,
             receive_shadow: true,
             tags: Tags::new(),
+            bakes: true,
             features: Vec::new(),
         }
     }
@@ -175,6 +191,7 @@ impl MaterialConfig {
             lighting,
             cast_shadow: self.cast_shadow,
             tags: self.tags.clone(),
+            bakes: self.bakes,
         })
     }
 }
@@ -197,6 +214,9 @@ pub struct ResolvedMaterialConfig {
     pub cast_shadow: bool,
     /// What this material *is*, for a pass's tag expression to select on.
     pub tags: Tags,
+    /// Whether the graph's bake declarations are consumed as bakes (the
+    /// sampled table) or evaluated inline (the subgraph in the module).
+    pub bakes: bool,
 }
 
 impl Default for ResolvedMaterialConfig {

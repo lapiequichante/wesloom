@@ -52,6 +52,7 @@ use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
 use wxsl_core::error::CodegenError;
 use wxsl_core::graph::Graph;
 use wxsl_core::identity;
+use wxsl_core::macros::MacroSet;
 use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, Value, ValueType};
 use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
 use wxsl_core::resources::BufferLayout;
@@ -198,10 +199,11 @@ pub enum EffectShader {
         /// The WXSL text.
         wxsl: &'static str,
     },
-    /// Generated from a **screen graph**: an effect a user could have
-    /// authored on a canvas, compiled through
-    /// [`wxsl_core::codegen::generate_screen`]
-    /// ([ADR 0040](../../../docs/adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+    /// Generated from a **graph**: a screen graph, or — since
+    /// [ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)
+    /// — a *material subgraph*, a bake. Compiled through
+    /// [`wxsl_core::codegen::generate_screen`] or
+    /// [`wxsl_core::codegen::generate_bake`].
     ///
     /// The WXSL is generated once, when the effect is built
     /// ([`Effect::from_graph`]), rather than per compile: generation needs
@@ -214,9 +216,12 @@ pub enum EffectShader {
         /// The authored graph, kept so an editor can open what it shows
         /// and a document can round-trip it.
         graph: Arc<Graph>,
-        /// The WXSL generated from it, mounted at
-        /// [`wxsl_core::codegen::SCREEN_MODULE`].
+        /// The WXSL generated from it, mounted at `module`.
         wxsl: Arc<str>,
+        /// The module path the text is mounted under —
+        /// [`wxsl_core::codegen::SCREEN_MODULE`] or
+        /// [`wxsl_core::codegen::BAKE_MODULE`], by what generated it.
+        module: &'static str,
     },
 }
 
@@ -226,10 +231,9 @@ impl EffectShader {
         match self {
             EffectShader::Lighting => None,
             EffectShader::Source { path, wxsl } => Some((path, std::borrow::Cow::Borrowed(*wxsl))),
-            EffectShader::Graph { wxsl, .. } => Some((
-                codegen::SCREEN_MODULE,
-                std::borrow::Cow::Owned(wxsl.to_string()),
-            )),
+            EffectShader::Graph { wxsl, module, .. } => {
+                Some((*module, std::borrow::Cow::Owned(wxsl.to_string())))
+            }
         }
     }
 }
@@ -304,6 +308,81 @@ impl Effect {
             shader: EffectShader::Graph {
                 graph: Arc::new(graph),
                 wxsl: Arc::from(generated.source),
+                // The nominal mount, not the ABI's own path: the generated
+                // module *imports* `abi::SCREEN_MODULE`, and mounting it
+                // there would be a module importing itself.
+                module: codegen::SCREEN_MODULE,
+            },
+        })
+    }
+
+    /// Build a *bake* effect from a material graph's bake declaration
+    /// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)):
+    /// the descriptor's shader is generated from the subgraph the
+    /// declaration names, the way a material module is generated from the
+    /// graph, and the effect is an ordinary compute effect from there on —
+    /// one declared output (the table, wired from a `resource.color` the
+    /// document labels with the declaration's texture name), one dispatch
+    /// whose shape is the table's.
+    ///
+    /// `texture` is the declaration's name — how an application addresses
+    /// a bake without knowing node ids, and the same string the pipeline's
+    /// `resource.color` must be labelled and the host must bind the
+    /// created table under. `macros` are what the module is generated at;
+    /// keep them equal to what the *material* compiles the same subgraph
+    /// under, or the two arms of the toggle disagree.
+    ///
+    /// A graph that does not generate fails here, at registration, rather
+    /// than at the first frame — the cone's purity among the rest.
+    ///
+    /// The graph is borrowed, not taken: the caller almost always keeps it
+    /// — the material is compiled from the same document — and an `Arc`
+    /// behind the descriptor makes sharing free.
+    pub fn from_bake(
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        graph: &Graph,
+        texture: &str,
+        macros: &MacroSet,
+        registry: &NodeRegistry,
+    ) -> Result<Effect, CodegenError> {
+        let decl = graph.bake(texture).ok_or_else(|| {
+            CodegenError::Invalid(wxsl_core::error::GraphErrors(vec![
+                wxsl_core::error::GraphError::InvalidBake {
+                    texture: texture.to_string(),
+                    reason: "no bake declaration names this texture".to_string(),
+                },
+            ]))
+        })?;
+        let generated = codegen::generate_bake(
+            graph,
+            decl,
+            registry,
+            &wxsl_core::codegen::BakeOptions {
+                macros: macros.clone(),
+                ..wxsl_core::codegen::BakeOptions::default()
+            },
+        )?;
+        Ok(Effect {
+            id,
+            label,
+            description,
+            kind: EffectKind::Compute {
+                entry: generated.entry,
+                workgroups: generated.workgroups,
+            },
+            inputs: &[],
+            outputs: &[EffectOutput {
+                name: "bake",
+                shape: EffectOutputShape::StorageTexture,
+                description: "The bake table this effect fills, one value per texel.",
+            }],
+            parameters: &[],
+            shader: EffectShader::Graph {
+                graph: Arc::new(graph.clone()),
+                wxsl: Arc::from(generated.source),
+                module: abi::BAKE_MODULE,
             },
         })
     }

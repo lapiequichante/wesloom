@@ -109,7 +109,7 @@ pub use pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassKind, PassState,
     Persistence, Policy, Read, ResourceDesc, ResourceId,
 };
-pub use pipeline::{PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
+pub use pipeline::{gbuffer_format, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 pub use pipeline_doc::{compile as compile_pipeline, document_registry, PipelineError};
 pub use renderer::{single_draw, RenderRequest, Renderer};
 pub use swap::SwapProgress;

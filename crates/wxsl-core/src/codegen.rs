@@ -38,14 +38,14 @@
 //! the interface is computed over that same reachable set, so a parked
 //! `param.value` declares no uniform either.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::abi;
 use crate::error::{CodegenError, GraphError, GraphErrors};
-use crate::graph::{Graph, NodeId, ShaderStage, SocketRef};
+use crate::graph::{Graph, GraphOutputs, NodeId, ShaderStage, SocketRef};
 use crate::macros::{MacroSet, MacroValue};
-use crate::node::{self, FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value};
+use crate::node::{self, FunctionReturn, NodeBody, NodeDefinition, NodeRegistry, Value, ValueType};
 use crate::resources::{GeometryInterface, MaterialInterface};
 use crate::wxsl::{stable_hash, ModulePath, WxslIdent};
 
@@ -240,12 +240,23 @@ pub fn generate(
         );
     }
     let stage = options.stage;
+    // The bake plan, over the reachable set: each declaration whose node
+    // the surface (or a discard test) actually reaches becomes a stand-in,
+    // and its cone leaves the module — unless the material evaluates its
+    // bakes inline, which is the toggle and not an edit.
+    let baked = if options.material.bakes {
+        bake_terms(graph, registry, &reachable, &outputs, &plan)?
+    } else {
+        BTreeMap::new()
+    };
     let mut emitter = Emitter {
         graph,
         registry,
         options,
         interface,
         stage: ShaderStage::Fragment,
+        baked,
+        bake_domain: false,
         bindings: BTreeMap::new(),
         imports: BTreeMap::new(),
         lighting_source: String::new(),
@@ -411,6 +422,8 @@ pub fn generate_screen(
         options: &material_options,
         interface: interface.clone(),
         stage: ShaderStage::Fragment,
+        baked: BTreeMap::new(),
+        bake_domain: false,
         bindings: BTreeMap::new(),
         imports: BTreeMap::new(),
         lighting_source: String::new(),
@@ -430,6 +443,299 @@ pub fn generate_screen(
         interface,
         source_hash,
     })
+}
+
+/// Module path a generated *bake* module is mounted at — the shader an
+/// effect generated from a material subgraph compiles as. Nominal, like
+/// the other mounts: nothing imports a root module.
+pub use crate::abi::BAKE_MODULE;
+
+/// Knobs for [`generate_bake`]: the same macro chain a screen graph goes
+/// through, because the cone's nodes declare macros the same way.
+///
+/// One rule the caller owns: the bake module must be generated at the same
+/// macro values the *material* compiles under when it evaluates the cone
+/// inline — an octave count pinned differently on one side is a bake that
+/// disagrees with its own subgraph. Pin the shared knobs on the graph, and
+/// both sides read them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BakeOptions {
+    /// Macro values to sit *beneath* the graph's own.
+    pub base_macros: MacroSet,
+    /// Macro values to sit *above* the graph's own — what the application
+    /// decides rather than the graph's author.
+    pub macros: MacroSet,
+}
+
+/// What generating a bake produces: the module, and everything the effect
+/// descriptor and the pass that runs it need to know about the dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneratedBake {
+    /// The WXSL source of the root module.
+    pub source: String,
+    /// The macro values this source was generated at — the flag macros go
+    /// to the compiler as conditional-translation bindings, as for any
+    /// generated module.
+    pub macros: MacroSet,
+    /// The compute entry point in [`Self::source`].
+    pub entry: &'static str,
+    /// Workgroups in x, y, z: the bake table's extent, rounded up to whole
+    /// [`abi::BAKE_WORKGROUP_SIZE`] squares.
+    pub workgroups: [u32; 3],
+    /// The bake table's size, in pixels — what the target must be.
+    pub size: [u32; 2],
+    /// The name the table's write-only storage binding goes by, and the
+    /// one output the effect declares.
+    pub target: &'static str,
+    /// Stable hash of the source, for the variant cache.
+    pub source_hash: u64,
+}
+
+/// Generate WXSL for one bake: a material subgraph, evaluated per texel of
+/// a small 2D table and written to it
+/// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+///
+/// The material-side twin of this — the subgraph skipped and one sample
+/// emitted instead — is [`generate`] with the configuration's `bakes` on;
+/// both are generated from the same declaration, which is why the two arms
+/// can agree.
+///
+/// The cone's purity is checked here, at generation, so a bake that cannot
+/// be computed is a failure at registration rather than at the first frame
+/// that wanted it — the same rule `Effect::from_graph` keeps. The cone is a
+/// function of the bake domain alone: `input.uv` is allowed (it *is* the
+/// domain, and becomes the function's parameter); any other context read,
+/// any attribute, parameter, application field or texture is refused by
+/// name. A bake is a pure function of where it is evaluated — that is the
+/// whole of what makes sampling it back equal computing it.
+pub fn generate_bake(
+    graph: &Graph,
+    decl: &crate::graph::BakeDecl,
+    registry: &NodeRegistry,
+    options: &BakeOptions,
+) -> Result<GeneratedBake, CodegenError> {
+    graph.validate(registry)?;
+    let invalid = |reason: String| {
+        CodegenError::Invalid(GraphErrors(vec![GraphError::InvalidBake {
+            texture: decl.texture.trim().to_string(),
+            reason,
+        }]))
+    };
+
+    // Everything the baked node's output depends on — the node itself
+    // included: its own body computes the value, whatever feeds it computes
+    // the inputs.
+    let cone = graph.dependencies_of(decl.node);
+    let order = graph
+        .topological_order(Some(&cone))
+        .map_err(|e| CodegenError::Invalid(GraphErrors(vec![e])))?;
+
+    // Purity: the cone is a function of the domain and nothing else. One
+    // refusal per offending node, naming what it reads.
+    for &member in &order {
+        let Some(instance) = graph.node(member) else {
+            continue;
+        };
+        let Some(def) = registry.get(&instance.def) else {
+            continue;
+        };
+        let what = match &def.body {
+            NodeBody::ContextRead(field) if field.as_str() == "uv" => continue,
+            NodeBody::ContextRead(field) => format!("the surface context field `{field}`"),
+            NodeBody::VertexContextRead(field) => format!("the vertex context field `{field}`"),
+            NodeBody::AttributeRead => "a geometry attribute".to_string(),
+            NodeBody::Param => "a material parameter".to_string(),
+            NodeBody::UserRead => "the application block".to_string(),
+            NodeBody::Resource => "a bound texture".to_string(),
+            _ => continue,
+        };
+        return Err(invalid(format!(
+            "the baked subgraph reads {what} at node {member}, and a bake \
+             evaluates over the bake domain (`input.uv`) alone — a bake is a \
+             pure function of where it is sampled"
+        )));
+    }
+
+    // The same macro chain a screen graph goes through.
+    let mut macros = options.base_macros.clone();
+    macros.overlay(&graph.effective_macros(registry)?);
+    macros.overlay(&options.macros);
+
+    // Which output socket, and therefore which expression the table
+    // stores.
+    let instance = graph
+        .node(decl.node)
+        .ok_or_else(|| invalid("names a node the graph does not contain".to_string()))?;
+    let def = registry
+        .get(&instance.def)
+        .ok_or_else(|| invalid("names a node whose definition is not registered".to_string()))?;
+    let socket_name = decl
+        .socket
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            def.outputs
+                .first()
+                .map(|socket| socket.name.as_str().to_string())
+                .expect("check_bakes rejected a node with no outputs")
+        });
+    let socket = def
+        .outputs
+        .iter()
+        .find(|socket| socket.name.as_str() == socket_name)
+        .ok_or_else(|| {
+            invalid(format!(
+                "node {} has no output socket `{socket_name}` to bake",
+                decl.node
+            ))
+        })?;
+    let value_ty = socket.ty;
+
+    // Emit the cone into the value function, under `bake_domain`, so the
+    // uv reads come out as the parameter.
+    let material_options = CodegenOptions {
+        emit_entry_points: false,
+        ..CodegenOptions::default()
+    };
+    let mut emitter = Emitter {
+        graph,
+        registry,
+        options: &material_options,
+        interface: MaterialInterface::default(),
+        stage: ShaderStage::Fragment,
+        baked: BTreeMap::new(),
+        bake_domain: true,
+        bindings: BTreeMap::new(),
+        imports: BTreeMap::new(),
+        lighting_source: String::new(),
+        body: String::new(),
+    };
+    for node in &order {
+        emitter.emit_node(*node)?;
+    }
+    let value = emitter
+        .bindings
+        .get(&SocketRef::new(decl.node, &socket_name))
+        .cloned()
+        .ok_or_else(|| invalid("its own value never computed".to_string()))?;
+    let cone_body = core::mem::take(&mut emitter.body);
+    let imports = emitter.imports;
+
+    let size = decl.size;
+    let workgroups = [
+        size[0].div_ceil(abi::BAKE_WORKGROUP_SIZE),
+        size[1].div_ceil(abi::BAKE_WORKGROUP_SIZE),
+        1,
+    ];
+    let source = bake_module(
+        graph,
+        decl,
+        &macros,
+        &imports,
+        BakedValue {
+            body: &cone_body,
+            expr: &value,
+            ty: value_ty,
+            size,
+        },
+    );
+    let source_hash = stable_hash(source.as_bytes());
+    Ok(GeneratedBake {
+        source,
+        macros,
+        entry: abi::BAKE_ENTRY,
+        workgroups,
+        size,
+        target: abi::BAKE_TARGET_VAR,
+        source_hash,
+    })
+}
+
+/// The value a bake stores: the cone's emitted statements, the expression
+/// that is the baked node's output, its type, and the table it lands in.
+struct BakedValue<'a> {
+    body: &'a str,
+    expr: &'a str,
+    ty: ValueType,
+    size: [u32; 2],
+}
+
+/// The whole generated bake module: header, imports, macros, the write-only
+/// target, the value function over the bake domain, and the dispatch that
+/// fills the table.
+fn bake_module(
+    graph: &Graph,
+    decl: &crate::graph::BakeDecl,
+    macros: &MacroSet,
+    imports: &BTreeMap<ModulePath, Vec<WxslIdent>>,
+    value: BakedValue<'_>,
+) -> String {
+    let BakedValue {
+        body: cone_body,
+        expr: value,
+        ty: value_ty,
+        size,
+    } = value;
+    // The stored value, padded out to the table's four channels. The
+    // padding is constant, and the reading side's swizzle takes exactly
+    // the value's width back.
+    let padded = match value_ty {
+        ValueType::F32 => format!("vec4f({value}, 0.0, 0.0, 1.0)"),
+        ValueType::Vec2 => format!("vec4f({value}, 0.0, 1.0)"),
+        ValueType::Vec3 => format!("vec4f({value}, 1.0)"),
+        ValueType::Vec4 => value.to_string(),
+        _ => unreachable!("check_bakes rejected a non-float bake"),
+    };
+    // The two precisions a bake may declare are the two that can be
+    // written through storage (the check is `check_bakes`'s); this is
+    // their WGSL.
+    let format = match decl.precision {
+        crate::abi::GBufferPrecision::Normalized => "rgba8unorm",
+        _ => "rgba16float",
+    };
+    let (width, height) = (size[0], size[1]);
+
+    let mut out = String::with_capacity(1024);
+    write_header(&mut out, graph, macros, imports);
+    let _ = writeln!(
+        out,
+        "// Bake `{texture}`: {width}x{height}, {format}.",
+        texture = decl.texture.trim(),
+    );
+    let _ = writeln!(
+        out,
+        "@group({}) @binding(0) var {}: texture_storage_2d<{format}, write>;",
+        abi::GROUP_PASS,
+        abi::BAKE_TARGET_VAR,
+    );
+
+    let _ = writeln!(out, "\nfn {}(uv: vec2f) -> vec4f {{", abi::BAKE_VALUE_FN,);
+    // The cone's statements, already emitted in dependency order.
+    out.push_str(cone_body);
+    let _ = writeln!(out, "    return {padded};");
+    out.push_str("}\n");
+
+    let _ = write!(
+        out,
+        "
+@compute @workgroup_size({}, {})
+fn {}(@builtin(global_invocation_id) id: vec3u) {{
+    if (id.x >= {width}u || id.y >= {height}u) {{
+        return;
+    }}
+    let uv = (vec2f(id.xy) + vec2f(0.5, 0.5)) / vec2f({width}.0, {height}.0);
+    textureStore({}, vec2i(id.xy), {}(uv));
+}}
+",
+        abi::BAKE_WORKGROUP_SIZE,
+        abi::BAKE_WORKGROUP_SIZE,
+        abi::BAKE_ENTRY,
+        abi::BAKE_TARGET_VAR,
+        abi::BAKE_VALUE_FN,
+    );
+    out
 }
 
 /// The whole generated screen module: header, imports, macros, the graph's
@@ -532,6 +838,17 @@ struct Emitter<'a> {
     /// because those are the only expressions that are spelled
     /// differently on the two sides of the interpolator.
     stage: ShaderStage,
+    /// The bakes this module consumes: each is a node the partitions stop
+    /// at, binding its output socket to one sample of its table instead
+    /// of to the subgraph that feeds it
+    /// ([ADR 0045](../../../docs/adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+    /// Empty when the material evaluates its bakes inline.
+    baked: BTreeMap<NodeId, BakedTerm>,
+    /// Whether this module is a *bake*: the generated value function of
+    /// one subgraph over the bake domain, where `input.uv` is the
+    /// function's parameter and every other context read is the purity
+    /// check's to have refused already.
+    bake_domain: bool,
     /// Expression that reads each already-emitted node output. Cleared
     /// between partitions: a node emitted into two of them is two `let`
     /// bindings in two functions.
@@ -545,6 +862,153 @@ struct Emitter<'a> {
     lighting_source: String,
     /// The partition's statements.
     body: String,
+}
+
+/// One bake declaration resolved for emission: the names the generated
+/// sample reads, and the swizzle from the table's `vec4f` to the value's
+/// type.
+#[derive(Clone, Debug)]
+struct BakedTerm {
+    /// The node the bake stands in for.
+    node: NodeId,
+    /// The output socket the bake replaces.
+    socket: String,
+    /// The table texture, as the `@group(1)` variable is named.
+    texture: String,
+    /// The sampler beside it, `{texture}_sampler` by the declaration's
+    /// convention.
+    sampler: String,
+    /// What to read off the sampled `vec4f` — `.x` for a scalar bake, an
+    /// empty string for a `vec4f` one.
+    swizzle: &'static str,
+}
+
+impl BakedTerm {
+    /// The expression that stands in for the baked node's output: one
+    /// filtered sample of the table at the surface's uv — the same domain
+    /// the bake evaluated the subgraph over.
+    fn sample_expr(&self) -> String {
+        format!(
+            "textureSample({}, {}, {}.uv){}",
+            self.texture,
+            self.sampler,
+            abi::CONTEXT_VAR,
+            self.swizzle,
+        )
+    }
+}
+
+/// Resolve the graph's bake declarations into what emission needs: one
+/// term per declaration whose node is reachable, with the cone checks that
+/// make the stand-in sound — the node runs per fragment, and nothing
+/// outside the bake reads into the subgraph being replaced.
+fn bake_terms(
+    graph: &Graph,
+    registry: &NodeRegistry,
+    reachable: &BTreeSet<NodeId>,
+    outputs: &GraphOutputs,
+    plan: &crate::stages::StagePlan,
+) -> Result<BTreeMap<NodeId, BakedTerm>, CodegenError> {
+    let mut terms = BTreeMap::new();
+    for decl in graph.bakes() {
+        if !reachable.contains(&decl.node) {
+            continue;
+        }
+        let invalid = |reason: String| {
+            CodegenError::Invalid(GraphErrors(vec![GraphError::InvalidBake {
+                texture: decl.texture.trim().to_string(),
+                reason,
+            }]))
+        };
+        // A bake is a per-fragment value — the material samples it, and
+        // the vertex stage has no business paying for it. (The purity of
+        // the *cone* is `generate_bake`'s check, at registration; these
+        // are the things about the node itself.) Either half of the vertex
+        // stage reaching it — the displacement or an interpolant — is the
+        // same refusal: `textureSample` does not run there, so there is no
+        // stand-in to emit.
+        if plan.stage_of.get(&decl.node) == Some(&ShaderStage::Vertex) {
+            return Err(invalid(
+                "the baked node is placed in the vertex stage, and a bake \
+                 is a per-fragment sample — pin it `fragment` or bake a node \
+                 the fragment stage computes"
+                    .to_string(),
+            ));
+        }
+        let vertex_roots = [outputs.vertex]
+            .into_iter()
+            .flatten()
+            .chain(outputs.varyings.iter().map(|(_, node)| *node));
+        for root in vertex_roots {
+            if graph.dependencies_of(root).contains(&decl.node) {
+                return Err(invalid(
+                    "the baked node also feeds the vertex stage — a bake is \
+                     sampled per fragment, so nothing it stands in for may \
+                     be read on the vertex side"
+                        .to_string(),
+                ));
+            }
+        }
+        // The subgraph being replaced must belong to the bake alone: a
+        // node whose value reaches the surface by another road as well
+        // would go dark the moment the bake stood in.
+        let cone = graph.dependencies_of(decl.node);
+        for &member in &cone {
+            if member == decl.node {
+                continue;
+            }
+            for edge in graph.edges_from(member) {
+                if edge.to.node != decl.node && !cone.contains(&edge.to.node) {
+                    return Err(invalid(format!(
+                        "the baked subgraph also feeds node {} — a bake \
+                         stands in for its cone alone, and that value would \
+                         be lost when it is skipped",
+                        edge.to.node
+                    )));
+                }
+            }
+        }
+        let instance = graph.node(decl.node).expect("reachable node exists");
+        let def = registry
+            .get(&instance.def)
+            .expect("a validated graph's definitions are known");
+        let socket_name = decl
+            .socket
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                def.outputs
+                    .first()
+                    .map(|socket| socket.name.as_str().to_string())
+                    .expect("check_bakes rejected a node with no outputs")
+            });
+        let socket = def
+            .outputs
+            .iter()
+            .find(|socket| socket.name.as_str() == socket_name)
+            .expect("check_bakes rejected an unknown socket");
+        let swizzle = match socket.ty {
+            ValueType::F32 => ".x",
+            ValueType::Vec2 => ".xy",
+            ValueType::Vec3 => ".xyz",
+            ValueType::Vec4 => "",
+            _ => unreachable!("check_bakes rejected a non-float bake"),
+        };
+        let texture = decl.texture.trim().to_string();
+        terms.insert(
+            decl.node,
+            BakedTerm {
+                node: decl.node,
+                socket: socket_name,
+                sampler: format!("{texture}_sampler"),
+                texture,
+                swizzle,
+            },
+        );
+    }
+    Ok(terms)
 }
 
 impl Emitter<'_> {
@@ -597,8 +1061,9 @@ impl Emitter<'_> {
             (crate::wxsl::WxslIdent, crate::node::ValueType),
         >,
     ) -> Result<Partition, CodegenError> {
-        let stops: std::collections::BTreeSet<NodeId> =
+        let mut stops: std::collections::BTreeSet<NodeId> =
             cuts.keys().map(|socket| socket.node).collect();
+        stops.extend(self.baked.keys().copied());
         let needed = self.graph.dependencies_stopping_at(terminal, &stops);
         let order = self
             .graph
@@ -615,6 +1080,17 @@ impl Emitter<'_> {
                 socket.clone(),
                 format!("{}.{}", abi::MATERIAL_ATTRIBUTES_VAR, name),
             );
+        }
+        // A baked term is a leaf the same way — but its expression is one
+        // sample of its table, which reads only the context uv and the
+        // table's own bindings, so it can be bound up front too. Its cone
+        // is not walked at all: that is the whole point of the bake, and
+        // the reason the baked arm's module is smaller by the subgraph.
+        for term in self.baked.values() {
+            let reference = SocketRef::new(term.node, term.socket.clone());
+            if self.graph.edge_from(&reference).is_some() {
+                self.bindings.insert(reference, term.sample_expr());
+            }
         }
         for node in &order {
             if *node == terminal || stops.contains(node) {
@@ -920,6 +1396,23 @@ impl Emitter<'_> {
                             outputs: 0,
                             exprs: 1,
                         })?;
+                // In a bake module there is no context to read: the uv is
+                // the generated function's parameter — the bake domain —
+                // and every other field is the purity check's to have
+                // refused before emission began.
+                if self.bake_domain {
+                    if matches!(def.body, NodeBody::ContextRead(_)) && field.as_str() == "uv" {
+                        self.bindings
+                            .insert(SocketRef::new(node, socket.name.as_str()), "uv".to_string());
+                        return Ok(());
+                    }
+                    return Err(CodegenError::Invalid(GraphErrors(vec![
+                        GraphError::InvalidBake {
+                            texture: String::new(),
+                            reason: "reads something a bake cannot evaluate".to_string(),
+                        },
+                    ])));
+                }
                 // The same node in either stage, reading whichever
                 // context struct this partition was handed — which is
                 // exactly why the vertex context is a superset of the
@@ -2345,5 +2838,277 @@ mod tests {
         assert!(!shader.source.contains("@vertex"));
         assert!(!shader.source.contains("@fragment"));
         assert!(shader.source.contains("fn wxsl_material"));
+    }
+
+    // -- bakes (ADR 0045) -----------------------------------------------
+
+    use crate::graph::BakeDecl;
+
+    /// A material whose roughness is an expensive term: two chained
+    /// multiplies the bake will stand in for. The cone is deliberately
+    /// constant — purity is about *what* the cone may read, and the
+    /// no-context case is the simplest one that exercises the machinery.
+    fn bake_graph(registry: &NodeRegistry) -> (Graph, NodeId) {
+        let mut graph = Graph::new("baked");
+        let expensive = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.25)));
+        let more = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.5)));
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        graph
+            .wire(registry, (expensive, "out"), (more, "b"))
+            .unwrap();
+        graph
+            .wire(registry, (more, "out"), (out, "roughness"))
+            .unwrap();
+        graph.declare_bake(BakeDecl {
+            node: more,
+            socket: None,
+            texture: "roughness_bake".to_string(),
+            size: [64, 64],
+            precision: crate::abi::GBufferPrecision::HighDynamicRange,
+        });
+        (graph, more)
+    }
+
+    #[test]
+    fn a_baked_term_is_one_sample_and_its_cone_leaves_the_module() {
+        let registry = registry();
+        let (graph, _) = bake_graph(&registry);
+
+        // Baked: one filtered sample stands in for the term, and the cone
+        // is not in the module at all — the cost change the toggle sells.
+        let baked = generate_default(&graph, &registry);
+        assert!(
+            baked.source.contains(
+                "surface.roughness = textureSample(roughness_bake, \
+                 roughness_bake_sampler, ctx.uv).x;",
+            ),
+            "{}",
+            baked.source
+        );
+        // The cone's multiplies are gone from the fragment side: neither
+        // the cone node's binding nor the baked node's own appears.
+        assert!(
+            !baked.source.contains("surface.roughness = (n"),
+            "{}",
+            baked.source
+        );
+        assert!(!baked.source.contains("let n1_out"), "{}", baked.source);
+        assert!(!baked.source.contains("let n2_out"), "{}", baked.source);
+        // The declaration turned into two bindings — the table and its
+        // sampler — at material-group bindings.
+        assert!(
+            baked
+                .source
+                .contains("@group(1) @binding(1) var roughness_bake: texture_2d<f32>;"),
+            "{}",
+            baked.source
+        );
+        assert!(
+            baked
+                .source
+                .contains("@group(1) @binding(2) var roughness_bake_sampler: sampler;"),
+            "{}",
+            baked.source
+        );
+        assert_eq!(baked.interface.resources.len(), 2);
+        assert!(baked.interface.resources[0].bake.is_some());
+
+        // Inline: the same graph with the toggle off emits the cone and no
+        // sample — and the two module sources differ, which is what gives
+        // the variant cache two shaders.
+        let inline = generate(
+            &graph,
+            &registry,
+            &CodegenOptions {
+                material: crate::material::ResolvedMaterialConfig {
+                    bakes: false,
+                    ..crate::material::ResolvedMaterialConfig::default()
+                },
+                ..CodegenOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !inline.source.contains("textureSample("),
+            "{}",
+            inline.source
+        );
+        // The cone is back: both multiplies emitted into the material.
+        assert!(inline.source.contains("let n1_out"), "{}", inline.source);
+        assert!(inline.source.contains("let n2_out"), "{}", inline.source);
+        assert_ne!(baked.source, inline.source);
+    }
+
+    #[test]
+    fn a_bake_generates_the_dispatch_that_fills_its_table() {
+        let registry = registry();
+        let (graph, more) = bake_graph(&registry);
+        let decl = graph.bake("roughness_bake").unwrap();
+        let generated = generate_bake(&graph, decl, &registry, &BakeOptions::default()).unwrap();
+
+        assert_eq!(generated.entry, abi::BAKE_ENTRY);
+        assert_eq!(generated.workgroups, [8, 8, 1]);
+        assert_eq!(generated.size, [64, 64]);
+        assert!(
+            generated.source.contains(
+                "@group(3) @binding(0) var wxsl_bake_target: \
+                           texture_storage_2d<rgba16float, write>;"
+            ),
+            "{}",
+            generated.source
+        );
+        assert!(
+            generated
+                .source
+                .contains("fn wxsl_bake_value(uv: vec2f) -> vec4f {"),
+            "{}",
+            generated.source
+        );
+        // The cone, computed inside the value function...
+        assert!(
+            generated.source.contains("0.5 * n1_out"),
+            "{}",
+            generated.source
+        );
+        // ...padded to the table's four channels...
+        assert!(
+            generated
+                .source
+                .contains("return vec4f(n2_out, 0.0, 0.0, 1.0);"),
+            "{}",
+            generated.source
+        );
+        // ...and dispatched, guarded by the table's own extent.
+        assert!(
+            generated.source.contains("if (id.x >= 64u || id.y >= 64u)"),
+            "{}",
+            generated.source
+        );
+        assert!(
+            generated
+                .source
+                .contains("textureStore(wxsl_bake_target, vec2i(id.xy), wxsl_bake_value(uv));"),
+            "{}",
+            generated.source
+        );
+
+        // The declaration is addressable by the table's name, which is how
+        // `Effect::from_bake` finds it.
+        assert_eq!(decl.node, more);
+    }
+
+    #[test]
+    fn a_cone_that_reads_more_than_the_domain_is_refused_by_name() {
+        let mut registry = registry();
+        registry.register_all([NodeDefinition::builder("test.param", "Parameter")
+            .setting(crate::node::SettingDef::new(
+                node::SETTING_NAME,
+                "Name",
+                "The uniform field.",
+            ))
+            .input(Socket::new("value", ValueType::F32).with_splat_default(0.0))
+            .output(Socket::new("out", ValueType::F32))
+            .declaration(NodeBody::Param)]);
+        let mut graph = Graph::new("impure");
+        let param = graph.add(Node::new("test.param").with_param("value", Value::F32(3.0)));
+        graph.set_setting(param, node::SETTING_NAME, "wobble");
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        graph
+            .wire(&registry, (param, "out"), (out, "roughness"))
+            .unwrap();
+        graph.declare_bake(BakeDecl {
+            node: param,
+            socket: None,
+            texture: "roughness_bake".to_string(),
+            size: [64, 64],
+            precision: crate::abi::GBufferPrecision::HighDynamicRange,
+        });
+        let error = generate_bake(
+            &graph,
+            graph.bake("roughness_bake").unwrap(),
+            &registry,
+            &BakeOptions::default(),
+        )
+        .expect_err("a bake over a material parameter is not a function of the domain");
+        let message = error.to_string();
+        assert!(
+            message.contains("roughness_bake") && message.contains("material parameter"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_cone_shared_outside_the_bake_is_refused() {
+        let registry = registry();
+        let mut graph = Graph::new("shared");
+        let expensive = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.25)));
+        let baked = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.5)));
+        let other = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.75)));
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        graph
+            .wire(&registry, (expensive, "out"), (baked, "b"))
+            .unwrap();
+        graph
+            .wire(&registry, (expensive, "out"), (other, "b"))
+            .unwrap();
+        graph
+            .wire(&registry, (baked, "out"), (out, "roughness"))
+            .unwrap();
+        graph
+            .wire(&registry, (other, "out"), (out, "metallic"))
+            .unwrap();
+        graph.declare_bake(BakeDecl {
+            node: baked,
+            socket: None,
+            texture: "roughness_bake".to_string(),
+            size: [64, 64],
+            precision: crate::abi::GBufferPrecision::HighDynamicRange,
+        });
+        let error = generate(&graph, &registry, &CodegenOptions::default())
+            .expect_err("the cone feeds `metallic` too, and the bake would go dark");
+        let message = error.to_string();
+        assert!(
+            message.contains("roughness_bake") && message.contains("also feeds"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_baked_node_the_vertex_stage_reaches_is_refused() {
+        let mut registry = registry();
+        registry.register(abi::vertex_output_def());
+        registry.register_all([NodeDefinition::builder("test.vec3", "To vec3")
+            .input(Socket::new("a", ValueType::F32).with_splat_default(0.0))
+            .output(Socket::new("out", ValueType::Vec3))
+            .expr("vec3f({a})")]);
+        let registry = registry;
+        let mut graph = Graph::new("vertex");
+        let term = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.25)));
+        let widened = graph.add(Node::new("test.vec3"));
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        let vertex = graph.add(Node::new(abi::VERTEX_OUTPUT_ID));
+        graph
+            .wire(&registry, (term, "out"), (out, "roughness"))
+            .unwrap();
+        graph
+            .wire(&registry, (term, "out"), (widened, "a"))
+            .unwrap();
+        graph
+            .wire(
+                &registry,
+                (widened, "out"),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .unwrap();
+        graph.declare_bake(BakeDecl {
+            node: term,
+            socket: None,
+            texture: "roughness_bake".to_string(),
+            size: [64, 64],
+            precision: crate::abi::GBufferPrecision::HighDynamicRange,
+        });
+        let error = generate(&graph, &registry, &CodegenOptions::default())
+            .expect_err("textureSample does not run in the vertex stage");
+        assert!(error.to_string().contains("vertex"), "{error}");
     }
 }

@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "abi": 1,
+  "//": [
+    "The bake demo's material (ADR 0045): the same shape as pbr_cube's",
+    "noise work, but over the *uv* — because a bake's domain is the uv.",
+    "The cone that computes `roughness` — surface uv, split, a 3D domain",
+    "built from it, twelve octaves of fbm, a remap — is declared baked:",
+    "`bakes` names the node whose value becomes a 256x256 table, and the",
+    "material then either samples that table (one texture read) or",
+    "evaluates the whole cone per fragment (the toggle,",
+    "MaterialConfig::bakes, and the point of the item: the two arms draw",
+    "the same picture and cost different amounts). The declaration is a",
+    "claim about node 5 — bake *this* — not a node of its own, so the",
+    "graph reads exactly as it would unbaked.",
+    "",
+    "Purity is the one authoring rule: the baked cone may read `input.uv`",
+    "(that is the domain) and nothing else — no world position, no time, no",
+    "parameters, no textures. A bake is a pure function of where it is",
+    "sampled; that is what makes sampling it back equal computing it.",
+    "The cone also belongs to the bake alone: nothing else may read the",
+    "nodes feeding the remap, or they would go dark when the bake is on.",
+    "WXSL_FBM_OCTAVES is pinned here rather than in the material config",
+    "so both arms of the toggle compile the same loop — the bake module",
+    "and the inline material must agree about what they compute."
+  ],
+  "name": "bake term",
+  "macros": {
+    "WXSL_FBM_OCTAVES": {
+      "int": 12
+    },
+    "wxsl_fbm_ridged": {
+      "flag": false
+    }
+  },
+  "bakes": [
+    {
+      "node": 5,
+      "texture": "roughness_bake",
+      "size": [256, 256],
+      "precision": "hdr"
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "def": "input.uv",
+      "label": "surface uv",
+      "position": [0.0, 0.0]
+    },
+    {
+      "id": 2,
+      "def": "convert.split.vec2f",
+      "label": "uv parts",
+      "position": [260.0, 0.0]
+    },
+    {
+      "id": 3,
+      "def": "convert.combine.vec3f",
+      "label": "noise domain",
+      "params": {
+        "z": { "f32": 0.5 }
+      },
+      "position": [520.0, 0.0]
+    },
+    {
+      "id": 4,
+      "def": "generative.fbm3",
+      "label": "surface detail",
+      "params": {
+        "lacunarity": { "f32": 2.1 },
+        "gain": { "f32": 0.55 }
+      },
+      "position": [780.0, 0.0]
+    },
+    {
+      "id": 5,
+      "def": "math.remap",
+      "generics": { "T": "f32" },
+      "label": "roughness term",
+      "params": {
+        "in_min": { "f32": 0.0 },
+        "in_max": { "f32": 1.0 },
+        "out_min": { "f32": 0.05 },
+        "out_max": { "f32": 0.95 }
+      },
+      "position": [1040.0, 0.0]
+    },
+    {
+      "id": 6,
+      "def": "output.surface",
+      "label": "shaded",
+      "position": [1300.0, 90.0]
+    },
+    {
+      "id": 7,
+      "def": "const.value",
+      "generics": { "T": "vec3" },
+      "label": "albedo (sRGB)",
+      "params": {
+        "value": { "vec3": [0.72, 0.7, 0.66] }
+      },
+      "position": [0.0, 184.0]
+    },
+    {
+      "id": 8,
+      "def": "color.srgb_to_linear",
+      "label": "to linear",
+      "position": [260.0, 184.0]
+    },
+    {
+      "id": 9,
+      "def": "const.value",
+      "generics": { "T": "f32" },
+      "label": "metal",
+      "params": {
+        "value": { "f32": 1.0 }
+      },
+      "position": [0.0, 264.0]
+    }
+  ],
+  "edges": [
+    { "from": { "node": 1, "socket": "out" }, "to": { "node": 2, "socket": "v" } },
+    { "from": { "node": 2, "socket": "x" }, "to": { "node": 3, "socket": "x" } },
+    { "from": { "node": 2, "socket": "y" }, "to": { "node": 3, "socket": "y" } },
+    { "from": { "node": 3, "socket": "out" }, "to": { "node": 4, "socket": "p" } },
+    { "from": { "node": 4, "socket": "out" }, "to": { "node": 5, "socket": "value" } },
+    { "from": { "node": 5, "socket": "out" }, "to": { "node": 6, "socket": "roughness" } },
+    { "from": { "node": 7, "socket": "out" }, "to": { "node": 8, "socket": "color" } },
+    { "from": { "node": 8, "socket": "out" }, "to": { "node": 6, "socket": "base_color" } },
+    { "from": { "node": 9, "socket": "out" }, "to": { "node": 6, "socket": "metallic" } }
+  ]
+}
