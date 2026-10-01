@@ -110,6 +110,19 @@ pub struct DrawItem<'a> {
     /// Required whenever the material declares one, and checked when the
     /// frame is compiled rather than read as zeroes.
     pub attributes: &'a InstanceAttributes,
+    /// Where this object was *last frame*, as the frame group's
+    /// previous-instance row (`abi::BINDING_PREVIOUS_INSTANCES`) — the
+    /// velocity stage's second transform.
+    ///
+    /// `None` — the default — says the object did not move, or that
+    /// nobody is keeping score: the row then carries this frame's own
+    /// transform, which is zero motion and today's behaviour. A draw
+    /// feeding a velocity pass fills it with what the transform was when
+    /// last frame rendered, exactly as the environment's
+    /// `previous_camera` does for the camera: the sequence of frames is
+    /// the application's to remember, and getting it out of step is
+    /// silent.
+    pub previous: Option<Mat4>,
 }
 
 impl<'a> DrawItem<'a> {
@@ -130,12 +143,20 @@ impl<'a> DrawItem<'a> {
             bindings: None,
             user: None,
             attributes: InstanceAttributes::EMPTY,
+            previous: None,
         }
     }
 
     /// Place it.
     pub fn with_transform(mut self, transform: Mat4) -> Self {
         self.transform = transform;
+        self
+    }
+
+    /// Say where it was last frame. Required of a draw a velocity pass
+    /// renders, unless it truly did not move.
+    pub fn with_previous(mut self, previous: Mat4) -> Self {
+        self.previous = Some(previous);
         self
     }
 
@@ -169,6 +190,14 @@ impl<'a> DrawItem<'a> {
     /// instance buffer.
     pub fn instance(&self) -> InstanceTransform {
         InstanceTransform::new(self.transform)
+    }
+
+    /// The transform half of the row this draw contributes to the frame's
+    /// *previous*-instance buffer: what it was last frame, or this
+    /// frame's own when nobody said — zero motion either way a
+    /// non-velocity frame would want.
+    pub fn previous_instance(&self) -> InstanceTransform {
+        InstanceTransform::new(self.previous.unwrap_or(self.transform))
     }
 }
 
@@ -225,6 +254,14 @@ impl<'a> DrawList<'a> {
     /// Every draw's transform, in instance-buffer order.
     pub fn transforms(&self) -> Vec<InstanceTransform> {
         self.items.iter().map(DrawItem::instance).collect()
+    }
+
+    /// Every draw's *previous* transform, in the same order — what the
+    /// frame's instance rows were last frame, as far as each draw says.
+    /// Same length as [`DrawList::transforms`] always, so the two arrays
+    /// index identically.
+    pub fn previous_transforms(&self) -> Vec<InstanceTransform> {
+        self.items.iter().map(DrawItem::previous_instance).collect()
     }
 
     /// Every draw's declared per-instance attributes, grouped by the row

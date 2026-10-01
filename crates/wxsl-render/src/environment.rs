@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
 
@@ -45,6 +45,17 @@ pub struct Camera {
     pub near: f32,
     /// Far plane distance.
     pub far: f32,
+    /// Sub-pixel offset applied to the projection, in NDC units — the
+    /// jitter a temporal technique (TAA above all) moves the camera by
+    /// each frame so that geometric edges land between samples instead of
+    /// on them. Zero is no jitter, which is every frame this repo drew
+    /// before the field existed. A sequence of small values (Halton(2, 3)
+    /// scaled to the pixel size is the usual) is what turns a velocity
+    /// buffer plus a history into antialiasing; the same values fed to
+    /// `previous_camera` are what keep the velocity buffer honest about
+    /// it, because the jitter cancels in the difference of the two
+    /// frames' clips.
+    pub jitter: Vec2,
 }
 
 impl Default for Camera {
@@ -57,6 +68,7 @@ impl Default for Camera {
             aspect: 1.0,
             near: 0.1,
             far: 100.0,
+            jitter: Vec2::ZERO,
         }
     }
 }
@@ -68,18 +80,41 @@ impl Camera {
     /// `[0, 1]`.
     pub fn view_proj(&self) -> Mat4 {
         // `directx` is the NDC convention wgpu uses: Z in [0, 1], Y up.
-        let projection = glam::camera::rh::proj::directx::perspective(
+        let mut projection = glam::camera::rh::proj::directx::perspective(
             self.fov_y,
             self.aspect.max(1e-3),
             self.near,
             self.far,
         );
+        // The jitter rides the projection's z column, so a clip position
+        // moves by `jitter * z` — the standard cheap sub-pixel shift,
+        // which is exact at every depth the way a post-translate would
+        // not be.
+        projection.z_axis.x += self.jitter.x;
+        projection.z_axis.y += self.jitter.y;
         projection * glam::camera::rh::view::look_at_mat4(self.eye, self.target, self.up)
     }
 
-    /// The uniform this camera fills in.
+    /// The uniform this camera fills in, answering for no previous frame.
     pub fn uniform(&self) -> CameraUniform {
         CameraUniform::new(self.view_proj(), self.eye)
+    }
+
+    /// The uniform this camera fills in when `previous` is where it was
+    /// last frame. `None` — the camera did not move, or nobody is keeping
+    /// score — carries this frame's own matrix and position there, which
+    /// is zero motion and the behaviour every frame had before the field
+    /// existed.
+    pub fn uniform_with(&self, previous: Option<&Camera>) -> CameraUniform {
+        match previous {
+            Some(previous) => CameraUniform::new_with_previous(
+                self.view_proj(),
+                previous.view_proj(),
+                self.eye,
+                previous.eye,
+            ),
+            None => self.uniform(),
+        }
     }
 }
 
@@ -272,6 +307,19 @@ pub struct Environment {
     /// [`Environment::advance`] keeps it up to date; an application that
     /// has no velocity stage may leave it alone.
     pub previous_time: f32,
+    /// Where the camera was on the previous frame.
+    ///
+    /// The velocity stage transforms every vertex against both frames'
+    /// cameras; without this it would see object motion only, and a
+    /// moving camera would drag a wrong motion vector across a still
+    /// scene. `None` — the default — says the camera did not move, which
+    /// is the behaviour every frame had before the field existed. An
+    /// application that moves the camera and renders velocity fills it
+    /// with what the camera was, exactly as [`Environment::advance`]
+    /// fills `previous_time` with what the clock was: "the previous
+    /// frame" is a fact about the sequence of frames, and getting it out
+    /// of step is silent.
+    pub previous_camera: Option<Camera>,
 }
 
 impl Default for Environment {
@@ -284,6 +332,7 @@ impl Default for Environment {
             exposure: 1.0,
             time: 0.0,
             previous_time: 0.0,
+            previous_camera: None,
         }
     }
 }
@@ -338,7 +387,7 @@ impl Environment {
     /// that casts no shadow gets the camera's own view, which nothing ever
     /// draws against — the pass built for it issues no draws at all.
     pub fn views(&self) -> Vec<CameraUniform> {
-        let camera = self.camera.uniform();
+        let camera = self.camera.uniform_with(self.previous_camera.as_ref());
         let mut views = vec![camera; PassView::COUNT];
         for (index, light) in self.lights.iter().take(MAX_LIGHTS).enumerate() {
             let Some(view) = light.shadow_view() else {
@@ -373,6 +422,13 @@ pub struct CameraUniform {
     /// Camera position in world space.
     pub position: [f32; 3],
     _padding: f32,
+    /// What [`CameraUniform::view_proj`] was last frame — the velocity
+    /// stage's second transform. A view slot nobody renders velocity from
+    /// carries its own matrix here.
+    pub previous_view_proj: [[f32; 4]; 4],
+    /// Where [`CameraUniform::position`] was last frame.
+    pub previous_position: [f32; 3],
+    _padding1: f32,
 }
 
 impl CameraUniform {
@@ -380,13 +436,32 @@ impl CameraUniform {
     ///
     /// Not only the camera's — a shadow pass fills one of these from the
     /// light it renders for, which is what lets the shader keep reading
-    /// `camera` and mean whichever view the pass named.
+    /// `camera` and mean whichever view the pass named. The previous
+    /// frame's halves answer "this view did not move".
     pub fn new(view_proj: Mat4, position: Vec3) -> Self {
+        CameraUniform::new_with_previous(
+            view_proj,
+            view_proj,
+            position,
+            position,
+        )
+    }
+
+    /// One point of view, with what it was last frame stated explicitly.
+    pub fn new_with_previous(
+        view_proj: Mat4,
+        previous_view_proj: Mat4,
+        position: Vec3,
+        previous_position: Vec3,
+    ) -> Self {
         CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             inverse_view_proj: view_proj.inverse().to_cols_array_2d(),
             position: position.to_array(),
             _padding: 0.0,
+            previous_view_proj: previous_view_proj.to_cols_array_2d(),
+            previous_position: previous_position.to_array(),
+            _padding1: 0.0,
         }
     }
 }
@@ -595,6 +670,10 @@ pub struct FrameBindings {
     view_stride: u32,
     scene: wgpu::Buffer,
     instances: wgpu::Buffer,
+    /// The same rows as last frame had them (`abi::BINDING_PREVIOUS_INSTANCES`)
+    /// — the velocity stage's second transform, filled beside the current
+    /// ones and grown with them.
+    previous_instances: wgpu::Buffer,
     capacity: usize,
     /// The shadow maps currently bound, and where they came from — the
     /// pool's generation and slot — so that rebinding the same texture is
@@ -675,6 +754,12 @@ impl FrameBindings {
         let instances = instance_buffer(
             device,
             "wxsl instances",
+            size_of::<InstanceTransform>(),
+            capacity,
+        );
+        let previous_instances = instance_buffer(
+            device,
+            "wxsl previous instances",
             size_of::<InstanceTransform>(),
             capacity,
         );
@@ -769,6 +854,19 @@ impl FrameBindings {
                 buffer(abi::BINDING_CAMERA, false, true),
                 buffer(abi::BINDING_SCENE, false, false),
                 buffer(abi::BINDING_INSTANCES, true, false),
+                // The velocity stage's other half: vertex-only, because
+                // nothing in a fragment stage has a reason to know where
+                // last frame's vertices were.
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_PREVIOUS_INSTANCES,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 // Always here, whether or not the material being drawn
                 // declares anything: a frame group whose shape changed
                 // per material would invalidate every pipeline layout
@@ -813,6 +911,7 @@ impl FrameBindings {
             view_stride,
             scene,
             instances,
+            previous_instances,
             capacity,
             shadow_source: None,
             shadow_view,
@@ -943,6 +1042,10 @@ impl FrameBindings {
                     resource: self.instances.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: abi::BINDING_PREVIOUS_INSTANCES,
+                    resource: self.previous_instances.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: abi::BINDING_INSTANCE_ATTRIBUTES,
                     resource: attributes.as_entire_binding(),
                 },
@@ -997,8 +1100,8 @@ impl FrameBindings {
         );
     }
 
-    /// Grow the transform array and rebuild every bind group that points
-    /// at it.
+    /// Grow the transform arrays and rebuild every bind group that points
+    /// at them.
     fn grow_instances(&mut self, device: &wgpu::Device, rows: usize) {
         if rows <= self.capacity {
             return;
@@ -1014,20 +1117,29 @@ impl FrameBindings {
             size_of::<InstanceTransform>(),
             capacity,
         );
+        self.previous_instances = instance_buffer(
+            device,
+            "wxsl previous instances",
+            size_of::<InstanceTransform>(),
+            capacity,
+        );
         self.rebuild_groups(device);
     }
 
-    /// Upload `environment` and every instance transform of the frame.
+    /// Upload `environment` and every instance transform of the frame —
+    /// this frame's, and what each draw says the previous frame's was
+    /// beside them.
     ///
-    /// Grows the storage buffer (and rebuilds the bind group) when the frame
-    /// has more instances than any before it, which is the only time either
-    /// is touched.
+    /// Grows the storage buffers (and rebuilds the bind group) when the
+    /// frame has more instances than any before it, which is the only time
+    /// either is touched.
     pub fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         environment: &Environment,
         transforms: &[InstanceTransform],
+        previous: &[InstanceTransform],
         rows: &InstanceRows,
     ) {
         // Every point of view the frame has, camera first: one write per
@@ -1045,6 +1157,12 @@ impl FrameBindings {
         self.grow_instances(device, transforms.len());
         if !transforms.is_empty() {
             queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(transforms));
+        }
+        // The previous frame's rows, always written: a draw that declared
+        // no previous transform contributes its current one, so the array
+        // is never a frame behind what its consumer assumes.
+        if !previous.is_empty() {
+            queue.write_buffer(&self.previous_instances, 0, bytemuck::cast_slice(previous));
         }
 
         for (key, set) in rows.sets() {
@@ -1172,7 +1290,7 @@ mod tests {
     fn uniform_layouts_match_wgsl_alignment_rules() {
         // vec3f aligns to 16 in WGSL, so every uniform struct is a multiple
         // of 16 bytes and each vec3 is padded to its own 16.
-        assert_eq!(size_of::<CameraUniform>(), 64 + 64 + 16);
+        assert_eq!(size_of::<CameraUniform>(), 64 + 64 + 16 + 64 + 16);
         // Two vec3+scalar pairs, then a mat4x4f (aligned to 16, so it
         // starts at 32), then the slice, the bias and their padding.
         assert_eq!(size_of::<LightUniform>(), 16 + 16 + 64 + 16);

@@ -190,12 +190,17 @@ pub fn compile(
 /// *screen* effect in the effect registry.
 ///
 /// Compute effects are already rows — `document_registry` derives a
-/// `pass.compute.<effect>` node per one (plan3 N3). A screen effect maps
-/// onto the fixed `pass.screen`, so its row is that node with the effect
-/// already named in the match's `preset`: dropping "bloom" places a
-/// `pass.screen` whose `effect` is set, and the wire to its `image` is
-/// the only thing left to draw. Searching and ranking are the palette's
-/// own, so both sources order the same way.
+/// `pass.compute.<effect>` node per one (plan3 N3), and since plan3 N2 it
+/// derives a `pass.screen.<effect>` row for every screen effect whose
+/// wiring the fixed socket set cannot name — a TAA resolve's three images
+/// have no honest home on one `image` socket. Those derived rows arrive
+/// through the registry like any other node's, and the sugar below stays
+/// for the effects that *do* fit: a screen effect maps onto the fixed
+/// `pass.screen`, so its row is that node with the effect already named
+/// in the match's `preset`: dropping "bloom" places a `pass.screen`
+/// whose `effect` is set, and the wire to its `image` is the only thing
+/// left to draw. Searching and ranking are the palette's own, so both
+/// sources order the same way.
 pub fn palette_matches(
     picker: &NodePicker,
     registry: &NodeRegistry,
@@ -210,7 +215,7 @@ pub fn palette_matches(
         let query = picker.query.trim();
         let mut rows: Vec<Match> = effects
             .iter()
-            .filter(|effect| !effect.is_compute())
+            .filter(|effect| !effect.is_compute() && effect.fits_pass_screen())
             .filter_map(|effect| {
                 let score = score(query, effect.id, effect.label, effect.description)?;
                 Some(Match {
@@ -813,15 +818,27 @@ mod tests {
         let (registry, effects, _) = harness();
         let mut picker = NodePicker::new();
         let matches = palette_matches(&picker, &registry, &effects);
-        // One row per document node plus one per *screen* effect; the
-        // shipped set carries no compute effects, but an application's
-        // would already be registry rows of their own (plan3 N3).
-        let screen_count = effects.iter().filter(|effect| !effect.is_compute()).count();
-        assert!(screen_count >= 3, "the shipped set has screen effects");
+        // One row per document node — which includes the derived
+        // `pass.screen.<effect>` rows for effects the fixed socket set
+        // cannot wire — plus one *sugar* row per screen effect that fits
+        // the fixed set (plan3 N3 for compute, N2 for the derived screen
+        // rows).
+        let sugar = effects
+            .iter()
+            .filter(|effect| !effect.is_compute() && effect.fits_pass_screen())
+            .count();
+        assert!(sugar >= 3, "the shipped set has screen effects that fit");
+        assert!(
+            effects
+                .iter()
+                .any(|effect| !effect.is_compute() && !effect.fits_pass_screen()),
+            "the shipped set has a screen effect only a derived row can wire"
+        );
         assert_eq!(
             matches.len(),
-            registry.in_domain(GraphDomain::Document).count() + screen_count,
-            "one row per document node plus one per screen effect"
+            registry.in_domain(GraphDomain::Document).count() + sugar,
+            "one row per document node, derived rows included, plus one \
+             sugar row per fitting screen effect"
         );
 
         picker.query = "bloom".to_string();
@@ -836,6 +853,18 @@ mod tests {
             Some((doc::SETTING_EFFECT.to_string(), "wxsl.bloom".to_string())),
             "the row arrives with its effect named"
         );
+
+        // The TAA resolve is *only* a derived row — three image inputs
+        // have no honest home on the fixed `pass.screen` — and the row
+        // comes from the registry, sockets and all.
+        picker.query = "taa".to_string();
+        let matches = palette_matches(&picker, &registry, &effects);
+        let taa = matches
+            .iter()
+            .find(|found| found.label == "TAA")
+            .expect("the TAA resolve is offered");
+        assert_eq!(taa.id, format!("{}wxsl.taa", doc::PASS_SCREEN_PREFIX));
+        assert!(taa.preset.is_none(), "the derived row needs no preset");
 
         // And the bare pass is offered beside it, for wiring an effect by
         // hand from the inspector.

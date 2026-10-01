@@ -1,0 +1,54 @@
+//! motion_blur — the first consumer of the velocity buffer that is not
+//! TAA.
+//!
+//! One fullscreen pass over the frame's colour: each fragment samples
+//! back along its own screen motion, which is what makes the smear lie
+//! along the *object's* movement rather than a global direction — a
+//! screen-space filter that knows per-pixel where things went. The input
+//! is linear radiance (ADR 0039's rule: everything before the display
+//! transform is light), so the blur averages brightness, not encoded
+//! tones.
+//!
+//! Mounted by the `wxsl.motion_blur` effect, whose two declared inputs
+//! are this file's two bindings. The tap count is a `const` — the
+//! kernel's shape is the effect's structure, not its tuning surface, and
+//! the same argument bloom's thirteen taps made; `strength` is a
+//! parameter of the descriptor (ADR 0042).
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var velocity_image: texture_2d<f32>;
+
+/// How many samples the smear averages, current pixel included. Odd, so
+/// the unblurred centre is one of them.
+const TAPS: i32 = 8;
+
+@vertex
+fn motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(color_image));
+    let uv = position.xy / size;
+    let pixel = vec2i(position.xy);
+
+    // Walk *backwards* along the motion: where this fragment's light came
+    // from during the frame, which is the smear a shutter would record.
+    // Halved because the velocity is per frame and a shutter shows half
+    // the way back and half the way forward around the sample point.
+    let motion = textureLoad(velocity_image, pixel, 0).xy * 0.5 * params.strength;
+
+    var sum = textureLoad(color_image, pixel, 0).rgb;
+    for (var tap = 1; tap < TAPS; tap++) {
+        let fraction = f32(tap) / f32(TAPS - 1);
+        let sample_uv = clamp(uv - motion * fraction, vec2f(0.0), vec2f(1.0));
+        let sample_pixel = vec2i(sample_uv * size);
+        sum += textureLoad(color_image, sample_pixel, 0).rgb;
+    }
+    return vec4f(sum / f32(TAPS), 1.0);
+}

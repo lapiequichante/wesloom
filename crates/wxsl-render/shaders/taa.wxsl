@@ -1,0 +1,117 @@
+//! taa — temporal antialiasing, as a policy'd chain's resolve pass.
+//!
+//! The velocity buffer says where each fragment was last frame; the
+//! history ring keeps what was resolved then; this pass blends the two.
+//! One fullscreen pass over the frame's colour, reading its velocity and
+//! the previous resolve, writing the new resolve — which is next frame's
+//! history, which is why the *output* is the persistent resource and the
+//! resolve is `per frame` while the ring does the temporal bookkeeping.
+//!
+//! The disocclusion question is answered by clamping, twice over: the
+//! history is pulled into the current frame's 3x3 neighbourhood box
+//! before it is blended (a surface that appears where nothing was does
+//! not accept the old texel's *value*), and the blend itself falls off
+//! with how far the history sits from the *current pixel* relative to
+//! that box — which is the half that keeps an unwritten ring honest. A
+//! history of zeros is indistinguishable from legitimately dark content
+//! to a box whose dark end is zero, and a frame-one blend toward black
+//! would then reproduce itself forever; measured against the current
+//! pixel, it is a vast distance and is rejected on sight. That is the
+//! honest, cheap answer — no ghosting that outlives its cause, and no
+//! mailbox pass, no depth-aware weighting, none of the machinery a
+//! production TAA grows. What it buys: geometric edges under sub-pixel
+//! motion stop crawling, because each frame's jittered samples
+//! accumulate in the ring instead of arriving alone.
+//!
+//! Mounted by the `wxsl.taa` effect, whose three declared inputs are this
+//! file's three bindings, in declaration order (colour, velocity,
+//! history — the history one read a frame back, which is what makes the
+//! pass orderable against its own previous output). Its one knob, the
+//! blend strength, is a parameter of the descriptor (ADR 0042); this file
+//! reads `params.blend` and states no struct.
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var velocity_image: texture_2d<f32>;
+@group(3) @binding(2) var history_image: texture_2d<f32>;
+
+/// One clamped texel of `image`: a hand-rolled bilinear tap, loaded with
+/// `textureLoad` because the pass group binds textures and no sampler
+/// (bloom's rule), clamped to the edge because a reprojected uv at the
+/// border can step past it.
+fn tap(image: texture_2d<f32>, at: vec2i) -> vec3f {
+    let size = vec2i(textureDimensions(image));
+    return textureLoad(image, clamp(at, vec2i(0), size - vec2i(1)), 0).rgb;
+}
+
+/// The history is loaded with a hand-rolled bilinear: a reprojected uv
+/// lands between texels precisely because the surface moved. Four loads
+/// and a mix, at whatever resolution the ring is.
+fn bilinear(image: texture_2d<f32>, uv: vec2f) -> vec3f {
+    let size = vec2f(textureDimensions(image));
+    let position = uv * size - vec2f(0.5, 0.5);
+    let base = vec2i(floor(position));
+    let fraction = position - floor(position);
+    let top = mix(tap(image, base), tap(image, base + vec2i(1, 0)), fraction.x);
+    let bottom = mix(tap(image, base + vec2i(0, 1)), tap(image, base + vec2i(1, 1)), fraction.x);
+    return mix(top, bottom, fraction.y);
+}
+
+@vertex
+fn taa_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn taa_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let current = textureLoad(color_image, pixel, 0).rgb;
+
+    // Where this fragment was last frame. The velocity is uv per frame,
+    // `y` down — the same orientation as the uv below, so the subtraction
+    // needs no flip and the jitter each frame applied cancels in the
+    // difference the way it was measured to.
+    let motion = textureLoad(velocity_image, pixel, 0).xy;
+    let size = vec2f(textureDimensions(color_image));
+    let previous_uv = position.xy / size - motion;
+    if (any(previous_uv < vec2f(0.0)) || any(previous_uv > vec2f(1.0))) {
+        // Off the frame: nothing was resolved here, and pretending
+        // otherwise would smear the border inward.
+        return vec4f(current, 1.0);
+    }
+    var history = bilinear(history_image, previous_uv);
+
+    // The disocclusion clamp: the history may only claim to be this
+    // surface if it survives this frame's own neighbourhood. Min and max
+    // of the 3x3 box, history pulled inside it, and the blend scaled down
+    // by how far outside it landed — the standard AABB rejection, which
+    // trades some long-lived accumulation for never ghosting a thing
+    // that is genuinely gone.
+    var lo = current;
+    var hi = current;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            if (x == 0 && y == 0) {
+                continue;
+            }
+            let neighbour = textureLoad(color_image, pixel + vec2i(x, y), 0).rgb;
+            lo = min(lo, neighbour);
+            hi = max(hi, neighbour);
+        }
+    }
+    let clamped = clamp(history, lo, hi);
+    let box_size = max(hi - lo, vec3f(1e-3));
+    // How far the history sits from what this pixel shows *now*, in box
+    // units — the rejection measure. Against the box alone, an unwritten
+    // ring's zeros are invisible wherever the neighbourhood's dark end is
+    // zero, and a frame-one blend toward black is a hole that rewrites
+    // itself every frame after; against the current pixel, it is the
+    // vast distance it deserves to be.
+    let distance = abs(history - current) / box_size;
+    let distance_max = max(distance.x, max(distance.y, distance.z));
+    let blend = params.blend * exp2(-8.0 * distance_max);
+    return vec4f(mix(current, clamped, blend), 1.0);
+}

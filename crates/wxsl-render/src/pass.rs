@@ -853,11 +853,31 @@ impl PassDesc {
     }
 
     /// Every resource this pass writes, attachments included.
+    ///
+    /// A colour attachment drawn with [`Load`] still writes — drawing on
+    /// top of what is there is a write. A depth attachment *loaded* is
+    /// one only when the pass's state writes depth: testing against what
+    /// a prepass left, the second half of every stock chain, is a read
+    /// and not a write, and counting it as one made a third depth-loading
+    /// pass mutually dependent with the pass before it — the scheduler
+    /// saw a cycle where a frame had none.
     pub fn written(&self) -> impl Iterator<Item = ResourceId> + '_ {
+        let depth_written = match self.depth {
+            // Clearing is writing, whatever the state says.
+            Some(depth) if depth.clear.is_some() => true,
+            // Loading writes only when the state keeps the result.
+            Some(_) => self.state.depth_write,
+            None => false,
+        };
         self.color
             .iter()
             .map(|attachment| attachment.resource)
-            .chain(self.depth.iter().map(|depth| depth.resource))
+            .chain(
+                self.depth
+                    .iter()
+                    .filter(move |_| depth_written)
+                    .map(|depth| depth.resource),
+            )
             .chain(self.writes.iter().copied())
     }
 

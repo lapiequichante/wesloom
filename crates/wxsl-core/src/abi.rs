@@ -86,6 +86,52 @@ pub const VERTEX_CONTEXT_FN: &str = "vertex_context";
 /// before the model transform.
 pub const TRANSFORM_VERTEX_OFFSET_FN: &str = "transform_vertex_offset";
 
+/// Module path of the velocity stage's ABI, the twin of [`VERTEX_MODULE`]
+/// for the one stage whose vertex entry differs: it transforms every
+/// vertex against the *previous* frame's camera and instance row as well
+/// as this frame's, and its fragment is the difference.
+pub const VELOCITY_MODULE: &str = "package::wxsl::velocity";
+/// Struct the velocity stage's vertex entry returns when the material
+/// declares no geometry of its own: [`VERTEX_OUT_STRUCT`]'s fields at
+/// [`VERTEX_OUT_FIELDS`]' locations, plus [`PREVIOUS_CLIP_FIELD`] — the
+/// fields `transform_vertex_velocity` fills from the same vertex
+/// ([`VERTEX_MODULE`] keeps its own struct unchanged, so every other
+/// stage's IO stays exactly what it was).
+pub const VELOCITY_OUT_STRUCT: &str = "VelocityOut";
+/// Field of [`VELOCITY_OUT_STRUCT`] (and of the generated
+/// [`MATERIAL_VERTEX_OUT_STRUCT`] in a velocity-stage module): this
+/// vertex's clip position *last frame*.
+pub const PREVIOUS_CLIP_FIELD: &str = "previous_clip";
+/// Field of [`VELOCITY_OUT_STRUCT`] (and of the generated
+/// [`MATERIAL_VERTEX_OUT_STRUCT`] in a velocity-stage module): this
+/// vertex's clip position *this frame*, as a plain varying.
+///
+/// The duplicate of the builtin is the whole point: a `@builtin(position)`
+/// arrives in a fragment stage as framebuffer coordinates, so the motion
+/// fragment cannot divide it by `w` — it needs the clip position the way
+/// the vertex stage meant it, interpolated like the previous one beside
+/// it.
+pub const CURRENT_CLIP_FIELD: &str = "current_clip";
+/// [`TRANSFORM_VERTEX_OFFSET_FN`] for the velocity stage: both frames'
+/// clips in one [`VERTEX_OUT_STRUCT`]-shaped pass, current basis included.
+pub const TRANSFORM_VERTEX_VELOCITY_FN: &str = "transform_vertex_velocity";
+/// Builds a [`VERTEX_CONTEXT_STRUCT`] as it was *last frame*: previous
+/// instance row, previous camera position, the previous clock. The one
+/// function `wxsl_previous_frame` was waiting for — the graph's own vertex
+/// partition is evaluated against it and answers for the frame that has
+/// passed.
+pub const PREVIOUS_CONTEXT_FN: &str = "previous_vertex_context";
+/// A [`VERTEX_CONTEXT_STRUCT`]-evaluated vertex's clip position *last
+/// frame*: previous instance row, previous camera.
+pub const PREVIOUS_CLIP_POSITION_FN: &str = "previous_clip_position";
+/// Builds a [`CONTEXT_STRUCT`] from a [`VELOCITY_OUT_STRUCT`] — the twin
+/// of [`SURFACE_CONTEXT_FN`] the velocity fragment needs when the material
+/// discards, because its vertex struct is the extended one.
+pub const VELOCITY_CONTEXT_FN: &str = "velocity_surface_context";
+/// Screen motion between two clip positions: uv units per frame, `y` down
+/// — the same orientation every screen-space uv in this ABI uses.
+pub const SCREEN_MOTION_FN: &str = "screen_motion";
+
 /// Struct a generated module declares for the *declared* per-vertex
 /// attributes, taken as the vertex entry's **second** parameter.
 ///
@@ -472,6 +518,19 @@ pub const BINDING_ENVIRONMENT_LUT: u32 = 6;
 /// lookup wants the hardware's bilinear between texels rather than the
 /// banding a `textureLoad` would give a roughness sweep.
 pub const BINDING_ENVIRONMENT_SAMPLER: u32 = 7;
+
+/// [`GROUP_FRAME`] binding of the instance transforms as they were *last
+/// frame* — the array the velocity stage's previous-frame transform reads,
+/// beside [`BINDING_INSTANCES`] and indexed by the same
+/// `@builtin(instance_index)`.
+///
+/// A second array rather than a wider row, by ADR 0024's stride rule: the
+/// current row's stride is ABI, and nothing that does not do motion should
+/// pay for it — in bytes, in upload, or in a vertex stage's attention. The
+/// host fills it from whatever each draw says its previous transform was;
+/// a draw that supplies none reads its own current one there, which is
+/// zero motion and today's behaviour.
+pub const BINDING_PREVIOUS_INSTANCES: u32 = 8;
 
 /// Edge length in texels of the environment-BRDF LUT.
 ///
@@ -901,6 +960,12 @@ pub enum StageOutput {
     Color,
     /// A [`GBUFFER_STRUCT`], one target per [`GBUFFER_BASE_TARGETS`] entry.
     GBuffer,
+    /// One `vec2f` of screen motion at `@location(0)`: where this fragment
+    /// was on screen last frame, in uv units per frame. The velocity
+    /// stage's fragment reads no surface — position, current and
+    /// previous, is the whole of what it needs — which is why it is not
+    /// [`MaterialStage::needs_surface`].
+    Velocity,
     /// Nothing: the stage has no fragment entry point at all, and a
     /// pipeline built for it has no fragment state. Depth is written by
     /// the depth test, which needs no shader.
@@ -911,7 +976,7 @@ impl StageOutput {
     /// How many colour attachments a pass running this stage must have.
     pub fn color_targets(self) -> usize {
         match self {
-            StageOutput::Color => 1,
+            StageOutput::Color | StageOutput::Velocity => 1,
             StageOutput::GBuffer => GBUFFER_BASE_TARGETS.len(),
             StageOutput::Nothing => 0,
         }
@@ -945,10 +1010,11 @@ pub struct MaterialStageDesc {
 /// enum, which had room for exactly two entry points and no more
 /// ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
 ///
-/// The stages the plan still owes — `Shadow`, `PeelFront`/`PeelBack`,
-/// `Velocity` — are rows that do not exist yet. Each needs something else
-/// first (a depth bias, the peel test, a previous-frame transform), which
-/// is why they are not stubbed out here.
+/// The stages the plan still owes — `PeelFront`/`PeelBack` — are rows that
+/// do not exist yet. `Shadow` landed in M5 (a depth bias and a view per
+/// light), `Velocity` with the previous-frame transform row the frame
+/// group now carries; the peel pair waits on the peel test, which is why
+/// it is not stubbed out here.
 pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
     MaterialStageDesc {
         name: "forward_lit",
@@ -978,6 +1044,18 @@ pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
               prepass, from a light's point of view — and the reason the vertex \
               and alpha subgraphs had to become separable at all.",
     },
+    MaterialStageDesc {
+        name: "velocity",
+        fragment_entry: "fs_velocity",
+        output: StageOutput::Velocity,
+        doc: "Write the screen motion of every visible fragment: where it was \
+              last frame, as uv per frame. The vertex entry transforms each \
+              vertex twice — against this frame's camera and instance row, and \
+              against the previous frame's, which the frame group carries \
+              beside the current ones — and the fragment interpolates the \
+              difference. TAA and motion blur read the target; the stage \
+              itself reads no surface.",
+    },
 ];
 
 /// Which stage a material is compiled for.
@@ -997,6 +1075,8 @@ impl MaterialStage {
     pub const DEPTH_ONLY: MaterialStage = MaterialStage(2);
     /// Write depth into a shadow map, from a light's point of view.
     pub const SHADOW: MaterialStage = MaterialStage(3);
+    /// Write each visible fragment's screen motion since last frame.
+    pub const VELOCITY: MaterialStage = MaterialStage(4);
 
     /// Every stage, in table order.
     pub const ALL: &'static [MaterialStage] = &[
@@ -1004,6 +1084,7 @@ impl MaterialStage {
         MaterialStage::GBUFFER,
         MaterialStage::DEPTH_ONLY,
         MaterialStage::SHADOW,
+        MaterialStage::VELOCITY,
     ];
 
     /// The stage at `index` in [`MATERIAL_STAGES`], if there is one.
@@ -1045,8 +1126,26 @@ impl MaterialStage {
     ///
     /// The whole of what partitioning turns on: a stage that writes no
     /// colour needs the vertex offset and the discard test, and nothing
-    /// else from the graph (ADR 0025).
+    /// else from the graph (ADR 0025). The velocity stage writes colour
+    /// but reads no surface — its fragment is position arithmetic — so it
+    /// is the one colour-writing stage that answers `false`, and the one
+    /// reason this is not `self.output() != StageOutput::Nothing`.
     pub fn needs_surface(self) -> bool {
+        matches!(
+            self.output(),
+            StageOutput::Color | StageOutput::GBuffer
+        )
+    }
+
+    /// Whether a pipeline built for this stage always has a fragment
+    /// program.
+    ///
+    /// A colour-writing stage does; a [`StageOutput::Nothing`] stage has
+    /// one only when the material discards, which is a property of the
+    /// material and not of the stage
+    /// ([`GeneratedShader::fragment_entry`] is the answer for a given
+    /// one).
+    pub fn always_has_fragment(self) -> bool {
         self.output() != StageOutput::Nothing
     }
 
@@ -1681,7 +1780,8 @@ mod tests {
             MaterialStage::parse("  GBuffer "),
             Some(MaterialStage::GBUFFER)
         );
-        assert_eq!(MaterialStage::parse("velocity"), None);
+        assert_eq!(MaterialStage::parse("velocity"), Some(MaterialStage::VELOCITY));
+        assert_eq!(MaterialStage::parse("shadowy"), None);
         let mut names: Vec<&str> = MATERIAL_STAGES.iter().map(|stage| stage.name).collect();
         names.sort_unstable();
         names.dedup();
@@ -1700,13 +1800,22 @@ mod tests {
         );
         assert_eq!(MaterialStage::DEPTH_ONLY.color_targets(), 0);
         assert_eq!(MaterialStage::SHADOW.color_targets(), 0);
-        // A stage that needs no surface writes no colour, and the
-        // converse: those are the same stages, and it is what
-        // partitioning turns on.
+        assert_eq!(MaterialStage::VELOCITY.color_targets(), 1);
+        // A stage that needs no surface writes no colour, with the one
+        // exception that named this test's shape: the velocity stage
+        // writes motion and reads no surface, so "needs surface" is the
+        // material-function question and "writes colour" is not its
+        // consequence any more.
         for stage in MaterialStage::ALL {
-            assert_eq!(stage.needs_surface(), stage.color_targets() > 0);
             assert_eq!(
                 stage.needs_surface(),
+                matches!(
+                    stage.output(),
+                    StageOutput::Color | StageOutput::GBuffer
+                )
+            );
+            assert_eq!(
+                stage.always_has_fragment(),
                 stage.output() != StageOutput::Nothing
             );
         }

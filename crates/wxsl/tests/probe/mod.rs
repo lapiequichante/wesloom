@@ -83,6 +83,7 @@ pub fn unlit() -> Environment {
         exposure: 1.0,
         time: 0.0,
         previous_time: 0.0,
+    previous_camera: None,
     }
 }
 

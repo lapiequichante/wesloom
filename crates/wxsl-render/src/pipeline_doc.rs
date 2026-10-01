@@ -61,7 +61,7 @@ use wxsl_core::node::NodeRegistry;
 use wxsl_core::pipeline as doc;
 use wxsl_core::scene::TagExpr;
 
-use crate::effect::{EffectInputKind, EffectRegistry};
+use crate::effect::{Effect, EffectInputKind, EffectRegistry};
 use crate::graph::RenderGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
@@ -269,6 +269,18 @@ pub enum PipelineError {
         /// The pass doing the writing.
         node: String,
     },
+    /// A velocity-stage pass writes a target that is not a pair of signed
+    /// half floats. Motion is a difference — negative, and worth half
+    /// floats — so `precision: "pair"` is the one `resource.color` the
+    /// fragment's `vec2f` output agrees with, and the document names its
+    /// mistake rather than leaving it to a `wgpu` validation error about
+    /// formats.
+    VelocityTargetFormat {
+        /// The pass doing the writing.
+        node: String,
+        /// The format the wired target actually is.
+        format: String,
+    },
 }
 
 impl core::fmt::Display for PipelineError {
@@ -439,6 +451,12 @@ impl core::fmt::Display for PipelineError {
                  `resource.color` or `resource.buffer` into it instead — a \
                  resource is the thing a chain passes along"
             ),
+            PipelineError::VelocityTargetFormat { node, format } => write!(
+                f,
+                "pass `{node}` is a velocity pass, and writes {format} — motion \
+                 is a pair of signed half floats, so its target is a \
+                 `resource.color` at precision `pair`"
+            ),
         }
     }
 }
@@ -596,6 +614,13 @@ impl<'a> Compiler<'a> {
                 Some(doc::PRESENT) => presents.push(*node),
                 Some(other) if other.starts_with(doc::PASS_COMPUTE_PREFIX) => {
                     self.compute_pass(*node, other)?;
+                }
+                // The screen pass's own derived rows: same dispatch shape,
+                // and the effect named by the row rather than by a setting.
+                // (`pass.screen` itself does not match the prefix — the dot
+                // sees to that.)
+                Some(other) if other.starts_with(doc::PASS_SCREEN_PREFIX) => {
+                    self.derived_screen_pass(*node, other)?;
                 }
                 _ => {}
             }
@@ -972,13 +997,41 @@ impl<'a> Compiler<'a> {
         let into_wired = self.fed(node, "into").is_some();
         let mut wrote = RenderGraph::TARGET;
         let colors: Vec<Attachment> = match stage.output() {
-            abi::StageOutput::Color => {
+            abi::StageOutput::Color | abi::StageOutput::Velocity => {
                 // A pass whose colour reaches nothing: neither handed on
                 // through `color` nor written into a named target.
                 if !color_wired && !into_wired {
                     return Err(PipelineError::ColorWithoutConsumer { node: name });
                 }
                 wrote = self.write_target(node)?;
+                // A velocity target holds a pair of *signed* half floats —
+                // motion is a difference, and negative — so the one
+                // precision that spells that is the only one the fragment
+                // output type agrees with. Everything else would fail at
+                // pipeline creation with a format complaint; this names
+                // the document node instead.
+                if stage.output() == abi::StageOutput::Velocity {
+                    let format = self
+                        .graph
+                        .resource_desc(wrote)
+                        .and_then(|desc| desc.texture())
+                        .map(|shape| match shape {
+                            crate::pass::ResourceShape::Texture { format, .. } => *format,
+                            crate::pass::ResourceShape::Buffer { .. } => unreachable!(
+                                "typing only lets a colour target feed an `into`"
+                            ),
+                        });
+                    if format != Some(gbuffer_format(
+                        abi::GBufferPrecision::HighDynamicRangePair,
+                    )) {
+                        return Err(PipelineError::VelocityTargetFormat {
+                            node: name,
+                            format: format
+                                .map(|format| format!("{format:?}"))
+                                .unwrap_or_else(|| "the frame's own target".to_string()),
+                        });
+                    }
+                }
                 vec![self.color_attachment(wrote)]
             }
             abi::StageOutput::GBuffer => {
@@ -1078,90 +1131,46 @@ impl<'a> Compiler<'a> {
         let name = self.label(node);
         let effect_text = self.setting(node, doc::SETTING_EFFECT).trim().to_string();
         let known: Vec<String> = self.effects.ids();
-        let effect =
-            self.effects
-                .get(&effect_text)
-                .ok_or_else(|| PipelineError::UnknownEffect {
-                    node: name.clone(),
-                    effect: effect_text,
-                    known,
-                })?;
+        let effect = self
+            .effects
+            .get(&effect_text)
+            .ok_or_else(|| PipelineError::UnknownEffect {
+                node: name.clone(),
+                effect: effect_text,
+                known,
+            })?
+            .clone();
+        // An effect whose wiring the fixed socket set cannot name — two
+        // image inputs and up — has a derived row of its own, whose
+        // sockets are the declaration. Naming it here would bind two
+        // declared inputs to the one `image` socket and pretend that was
+        // wiring; the mistake is named instead.
+        if !effect.fits_pass_screen() {
+            return Err(PipelineError::EffectInputMismatch {
+                node: name.clone(),
+                effect: effect.id.to_string(),
+                reason: format!(
+                    "it declares more images than the fixed socket set can name — \
+                     place `{}{}` instead, whose sockets are the declaration",
+                    doc::PASS_SCREEN_PREFIX,
+                    effect.id
+                ),
+            });
+        }
 
         // The reads are the effect's declared inputs, in declaration order
-        // — the order the shader declares its pass-group bindings in. A
-        // G-buffer input expands to one read per layout target plus depth;
-        // an image is exactly one. A wired socket the effect does not
-        // declare is the mirror mistake and gets the same named error.
-        let mut reads: Vec<Read> = Vec::new();
-        let mut buffer_socket_taken = false;
-        for input in effect.inputs {
-            match input.kind {
-                EffectInputKind::GBuffer => match self.fed(node, "gbuffer") {
-                    Some(source) => {
-                        let (targets, depth) = &self.gbuffers[&source];
-                        reads.extend(
-                            targets
-                                .iter()
-                                .copied()
-                                .chain(core::iter::once(*depth))
-                                .map(Read::current),
-                        );
-                    }
-                    None => {
-                        return Err(PipelineError::EffectInputMismatch {
-                            node: name.clone(),
-                            effect: effect.id.to_string(),
-                            reason: format!(
-                                "{} — but no G-buffer is wired into it",
-                                input.description
-                            ),
-                        });
-                    }
-                },
-                EffectInputKind::Image => match self.fed(node, "image") {
-                    Some(source) => reads.push(Read::current(self.image_source(source, node)?)),
-                    None => {
-                        return Err(PipelineError::EffectInputMismatch {
-                            node: name.clone(),
-                            effect: effect.id.to_string(),
-                            reason: format!(
-                                "{} — but nothing is wired into `image`",
-                                input.description
-                            ),
-                        });
-                    }
-                },
-                EffectInputKind::Buffer => {
-                    // The declared buffer inputs ride the one `buffer`
-                    // socket, as the images ride `image` — the socket set
-                    // is fixed, so a second buffer input is the named
-                    // mistake rather than a socket nobody could draw.
-                    if buffer_socket_taken {
-                        return Err(PipelineError::EffectInputMismatch {
-                            node: name.clone(),
-                            effect: effect.id.to_string(),
-                            reason: format!(
-                                "{} — but a screen pass has one `buffer` socket, \
-                                 and an earlier declared input took it",
-                                input.description
-                            ),
-                        });
-                    }
-                    let Some(source) = self.fed(node, "buffer") else {
-                        return Err(PipelineError::EffectInputMismatch {
-                            node: name.clone(),
-                            effect: effect.id.to_string(),
-                            reason: format!(
-                                "{} — but nothing is wired into `buffer`",
-                                input.description
-                            ),
-                        });
-                    };
-                    reads.push(Read::current(self.storage_source(source, &effect)?));
-                    buffer_socket_taken = true;
-                }
-            }
-        }
+        // — the order the shader declares its pass-group bindings in —
+        // each through the fixed socket set's one name for its kind.
+        let sockets: Vec<&'static str> = effect
+            .inputs
+            .iter()
+            .map(|input| match input.kind {
+                EffectInputKind::GBuffer => "gbuffer",
+                EffectInputKind::Image => "image",
+                EffectInputKind::Buffer => "buffer",
+            })
+            .collect();
+        let reads = self.screen_reads(node, &effect, &sockets)?;
         for (socket, wired) in [("gbuffer", "a G-buffer"), ("image", "an image")] {
             if effect.declares(socket) {
                 continue;
@@ -1192,7 +1201,132 @@ impl<'a> Compiler<'a> {
                 ),
             });
         }
+        self.screen_pass_tail(node, &effect, reads)
+    }
 
+    /// The screen pass's derived row: same tail as [`Self::screen_pass`],
+    /// but the effect named by the row itself and every declared input
+    /// wired through a socket of its own — TAA's `color`, `velocity` and
+    /// `history` are three sockets, not one `image` said three times.
+    fn derived_screen_pass(&mut self, node: NodeId, def_id: &str) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let effect_id = &def_id[doc::PASS_SCREEN_PREFIX.len()..];
+        let known: Vec<String> = self.effects.ids();
+        let effect = self
+            .effects
+            .get(effect_id)
+            .ok_or_else(|| PipelineError::UnknownEffect {
+                node: name.clone(),
+                effect: effect_id.to_string(),
+                known,
+            })?
+            .clone();
+        let sockets: Vec<&'static str> = effect.inputs.iter().map(|input| input.name).collect();
+        let reads = self.screen_reads(node, &effect, &sockets)?;
+        self.screen_pass_tail(node, &effect, reads)
+    }
+
+    /// The pass-group reads one screen effect's declared inputs become, in
+    /// declaration order — the order the shader declares its `@group(3)`
+    /// bindings in. `sockets[i]` is the document socket inputs[i] is wired
+    /// through: the fixed set's name for its kind on the generic
+    /// `pass.screen`, the input's own name on a derived row. An image
+    /// input carrying a `history` reads a resource's ring at that depth,
+    /// which orders nothing — the property a temporal resolve needs to
+    /// stay schedulable against its own previous output.
+    fn screen_reads(
+        &self,
+        node: NodeId,
+        effect: &Effect,
+        sockets: &[&'static str],
+    ) -> Result<Vec<Read>, PipelineError> {
+        let name = self.label(node);
+        let mut reads: Vec<Read> = Vec::new();
+        let mut socket_taken: Vec<&'static str> = Vec::new();
+        for (input, socket) in effect.inputs.iter().zip(sockets) {
+            // Two declared inputs through one socket is the fixed set's
+            // own limit speaking: on the generic pass a second buffer has
+            // no socket to take, and on a derived row the sockets are the
+            // inputs' own names, so this stays quiet.
+            if socket_taken.contains(socket) {
+                return Err(PipelineError::EffectInputMismatch {
+                    node: name.clone(),
+                    effect: effect.id.to_string(),
+                    reason: format!(
+                        "{} — but a screen pass has one `{socket}` socket, \
+                         and an earlier declared input took it",
+                        input.description
+                    ),
+                });
+            }
+            socket_taken.push(socket);
+            match input.kind {
+                EffectInputKind::GBuffer => match self.fed(node, socket) {
+                    Some(source) => {
+                        let (targets, depth) = &self.gbuffers[&source];
+                        reads.extend(
+                            targets
+                                .iter()
+                                .copied()
+                                .chain(core::iter::once(*depth))
+                                .map(Read::current),
+                        );
+                    }
+                    None => {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but no G-buffer is wired into it",
+                                input.description
+                            ),
+                        });
+                    }
+                },
+                EffectInputKind::Image => match self.fed(node, socket) {
+                    Some(source) => reads.push(Read {
+                        resource: self.image_source(source, node)?,
+                        history: input.history,
+                    }),
+                    None => {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but nothing is wired into `{socket}`",
+                                input.description
+                            ),
+                        });
+                    }
+                },
+                EffectInputKind::Buffer => {
+                    let Some(source) = self.fed(node, socket) else {
+                        return Err(PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.to_string(),
+                            reason: format!(
+                                "{} — but nothing is wired into `{socket}`",
+                                input.description
+                            ),
+                        });
+                    };
+                    reads.push(Read::current(self.storage_source(source, effect)?));
+                }
+            }
+        }
+        Ok(reads)
+    }
+
+    /// Everything a screen pass shares once its reads are known: the write
+    /// target, the policy, the promotion a skipped frame needs, and the
+    /// pass itself.
+    fn screen_pass_tail(
+        &mut self,
+        node: NodeId,
+        effect: &Effect,
+        reads: Vec<Read>,
+    ) -> Result<(), PipelineError> {
+        let name = self.label(node);
         let target = self.write_target(node)?;
         let policy = self.policy(node)?;
         // A pass that skips frames writes stable storage, or the
@@ -1980,6 +2114,223 @@ mod tests {
         assert!(
             matches!(error, PipelineError::EffectInputMismatch { .. }),
             "{error}"
+        );
+    }
+
+    /// The motion chain a TAA resolve sits at the end of, as one document:
+    /// shade into a colour target, a velocity pass over the same depth,
+    /// the resolve reading colour, velocity and its own last frame, and
+    /// the display transform after. Every node is the shipped vocabulary's;
+    /// the registry is `document_registry`'s, because the resolve is a
+    /// derived row (plan3 N2).
+    fn taa_document() -> Graph {
+        let effects = effects();
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("forward + taa");
+        let scene = graph.add_node(doc::SOURCE_SCENE);
+        let depth = graph.add_node(doc::RESOURCE_DEPTH);
+        let material = graph.add(
+            Node::new(doc::PASS_GEOMETRY)
+                .with_label("forward_lit")
+                .with_setting(doc::SETTING_STAGE, "forward_lit"),
+        );
+        let color = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("scene")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let velocity = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("velocity")
+                .with_setting(doc::SETTING_PRECISION, "pair"),
+        );
+        let history = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("taa")
+                .with_setting(doc::SETTING_PRECISION, "hdr")
+                .with_setting(doc::SETTING_HISTORY, "1"),
+        );
+        let motion = graph.add(
+            Node::new(doc::PASS_GEOMETRY)
+                .with_label("velocity")
+                .with_setting(doc::SETTING_STAGE, "velocity"),
+        );
+        let taa = graph.add(Node::new(format!("{}wxsl.taa", doc::PASS_SCREEN_PREFIX)).with_label("taa"));
+        let tonemap = graph.add(
+            Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((scene, "draws"), (material, "draws")),
+            ((depth, "depth"), (material, "depth")),
+            ((color, "color"), (material, "into")),
+            ((scene, "draws"), (motion, "draws")),
+            ((material, "depth"), (motion, "depth")),
+            ((velocity, "color"), (motion, "into")),
+            ((color, "color"), (taa, "color")),
+            ((velocity, "color"), (taa, "velocity")),
+            ((history, "color"), (taa, "history")),
+            ((history, "color"), (taa, "into")),
+            ((history, "color"), (tonemap, "image")),
+            ((tonemap, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        graph
+    }
+
+    #[test]
+    fn a_taa_chain_compiles_from_a_document() {
+        // The whole of plan3 N2's chain, as nodes: a velocity pass, and a
+        // resolve whose history input reads last frame's own output
+        // through the ring it writes.
+        let compiled = compile(
+            &taa_document(),
+            &document_registry(&effects()),
+            &effects(),
+            &config(),
+        )
+        .expect("the chain compiles");
+        compiled.schedule().expect("the chain schedules");
+
+        let motion = compiled
+            .passes()
+            .iter()
+            .find(|pass| pass.label == "velocity")
+            .expect("the velocity pass is in the list");
+        let crate::pass::PassKind::Geometry { stage, .. } = &motion.kind else {
+            panic!("the velocity pass is geometry");
+        };
+        assert_eq!(*stage, abi::MaterialStage::VELOCITY);
+
+        let resolve = compiled
+            .passes()
+            .iter()
+            .find(|pass| pass.label == "taa")
+            .expect("the resolve is in the list");
+        let history_id = compiled
+            .resources()
+            .iter()
+            .position(|desc| desc.label == "taa")
+            .map(|index| ResourceId(index as u32))
+            .expect("the history resource exists");
+        assert!(
+            resolve.reads.iter().any(|read| read.resource == history_id
+                && read.history == 1),
+            "the resolve reads its own ring one frame back: {:?}",
+            resolve.reads
+        );
+        // And the history read is exactly the read that orders nothing —
+        // the resolve still writes the resource, which without the
+        // history exemption would be a cycle.
+        assert!(!resolve
+            .read_this_frame()
+            .any(|resource| resource == history_id));
+    }
+
+    #[test]
+    fn a_velocity_pass_orders_after_the_depth_it_tests_against() {
+        let compiled = compile(
+            &taa_document(),
+            &document_registry(&effects()),
+            &effects(),
+            &config(),
+        )
+        .expect("the chain compiles");
+        let schedule = compiled.schedule().expect("schedules");
+        let order: Vec<&str> = schedule
+            .order()
+            .iter()
+            .map(|index| compiled.passes()[*index].label.as_str())
+            .collect();
+        let material = order
+            .iter()
+            .position(|label| *label == "forward_lit")
+            .expect("the material pass");
+        let motion = order
+            .iter()
+            .position(|label| *label == "velocity")
+            .expect("the velocity pass");
+        let resolve = order
+            .iter()
+            .position(|label| *label == "taa")
+            .expect("the resolve");
+        assert!(
+            material < motion,
+            "the velocity pass loads the depth the material pass wrote"
+        );
+        assert!(
+            motion < resolve,
+            "the resolve reads the velocity the velocity pass wrote"
+        );
+    }
+
+    #[test]
+    fn a_velocity_target_that_cannot_hold_motion_is_named() {
+        // Motion is a difference — negative, half float — so `standard`
+        // (rgba8unorm, unsigned) has no agreement with the fragment's
+        // `vec2f`, and the document is told instead of the pipeline
+        // creation failing on a format.
+        let effects = effects();
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("velocity into 8-bit");
+        let scene = graph.add_node(doc::SOURCE_SCENE);
+        let depth = graph.add_node(doc::RESOURCE_DEPTH);
+        let material = graph.add(
+            Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "forward_lit"),
+        );
+        let color = graph.add(
+            Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let velocity = graph.add(
+            Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "standard"),
+        );
+        let motion = graph.add(
+            Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "velocity"),
+        );
+        for (from, to) in [
+            ((scene, "draws"), (material, "draws")),
+            ((depth, "depth"), (material, "depth")),
+            ((color, "color"), (material, "into")),
+            ((scene, "draws"), (motion, "draws")),
+            ((material, "depth"), (motion, "depth")),
+            ((velocity, "color"), (motion, "into")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        let error = compile(&graph, &registry, &effects, &config())
+            .expect_err("8-bit unsigned is not a motion format");
+        assert!(
+            matches!(error, PipelineError::VelocityTargetFormat { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_multi_image_effect_on_the_generic_pass_is_reported_with_its_row() {
+        // Naming `wxsl.taa` on the fixed `pass.screen` would bind three
+        // declared inputs to one `image` socket and call it wiring; the
+        // error names the derived row that exists for exactly this.
+        let registry = make_registry();
+        let mut graph = wxsl_core::pipeline::document("taa on the fixed set");
+        let color = graph.add_node(doc::RESOURCE_COLOR);
+        let taa = graph
+            .add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.taa"));
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((color, "color"), (taa, "image")),
+            ((taa, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        let error = errors_of(&graph, &config());
+        assert!(
+            matches!(error, PipelineError::EffectInputMismatch { .. }),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("pass.screen.wxsl.taa"),
+            "the error names the derived row: {error}"
         );
     }
 

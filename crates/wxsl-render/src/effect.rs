@@ -69,7 +69,8 @@ pub const LUT_VIEW_MODULE: &str = "package::wxsl::lut_view";
 
 /// One input an effect consumes.
 ///
-/// The `name` is the `pass.screen` socket the document wires, and the
+/// The `name` is the `pass.screen` socket the document wires — and for a
+/// derived `pass.screen.<effect>` node, the socket's own name — and the
 /// `kind` is what the compiler does with it — the spellings exist
 /// because a G-buffer input expands to one texture per layout target plus
 /// depth, an image is exactly one read, and a buffer one more.
@@ -82,6 +83,14 @@ pub struct EffectInput {
     pub kind: EffectInputKind,
     /// One line for the palette and for error messages.
     pub description: &'static str,
+    /// How many frames back this input reads. `0` is this frame's
+    /// contents, which orders the pass after whoever wrote them; anything
+    /// else reads a persistent resource's *history*, and creates no
+    /// ordering edge — the property that makes a temporal technique
+    /// schedulable at all. A resource whose ring is too shallow is the
+    /// scheduler's named error, exactly as a hand-built pass list's would
+    /// be.
+    pub history: u32,
 }
 
 /// The shape of an effect input, and therefore how many pass-group
@@ -407,6 +416,26 @@ impl Effect {
         matches!(self.kind, EffectKind::Compute { .. })
     }
 
+    /// Whether this screen effect's wiring fits the fixed `pass.screen`
+    /// socket set: at most one image and at most one buffer, which is all
+    /// that node can name. Effects that do not — TAA's three images, the
+    /// blur's two — are placed as their derived `pass.screen.<id>` row
+    /// instead, whose sockets *are* the declaration, exactly as a compute
+    /// pass's are.
+    pub fn fits_pass_screen(&self) -> bool {
+        let images = self
+            .inputs
+            .iter()
+            .filter(|input| input.kind == EffectInputKind::Image)
+            .count();
+        let buffers = self
+            .inputs
+            .iter()
+            .filter(|input| input.kind == EffectInputKind::Buffer)
+            .count();
+        images <= 1 && buffers <= 1
+    }
+
     /// The parameters, laid out for the uniform block the pass group
     /// binds: one field per declared parameter, under the same WGSL
     /// uniform rules every host-shared buffer here follows.
@@ -470,6 +499,7 @@ const SCREEN_GRAPH_INPUTS: &[EffectInput] = &[EffectInput {
     name: "image",
     kind: EffectInputKind::Image,
     description: "The image this effect reads, as linear radiance.",
+    history: 0,
 }];
 
 /// The deferred lighting pass, as an effect: the first one, migrated out
@@ -487,6 +517,7 @@ pub const DEFERRED_LIGHTING: Effect = Effect {
         name: "gbuffer",
         kind: EffectInputKind::GBuffer,
         description: "The G-buffer to shade: every target, then depth.",
+        history: 0,
     }],
     outputs: &[],
     parameters: &[],
@@ -511,6 +542,7 @@ pub const BLOOM: Effect = Effect {
         name: "image",
         kind: EffectInputKind::Image,
         description: "The image to glow from, as linear radiance.",
+        history: 0,
     }],
     outputs: &[],
     parameters: &[
@@ -558,6 +590,7 @@ pub const TONEMAP: Effect = Effect {
         name: "image",
         kind: EffectInputKind::Image,
         description: "The linear image to tonemap.",
+        history: 0,
     }],
     outputs: &[],
     parameters: &[],
@@ -609,6 +642,7 @@ pub const LUT_VIEW: Effect = Effect {
         name: "image",
         kind: EffectInputKind::Image,
         description: "The image to display.",
+        history: 0,
     }],
     outputs: &[],
     parameters: &[],
@@ -663,12 +697,108 @@ pub const RAMP_VIEW: Effect = Effect {
         name: "ramp",
         kind: EffectInputKind::Buffer,
         description: "The buffer to draw, read as storage.",
+        history: 0,
     }],
     outputs: &[],
     parameters: &[],
     shader: EffectShader::Source {
         path: RAMP_VIEW_MODULE,
         wxsl: include_str!("../shaders/ramp_view.wxsl"),
+    },
+};
+
+/// Module path the TAA resolve's shader is mounted under.
+pub const TAA_MODULE: &str = "package::wxsl::taa";
+/// Module path the motion blur's shader is mounted under.
+pub const MOTION_BLUR_MODULE: &str = "package::wxsl::motion_blur";
+
+/// TAA: the temporal resolve at the end of a policy'd chain — the
+/// velocity stage's reason to exist (plan3 N2). Three inputs, which is
+/// exactly why the fixed `pass.screen` socket set cannot carry it: the
+/// colour, the velocity, and *last frame's own output*, read a frame
+/// back through a persistent resource's history so the pass orders
+/// against the scene but never against itself. Writing the history and
+/// reading it is the shape `reading_history_is_not_an_ordering_edge` is
+/// about.
+pub const TAA: Effect = Effect {
+    id: "wxsl.taa",
+    label: "TAA",
+    description: "Blend the frame with its reprojected history: antialias, \
+                  at the cost of one ring.",
+    kind: EffectKind::Screen {
+        vertex_entry: "taa_vs",
+        fragment_entry: "taa_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The frame, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "velocity",
+            kind: EffectInputKind::Image,
+            description: "The velocity stage's screen motion, uv per frame.",
+            history: 0,
+        },
+        EffectInput {
+            name: "history",
+            kind: EffectInputKind::Image,
+            description: "Last frame's resolve — the same resource `into` names.",
+            history: 1,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "blend",
+        // How much of the clamped history survives. 1 would never accept
+        // new light; 0 is no history at all.
+        default: Value::F32(0.9),
+    }],
+    shader: EffectShader::Source {
+        path: TAA_MODULE,
+        wxsl: include_str!("../shaders/taa.wxsl"),
+    },
+};
+
+/// Motion blur: sample back along each fragment's own screen motion — the
+/// first consumer of the velocity buffer that is not TAA, and the second
+/// proof that a two-image effect cannot sit on the fixed `pass.screen`
+/// socket set. Reads linear radiance, before the display transform, which
+/// is the only place averaging brightness means anything.
+pub const MOTION_BLUR: Effect = Effect {
+    id: "wxsl.motion_blur",
+    label: "motion blur",
+    description: "Smear the frame along its own velocity buffer.",
+    kind: EffectKind::Screen {
+        vertex_entry: "motion_blur_vs",
+        fragment_entry: "motion_blur_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The frame, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "velocity",
+            kind: EffectInputKind::Image,
+            description: "The velocity stage's screen motion, uv per frame.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        // 1 is a full frame's motion smeared across the exposure; 0 is
+        // the image exactly as it was.
+        default: Value::F32(1.0),
+    }],
+    shader: EffectShader::Source {
+        path: MOTION_BLUR_MODULE,
+        wxsl: include_str!("../shaders/motion_blur.wxsl"),
     },
 };
 
@@ -684,10 +814,11 @@ pub struct EffectRegistry {
 
 impl EffectRegistry {
     /// The effects this crate ships: the migrated lighting pass, the
-    /// display transform every stock chain ends in, and bloom.
+    /// display transform every stock chain ends in, bloom, the TAA
+    /// resolve, and the motion blur.
     pub fn shipped() -> Self {
         EffectRegistry {
-            effects: vec![DEFERRED_LIGHTING, TONEMAP, BLOOM],
+            effects: vec![DEFERRED_LIGHTING, TONEMAP, BLOOM, TAA, MOTION_BLUR],
         }
     }
 
@@ -825,6 +956,53 @@ impl EffectRegistry {
                 }
                 def.document()
             })
+            .chain(
+                // The screen pass's own derived rows, for the effects whose
+                // wiring the fixed socket set cannot name: one image socket
+                // per declared image input, under the input's own name,
+                // beside `into` and the colour hand-off. The TAA resolve's
+                // `history` socket is where a document says "last frame's"
+                // — the history lives on the *input*, and the resource it
+                // names is the one `into` writes.
+                self.effects
+                    .iter()
+                    .filter(|effect| !effect.is_compute() && !effect.fits_pass_screen())
+                    .map(|effect| {
+                        let mut def = NodeDefinition::builder(
+                            format!("{}{}", doc::PASS_SCREEN_PREFIX, effect.id),
+                            effect.label,
+                        )
+                        .doc(format!(
+                            "{} Reads: {}.",
+                            effect.description,
+                            declarations(
+                                effect
+                                    .inputs
+                                    .iter()
+                                    .map(|input| (input.name, input.description))
+                            ),
+                        ))
+                        .input(
+                            Socket::new("into", ValueType::ColorTarget).optional().with_doc(
+                                "Where to write. Unconnected means the frame's own target.",
+                            ),
+                        )
+                        .output(
+                            Socket::new("color", ValueType::ColorTarget).with_doc(
+                                "What the effect wrote — the frame's target when \
+                                 `into` is unconnected.",
+                            ),
+                        )
+                        .setting(policy_setting());
+                        for input in effect.inputs {
+                            def = def.input(
+                                Socket::new(input.name, input_socket_type(input.kind))
+                                    .with_doc(input.description),
+                            );
+                        }
+                        def.document()
+                    }),
+            )
             .collect()
     }
 }
@@ -889,7 +1067,12 @@ mod tests {
     #[test]
     fn the_shipped_registry_holds_the_migrated_lighting_pass_and_bloom() {
         let registry = EffectRegistry::shipped();
-        assert_eq!(registry.len(), 3);
+        assert_eq!(
+            registry.len(),
+            5,
+            "lighting, tonemap, bloom — and, since plan3 N2, the TAA resolve \
+             and the motion blur"
+        );
 
         let lighting = registry
             .get("deferred_lighting")
@@ -923,7 +1106,7 @@ mod tests {
             ..DEFERRED_LIGHTING
         };
         let registry = EffectRegistry::shipped().with(replacement);
-        assert_eq!(registry.len(), 3, "replacing, not appending");
+        assert_eq!(registry.len(), 5, "replacing, not appending");
         assert_eq!(
             registry
                 .get("deferred_lighting")

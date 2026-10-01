@@ -215,6 +215,27 @@ struct Demo {
     /// 0045). `None` is the shared cube, and every other demo's image
     /// comes from it unchanged.
     material: Option<fn() -> Graph>,
+    /// How the demo moves, when it moves at all: the transform at `t`,
+    /// for the demos whose cube has a *velocity* — the previous-frame
+    /// transform the velocity stage reads is this path one frame back.
+    /// `None` is the static spin every other demo draws, and a draw with
+    /// no previous is zero motion — today's behaviour (plan3 N2).
+    motion: Option<Motion>,
+    /// How many frames render before the captured one, so a temporal
+    /// pipeline's screenshot shows a settled history rather than frame
+    /// one's empty ring. The live view needs none of this: it runs
+    /// continuously.
+    warmup: u32,
+}
+
+/// One demo's way of moving: where the cube is at `t`, and the frame step
+/// its previous-frame transform answers for in a screenshot. The step is
+/// the shutter a motion blur is the average over — a screenshot has no
+/// real frame times to measure, so the demo states one.
+#[derive(Clone, Copy)]
+struct Motion {
+    step: f32,
+    path: fn(f32) -> Mat4,
 }
 
 fn demos() -> Vec<Demo> {
@@ -229,6 +250,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "deferred",
@@ -240,6 +263,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "single-pass",
@@ -251,6 +276,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "deferred-bloom",
@@ -264,6 +291,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "bloom-instances",
@@ -275,6 +304,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "bloom-tuned",
@@ -291,6 +322,8 @@ fn demos() -> Vec<Demo> {
             // visibly not the default image, from the same document.
             params: &[("bloom", "threshold", 0.35), ("bloom", "strength", 1.6)],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "brdf-lut",
@@ -304,6 +337,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "buffer-ramp",
@@ -317,6 +352,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "subsurface",
@@ -330,6 +367,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "ibl",
@@ -344,6 +383,8 @@ fn demos() -> Vec<Demo> {
             sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "bake",
@@ -357,6 +398,8 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: Some(bake_material_graph),
+            motion: None,
+            warmup: 0,
         },
         Demo {
             name: "fxaa",
@@ -368,6 +411,47 @@ fn demos() -> Vec<Demo> {
             sky: None,
             params: &[],
             material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "taa",
+            blurb: "the spinning cube under TAA: a velocity pass, a history \
+                    ring, and a resolve whose disocclusion answer is a clamp — \
+                    the plan3 N2 chain as a document",
+            pipeline: Pipeline::Document(taa_document),
+            instances: 1,
+            key_intensity: 22.0,
+            features: &[],
+            sky: None,
+            params: &[("taa", "blend", 0.0)],
+            material: None,
+            // The cube spins, so its velocity is real; the history needs
+            // frames behind it before the captured one shows what the
+            // ring accumulated.
+            motion: Some(Motion {
+                step: 1.0 / 60.0,
+                path: cube_transform,
+            }),
+            warmup: 24,
+        },
+        Demo {
+            name: "motion-blur",
+            blurb: "a cube swept across the frame, smeared along its own \
+                    velocity — the first consumer of the velocity buffer that \
+                    is not TAA",
+            pipeline: Pipeline::Document(motion_blur_document),
+            instances: 1,
+            key_intensity: 22.0,
+            features: &[],
+            sky: None,
+            params: &[],
+            material: None,
+            motion: Some(Motion {
+                step: 1.0 / 60.0,
+                path: swept_transform,
+            }),
+            warmup: 0,
         },
     ]
 }
@@ -421,6 +505,178 @@ fn fxaa_document() -> Graph {
         ((fxaa, "color"), (present, "surface")),
     ] {
         document.wire(&registry, from, to).expect("gallery wiring");
+    }
+    document
+}
+
+/// The TAA chain as a document: the shipped deferred preset with a
+/// velocity pass and a resolve composed onto it — three nodes, one
+/// resource, one rewire, in a demo, because that is what a temporal
+/// pipeline *is* now ([plan3 N2]).
+///
+/// The velocity pass loads the depth the G-buffer pass wrote — the same
+/// `depth` output every material pass carries — and writes a `pair`
+/// precision colour: motion is a difference, signed, and worth half
+/// floats. The resolve is a derived `pass.screen.wxsl.taa` row, whose
+/// sockets are its declaration's — `color`, `velocity`, and `history`,
+/// the last read a frame back through the ring the resolve itself
+/// writes, which is the whole reason the pass orders against the scene
+/// and never against itself. The tonemap reads the ring.
+fn taa_document() -> Graph {
+    use wxsl::core::graph::SocketRef;
+
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let mut document = StockPipeline::Deferred.document();
+    document.set_name("deferred + taa");
+
+    // The preset's nodes, by what they are.
+    let scene = document
+        .nodes()
+        .find(|(_, node)| node.def == doc::SOURCE_SCENE)
+        .map(|(id, _)| id)
+        .expect("the preset draws a scene");
+    let material = document
+        .nodes()
+        .find(|(_, node)| {
+            node.def == doc::PASS_GEOMETRY
+                && node
+                    .settings
+                    .get(doc::SETTING_STAGE)
+                    .is_some_and(|stage| stage.as_str() == "gbuffer")
+        })
+        .map(|(id, _)| id)
+        .expect("the deferred preset shades a G-buffer");
+    let scene_color = document
+        .nodes()
+        .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+        .map(|(id, _)| id)
+        .expect("the deferred preset shades into a colour target");
+    let tonemap = document
+        .nodes()
+        .find(|(_, node)| {
+            node.settings
+                .get(doc::SETTING_EFFECT)
+                .is_some_and(|spelled| {
+                    wxsl::core::identity::resolve(spelled).as_ref() == "wxsl.tonemap"
+                })
+        })
+        .map(|(id, _)| id)
+        .expect("every stock document ends in the tonemap pass");
+
+    let velocity = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("velocity")
+            .with_setting(doc::SETTING_PRECISION, "pair"),
+    );
+    let motion = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_GEOMETRY)
+            .with_label("velocity")
+            .with_setting(doc::SETTING_STAGE, "velocity"),
+    );
+    let ring = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("taa")
+            .with_setting(doc::SETTING_PRECISION, "hdr")
+            .with_setting(doc::SETTING_HISTORY, "1"),
+    );
+    let taa = document.add(
+        wxsl::core::graph::Node::new(format!("{}wxsl.taa", doc::PASS_SCREEN_PREFIX))
+            .with_label("taa"),
+    );
+
+    document.disconnect(&registry, &SocketRef::new(tonemap, "image"));
+    for (from, to) in [
+        ((scene, "draws"), (motion, "draws")),
+        ((material, "depth"), (motion, "depth")),
+        ((velocity, "color"), (motion, "into")),
+        ((scene_color, "color"), (taa, "color")),
+        ((velocity, "color"), (taa, "velocity")),
+        ((ring, "color"), (taa, "history")),
+        ((ring, "color"), (taa, "into")),
+        ((ring, "color"), (tonemap, "image")),
+    ] {
+        document.wire(&registry, from, to).expect("taa wiring");
+    }
+    document
+}
+
+/// The motion-blur chain as a document: the shipped forward preset with a
+/// velocity pass and the blur composed between the shading and the
+/// display transform. The blur reads *linear* radiance — ADR 0039's rule
+/// is the reason it sits before the tonemap — and smears each fragment
+/// along its own screen motion, which is what makes the smear follow the
+/// object rather than a global direction.
+fn motion_blur_document() -> Graph {
+    use wxsl::core::graph::SocketRef;
+
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let mut document = StockPipeline::Forward.document();
+    document.set_name("forward + motion blur");
+
+    let scene = document
+        .nodes()
+        .find(|(_, node)| node.def == doc::SOURCE_SCENE)
+        .map(|(id, _)| id)
+        .expect("the preset draws a scene");
+    let prepass = document
+        .nodes()
+        .find(|(_, node)| {
+            node.def == doc::PASS_GEOMETRY
+                && node
+                    .settings
+                    .get(doc::SETTING_STAGE)
+                    .is_some_and(|stage| stage.as_str() == "depth_only")
+        })
+        .map(|(id, _)| id)
+        .expect("the forward preset starts with a depth prepass");
+    let scene_color = document
+        .nodes()
+        .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+        .map(|(id, _)| id)
+        .expect("the forward preset shades into a colour target");
+    let tonemap = document
+        .nodes()
+        .find(|(_, node)| {
+            node.settings
+                .get(doc::SETTING_EFFECT)
+                .is_some_and(|spelled| {
+                    wxsl::core::identity::resolve(spelled).as_ref() == "wxsl.tonemap"
+                })
+        })
+        .map(|(id, _)| id)
+        .expect("every stock document ends in the tonemap pass");
+
+    let velocity = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("velocity")
+            .with_setting(doc::SETTING_PRECISION, "pair"),
+    );
+    let motion = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_GEOMETRY)
+            .with_label("velocity")
+            .with_setting(doc::SETTING_STAGE, "velocity"),
+    );
+    let blurred = document.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("blurred")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let blur = document.add(
+        wxsl::core::graph::Node::new(format!("{}wxsl.motion_blur", doc::PASS_SCREEN_PREFIX))
+            .with_label("motion blur"),
+    );
+
+    document.disconnect(&registry, &SocketRef::new(tonemap, "image"));
+    for (from, to) in [
+        ((scene, "draws"), (motion, "draws")),
+        ((prepass, "depth"), (motion, "depth")),
+        ((velocity, "color"), (motion, "into")),
+        ((scene_color, "color"), (blur, "color")),
+        ((velocity, "color"), (blur, "velocity")),
+        ((blurred, "color"), (blur, "into")),
+        ((blurred, "color"), (tonemap, "image")),
+    ] {
+        document.wire(&registry, from, to).expect("blur wiring");
     }
     document
 }
@@ -788,6 +1044,9 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
         exposure: 1.0,
         time,
         previous_time: time,
+        // Every gallery camera is fixed, so the velocity stage sees
+        // object motion only — and `None` says exactly that.
+        previous_camera: None,
     }
 }
 
@@ -958,6 +1217,14 @@ fn cube_transform(time: f32) -> Mat4 {
     Mat4::from_rotation_y(time * 0.45) * Mat4::from_rotation_x(time * 0.21)
 }
 
+/// The motion-blur demo's path: a sweep across the frame, fast enough
+/// that one frame's motion is a visible smear, and slow enough to stay
+/// on screen.
+fn swept_transform(time: f32) -> Mat4 {
+    let travel = (time * 0.9).sin() * 2.2;
+    Mat4::from_translation(Vec3::new(travel, 0.0, 0.0)) * Mat4::from_rotation_y(time * 1.8)
+}
+
 fn cube_draws<'a>(
     mesh: &'a Mesh,
     material: &'a wxsl::render::Material,
@@ -965,15 +1232,27 @@ fn cube_draws<'a>(
     tints: &'a [InstanceAttributes],
     count: u32,
     time: f32,
+    motion: Option<Motion>,
+    step: f32,
 ) -> DrawList<'a> {
-    let spin = cube_transform(time);
     (0..count.max(1))
         .map(|index| {
             let offset = index as f32 - (count.max(1) - 1) as f32 * 0.5;
             let place = Mat4::from_translation(Vec3::new(offset * 2.4, 0.0, 0.0));
             let mut item = DrawItem::new(mesh, material)
-                .with_transform(place * spin)
+                .with_transform(match motion {
+                    Some(motion) => place * (motion.path)(time),
+                    None => place * cube_transform(time),
+                })
                 .with_bindings(bindings);
+            // Where the cube was one frame ago, for the velocity stage's
+            // previous-instance row. Only a demo whose cube *moves*
+            // states it: every other draw stays `None`, which the frame
+            // group reads as this frame's own transform — zero motion,
+            // and the behaviour every frame had before the row existed.
+            if let Some(motion) = motion {
+                item = item.with_previous(place * (motion.path)((time - step).max(0.0)));
+            }
             if let Some(tint) = tints.get(index as usize) {
                 item = item.with_attributes(tint);
             }
@@ -1103,7 +1382,10 @@ impl Stage {
         Ok(())
     }
 
-    /// Render one frame of `demo` at `time`, into `view`.
+    /// Render one frame of `demo` at `time`, into `view`, where `step`
+    /// is how long the frame before it took — the shutter the velocity
+    /// stage's previous-instance row answers for. A screenshot states
+    /// the demo's own step; the live loop states what it measured.
     fn render(
         &mut self,
         demo: &Demo,
@@ -1111,6 +1393,7 @@ impl Stage {
         width: u32,
         height: u32,
         time: f32,
+        step: f32,
     ) -> Result<(), Box<dyn Error>> {
         apply(demo, &mut self.renderer)?;
         self.ensure_material(demo.features)?;
@@ -1134,7 +1417,16 @@ impl Stage {
                 demo.instances,
             )
         };
-        let draws = cube_draws(&self.mesh, material, bindings, tints, instances, time);
+        let draws = cube_draws(
+            &self.mesh,
+            material,
+            bindings,
+            tints,
+            instances,
+            time,
+            demo.motion,
+            step,
+        );
         self.renderer.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1173,8 +1465,24 @@ fn run_screenshots(
     std::fs::create_dir_all(dir)?;
     let mut shots: Vec<Shot> = Vec::new();
     for demo in demos {
-        // A fixed time, so two runs produce identical images.
-        stage.render(demo, target.view(), width, height, 0.6)?;
+        // A fixed time, so two runs produce identical images. A temporal
+        // pipeline's demo renders its warmup first — the same step, one
+        // frame at a time — so the captured frame shows a settled
+        // history instead of frame one's empty ring.
+        if let Some(motion) = demo.motion {
+            for frame in 0..demo.warmup {
+                stage.render(
+                    demo,
+                    target.view(),
+                    width,
+                    height,
+                    0.6 - (demo.warmup - frame) as f32 * motion.step,
+                    motion.step,
+                )?;
+            }
+        }
+        let step = demo.motion.map_or(0.0, |motion| motion.step);
+        stage.render(demo, target.view(), width, height, 0.6, step)?;
         stage.gpu.wait();
         let pixels = target.read_rgba8(&stage.gpu.device, &stage.gpu.queue);
         let file = dir.join(format!("{}.png", demo.name));
@@ -1281,6 +1589,9 @@ struct App {
     started: Instant,
     paused_at: Option<f32>,
     error: Option<Box<dyn Error>>,
+    /// When the previous frame rendered, so a temporal demo's velocity
+    /// answers for the *measured* frame time rather than an assumed one.
+    last_frame: Option<Instant>,
 }
 
 impl App {
@@ -1334,6 +1645,12 @@ impl App {
 
     fn render(&mut self) {
         let time = self.elapsed();
+        let step = self
+            .last_frame
+            .replace(std::time::Instant::now())
+            .map_or(1.0 / 60.0, |last| {
+                last.elapsed().as_secs_f32().clamp(1.0 / 240.0, 0.1)
+            });
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -1360,11 +1677,14 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = state.window.inner_size();
         let demo = &self.demos[self.current];
-        if let Err(error) =
-            state
-                .stage
-                .render(demo, &view, size.width.max(1), size.height.max(1), time)
-        {
+        if let Err(error) = state.stage.render(
+            demo,
+            &view,
+            size.width.max(1),
+            size.height.max(1),
+            time,
+            step,
+        ) {
             eprintln!("cannot render: {error}");
         }
         state.stage.gpu.queue.present(frame);
@@ -1540,6 +1860,7 @@ fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), 
         started: Instant::now(),
         paused_at: None,
         error: None,
+        last_frame: None,
     };
     event_loop.run_app(&mut app)?;
     match app.error {

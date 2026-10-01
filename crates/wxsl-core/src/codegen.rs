@@ -286,7 +286,7 @@ pub fn generate(
     // the location either way — the interface is per material — which is
     // what makes this a saving in the vertex stage rather than a
     // different pipeline layout.
-    let has_fragment = stage.needs_surface() || outputs.discard.is_some();
+    let has_fragment = stage.always_has_fragment() || outputs.discard.is_some();
     let mut varyings = Vec::with_capacity(outputs.varyings.len() + plan.cuts.len());
     if has_fragment {
         for (name, node) in &outputs.varyings {
@@ -322,6 +322,29 @@ pub fn generate(
     let fragment_entry = has_fragment.then(|| stage.fragment_entry().to_string());
 
     let interface = emitter.interface.clone();
+    // The velocity stage interpolates two more values than the graph's
+    // location budget accounted for — both frames' clip positions, which
+    // ride after the material's own extras. A material that spent every
+    // location but one has none left for the pair, and that is a fact
+    // about *this stage*, which no graph-level check could have seen.
+    if stage.output() == abi::StageOutput::Velocity
+        && !interface.geometry.is_empty()
+        && previous_clip_location(&interface.geometry) + 1 >= abi::MAX_VARYING_LOCATIONS as u32
+    {
+        let output = outputs.surface;
+        return Err(CodegenError::Invalid(GraphErrors(vec![GraphError::WrongStage {
+            node: output,
+            def: graph.node(output).map(|n| n.def.clone()).unwrap_or_default(),
+            output,
+            reason: format!(
+                "the velocity stage needs two more inter-stage locations than \
+                 this material's geometry leaves ({} of {} spent), and the \
+                 two clip positions have nowhere to ride",
+                previous_clip_location(&interface.geometry),
+                abi::MAX_VARYING_LOCATIONS,
+            ),
+        }])));
+    }
     let source = emitter.finish(graph, &macros, &parts);
     let source_hash = stable_hash(source.as_bytes());
     Ok(GeneratedShader {
@@ -1210,6 +1233,28 @@ impl Emitter<'_> {
                     }
                     self.lighting_source = generated.source;
                 }
+                abi::StageOutput::Velocity => {
+                    // The whole velocity ABI comes from one module, and the
+                    // fragment is position arithmetic — no surface, no
+                    // shading function. The previous-frame context is only
+                    // called when the graph displaces, but an unused import
+                    // is stripped, and one arm per stage reads better than
+                    // import accounting per shape.
+                    self.request_import(abi::VELOCITY_MODULE, abi::VELOCITY_OUT_STRUCT);
+                    self.request_import(
+                        abi::VELOCITY_MODULE,
+                        abi::TRANSFORM_VERTEX_VELOCITY_FN,
+                    );
+                    self.request_import(
+                        abi::VELOCITY_MODULE,
+                        abi::PREVIOUS_CLIP_POSITION_FN,
+                    );
+                    self.request_import(abi::VELOCITY_MODULE, abi::VELOCITY_CONTEXT_FN);
+                    self.request_import(abi::VELOCITY_MODULE, abi::SCREEN_MOTION_FN);
+                    if displaces {
+                        self.request_import(abi::VELOCITY_MODULE, abi::PREVIOUS_CONTEXT_FN);
+                    }
+                }
                 abi::StageOutput::Nothing => {}
             }
         }
@@ -1964,9 +2009,27 @@ fn extra_varyings(geometry: &GeometryInterface) -> String {
     out
 }
 
+/// The inter-stage location the velocity stage's previous clip position
+/// takes in a module with `geometry`'s declared attributes: one past
+/// every location the material's own extras spent. A module without
+/// declared attributes carries it in [`abi::VELOCITY_OUT_STRUCT`] at the
+/// first location after the base fields instead, so this is only asked
+/// for the geometry case.
+fn previous_clip_location(geometry: &GeometryInterface) -> u32 {
+    geometry
+        .vertex()
+        .iter()
+        .map(|attribute| attribute.varying)
+        .chain(geometry.computed().iter().map(|varying| varying.varying))
+        .chain(geometry.instance_index_location())
+        .max()
+        .map(|last| last + 1)
+        .unwrap_or(abi::VERTEX_OUT_FIELDS.len() as u32)
+}
+
 /// The IO structs a material with declared attributes needs, beside the
 /// ABI's own.
-fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
+fn write_geometry_io(out: &mut String, geometry: &GeometryInterface, stage: abi::MaterialStage) {
     if geometry.is_empty() {
         return;
     }
@@ -1984,6 +2047,23 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
         }
         out.push_str("}\n");
     }
+    // The velocity stage carries two more interpolated values than the
+    // interface's location budget accounted: this frame's clip and last
+    // frame's, which no other stage reads. They take the locations
+    // *after* the material's own extras — no interface location moves,
+    // and a stage-independent material resolves to two IO shapes that
+    // differ only where the velocity module says so.
+    let first_clip_location = previous_clip_location(geometry);
+    let velocity_clips = match stage.output() {
+        abi::StageOutput::Velocity => format!(
+            "    @location({}) {}: vec4f,\n    @location({}) {}: vec4f,\n",
+            first_clip_location,
+            abi::CURRENT_CLIP_FIELD,
+            first_clip_location + 1,
+            abi::PREVIOUS_CLIP_FIELD
+        ),
+        _ => String::new(),
+    };
     // An entry point returns one value, so this is the one struct that
     // cannot be split into "the ABI's half" and "the material's half". Its
     // base half is written from `abi::VERTEX_OUT_FIELDS`, which is also
@@ -2003,6 +2083,7 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
         );
     }
     out.push_str(&extra_varyings(geometry));
+    out.push_str(&velocity_clips);
     out.push_str("}\n");
 
     // The fragment side takes two parameters instead, so the ABI's own
@@ -2010,6 +2091,7 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface) {
     // widening at all.
     let _ = writeln!(out, "struct {} {{", abi::MATERIAL_VARYINGS_STRUCT);
     out.push_str(&extra_varyings(geometry));
+    out.push_str(&velocity_clips);
     out.push_str("}\n");
 }
 
@@ -2026,7 +2108,7 @@ fn write_entry_points(
     parts: &Partitions,
 ) {
     let geometry = &interface.geometry;
-    write_geometry_io(out, geometry);
+    write_geometry_io(out, geometry, options.stage);
     // Bound once when anything in the vertex stage wants it — the
     // displacement, an interpolant, or both — and never computed twice.
     // Everything reads the *undisplaced* context, which is the input to
@@ -2051,7 +2133,38 @@ fn write_entry_points(
         ),
         false => format!("{}(input)", abi::TRANSFORM_VERTEX_FN),
     };
+    // The velocity stage transforms every vertex twice — this frame's
+    // camera and instance row, and last frame's. Both offsets come from
+    // the *same* graph partition: this frame's against the context the
+    // vertex stage always builds, the previous frame's against
+    // `previous_vertex_context`, which is how a time-driven displacement
+    // answers for the frame that has passed without the graph knowing
+    // there is a previous frame at all.
+    let velocity = options.stage.output() == abi::StageOutput::Velocity;
+    let attrs_arg = match parts.vertex.is_some() && !geometry.is_empty() {
+        true => format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
+        false => String::new(),
+    };
+    let (offset_now, offset_previous) = match parts.vertex.is_some() {
+        true => (
+            format!("{}({}{attrs_arg})", abi::VERTEX_FN, abi::VERTEX_CONTEXT_VAR),
+            format!(
+                "{}({}(input){attrs_arg})",
+                abi::VERTEX_FN,
+                abi::PREVIOUS_CONTEXT_FN,
+            ),
+        ),
+        false => ("vec3f(0.0)".to_string(), "vec3f(0.0)".to_string()),
+    };
+    let velocity_transform = format!(
+        "{}(input, {offset_now}, {offset_previous})",
+        abi::TRANSFORM_VERTEX_VELOCITY_FN,
+    );
     if geometry.is_empty() {
+        let (vertex_out, call) = match velocity {
+            true => (abi::VELOCITY_OUT_STRUCT, velocity_transform.clone()),
+            false => (abi::VERTEX_OUT_STRUCT, transform("")),
+        };
         let _ = write!(
             out,
             "
@@ -2062,8 +2175,6 @@ fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
 ",
             vertex = options.vertex_entry,
             vertex_in = abi::VERTEX_IN_STRUCT,
-            vertex_out = abi::VERTEX_OUT_STRUCT,
-            call = transform(""),
         );
     } else {
         let extra_param = if geometry.vertex().is_empty() {
@@ -2110,7 +2221,10 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             vertex = options.vertex_entry,
             vertex_in = abi::VERTEX_IN_STRUCT,
             vertex_out = abi::MATERIAL_VERTEX_OUT_STRUCT,
-            call = transform(&format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR)),
+            call = match velocity {
+                true => velocity_transform.clone(),
+                false => transform(&format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR)),
+            },
         );
         let _ = writeln!(
             out,
@@ -2119,6 +2233,14 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         );
         for field in abi::VERTEX_OUT_FIELDS {
             let _ = writeln!(out, "    out.{name} = base.{name};", name = field.name);
+        }
+        if velocity {
+            // Last in the struct, because write_geometry_io put them
+            // after the material's own extras: the locations the
+            // interface's budget did not spend.
+            for field in [abi::CURRENT_CLIP_FIELD, abi::PREVIOUS_CLIP_FIELD] {
+                let _ = writeln!(out, "    out.{field} = base.{field};");
+            }
         }
         if geometry.instance_index_location().is_some() {
             let _ = writeln!(
@@ -2144,7 +2266,7 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     }
 
     let stage = options.stage;
-    if !stage.needs_surface() && parts.discard.is_none() {
+    if !stage.always_has_fragment() && parts.discard.is_none() {
         // Nothing to write and nothing to throw away: no fragment stage
         // at all, which is the whole economy of a depth prepass.
         return;
@@ -2199,11 +2321,31 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         ),
         false => String::new(),
     };
-    let prologue = format!(
-        "    let {ctx} = {context}(vertex);\n{unpack}{test}",
-        ctx = abi::CONTEXT_VAR,
-        context = abi::SURFACE_CONTEXT_FN,
-    );
+    // The velocity fragment reads no surface: its context exists only
+    // for the discard test, and only the non-geometry shape needs the
+    // velocity twin of `surface_context` — with declared attributes the
+    // fragment still receives the ABI's own `VertexOut`, so the original
+    // function fits as it always did.
+    let velocity = stage.output() == abi::StageOutput::Velocity;
+    let context_fn = match velocity && geometry.is_empty() {
+        true => abi::VELOCITY_CONTEXT_FN,
+        false => abi::SURFACE_CONTEXT_FN,
+    };
+    let prologue = match velocity {
+        true => match parts.discard.is_some() {
+            true => format!(
+                "    let {ctx} = {context}(vertex);\n{unpack}{test}",
+                ctx = abi::CONTEXT_VAR,
+                context = context_fn,
+            ),
+            false => String::new(),
+        },
+        false => format!(
+            "    let {ctx} = {context}(vertex);\n{unpack}{test}",
+            ctx = abi::CONTEXT_VAR,
+            context = context_fn,
+        ),
+    };
     let body = match stage.output() {
         abi::StageOutput::Color => format!(
             "-> @location(0) vec4f {{\n{prologue}    \
@@ -2225,6 +2367,30 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
                 String::new()
             },
         ),
+        abi::StageOutput::Velocity => {
+            // Where this fragment was last frame: the velocity stage's
+            // whole answer, interpolated from the two clips its vertex
+            // entry computed. With declared attributes the previous clip
+            // rides in `extra` — write_geometry_io put it there, at the
+            // location both IO shapes agreed on.
+            let clips = match geometry.is_empty() {
+                true => (
+                    format!("vertex.{}", abi::CURRENT_CLIP_FIELD),
+                    format!("vertex.{}", abi::PREVIOUS_CLIP_FIELD),
+                ),
+                false => (
+                    format!("extra.{}", abi::CURRENT_CLIP_FIELD),
+                    format!("extra.{}", abi::PREVIOUS_CLIP_FIELD),
+                ),
+            };
+            format!(
+                "-> @location(0) vec2f {{\n{prologue}    \
+                 return {motion}({current}, {previous});\n}}\n",
+                motion = abi::SCREEN_MOTION_FN,
+                current = clips.0,
+                previous = clips.1,
+            )
+        }
         // Reached only when the material discards: a depth or shadow
         // stage whose whole fragment program is the alpha test.
         abi::StageOutput::Nothing => format!("{{\n{prologue}}}\n"),
@@ -2232,7 +2398,14 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     let _ = write!(
         out,
         "\n@fragment\nfn {fragment}(vertex: {vertex_out}{params}) {body}",
-        vertex_out = abi::VERTEX_OUT_STRUCT,
+        // The velocity stage's own IO shape when the material declares no
+        // geometry: `VelocityOut`, which carries the previous clip the
+        // body above reads. With declared attributes it is the plain
+        // `VertexOut` plus `extra`, exactly as every other stage sees.
+        vertex_out = match velocity && geometry.is_empty() {
+            true => abi::VELOCITY_OUT_STRUCT,
+            false => abi::VERTEX_OUT_STRUCT,
+        },
     );
 }
 
@@ -2456,6 +2629,164 @@ mod tests {
         assert_eq!(shader.source.matches("@fragment").count(), 1);
         assert_eq!(shader.source.matches("@if(wxsl_debug_normals)").count(), 1);
         assert_eq!(shader.source.matches("@if(!wxsl_debug_normals)").count(), 1);
+    }
+
+    #[test]
+    fn the_velocity_stage_transforms_every_vertex_twice_and_shades_nothing() {
+        // The stage's whole shape: a vertex entry whose IO carries both
+        // frames' clip positions, a fragment that is their difference in
+        // uv units, and no surface anywhere — the material function and
+        // the shading function are not in this module at all, which is
+        // the velocity stage's share of the partitioning saving
+        // (ADR 0025).
+        let registry = registry();
+        let mut graph = Graph::new("plain");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+        let options = CodegenOptions {
+            stage: abi::MaterialStage::VELOCITY,
+            ..CodegenOptions::default()
+        };
+        let source = generate(&graph, &registry, &options)
+            .expect("compiles")
+            .source;
+        assert!(
+            source
+                .contains("fn vs_main(input: VertexIn) -> VelocityOut {\n    return transform_vertex_velocity(input, vec3f(0.0), vec3f(0.0));"),
+            "the undismayed vertex entry passes both zero offsets: {source}"
+        );
+        assert!(
+            source.contains(
+                "fn fs_velocity(vertex: VelocityOut) -> @location(0) vec2f {\n    \
+                 return screen_motion(vertex.current_clip, vertex.previous_clip);"
+            ),
+            "the fragment is the difference of the two interpolated clips: {source}"
+        );
+        assert!(!source.contains(abi::SHADE_SURFACE_FN), "{source}");
+        assert!(!source.contains(abi::PACK_GBUFFER_FN), "{source}");
+        assert!(
+            source
+                .contains("import package::wxsl::velocity::"),
+            "the whole velocity ABI comes from its one module: {source}"
+        );
+    }
+
+    #[test]
+    fn a_time_driven_displacement_answers_for_both_frames() {
+        // The graph half M5 settled: the vertex partition is evaluated
+        // twice — once against this frame's context, once against
+        // `previous_vertex_context` — by the same emitted function, so a
+        // displacement driven by `input.time` is where it *was* last
+        // frame without the graph knowing there is a previous frame.
+        let mut registry = registry();
+        registry.register(abi::vertex_output_def());
+        registry.register_all([NodeDefinition::builder("test.vec3", "To vec3")
+            .input(Socket::new("a", ValueType::F32).with_splat_default(0.0))
+            .output(Socket::new("out", ValueType::Vec3))
+            .expr("vec3f({a})")]);
+        let registry = registry;
+        let mut graph = Graph::new("displaced");
+        let term = graph.add(Node::new("math.multiply.f32").with_param("a", Value::F32(0.25)));
+        let widened = graph.add(Node::new("test.vec3"));
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        let vertex = graph.add(Node::new(abi::VERTEX_OUTPUT_ID));
+        graph
+            .wire(&registry, (term, "out"), (out, "roughness"))
+            .unwrap();
+        graph
+            .wire(&registry, (term, "out"), (widened, "a"))
+            .unwrap();
+        graph
+            .wire(
+                &registry,
+                (widened, "out"),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .unwrap();
+        let options = CodegenOptions {
+            stage: abi::MaterialStage::VELOCITY,
+            ..CodegenOptions::default()
+        };
+        let source = generate(&graph, &registry, &options)
+            .expect("compiles")
+            .source;
+        assert!(
+            source.contains(
+                "transform_vertex_velocity(input, wxsl_vertex(vtx, attrs), \
+                 wxsl_vertex(previous_vertex_context(input), attrs))"
+            ),
+            "both offsets come from the one partition, twice-contexted: {source}"
+        );
+    }
+
+    #[test]
+    fn the_previous_clip_rides_after_a_materials_own_extras() {
+        // With declared attributes the velocity stage's extra varying
+        // takes the first location the material's own did not, in both IO
+        // structs — no interface location moves, and the fragment reads
+        // it from `extra` like any other declared extra.
+        let mut registry = registry();
+        registry.register(
+            NodeDefinition::builder("input.attribute", "Attribute")
+                .setting(crate::node::SettingDef::new(
+                    node::SETTING_NAME,
+                    "name",
+                    "Which attribute.",
+                ))
+                .generic_param(crate::node::GenericParam::new("T", ValueType::ALL.to_vec()))
+                .output(Socket::new("out", ValueType::F32).generic("T"))
+                .declaration(NodeBody::AttributeRead),
+        );
+        let registry = registry;
+        let mut graph = Graph::new("with attributes");
+        graph.declare_attribute(crate::graph::AttributeDecl::vertex(
+            "weight",
+            ValueType::F32,
+        ));
+        let weight = graph.add(Node::new("input.attribute").with_setting("name", "weight"));
+        let out = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        graph
+            .wire(&registry, (weight, "out"), (out, "roughness"))
+            .unwrap();
+        let options = CodegenOptions {
+            stage: abi::MaterialStage::VELOCITY,
+            ..CodegenOptions::default()
+        };
+        let source = generate(&graph, &registry, &options)
+            .expect("compiles")
+            .source;
+        let first = abi::VERTEX_OUT_FIELDS.len() + 1;
+        for (location, field) in [
+            (first, abi::CURRENT_CLIP_FIELD),
+            (first + 1, abi::PREVIOUS_CLIP_FIELD),
+        ] {
+            let line = format!("@location({location}) {field}: vec4f,");
+            assert_eq!(
+                source.matches(&line).count(),
+                2,
+                "`{field}` rides in the vertex output struct and in the \
+                 fragment's extras, at its own location:\n{source}"
+            );
+        }
+        assert!(
+            source.contains(&format!(
+                "out.{} = base.{};",
+                abi::CURRENT_CLIP_FIELD,
+                abi::CURRENT_CLIP_FIELD
+            )) && source.contains(&format!(
+                "out.{} = base.{};",
+                abi::PREVIOUS_CLIP_FIELD,
+                abi::PREVIOUS_CLIP_FIELD
+            )),
+            "the vertex entry copies both like any other field: {source}"
+        );
+        assert!(
+            source.contains(&format!(
+                "return screen_motion(extra.{}, extra.{});",
+                abi::CURRENT_CLIP_FIELD,
+                abi::PREVIOUS_CLIP_FIELD
+            )),
+            "the fragment reads both from `extra`: {source}"
+        );
     }
 
     #[test]

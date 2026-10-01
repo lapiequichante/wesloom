@@ -1,0 +1,153 @@
+// The velocity stage's ABI: the one stage whose vertex entry differs from
+// every other's, because it transforms each vertex *twice* — against this
+// frame's camera and instance row, and against last frame's — and its
+// fragment is the interpolated difference.
+//
+// Everything here reads the previous frame through the frame group's
+// second copies (`previous_instances`, `camera.previous_view_proj`), which
+// the host fills beside the current ones; a draw that supplies no previous
+// transform reads its own current one there, and the motion vector comes
+// out zero. The graph's own vertex partition is *not* duplicated: it is
+// evaluated twice, once per context — this frame's as every stage builds
+// it, last frame's from `previous_vertex_context` — which is what makes a
+// time-driven displacement answer for the frame that has passed while the
+// graph stays ignorant that a previous frame exists at all.
+//
+// Motion is stored in uv units per frame, `y` down, the same orientation
+// every screen-space uv in this ABI uses — so `uv - motion` is where the
+// fragment was, and a TAA resolve or a blur samples exactly there.
+
+import package::wxsl::bindings::{
+    camera,
+    eye_position,
+    frame_time,
+    previous_frame_time,
+    previous_instances,
+    world_origin,
+};
+import package::wxsl::surface::SurfaceContext;
+import package::wxsl::vertex::{VertexContext, VertexIn, transform_vertex_offset};
+
+// The velocity stage's vertex output, for a material that declares no
+// geometry of its own: the ordinary vertex output's fields at the
+// ordinary locations, plus both frames' clip positions. A material
+// *with* declared attributes carries the same two fields in the
+// generated structs instead, after its own extras — the generated module
+// is the only place that knows where those end.
+//
+// `clip_position` is the builtin, and the builtin is the trap: as a
+// *fragment input* it arrives as framebuffer coordinates, not clip space,
+// so the current clip travels again as a plain varying beside the
+// previous one — two interpolated clips of the same surface point, whose
+// difference is the per-fragment motion.
+struct VelocityOut {
+    @builtin(position) clip_position: vec4f,
+    @location(0) world_position: vec3f,
+    @location(1) world_normal: vec3f,
+    @location(2) world_tangent: vec3f,
+    @location(3) world_bitangent: vec3f,
+    @location(4) uv: vec2f,
+    // This vertex's clip position this frame and last. Interpolated like
+    // any other varying, which is what makes the motion vector
+    // per-fragment: the vertex stage computes corners, the fragment sees
+    // the surface.
+    @location(5) current_clip: vec4f,
+    @location(6) previous_clip: vec4f,
+}
+
+// The upper 3x3 of a *previous* instance row's normal matrix — the twin of
+// `instance_normal_matrix`, reading `previous_instances` for the one stage
+// whose previous context needs a basis from the frame that has passed.
+fn previous_normal_matrix(index: u32) -> mat3x3f {
+    let normal_matrix = previous_instances[index].normal_matrix;
+    return mat3x3f(
+        normal_matrix[0].xyz,
+        normal_matrix[1].xyz,
+        normal_matrix[2].xyz,
+    );
+}
+
+// Build the vertex-stage context as it was *last frame*: previous
+// instance row, previous camera position, the previous clock. The graph's
+// vertex partition evaluated against this is the displacement the surface
+// carried then — `input.time` and every time-driven node included,
+// without the graph's participation.
+//
+// `world_origin()` is this frame's by ABI (under `wxsl_relative_to_eye`
+// the precision work that makes the mode *useful* is M10's, and until
+// then the flag and the velocity stage have no consumer in common).
+fn previous_vertex_context(input: VertexIn) -> VertexContext {
+    let world = previous_instances[input.instance].model * vec4f(input.position, 1.0);
+    let normal_matrix = previous_normal_matrix(input.instance);
+    let normal = normalize(normal_matrix * input.normal);
+    let tangent = normalize(normal_matrix * input.tangent.xyz);
+
+    var out: VertexContext;
+    out.object_position = input.position;
+    out.object_normal = input.normal;
+    out.world_position = world.xyz - world_origin();
+    out.world_normal = normal;
+    out.world_tangent = tangent;
+    out.world_bitangent = cross(normal, tangent) * input.tangent.w;
+    out.view_direction = normalize(camera.previous_position - world_origin() - out.world_position);
+    out.uv = input.uv;
+    out.time = previous_frame_time();
+    return out;
+}
+
+// One vertex's clip position *last frame*, with `offset` added in object
+// space first — the same displacement convention `transform_vertex_offset`
+// uses, so the two frames see the same displaced surface.
+fn previous_clip_position(input: VertexIn, offset: vec3f) -> vec4f {
+    let world = previous_instances[input.instance].model * vec4f(input.position + offset, 1.0);
+    return camera.previous_view_proj * world;
+}
+
+// Both frames' clips in one pass: this frame exactly as
+// `transform_vertex_offset` computes it, last frame through
+// `previous_clip_position`. The shading basis is this frame's — it feeds
+// nothing in this stage beyond the interpolants a material discards by,
+// and a velocity is a difference of positions, not of normals.
+fn transform_vertex_velocity(input: VertexIn, offset: vec3f, previous_offset: vec3f) -> VelocityOut {
+    let base = transform_vertex_offset(input, offset);
+    var out: VelocityOut;
+    out.clip_position = base.clip_position;
+    out.world_position = base.world_position;
+    out.world_normal = base.world_normal;
+    out.world_tangent = base.world_tangent;
+    out.world_bitangent = base.world_bitangent;
+    out.uv = base.uv;
+    out.current_clip = base.clip_position;
+    out.previous_clip = previous_clip_position(input, previous_offset);
+    return out;
+}
+
+// Build a `SurfaceContext` from the extended output — the twin of
+// `surface_context` for the one shape whose struct carries the extra
+// field, and the only reason it exists: a material that discards needs a
+// context to discard *by*, and the velocity stage's vertex struct is the
+// extended one. (With declared attributes the generated module keeps the
+// plain `VertexOut` as the fragment's first parameter and the original
+// function fits.)
+fn velocity_surface_context(vertex: VelocityOut) -> SurfaceContext {
+    var ctx: SurfaceContext;
+    ctx.world_position = vertex.world_position;
+    ctx.world_normal = normalize(vertex.world_normal);
+    ctx.world_tangent = normalize(vertex.world_tangent);
+    ctx.world_bitangent = normalize(vertex.world_bitangent);
+    ctx.view_direction = normalize(eye_position() - vertex.world_position);
+    ctx.uv = vertex.uv;
+    ctx.time = frame_time();
+    return ctx;
+}
+
+// Screen motion between two clip positions of the same vertex: uv units
+// per frame, `y` down. Halved because NDC spans 2, flipped because NDC's
+// `y` points up and this ABI's uv points down. Guarded against a `w` the
+// numerical edges of the frustum can hand over — a velocity is a
+// difference of fractions, and one wild texel smears a whole resolve.
+fn screen_motion(current: vec4f, previous: vec4f) -> vec2f {
+    let now = current.xy / max(current.w, 1e-5);
+    let before = previous.xy / max(previous.w, 1e-5);
+    return (now - before) * vec2f(0.5, -0.5);
+}

@@ -30,6 +30,7 @@ modules! {
     "package::wxsl::bindings" => "wxsl/bindings.wxsl",
     "package::wxsl::surface" => "wxsl/surface.wxsl",
     "package::wxsl::vertex" => "wxsl/vertex.wxsl",
+    "package::wxsl::velocity" => "wxsl/velocity.wxsl",
     "package::wxsl::screen" => "wxsl/screen.wxsl",
     "package::wxsl::shadow" => "wxsl/shadow.wxsl",
     // The shading function and the lighting pass are *generated* now, from
@@ -297,8 +298,9 @@ mod tests {
             .collect();
         assert_eq!(
             frame,
-            vec![abi::GROUP_FRAME; 5],
-            "camera, scene, object, and the environment-BRDF table and its              sampler (ADR 0039)"
+            vec![abi::GROUP_FRAME; 6],
+            "camera, scene, object, the previous-frame object, and the \
+             environment-BRDF table and its sampler (ADR 0039)"
         );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its
@@ -316,6 +318,12 @@ mod tests {
             // A storage buffer, not a uniform: one binding serves every
             // draw in the frame, indexed by `@builtin(instance_index)`.
             (abi::BINDING_INSTANCES, "var<storage, read> instances"),
+            // The same rows last frame, beside them — the velocity
+            // stage's other half (plan3 N2).
+            (
+                abi::BINDING_PREVIOUS_INSTANCES,
+                "var<storage, read> previous_instances",
+            ),
         ] {
             let declaration = format!(
                 "@group({}) @binding({binding}) {declaration}",

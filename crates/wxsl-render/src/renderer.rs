@@ -971,6 +971,7 @@ impl Renderer {
             queue,
             request.environment,
             &request.draws.transforms(),
+            &request.draws.previous_transforms(),
             &rows,
         );
         // The pass parameters, for the passes whose effects declare any:

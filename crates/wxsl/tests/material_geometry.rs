@@ -507,13 +507,28 @@ fn declaring_nothing_generates_what_it_always_did() {
 
     for stage in abi::MaterialStage::ALL {
         let source = material.wxsl(*stage);
-        assert!(
-            source.contains(&format!(
+        // The velocity stage's plain vertex entry is the one deliberate
+        // exception: its IO is `VelocityOut`, because it carries the
+        // previous clip position — the stage's whole point, not a
+        // geometry declaration's doing. What it must still not do is
+        // invent the *declared-attribute* structs, which the loop below
+        // checks for every stage alike.
+        let expected = match *stage {
+            abi::MaterialStage::VELOCITY => format!(
+                "fn {}(input: {}) -> {}",
+                abi::VERTEX_ENTRY,
+                abi::VERTEX_IN_STRUCT,
+                abi::VELOCITY_OUT_STRUCT
+            ),
+            _ => format!(
                 "fn {}(input: {}) -> {}",
                 abi::VERTEX_ENTRY,
                 abi::VERTEX_IN_STRUCT,
                 abi::VERTEX_OUT_STRUCT
-            )),
+            ),
+        };
+        assert!(
+            source.contains(&expected),
             "{stage} did not keep the plain vertex entry: {source}"
         );
         for invented in [

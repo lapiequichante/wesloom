@@ -492,6 +492,7 @@ fn demo_environment(aspect: f32, time: f32) -> Environment {
         time,
         // Nothing here has a velocity stage to be the previous frame of.
         previous_time: time,
+        previous_camera: None,
     }
 }
 

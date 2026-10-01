@@ -643,6 +643,7 @@ pub fn preview_environment(time: f32) -> Environment {
         // The preview has no velocity stage; there is nothing to be the
         // previous frame *of*.
         previous_time: time,
+        previous_camera: None,
     }
 }
 

@@ -105,6 +105,13 @@ pub const PASS_SCREEN: &str = "pass.screen";
 /// [`crate::node::NodeRegistry`] holds the static vocabulary; the
 /// document compiler's side supplies the generated rows beside it.
 pub const PASS_COMPUTE_PREFIX: &str = "pass.compute.";
+/// Prefix of the `pass.screen.<effect>` ids — the screen pass's own
+/// derived rows, for the same reason the compute ones exist: an effect
+/// with two image inputs (TAA's colour, velocity and history; a blur's
+/// colour and velocity) has no honest home on the fixed `pass.screen`
+/// socket set, whose one `image` socket cannot name which wire is which.
+/// The declaration is the sockets, exactly as it is for compute.
+pub const PASS_SCREEN_PREFIX: &str = "pass.screen.";
 /// Node id of `present`, the document's terminal — named into the
 /// `output` package like the ABI's own outputs, every registry id carrying
 /// a package segment ([`crate::identity`], ADR 0044).
@@ -301,7 +308,8 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .setting(text_setting(
                 SETTING_STAGE,
                 "Stage",
-                "forward_lit, gbuffer or depth_only — the material stage the pass draws.",
+                "forward_lit, gbuffer, depth_only or velocity — the material \
+                 stage the pass draws.",
                 "forward_lit",
             ))
             .setting(text_setting(

@@ -80,6 +80,7 @@ fn at(previous: f32, now: f32) -> Environment {
         exposure: 1.0,
         time: previous,
         previous_time: previous,
+    previous_camera: None,
     };
     environment.advance(now);
     environment
