@@ -35,9 +35,20 @@ fn gpu() -> Option<GpuContext> {
 /// The two fonts, or `None` when this machine has neither.
 ///
 /// The renderer ships no font (ADR 0014), so a test needs one from the
-/// system. A machine with no usable font is a skip, not a failure.
+/// outside. The repo's defaults (`resources/fonts/`) come first, so the
+/// test runs — and renders the same text — on every machine; a machine
+/// without even a system fallback font is a skip, not a failure.
 fn fonts() -> Option<(Vec<u8>, Vec<u8>)> {
+    let repo_ui = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../resources/fonts/Inter-Regular.ttf"
+    );
+    let repo_mono = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../resources/fonts/JetBrainsMono-Regular.ttf"
+    );
     let candidates = [
+        repo_ui,
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -48,6 +59,7 @@ fn fonts() -> Option<(Vec<u8>, Vec<u8>)> {
         "/System/Library/Fonts/Helvetica.ttc",
     ];
     let mono_candidates = [
+        repo_mono,
         "C:/Windows/Fonts/consola.ttf",
         "C:/Windows/Fonts/cour.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",

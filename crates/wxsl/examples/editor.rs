@@ -20,10 +20,11 @@
 //! # Fonts
 //!
 //! `wxsl-render` ships no font, exactly as it ships no shaders (ADR 0014):
-//! the application supplies them. This one looks in a short list of
-//! well-known places for a proportional and a monospaced face, and
-//! `--font`/`--mono` override it. If the search fails, the error says so
-//! rather than opening a window with invisible labels.
+//! the application supplies them. This one takes the repo's default faces
+//! from `resources/fonts/` (see that directory's README) and falls back to
+//! a short list of well-known system places; `--font`/`--mono` override
+//! both. If the search fails, the error says so rather than opening a
+//! window with invisible labels.
 //!
 //! # Keys
 //!
@@ -403,13 +404,28 @@ fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+/// The repo's default faces, resolved at compile time so the example finds
+/// them however it is run from. Checked before the system lists, so the
+/// editor renders the same text on every machine — which is also what the
+/// screenshot tests want.
+const UI_FONT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/fonts/Inter-Regular.ttf"
+);
+const MONO_FONT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/fonts/JetBrainsMono-Regular.ttf"
+);
+
 /// Where a proportional UI font usually lives.
 ///
-/// Deliberately dumb — a short list, checked in order. A real application
-/// would ask the platform's font service; an example that has to work on
-/// three operating systems with no dependencies checks paths.
+/// Deliberately dumb — the repo's default first, then a short list of
+/// system places, checked in order. A real application would ask the
+/// platform's font service; an example that has to work on three operating
+/// systems with no dependencies checks paths.
 #[cfg(target_os = "windows")]
 const UI_FONT_CANDIDATES: &[&str] = &[
+    UI_FONT,
     "C:/Windows/Fonts/segoeui.ttf",
     "C:/Windows/Fonts/calibri.ttf",
     "C:/Windows/Fonts/arial.ttf",
@@ -419,6 +435,7 @@ const UI_FONT_CANDIDATES: &[&str] = &[
 /// Where a monospaced font usually lives.
 #[cfg(target_os = "windows")]
 const MONO_FONT_CANDIDATES: &[&str] = &[
+    MONO_FONT,
     "C:/Windows/Fonts/consola.ttf",
     "C:/Windows/Fonts/CascadiaMono.ttf",
     "C:/Windows/Fonts/lucon.ttf",
@@ -427,6 +444,7 @@ const MONO_FONT_CANDIDATES: &[&str] = &[
 
 #[cfg(target_os = "macos")]
 const UI_FONT_CANDIDATES: &[&str] = &[
+    UI_FONT,
     "/System/Library/Fonts/SFNS.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
     "/Library/Fonts/Arial.ttf",
@@ -434,6 +452,7 @@ const UI_FONT_CANDIDATES: &[&str] = &[
 
 #[cfg(target_os = "macos")]
 const MONO_FONT_CANDIDATES: &[&str] = &[
+    MONO_FONT,
     "/System/Library/Fonts/SFNSMono.ttf",
     "/System/Library/Fonts/Menlo.ttc",
     "/System/Library/Fonts/Monaco.ttf",
@@ -441,6 +460,7 @@ const MONO_FONT_CANDIDATES: &[&str] = &[
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const UI_FONT_CANDIDATES: &[&str] = &[
+    UI_FONT,
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
@@ -450,6 +470,7 @@ const UI_FONT_CANDIDATES: &[&str] = &[
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const MONO_FONT_CANDIDATES: &[&str] = &[
+    MONO_FONT,
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
