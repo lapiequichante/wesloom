@@ -70,6 +70,16 @@ pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 pub const BRDF_LUT_MODULE: &str = "package::wxsl::brdf_lut";
 /// Module path the LUT viewer's shader is mounted under.
 pub const LUT_VIEW_MODULE: &str = "package::wxsl::lut_view";
+/// Module path the baseline peel-window update is mounted under.
+pub const PEEL_BOUNDS_MODULE: &str = "package::wxsl::peel_bounds";
+/// Module path the native peel-window update is mounted under.
+pub const PEEL_DEPTH_BOUNDS_MODULE: &str = "package::wxsl::peel_depth_bounds";
+/// Module path the peel composite is mounted under.
+pub const PEEL_COMPOSITE_MODULE: &str = "package::wxsl::peel_composite";
+/// Module path the front-to-back peel fold is mounted under.
+pub const PEEL_UNDER_MODULE: &str = "package::wxsl::peel_under";
+/// Module path the back-to-front peel fold is mounted under.
+pub const PEEL_OVER_MODULE: &str = "package::wxsl::peel_over";
 
 /// One input an effect consumes.
 ///
@@ -883,6 +893,174 @@ pub const MOTION_BLUR: Effect = Effect {
     },
 };
 
+/// The baseline peel's window update. `pass.peel` expands into it; it is
+/// not a palette row (ADR 0047).
+pub const PEEL_BOUNDS: Effect = Effect {
+    id: "wxsl.peel_bounds",
+    label: "peel bounds",
+    description: "Write the next peel window from the two depth buffers.",
+    kind: EffectKind::Screen {
+        vertex_entry: "peel_bounds_vs",
+        fragment_entry: "peel_bounds_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "front_depth",
+            kind: EffectInputKind::Image,
+            description: "The front peel's depth buffer.",
+            history: 0,
+        },
+        EffectInput {
+            name: "back_depth",
+            kind: EffectInputKind::Image,
+            description: "The back peel's depth buffer.",
+            history: 0,
+        },
+        EffectInput {
+            name: "prev",
+            kind: EffectInputKind::Image,
+            description: "The previous window.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: PEEL_BOUNDS_MODULE,
+        wxsl: include_str!("../shaders/peel_bounds.wxsl"),
+    },
+};
+
+/// The native peel's window update, from the MAX-blended depth pair.
+pub const PEEL_DEPTH_BOUNDS: Effect = Effect {
+    id: "wxsl.peel_depth_bounds",
+    label: "peel depth bounds",
+    description: "Write the next peel window from the native depth pair.",
+    kind: EffectKind::Screen {
+        vertex_entry: "peel_depth_bounds_vs",
+        fragment_entry: "peel_depth_bounds_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "pair",
+            kind: EffectInputKind::Image,
+            description: "The MAX-blended `(1 - z, z)` pair.",
+            history: 0,
+        },
+        EffectInput {
+            name: "prev",
+            kind: EffectInputKind::Image,
+            description: "The previous window.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: PEEL_DEPTH_BOUNDS_MODULE,
+        wxsl: include_str!("../shaders/peel_depth_bounds.wxsl"),
+    },
+};
+
+/// Front and back accumulators over the opaque colour.
+pub const PEEL_COMPOSITE: Effect = Effect {
+    id: "wxsl.peel_composite",
+    label: "peel composite",
+    description: "Composite the two peel accumulators over the opaque colour.",
+    kind: EffectKind::Screen {
+        vertex_entry: "peel_composite_vs",
+        fragment_entry: "peel_composite_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "front",
+            kind: EffectInputKind::Image,
+            description: "The front accumulator, premultiplied, nearest first.",
+            history: 0,
+        },
+        EffectInput {
+            name: "back",
+            kind: EffectInputKind::Image,
+            description: "The back accumulator, premultiplied, farthest first.",
+            history: 0,
+        },
+        EffectInput {
+            name: "scene",
+            kind: EffectInputKind::Image,
+            description: "The opaque colour.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: PEEL_COMPOSITE_MODULE,
+        wxsl: include_str!("../shaders/peel_composite.wxsl"),
+    },
+};
+
+/// Fold one front layer under the front accumulator. Not a palette node.
+pub const PEEL_UNDER: Effect = Effect {
+    id: "wxsl.peel_under",
+    label: "peel under",
+    description: "Front-to-back fold of one peeled layer under the accumulator.",
+    kind: EffectKind::Screen {
+        vertex_entry: "peel_under_vs",
+        fragment_entry: "peel_under_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "accum",
+            kind: EffectInputKind::Image,
+            description: "The front accumulator so far.",
+            history: 0,
+        },
+        EffectInput {
+            name: "layer",
+            kind: EffectInputKind::Image,
+            description: "The layer just peeled, premultiplied.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: PEEL_UNDER_MODULE,
+        wxsl: include_str!("../shaders/peel_under.wxsl"),
+    },
+};
+
+/// Fold one back layer over the back accumulator. Not a palette node.
+pub const PEEL_OVER: Effect = Effect {
+    id: "wxsl.peel_over",
+    label: "peel over",
+    description: "Back-to-front fold of one peeled layer over the accumulator.",
+    kind: EffectKind::Screen {
+        vertex_entry: "peel_over_vs",
+        fragment_entry: "peel_over_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "accum",
+            kind: EffectInputKind::Image,
+            description: "The back accumulator so far.",
+            history: 0,
+        },
+        EffectInput {
+            name: "layer",
+            kind: EffectInputKind::Image,
+            description: "The layer just peeled, premultiplied.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: PEEL_OVER_MODULE,
+        wxsl: include_str!("../shaders/peel_over.wxsl"),
+    },
+};
+
 /// The effects a renderer knows how to run, and a pipeline document may
 /// name.
 ///
@@ -907,6 +1085,11 @@ impl EffectRegistry {
                 BLOOM_Y,
                 TAA,
                 MOTION_BLUR,
+                PEEL_BOUNDS,
+                PEEL_DEPTH_BOUNDS,
+                PEEL_COMPOSITE,
+                PEEL_UNDER,
+                PEEL_OVER,
             ],
         }
     }
@@ -1055,7 +1238,14 @@ impl EffectRegistry {
                 // names is the one `into` writes.
                 self.effects
                     .iter()
-                    .filter(|effect| !effect.is_compute() && !effect.fits_pass_screen())
+                    // The peel's fullscreen passes are expanded by `pass.peel`.
+                    // A derived `pass.screen.wxsl.peel_*` row would invite an
+                    // author to wire depth textures into colour sockets.
+                    .filter(|effect| {
+                        !effect.is_compute()
+                            && !effect.fits_pass_screen()
+                            && !effect.id.starts_with("wxsl.peel_")
+                    })
                     .map(|effect| {
                         let mut def = NodeDefinition::builder(
                             format!("{}{}", doc::PASS_SCREEN_PREFIX, effect.id),
@@ -1158,9 +1348,10 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            7,
-            "lighting, tonemap, bloom, the separable bloom pair — and, since \
-             plan3 N2, the TAA resolve and the motion blur"
+            12,
+            "lighting, tonemap, bloom, the separable bloom pair, the TAA \
+             resolve, the motion blur, and the five peel passes `pass.peel` \
+             expands into"
         );
 
         let lighting = registry
@@ -1195,7 +1386,7 @@ mod tests {
             ..DEFERRED_LIGHTING
         };
         let registry = EffectRegistry::shipped().with(replacement);
-        assert_eq!(registry.len(), 7, "replacing, not appending");
+        assert_eq!(registry.len(), 12, "replacing, not appending");
         assert_eq!(
             registry
                 .get("deferred_lighting")

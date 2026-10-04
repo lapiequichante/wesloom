@@ -1,0 +1,28 @@
+//! peel under — fold one front layer under the front accumulator.
+//!
+//! The layer is premultiplied and holds a single peeled surface. Under is
+//! `layer * (1 - accum.a) + accum`: what is already in front keeps its
+//! weight, and the new layer shows through whatever transmittance is left.
+//! A geometry pass cannot reload the accumulator, because a later layer
+//! writes it again and the scheduler would see a cycle — this pass writes
+//! a new target.
+//!
+//! Expanded by `pass.peel`. Not a palette node.
+
+@group(3) @binding(0) var accum_image: texture_2d<f32>;
+@group(3) @binding(1) var layer_image: texture_2d<f32>;
+
+@vertex
+fn peel_under_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn peel_under_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let accum = textureLoad(accum_image, pixel, 0);
+    let layer = textureLoad(layer_image, pixel, 0);
+    return layer * (1.0 - accum.a) + accum;
+}

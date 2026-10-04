@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use wxsl_core::abi::{self, GBufferPrecision, GBufferTarget, MaterialStage};
 use wxsl_core::graph::Graph;
 use wxsl_core::lighting::{ChannelRequest, GBufferPlan, LightingError, LightingSet};
+use wxsl_core::macros::MacroSet;
 use wxsl_core::resources::VertexAttributeBinding;
 use wxsl_core::scene::TagExpr;
 
@@ -150,6 +151,10 @@ pub struct PipelineConfig {
     /// declares its resources from and what every gbuffer-stage material
     /// is generated against.
     pub features: Vec<ChannelRequest>,
+    /// Macros the document compiler reads. `wxsl_peel_layers` and
+    /// `wxsl_peel_native` change a `pass.peel` expansion (ADR 0047). Empty
+    /// is every pipeline that has no peel.
+    pub macros: MacroSet,
 }
 
 impl PipelineConfig {
@@ -160,6 +165,7 @@ impl PipelineConfig {
             target,
             lighting: LightingSet::default(),
             features: Vec::new(),
+            macros: MacroSet::new(),
         }
     }
 
@@ -518,7 +524,10 @@ impl MaterialGroups<'_> {
 struct PipelineKey {
     variant: VariantKey,
     state: PassState,
-    targets: Vec<wgpu::TextureFormat>,
+    /// Format and blend of each colour target. The blend is per target:
+    /// a peel resolve under-blends one accumulator and over-blends the
+    /// other, and the pass-wide [`PassState`] blend cannot say both.
+    targets: Vec<(wgpu::TextureFormat, Option<wgpu::BlendState>)>,
     /// The shape of the pass group the pipeline was laid out for. Two
     /// passes may run the same shader over different inputs — a screen
     /// effect with a G-buffer and one with a single image — and a pipeline
@@ -746,7 +755,7 @@ impl PipelineCache {
             targets: targets
                 .iter()
                 .flatten()
-                .map(|target| target.format)
+                .map(|target| (target.format, target.blend))
                 .collect(),
             pass_group: pass_shape.to_vec(),
             material_group: material.signature.to_string(),
@@ -1023,6 +1032,7 @@ mod tests {
                         lighting: default_lighting(),
                         features: Vec::new(),
                         target,
+                        macros: wxsl_core::macros::MacroSet::new(),
                     })
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));

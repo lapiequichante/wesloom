@@ -27,10 +27,13 @@ use crate::error::RenderError;
 ///   graph's pass list worth reordering.
 /// * `FLOAT32_FILTERABLE` — filtering a 32-bit float target, for the
 ///   bakes and lookups of M9.
+/// * `FLOAT32_BLENDABLE` — MAX-blending an `rg32float` peel pair. Optional:
+///   the baseline peel does not need it (ADR 0047).
 pub const WANTED_FEATURES: wgpu::Features = wgpu::Features::DEPTH32FLOAT_STENCIL8
     .union(wgpu::Features::INDIRECT_FIRST_INSTANCE)
     .union(wgpu::Features::TIMESTAMP_QUERY)
-    .union(wgpu::Features::FLOAT32_FILTERABLE);
+    .union(wgpu::Features::FLOAT32_FILTERABLE)
+    .union(wgpu::Features::FLOAT32_BLENDABLE);
 
 /// What the device we got can actually do.
 ///

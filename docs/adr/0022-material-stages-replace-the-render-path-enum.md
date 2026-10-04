@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md)
+Status: Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md), [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md)
 
 Amends [0005](0005-render-pipeline-abstraction-and-shader-switching.md),
 [0021](0021-a-declarative-render-graph-and-a-scene-document.md)
@@ -45,7 +45,9 @@ Three rows ship: `forward_lit`, `gbuffer`, `depth_only`. The stages the
 plan still owes — `Shadow`, `PeelFront`/`PeelBack`, `Velocity` — are not
 stubbed out, because each needs something that does not exist yet (a depth
 bias, the peel test, a previous-frame transform) and an empty row would be
-a lie about readiness.
+a lie about readiness. `Shadow` landed with ADR 0026, `Velocity` with
+ADR 0046, and the peel rows with
+[0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md).
 
 `StageOutput::color_targets()` is what the render graph validates a pass
 against, so "this pass attaches one target and its stage writes three" is a

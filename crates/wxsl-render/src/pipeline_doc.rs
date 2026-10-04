@@ -59,13 +59,17 @@ use wxsl_core::graph::Node;
 use wxsl_core::graph::{Graph, NodeId, SocketRef};
 use wxsl_core::node::NodeRegistry;
 use wxsl_core::pipeline as doc;
-use wxsl_core::scene::TagExpr;
+use wxsl_core::scene::{self, TagExpr};
 
-use crate::effect::{Effect, EffectInputKind, EffectRegistry};
+use crate::effect::{
+    Effect, EffectInputKind, EffectRegistry, PEEL_BOUNDS, PEEL_COMPOSITE, PEEL_DEPTH_BOUNDS,
+    PEEL_OVER, PEEL_UNDER,
+};
 use crate::graph::RenderGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Persistence, Policy, Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
+    Persistence, Policy, Read, ResourceDesc, ResourceId, DEPTH_FORMAT, MAX_BLEND,
+    PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
 };
 #[cfg(test)]
 use crate::pipeline::StockPipeline;
@@ -281,6 +285,15 @@ pub enum PipelineError {
         /// The format the wired target actually is.
         format: String,
     },
+    /// A `pass.peel` is wired to something it cannot sample, or a material
+    /// pass names a peel stage. The peel draws the transparent tag; the
+    /// stage rows are not a `pass.geometry` setting.
+    Peel {
+        /// The document node.
+        node: String,
+        /// What is wrong with it.
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for PipelineError {
@@ -451,6 +464,9 @@ impl core::fmt::Display for PipelineError {
                  `resource.color` or `resource.buffer` into it instead — a \
                  resource is the thing a chain passes along"
             ),
+            PipelineError::Peel { node, reason } => {
+                write!(f, "depth peel `{node}`: {reason}")
+            }
             PipelineError::VelocityTargetFormat { node, format } => write!(
                 f,
                 "pass `{node}` is a velocity pass, and writes {format} — motion \
@@ -505,6 +521,12 @@ fn label(document: &Graph, registry: &NodeRegistry, node: NodeId) -> String {
     node.label
         .clone()
         .unwrap_or_else(|| def_label(registry, &node.def))
+}
+
+/// The peel draws this and nothing else. The scene source that feeds the
+/// opaque pass keeps its own tag expression.
+fn transparent_draws() -> DrawSource {
+    DrawSource::Scene(TagExpr::tag(scene::TAG_TRANSPARENT))
 }
 
 fn def_label(registry: &NodeRegistry, id: &str) -> String {
@@ -609,6 +631,7 @@ impl<'a> Compiler<'a> {
             let kind = self.kind(*node).map(str::to_string);
             match kind.as_deref() {
                 Some(doc::PASS_GEOMETRY) => self.geometry_pass(*node)?,
+                Some(doc::PASS_PEEL) => self.peel_passes(*node)?,
                 Some(doc::PASS_SHADOW) => self.shadow_passes(*node)?,
                 Some(doc::PASS_SCREEN) => self.screen_pass(*node)?,
                 Some(doc::PRESENT) => presents.push(*node),
@@ -959,6 +982,17 @@ impl<'a> Compiler<'a> {
                 stage: MaterialStage::SHADOW.name().to_string(),
             });
         }
+        // Front and back share `StageOutput::Color` with a lit pass, so the
+        // rejection has to happen before that arm treats them as one.
+        if matches!(stage, MaterialStage::PEEL_FRONT | MaterialStage::PEEL_BACK) {
+            return Err(PipelineError::Peel {
+                node: name,
+                reason: format!(
+                    "stage `{}` is drawn by `pass.peel`, which selects the transparent tag",
+                    stage.name()
+                ),
+            });
+        }
 
         // Depth first: a `gbuffer`-stage pass takes the G-buffer's, and may
         // not also wire a separate one.
@@ -1065,6 +1099,15 @@ impl<'a> Compiler<'a> {
                 }
                 Vec::new()
             }
+            abi::StageOutput::PeelDepth | abi::StageOutput::PeelResolve => {
+                return Err(PipelineError::Peel {
+                    node: name,
+                    reason: format!(
+                        "stage `{}` is drawn by `pass.peel`, which selects the transparent tag",
+                        stage.name()
+                    ),
+                });
+            }
         };
 
         // A pass that loads depth never writes it — the prepass already
@@ -1102,6 +1145,435 @@ impl<'a> Compiler<'a> {
         self.graph.pass(pass);
         self.pass_colors.insert(node, wrote);
         Ok(())
+    }
+
+    /// Dual depth peeling of the `transparent` tag, over the opaque colour
+    /// and depth this node is wired to (ADR 0047).
+    ///
+    /// The layer count is `wxsl_peel_layers`, clamped to 1..=8.
+    /// `wxsl_peel_native` selects the MAX-blend path. Either path draws at
+    /// most eight geometry passes, and only the `transparent` tag.
+    fn peel_passes(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let depth_source = self
+            .fed(node, "depth")
+            .expect("a validated document's peel pass has depth");
+        let scene_source = self
+            .fed(node, "scene")
+            .expect("a validated document's peel pass has a scene colour");
+        let scene_depth = self.sampled_depth(depth_source, &name)?;
+        let scene_color = self.sampled_color(scene_source, &name)?;
+        let layers = abi::peel_layers(&self.config.macros);
+        let native = abi::peel_native(&self.config.macros);
+
+        let pair_format = wgpu::TextureFormat::Rg32Float;
+        // A side that peeled nothing. One layer never runs a back pass, and
+        // the composite still samples a back image.
+        let empty = self.graph.resource(ResourceDesc::color(
+            format!("{name} empty"),
+            wgpu::TextureFormat::Rgba16Float,
+        ));
+        self.graph.pass(
+            PassDesc::geometry(
+                format!("{name} empty"),
+                DrawSource::Scene(TagExpr::Never),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(Attachment::clear(empty, wgpu::Color::TRANSPARENT))
+            .with_state(PassState::FULLSCREEN),
+        );
+        // Near bound 0, far bound 1: the first iteration's window is the
+        // whole depth range in front of the opaque surface. Each later
+        // window is a new resource — rewriting this one would make every
+        // earlier reader wait on the later write.
+        let bounds = self
+            .graph
+            .resource(ResourceDesc::color(format!("{name} bounds"), pair_format));
+        self.graph.pass(
+            PassDesc::geometry(
+                format!("{name} bounds init"),
+                DrawSource::Scene(TagExpr::Never),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(Attachment::clear(
+                bounds,
+                wgpu::Color {
+                    r: 0.0,
+                    g: 1.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            ))
+            .with_state(PassState::FULLSCREEN),
+        );
+
+        let mut bounds_read = bounds;
+        let (front_accum, back_accum) = if native {
+            self.peel_native(
+                &name,
+                layers,
+                scene_depth,
+                pair_format,
+                &mut bounds_read,
+                empty,
+            )
+        } else {
+            self.peel_baseline(&name, layers, scene_depth, &mut bounds_read, empty)
+        };
+
+        let target = self.write_target(node)?;
+        self.graph.pass(
+            PassDesc::screen(format!("{name} composite"), PEEL_COMPOSITE.id)
+                .with_color(self.color_attachment(target))
+                .with_reads([
+                    Read::current(front_accum),
+                    Read::current(back_accum),
+                    Read::current(scene_color),
+                ]),
+        );
+        self.pass_colors.insert(node, target);
+        Ok(())
+    }
+
+    fn peel_baseline(
+        &mut self,
+        name: &str,
+        layers: u32,
+        scene_depth: ResourceId,
+        bounds_read: &mut ResourceId,
+        empty: ResourceId,
+    ) -> (ResourceId, ResourceId) {
+        // Two geometry passes per layer, and the budget is eight, so the
+        // baseline peels at most four layers. The depth pass is what makes
+        // the winner order-independent: blending every fragment that passes
+        // `Less` would composite whatever the draw list submitted first.
+        let layers = layers.min(abi::PEEL_LAYERS_MAX as u32 / 2);
+        let scratch = self.graph.resource(ResourceDesc::color(
+            format!("{name} depth scratch"),
+            wgpu::TextureFormat::Rg32Float,
+        ));
+        let mut front: Option<ResourceId> = None;
+        let mut back: Option<ResourceId> = None;
+        let mut front_depth = empty;
+        for layer in 0..layers {
+            let nearer = layer % 2 == 0;
+            let depth_buf = self.graph.resource(ResourceDesc::color(
+                format!("{name} depth {layer}"),
+                DEPTH_FORMAT,
+            ));
+            let written = self.peel_shaded_layer(
+                &format!("{name} {}", if nearer { "front" } else { "back" }),
+                layer,
+                nearer,
+                scene_depth,
+                depth_buf,
+                scratch,
+                *bounds_read,
+                if nearer { None } else { Some(front_depth) },
+            );
+            if nearer {
+                front_depth = depth_buf;
+                front = Some(self.fold_peel_layer(name, layer, true, front, written));
+            } else {
+                back = Some(self.fold_peel_layer(name, layer, false, back, written));
+                if layer + 1 < layers {
+                    self.advance_bounds(
+                        name,
+                        layer,
+                        PEEL_BOUNDS.id,
+                        front_depth,
+                        depth_buf,
+                        bounds_read,
+                    );
+                }
+            }
+        }
+        (
+            front.expect("a peel draws at least one layer"),
+            back.unwrap_or(empty),
+        )
+    }
+
+    /// `layer` under or over `accum`, into a new target.
+    ///
+    /// The first layer *is* the accumulator: nothing precedes it. A later
+    /// layer is folded by a fullscreen pass rather than blended into the
+    /// same texture, because the scheduler runs a reader after every writer
+    /// of what it reads — reloading one accumulator from two passes cycles.
+    fn fold_peel_layer(
+        &mut self,
+        name: &str,
+        layer: u32,
+        under: bool,
+        accum: Option<ResourceId>,
+        peeled: ResourceId,
+    ) -> ResourceId {
+        let Some(accum) = accum else {
+            return peeled;
+        };
+        let next = self.graph.resource(ResourceDesc::color(
+            format!("{name} fold {layer}"),
+            wgpu::TextureFormat::Rgba16Float,
+        ));
+        let effect = if under { PEEL_UNDER.id } else { PEEL_OVER.id };
+        self.graph.pass(
+            PassDesc::screen(format!("{name} fold {layer}"), effect)
+                .with_color(Attachment::clear(next, wgpu::Color::TRANSPARENT))
+                .with_reads([Read::current(accum), Read::current(peeled)]),
+        );
+        next
+    }
+
+    /// The next iteration's window, in a resource nothing has written yet.
+    fn advance_bounds(
+        &mut self,
+        name: &str,
+        layer: u32,
+        effect: &str,
+        near: ResourceId,
+        far: ResourceId,
+        bounds_read: &mut ResourceId,
+    ) {
+        let next = self.graph.resource(ResourceDesc::color(
+            format!("{name} bounds {layer}"),
+            wgpu::TextureFormat::Rg32Float,
+        ));
+        self.graph.pass(
+            PassDesc::screen(format!("{name} bounds {layer}"), effect)
+                .with_color(Attachment::clear(next, wgpu::Color::TRANSPARENT))
+                .with_reads([
+                    Read::current(near),
+                    Read::current(far),
+                    Read::current(*bounds_read),
+                ]),
+        );
+        *bounds_read = next;
+    }
+
+    /// One layer, order-independent: a depth pass keeps the nearest (front)
+    /// or farthest (back) fragment, and the shade pass blends only the
+    /// fragment whose depth equals it.
+    ///
+    /// `front_sample` is the front depth the back shade discards against, so
+    /// a single surface is not peeled into both accumulators.
+    #[allow(clippy::too_many_arguments)]
+    fn peel_shaded_layer(
+        &mut self,
+        name: &str,
+        layer: u32,
+        front: bool,
+        scene_depth: ResourceId,
+        depth_buf: ResourceId,
+        scratch: ResourceId,
+        bounds: ResourceId,
+        front_sample: Option<ResourceId>,
+    ) -> ResourceId {
+        let (clear_z, compare, stage, blend) = match front {
+            true => (
+                1.0,
+                wgpu::CompareFunction::Less,
+                MaterialStage::PEEL_FRONT,
+                PREMULTIPLIED_UNDER,
+            ),
+            false => (
+                0.0,
+                wgpu::CompareFunction::Greater,
+                MaterialStage::PEEL_BACK,
+                PREMULTIPLIED_OVER,
+            ),
+        };
+        self.graph.pass(
+            PassDesc::geometry(
+                format!("{name} depth {layer}"),
+                transparent_draws(),
+                MaterialStage::PEEL_DEPTH,
+            )
+            .with_color(Attachment::clear(scratch, wgpu::Color::TRANSPARENT))
+            .with_depth(DepthAttachment::clear(depth_buf, clear_z))
+            .with_state(
+                PassState::OPAQUE
+                    .with_cull_mode(None)
+                    .with_depth_test(compare, true),
+            )
+            .with_reads([Read::current(scene_depth), Read::current(bounds)]),
+        );
+        let mut reads = vec![Read::current(scene_depth), Read::current(bounds)];
+        if let Some(front_depth) = front_sample {
+            reads.push(Read::current(front_depth));
+        }
+        // Cleared, not loaded. One fragment matches the depth, so the blend
+        // against transparent is the fragment, and a later layer folds it
+        // in somewhere else. Loading a shared accumulator is the cycle.
+        let peeled = self.graph.resource(ResourceDesc::color(
+            format!("{name} layer {layer}"),
+            wgpu::TextureFormat::Rgba16Float,
+        ));
+        self.graph.pass(
+            PassDesc::geometry(format!("{name} shade {layer}"), transparent_draws(), stage)
+                .with_color(Attachment::clear(peeled, wgpu::Color::TRANSPARENT))
+                .with_depth(DepthAttachment::load(depth_buf))
+                .with_state(
+                    PassState::OPAQUE
+                        .with_cull_mode(None)
+                        .with_depth_test(wgpu::CompareFunction::Equal, false)
+                        .with_blend(blend),
+                )
+                .with_reads(reads),
+        );
+        peeled
+    }
+
+    fn peel_native(
+        &mut self,
+        name: &str,
+        layers: u32,
+        scene_depth: ResourceId,
+        pair_format: wgpu::TextureFormat,
+        bounds_read: &mut ResourceId,
+        empty: ResourceId,
+    ) -> (ResourceId, ResourceId) {
+        // An odd last layer is one front layer, not a back layer the macro
+        // did not ask for. It takes the baseline's two passes.
+        let tail = (layers % 2 == 1).then(|| {
+            (
+                self.graph.resource(ResourceDesc::color(
+                    format!("{name} front depth"),
+                    DEPTH_FORMAT,
+                )),
+                self.graph.resource(ResourceDesc::color(
+                    format!("{name} depth scratch"),
+                    wgpu::TextureFormat::Rg32Float,
+                )),
+            )
+        });
+        let mut front: Option<ResourceId> = None;
+        let mut back: Option<ResourceId> = None;
+        let mut layer = 0u32;
+        let mut iteration = 0u32;
+        while layer < layers {
+            if layer + 1 == layers {
+                let (front_depth, scratch) = tail.expect("an odd count built the tail targets");
+                let written = self.peel_shaded_layer(
+                    &format!("{name} front"),
+                    layer,
+                    true,
+                    scene_depth,
+                    front_depth,
+                    scratch,
+                    *bounds_read,
+                    None,
+                );
+                front = Some(self.fold_peel_layer(name, layer, true, front, written));
+                break;
+            }
+            // A new pair every iteration. The resolve reads it, and the next
+            // iteration must not write the same resource or that read waits
+            // on the later write.
+            let pair = self.graph.resource(ResourceDesc::color(
+                format!("{name} depth pair {iteration}"),
+                pair_format,
+            ));
+            self.graph.pass(
+                PassDesc::geometry(
+                    format!("{name} depth {iteration}"),
+                    transparent_draws(),
+                    MaterialStage::PEEL_DEPTH,
+                )
+                .with_color(Attachment::clear(pair, wgpu::Color::TRANSPARENT))
+                .with_state(PassState::FULLSCREEN.with_blend(MAX_BLEND))
+                .with_reads([Read::current(scene_depth), Read::current(*bounds_read)]),
+            );
+            let hdr = wgpu::TextureFormat::Rgba16Float;
+            let front_layer = self.graph.resource(ResourceDesc::color(
+                format!("{name} front {iteration}"),
+                hdr,
+            ));
+            let back_layer = self
+                .graph
+                .resource(ResourceDesc::color(format!("{name} back {iteration}"), hdr));
+            self.graph.pass(
+                PassDesc::geometry(
+                    format!("{name} resolve {iteration}"),
+                    transparent_draws(),
+                    MaterialStage::PEEL_RESOLVE,
+                )
+                .with_colors([
+                    Attachment::clear(front_layer, wgpu::Color::TRANSPARENT)
+                        .with_blend(PREMULTIPLIED_UNDER),
+                    Attachment::clear(back_layer, wgpu::Color::TRANSPARENT)
+                        .with_blend(PREMULTIPLIED_OVER),
+                ])
+                .with_state(PassState::FULLSCREEN)
+                .with_reads([Read::current(scene_depth), Read::current(pair)]),
+            );
+            front = Some(self.fold_peel_layer(name, layer, true, front, front_layer));
+            back = Some(self.fold_peel_layer(name, layer + 1, false, back, back_layer));
+            layer += 2;
+            if layer < layers {
+                let next = self.graph.resource(ResourceDesc::color(
+                    format!("{name} bounds {iteration}"),
+                    pair_format,
+                ));
+                self.graph.pass(
+                    PassDesc::screen(format!("{name} bounds {iteration}"), PEEL_DEPTH_BOUNDS.id)
+                        .with_color(Attachment::clear(next, wgpu::Color::TRANSPARENT))
+                        .with_reads([Read::current(pair), Read::current(*bounds_read)]),
+                );
+                *bounds_read = next;
+            }
+            iteration += 1;
+        }
+        (
+            front.expect("a peel draws at least one layer"),
+            back.unwrap_or(empty),
+        )
+    }
+
+    fn sampled_depth(&self, source: NodeId, node: &str) -> Result<ResourceId, PipelineError> {
+        match self.kind(source) {
+            Some(doc::RESOURCE_DEPTH) => Ok(self.depths[&source]),
+            Some(doc::PASS_GEOMETRY) => {
+                self.pass_depths
+                    .get(&source)
+                    .copied()
+                    .ok_or_else(|| PipelineError::Peel {
+                        node: node.to_string(),
+                        reason: format!(
+                            "depth comes from `{}`, which attaches none",
+                            label(self.document, self.registry, source)
+                        ),
+                    })
+            }
+            _ => Err(PipelineError::Peel {
+                node: node.to_string(),
+                reason: "depth must come from a `resource.depth` or a material pass".into(),
+            }),
+        }
+    }
+
+    fn sampled_color(&self, source: NodeId, node: &str) -> Result<ResourceId, PipelineError> {
+        match self.kind(source) {
+            Some(doc::RESOURCE_COLOR) => Ok(self.colors[&source]),
+            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL) => {
+                match self.pass_colors.get(&source) {
+                    Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                    _ => Err(PipelineError::Peel {
+                        node: node.to_string(),
+                        reason: format!(
+                            "the opaque colour comes from `{}`, which writes the frame target — \
+                             wire that pass into a `resource.color` so the peel can sample it",
+                            label(self.document, self.registry, source)
+                        ),
+                    }),
+                }
+            }
+            _ => Err(PipelineError::Peel {
+                node: node.to_string(),
+                reason: "the opaque colour must come from a `resource.color` or a pass that \
+                         writes one"
+                    .into(),
+            }),
+        }
     }
 
     fn shadow_passes(&mut self, node: NodeId) -> Result<(), PipelineError> {
@@ -1454,7 +1926,7 @@ impl<'a> Compiler<'a> {
     fn image_source(&self, source: NodeId, reader: NodeId) -> Result<ResourceId, PipelineError> {
         match self.kind(source) {
             Some(doc::RESOURCE_COLOR) => Ok(self.colors[&source]),
-            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) => {
+            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL) => {
                 match self.pass_colors.get(&source) {
                     Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
                     _ => Err(PipelineError::ImageFromPass {
@@ -1515,7 +1987,7 @@ impl<'a> Compiler<'a> {
         if let Some(feeder) = self.fed(present, "surface") {
             let stands_for_target = matches!(
                 self.kind(feeder),
-                Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN)
+                Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL)
             ) && self.pass_colors.get(&feeder)
                 == Some(&RenderGraph::TARGET);
             if !stands_for_target {
@@ -1622,10 +2094,13 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
 mod tests {
     use super::*;
     use crate::effect::EffectRegistry;
+    use crate::graph::RenderGraph;
     use crate::pass::PassKind;
-    use crate::pipeline::{deferred_graph, forward_graph, TargetConfig};
+    use crate::pipeline::{deferred_graph, forward_graph, PipelineConfig, TargetConfig};
+    use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::lighting::LightingSet;
     use wxsl_core::pipeline::registry as make_registry;
+    use wxsl_core::scene::{self, TagExpr};
 
     fn target() -> TargetConfig {
         TargetConfig::new(64, 64, wgpu::TextureFormat::Rgba8Unorm)
@@ -1726,6 +2201,7 @@ mod tests {
             target: target(),
             lighting: full,
             features: Vec::new(),
+            macros: wxsl_core::macros::MacroSet::new(),
         };
         let document = stock_document(StockPipeline::Deferred);
         let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -1744,6 +2220,7 @@ mod tests {
             target: target(),
             lighting: LightingSet::default(),
             features,
+            macros: wxsl_core::macros::MacroSet::new(),
         };
         let document = stock_document(StockPipeline::Deferred);
         let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -1774,6 +2251,7 @@ mod tests {
             target: target(),
             lighting: LightingSet::default(),
             features: vec![clashing],
+            macros: wxsl_core::macros::MacroSet::new(),
         };
         match compile(
             &stock_document(StockPipeline::Deferred),
@@ -3118,6 +3596,154 @@ mod tests {
                 assert_eq!(node, "bake");
             }
             other => panic!("expected a write-into-pass error, got {other:?}"),
+        }
+    }
+
+    /// A peel document: opaque shade into a colour target, then `pass.peel`.
+    fn peel_document() -> (wxsl_core::graph::Graph, wxsl_core::node::NodeRegistry) {
+        let registry = make_registry();
+        let mut graph = wxsl_core::pipeline::document("peel");
+        let scene = graph.add(
+            wxsl_core::graph::Node::new(doc::SOURCE_SCENE)
+                .with_setting(doc::SETTING_TAGS, "opaque"),
+        );
+        let depth = graph.add_node(doc::RESOURCE_DEPTH);
+        let color = graph.add(
+            wxsl_core::graph::Node::new(doc::RESOURCE_COLOR)
+                .with_label("scene")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let shade = graph.add(wxsl_core::graph::Node::new(doc::PASS_GEOMETRY).with_label("opaque"));
+        let peel = graph.add(wxsl_core::graph::Node::new(doc::PASS_PEEL).with_label("peel"));
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((scene, "draws"), (shade, "draws")),
+            ((depth, "depth"), (shade, "depth")),
+            ((color, "color"), (shade, "into")),
+            ((shade, "depth"), (peel, "depth")),
+            ((shade, "color"), (peel, "scene")),
+            ((peel, "color"), (present, "surface")),
+        ] {
+            graph
+                .wire(&registry, from, to)
+                .expect("the peel document wires");
+        }
+        (graph, registry)
+    }
+
+    fn peel_config(layers: i32, native: bool) -> PipelineConfig {
+        use wxsl_core::macros::MacroValue;
+        let mut config = config();
+        config
+            .macros
+            .set(abi::PEEL_LAYERS_MACRO, MacroValue::Int(layers));
+        if native {
+            config
+                .macros
+                .set(abi::PEEL_NATIVE_MACRO, MacroValue::Flag(true));
+        }
+        config
+    }
+
+    /// Geometry passes that actually draw transparent instances.
+    fn peel_draws(graph: &RenderGraph) -> Vec<MaterialStage> {
+        graph
+            .passes()
+            .iter()
+            .filter_map(|pass| match &pass.kind {
+                PassKind::Geometry { source, stage } => match source {
+                    crate::pass::DrawSource::Scene(TagExpr::Tag(tag))
+                        if tag == scene::TAG_TRANSPARENT =>
+                    {
+                        Some(*stage)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The geometry stages a peel of `layers` draws, after the clamp.
+    ///
+    /// Baseline: depth then shade, two passes a layer, at most four layers
+    /// (eight passes). Native: a depth/resolve pair peels two layers; an
+    /// odd leftover is one front layer, still depth then shade.
+    fn expected_peel_stages(layers: i32, native: bool) -> Vec<MaterialStage> {
+        let layers = layers.clamp(1, abi::PEEL_LAYERS_MAX) as u32;
+        match native {
+            true => {
+                let mut stages = Vec::new();
+                let mut layer = 0;
+                while layer < layers {
+                    if layer + 1 == layers {
+                        stages.push(MaterialStage::PEEL_DEPTH);
+                        stages.push(MaterialStage::PEEL_FRONT);
+                        break;
+                    }
+                    stages.push(MaterialStage::PEEL_DEPTH);
+                    stages.push(MaterialStage::PEEL_RESOLVE);
+                    layer += 2;
+                }
+                stages
+            }
+            false => (0..layers.min(abi::PEEL_LAYERS_MAX as u32 / 2))
+                .flat_map(|layer| {
+                    [
+                        MaterialStage::PEEL_DEPTH,
+                        match layer % 2 {
+                            0 => MaterialStage::PEEL_FRONT,
+                            _ => MaterialStage::PEEL_BACK,
+                        },
+                    ]
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn peel_draws_only_the_transparent_tag_and_stays_within_eight_passes() {
+        let (document, registry) = peel_document();
+        for native in [false, true] {
+            for layers in [0, 1, 4, 7, 8, 100] {
+                let compiled = compile(
+                    &document,
+                    &registry,
+                    &effects(),
+                    &peel_config(layers, native),
+                )
+                .unwrap_or_else(|error| panic!("native {native} layers {layers}: {error}"));
+                compiled
+                    .schedule()
+                    .unwrap_or_else(|error| panic!("native {native} layers {layers}: {error}"));
+                let draws = peel_draws(&compiled);
+                let expected = expected_peel_stages(layers, native);
+                assert_eq!(draws, expected, "native {native} layers {layers}");
+                assert!(
+                    draws.len() <= abi::PEEL_LAYERS_MAX as usize,
+                    "native {native} layers {layers}: {} geometry passes",
+                    draws.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_material_pass_cannot_name_a_peel_stage() {
+        let registry = make_registry();
+        let mut graph = wxsl_core::pipeline::document("not a peel");
+        let scene = graph.add_node(doc::SOURCE_SCENE);
+        let pass = graph.add(
+            wxsl_core::graph::Node::new(doc::PASS_GEOMETRY)
+                .with_label("shade")
+                .with_setting(doc::SETTING_STAGE, "peel_front"),
+        );
+        graph
+            .wire(&registry, (scene, "draws"), (pass, "draws"))
+            .expect("draws wire");
+        match compile(&graph, &registry, &effects(), &config()) {
+            Err(PipelineError::Peel { node, .. }) => assert_eq!(node, "shade"),
+            other => panic!("expected a peel error, got {other:?}"),
         }
     }
 }

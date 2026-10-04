@@ -197,6 +197,11 @@ facade crate's feature set, not about the workspace.
   difference below the raw chain's, while tracking the scene), the
   swept cube smearing along its own motion, and the chain leaving the
   lit frame untouched. Skips with no adapter.
+- `cargo test -p wxsl --test peeling` — dual depth peeling (ADR 0047):
+  four overlapping transparent surfaces, submitted out of depth order,
+  composite to the same front-to-back colour on the baseline path and,
+  when the device can blend `rg32float`, on the native path. A transparent
+  surface behind the opaque plane does not appear. Skips with no adapter.
 - The geometry tests share `crates/wxsl/tests/probe/mod.rs`, and that is
   the point:
   the computed uniform layout and the computed instance row are the only
@@ -270,7 +275,8 @@ facade crate's feature set, not about the workspace.
   tuned live, ADR 0042), the policy/buffer/channel proofs
   (BRDF-LUT bake, buffer ramp, subsurface channels), the bake demo (ADR
   0045), the fxaa chain (ADR 0040), and the motion pair — the spinning
-  cube under TAA and the swept cube under its blur (ADR 0046) — one PNG
+  cube under TAA and the swept cube under its blur (ADR 0046), and the
+  peel demo — a torus and a sphere through each other (ADR 0047) — one PNG
   each plus a contact sheet, or all of them live in one window without
   the flag. The
   fastest way to see whether a *pipeline* change (presets, effects, the
@@ -344,7 +350,10 @@ facade crate's feature set, not about the workspace.
   (`needs_surface` is the material-function question), it carries two
   extra clip varyings (the builtin arrives in a fragment as framebuffer
   coordinates), and its target clears to *zero motion*, not the frame's
-  radiance. `RenderPath` is gone: which pass list
+  radiance. The peel stages (ADR 0047) are the other exception:
+  `pass.peel` draws only the `transparent` tag, `wxsl_peel_layers` caps
+  the geometry passes at eight, and a `pass.geometry` that names a peel
+  stage is a document error. `RenderPath` is gone: which pass list
   is `StockPipeline`, which variant is `MaterialStage`.
   Anything the scheduler can check — attachment counts, depth formats, a
   resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,

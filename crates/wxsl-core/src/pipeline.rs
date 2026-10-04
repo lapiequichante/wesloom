@@ -93,6 +93,8 @@ pub const RESOURCE_DEPTH: &str = "resource.depth";
 pub const RESOURCE_BUFFER: &str = "resource.buffer";
 /// Node id of `pass.geometry`.
 pub const PASS_GEOMETRY: &str = "pass.geometry";
+/// Node id of `pass.peel`.
+pub const PASS_PEEL: &str = "pass.peel";
 /// Node id of `pass.shadow`.
 pub const PASS_SHADOW: &str = "pass.shadow";
 /// Node id of `pass.screen`.
@@ -128,6 +130,7 @@ pub const NODE_IDS: &[&str] = &[
     RESOURCE_DEPTH,
     RESOURCE_BUFFER,
     PASS_GEOMETRY,
+    PASS_PEEL,
     PASS_SHADOW,
     PASS_SCREEN,
     PRESENT,
@@ -319,6 +322,39 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                  pass whose target survives frames may skip.",
                 "per frame",
             ))
+            .document(),
+        NodeDefinition::builder(PASS_PEEL, "depth peel")
+            .doc(
+                "Order-independent transparency by dual depth peeling. Draws only \
+                 instances tagged `transparent`, however the scene source that feeds \
+                 other passes is filtered, and composites them over the opaque colour \
+                 wired to `scene`. The layer count is the `wxsl_peel_layers` macro on \
+                 the pipeline config (1 to 8, default 4), and `wxsl_peel_native` selects \
+                 the float-blend path (ADR 0047).",
+            )
+            .input(
+                Socket::new("depth", ValueType::DepthTarget).with_doc(
+                    "The opaque pass's depth. Fragments behind it are not peeled.",
+                ),
+            )
+            .input(
+                Socket::new("scene", ValueType::ColorTarget).with_doc(
+                    "The opaque colour, a `resource.color` the peel can sample. \
+                     The frame's own target cannot be both sampled and presented.",
+                ),
+            )
+            .input(
+                Socket::new("into", ValueType::ColorTarget)
+                    .optional()
+                    .with_doc(
+                        "Where the composite is written. Unconnected means the frame's \
+                         own target.",
+                    ),
+            )
+            .output(
+                Socket::new("color", ValueType::ColorTarget)
+                    .with_doc("The opaque colour with the transparent layers composited over it."),
+            )
             .document(),
         NodeDefinition::builder(PASS_SHADOW, "shadow")
             .doc(

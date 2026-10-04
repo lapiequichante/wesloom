@@ -430,6 +430,12 @@ pub struct Attachment {
     /// Whether the result is kept. `false` for a depth buffer nothing reads
     /// back, which lets a tiler skip the write-out entirely.
     pub store: bool,
+    /// Blend for this target, when it differs from [`PassState::blend`].
+    ///
+    /// `None` uses the pass state. The peel resolve writes two targets that
+    /// blend differently — under on the front accumulator, over on the back
+    /// — and a pass-wide blend is one value (ADR 0047).
+    pub blend: Option<wgpu::BlendState>,
     /// Which array layer or cube face, for a layered resource.
     pub layer: u32,
 }
@@ -442,6 +448,7 @@ impl Attachment {
             load: Load::Clear(color),
             store: true,
             layer: 0,
+            blend: None,
         }
     }
 
@@ -452,6 +459,7 @@ impl Attachment {
             load: Load::Load,
             store: true,
             layer: 0,
+            blend: None,
         }
     }
 
@@ -460,7 +468,56 @@ impl Attachment {
         self.layer = layer;
         self
     }
+
+    /// Blend this target differently from the rest of the pass.
+    pub fn with_blend(mut self, blend: wgpu::BlendState) -> Self {
+        self.blend = Some(blend);
+        self
+    }
 }
+
+/// Premultiplied front-to-back: `dst + src * (1 - dst.a)`.
+pub const PREMULTIPLIED_UNDER: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+/// Premultiplied back-to-front: `src + dst * (1 - src.a)`.
+pub const PREMULTIPLIED_OVER: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+/// Per-channel maximum. Factors are `One`: that is what a max blend
+/// requires, and what `FLOAT32_BLENDABLE` is asked for.
+pub const MAX_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    },
+};
 
 /// The depth-stencil attachment of a render pass.
 #[derive(Clone, Copy, Debug, PartialEq)]

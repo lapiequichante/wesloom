@@ -1,0 +1,37 @@
+//! peel bounds — the window the next peel iteration tests against.
+//!
+//! The front depth buffer holds the layer just peeled, or the clear value
+//! 1 where nothing drew. The back depth buffer holds its layer, or 0. A
+//! clear is not a surface, so the previous window stays. `rg32float`,
+//! sampled with `textureLoad`: the next geometry pass reads `.r` as the
+//! near bound and `.g` as the far bound.
+//!
+//! Expanded by `pass.peel`. Not a palette node.
+
+@group(3) @binding(0) var front_depth: texture_depth_2d;
+@group(3) @binding(1) var back_depth: texture_depth_2d;
+@group(3) @binding(2) var prev_bounds: texture_2d<f32>;
+
+@vertex
+fn peel_bounds_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn peel_bounds_fs(@builtin(position) position: vec4f) -> @location(0) vec2f {
+    let pixel = vec2i(position.xy);
+    let front = textureLoad(front_depth, pixel, 0);
+    let back = textureLoad(back_depth, pixel, 0);
+    let prev = textureLoad(prev_bounds, pixel, 0);
+    var new_front = prev.r;
+    if front < 0.999 {
+        new_front = front;
+    }
+    var new_back = prev.g;
+    if back > 0.001 {
+        new_back = back;
+    }
+    return vec2f(new_front, new_back);
+}

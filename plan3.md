@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8, N5 and N2 have landed — ADRs 0038 through 0046. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -20,7 +20,7 @@ earlier plans' items did.
 
 | From | Still open | Reshaped by |
 |---|---|---|
-| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040, its motion half with ADR 0046 —, M8 (peeling), ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
+| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040, its motion half with ADR 0046 —, ~~M8 (peeling)~~ — landed, ADR 0047 —, ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, ~~P8 (identity/contracts)~~ — landed, ADR 0044 | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
@@ -37,11 +37,12 @@ earlier plans' items did.
   in `shaders/brdf_lut.wxsl` for. The motion half (Velocity stage,
   previous-frame transforms, TAA, motion blur) is independent enough to
   be its own item — N2 below, landed with ADR 0046.
-* **M8 became what plan2 predicted**: "another preset document plus two
-  stages". The interesting residue is the portability rule's first real
-  bite — dual depth peeling wants float blending, which is the one place
-  the WebGPU baseline and native paths genuinely diverge, and the msdf
-  rule (two implementations agree, by test) applies.
+* **M8 became what plan2 predicted**, and landed that way (ADR 0047): a
+  `pass.peel` document node, not a new pipeline type. The interesting
+  residue was the portability rule's first real bite — dual depth peeling
+  wants float blending, which is the one place the WebGPU baseline and
+  native paths genuinely diverge, and the msdf rule (two implementations
+  agree, by test) applies.
 * **M9's mechanism pre-exists twice over.** A bake is an effect over a
   material subgraph (plan2's words), and its invalidation rule is the
   Policy machinery — a bake is `once` or `on demand`, not a new
@@ -475,7 +476,7 @@ node. One authoring rule the scheduler forces: the bake pass is declared
 before the pass that samples its table, because the material's sample is
 a dependency the scheduler cannot see.
 
-### M8 — Depth peeling
+### M8 — Depth peeling *(landed, ADR 0047)*
 
 Transparency by dual depth peeling, drawn from the `transparent` tag:
 
@@ -496,6 +497,24 @@ Transparency by dual depth peeling, drawn from the `transparent` tag:
   on both paths, within tolerance.
 * ADR: "Dual depth peeling, and the baseline/native split for blendable
   float targets."
+
+Landed as a `pass.peel` node that draws only the `transparent` tag. The
+layer count is the int macro `wxsl_peel_layers` (default 4, clamped to
+1..=8) and `wxsl_peel_native` selects the path; both are read when the
+document compiles, because they change the pass list. The geometry-pass
+budget is eight. The baseline spends two passes per layer — a depth pass,
+then a shade that depth-tests `Equal` — so it peels at most four layers.
+The native path MAX-blends an `rg32float` depth pair and resolves both
+layers in the next pass, so eight layers are eight passes. An odd leftover
+is the baseline's front pair, not a second back layer. Each layer is
+drawn into its own target and folded by a fullscreen pass: reloading one
+accumulator from two passes does not schedule. The done-when is
+`cargo test -p wxsl --test peeling`: four overlapping transparent quads,
+submitted out of order, composite to the same front-to-back colour on
+both paths, and a transparent surface behind the opaque plane does not
+appear. The native half skips when the device has no `FLOAT32_BLENDABLE`.
+The gallery's `peel` demo is the same PBR cube graph with an `alpha`
+uniform at 0.3, on a torus and a sphere that pass through each other.
 
 ### N6 — The subsurface model
 
@@ -745,8 +764,8 @@ none of it knows or cares which backend is underneath.
    and the effect seam that were already there — then ~~**N2**~~ —
    *landed (ADR 0046)*: the Velocity stage, the previous-frame rows, and
    the resolve that turns a history ring into antialiasing.
-8. **M8** (peeling) — the largest remaining render feature, and the one
-   that wants P8's contracts published first.
+8. ~~**M8**~~ — *landed (ADR 0047)*: dual depth peeling of the
+   `transparent` tag, eight geometry passes at most, the count a macro.
 9. **N6** (the subsurface model), **N7** (lighting scale) — feature work
    on top of a finished frame.
 10. **M11**, **M10**, **N9** — the editor's code editor, the precision

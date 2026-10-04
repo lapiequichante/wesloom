@@ -1186,7 +1186,7 @@ impl RenderGraph {
                     };
                     Ok(Some(wgpu::ColorTargetState {
                         format,
-                        blend: pass.state.blend,
+                        blend: attachment.blend.or(pass.state.blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     }))
                 })

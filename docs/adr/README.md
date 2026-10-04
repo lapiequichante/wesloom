@@ -36,7 +36,7 @@ is signal, don't delete it.
 | [0019](0019-node-colour-and-name-are-instance-metadata.md) | A node's colour and name belong to the node, not to its kind | Accepted, amended by [0023](0023-a-material-declares-its-resources.md) |
 | [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md) | A node definition is derived from its WXSL source | Accepted |
 | [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0033](0033-pipelines-are-documents.md) |
-| [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md), [0033](0033-pipelines-are-documents.md) |
+| [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md), [0033](0033-pipelines-are-documents.md), [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
 | [0023](0023-a-material-declares-its-resources.md) | A material declares its resources: uniforms, textures, and the application's slot | Accepted |
 | [0024](0024-a-material-declares-the-geometry-it-requires.md) | A material declares the vertex and instance attributes it requires | Accepted, amended by [0027](0027-a-graph-computes-its-own-interpolants.md) |
 | [0025](0025-a-material-graph-spans-shader-stages.md) | A material graph spans shader stages, and compiles per pass stage | Accepted, amended by [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0027](0027-a-graph-computes-its-own-interpolants.md), [0032](0032-stage-analysis-computes-the-cut-between-stages.md) |
@@ -61,6 +61,7 @@ is signal, don't delete it.
 | [0044](0044-identity-versions-and-the-capability-check.md) | Identity is namespaced, documents pin versions, and the capability check runs before anything is built | Accepted |
 | [0045](0045-a-bake-is-an-effect-over-a-material-subgraph.md) | A bake is an effect over a material subgraph, and the table is the material's | Accepted |
 | [0046](0046-velocity-is-a-stage-taa-is-a-policyd-chain.md) | Velocity is a stage; TAA is a policy'd chain | Accepted |
+| [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) | Dual depth peeling, and the baseline/native split for blendable float targets | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

@@ -970,13 +970,21 @@ pub enum StageOutput {
     /// pipeline built for it has no fragment state. Depth is written by
     /// the depth test, which needs no shader.
     Nothing,
+    /// One `vec2f` at `@location(0)`: `(1 - depth, depth)`, the near and
+    /// far fragment of one dual-peel iteration. The native path MAX-blends
+    /// it. The fragment reads no surface.
+    PeelDepth,
+    /// Two `vec4f` targets: the front accumulator and the back one. The
+    /// native shade pass writes both from one draw.
+    PeelResolve,
 }
 
 impl StageOutput {
     /// How many colour attachments a pass running this stage must have.
     pub fn color_targets(self) -> usize {
         match self {
-            StageOutput::Color | StageOutput::Velocity => 1,
+            StageOutput::Color | StageOutput::Velocity | StageOutput::PeelDepth => 1,
+            StageOutput::PeelResolve => 2,
             StageOutput::GBuffer => GBUFFER_BASE_TARGETS.len(),
             StageOutput::Nothing => 0,
         }
@@ -1010,11 +1018,10 @@ pub struct MaterialStageDesc {
 /// enum, which had room for exactly two entry points and no more
 /// ([ADR 0022](../../../docs/adr/0022-material-stages-replace-the-render-path-enum.md)).
 ///
-/// The stages the plan still owes — `PeelFront`/`PeelBack` — are rows that
-/// do not exist yet. `Shadow` landed in M5 (a depth bias and a view per
-/// light), `Velocity` with the previous-frame transform row the frame
-/// group now carries; the peel pair waits on the peel test, which is why
-/// it is not stubbed out here.
+/// `Shadow` landed in M5, `Velocity` with ADR 0046, and the peel rows with
+/// ADR 0047. `peel_front` / `peel_back` shade one layer each on the
+/// baseline path. `peel_depth` writes the native depth pair and reads no
+/// surface. `peel_resolve` shades both ends of that pair in one draw.
 pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
     MaterialStageDesc {
         name: "forward_lit",
@@ -1056,6 +1063,38 @@ pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
               difference. TAA and motion blur read the target; the stage \
               itself reads no surface.",
     },
+    MaterialStageDesc {
+        name: "peel_front",
+        fragment_entry: "fs_peel_front",
+        output: StageOutput::Color,
+        doc: "Shade the nearest transparent fragment still inside the peel \
+              window, premultiplied, for the front accumulator. Draws the \
+              `transparent` tag only — a `pass.peel` expands into it \
+              (ADR 0047).",
+    },
+    MaterialStageDesc {
+        name: "peel_back",
+        fragment_entry: "fs_peel_back",
+        output: StageOutput::Color,
+        doc: "Shade the farthest transparent fragment still inside the peel \
+              window, premultiplied, for the back accumulator.",
+    },
+    MaterialStageDesc {
+        name: "peel_depth",
+        fragment_entry: "fs_peel_depth",
+        output: StageOutput::PeelDepth,
+        doc: "Write `(1 - depth, depth)` of every transparent fragment inside \
+              the peel window. MAX blending keeps the nearest in `.r` and the \
+              farthest in `.g`. No surface: the resolve pass shades the match.",
+    },
+    MaterialStageDesc {
+        name: "peel_resolve",
+        fragment_entry: "fs_peel_resolve",
+        output: StageOutput::PeelResolve,
+        doc: "Shade the transparent fragment whose depth matches the pair \
+              `peel_depth` stored: the front target where it matches the near \
+              value, the back target where it matches the far value.",
+    },
 ];
 
 /// Which stage a material is compiled for.
@@ -1077,6 +1116,14 @@ impl MaterialStage {
     pub const SHADOW: MaterialStage = MaterialStage(3);
     /// Write each visible fragment's screen motion since last frame.
     pub const VELOCITY: MaterialStage = MaterialStage(4);
+    /// Shade the nearest remaining transparent layer.
+    pub const PEEL_FRONT: MaterialStage = MaterialStage(5);
+    /// Shade the farthest remaining transparent layer.
+    pub const PEEL_BACK: MaterialStage = MaterialStage(6);
+    /// Write the native peel's near/far depth pair.
+    pub const PEEL_DEPTH: MaterialStage = MaterialStage(7);
+    /// Shade both ends of the native depth pair.
+    pub const PEEL_RESOLVE: MaterialStage = MaterialStage(8);
 
     /// Every stage, in table order.
     pub const ALL: &'static [MaterialStage] = &[
@@ -1085,6 +1132,10 @@ impl MaterialStage {
         MaterialStage::DEPTH_ONLY,
         MaterialStage::SHADOW,
         MaterialStage::VELOCITY,
+        MaterialStage::PEEL_FRONT,
+        MaterialStage::PEEL_BACK,
+        MaterialStage::PEEL_DEPTH,
+        MaterialStage::PEEL_RESOLVE,
     ];
 
     /// The stage at `index` in [`MATERIAL_STAGES`], if there is one.
@@ -1128,10 +1179,14 @@ impl MaterialStage {
     /// colour needs the vertex offset and the discard test, and nothing
     /// else from the graph (ADR 0025). The velocity stage writes colour
     /// but reads no surface — its fragment is position arithmetic — so it
-    /// is the one colour-writing stage that answers `false`, and the one
-    /// reason this is not `self.output() != StageOutput::Nothing`.
+    /// is one colour-writing stage that answers `false`. `peel_depth` is
+    /// the other: it writes a depth pair and reads no surface. Neither is
+    /// `self.output() != StageOutput::Nothing`.
     pub fn needs_surface(self) -> bool {
-        matches!(self.output(), StageOutput::Color | StageOutput::GBuffer)
+        matches!(
+            self.output(),
+            StageOutput::Color | StageOutput::GBuffer | StageOutput::PeelResolve
+        )
     }
 
     /// Whether a pipeline built for this stage always has a fragment
@@ -1161,6 +1216,46 @@ impl Default for MaterialStage {
     fn default() -> Self {
         MaterialStage::FORWARD_LIT
     }
+}
+
+/// Int macro that sets how many transparent layers a peel draws. Read when
+/// the pipeline document compiles: it changes the pass list, so it is not
+/// a uniform.
+///
+/// Absent means [`PEEL_LAYERS_DEFAULT`]. A value outside `1..=PEEL_LAYERS_MAX`
+/// is clamped. See ADR 0047.
+pub const PEEL_LAYERS_MACRO: &str = "wxsl_peel_layers";
+/// Flag macro selecting the native peel path (MAX blend of an `rg32float`
+/// depth pair). Absent means the baseline, which needs no
+/// `FLOAT32_BLENDABLE`.
+pub const PEEL_NATIVE_MACRO: &str = "wxsl_peel_native";
+/// Layers peeled when [`PEEL_LAYERS_MACRO`] is unset. Four is the
+/// acceptance scene: four overlapping transparent surfaces.
+pub const PEEL_LAYERS_DEFAULT: i32 = 4;
+/// The most layers one `pass.peel` will draw.
+///
+/// The geometry-pass budget is this same number. The native path spends one
+/// geometry pass per layer. The baseline spends two (a depth pass, then the
+/// shade), so it peels at most half of this — four — and still stays inside
+/// the budget. See ADR 0047.
+pub const PEEL_LAYERS_MAX: i32 = 8;
+
+/// How many layers `macros` asks a peel to draw, clamped to
+/// `1..=PEEL_LAYERS_MAX`.
+pub fn peel_layers(macros: &crate::macros::MacroSet) -> u32 {
+    let requested = match macros.get(PEEL_LAYERS_MACRO) {
+        Some(crate::macros::MacroValue::Int(value)) => value,
+        _ => PEEL_LAYERS_DEFAULT,
+    };
+    requested.clamp(1, PEEL_LAYERS_MAX) as u32
+}
+
+/// Whether `macros` selects the native peel path.
+pub fn peel_native(macros: &crate::macros::MacroSet) -> bool {
+    matches!(
+        macros.get(PEEL_NATIVE_MACRO),
+        Some(crate::macros::MacroValue::Flag(true))
+    )
 }
 
 impl core::fmt::Debug for MaterialStage {
@@ -1801,15 +1896,20 @@ mod tests {
         assert_eq!(MaterialStage::DEPTH_ONLY.color_targets(), 0);
         assert_eq!(MaterialStage::SHADOW.color_targets(), 0);
         assert_eq!(MaterialStage::VELOCITY.color_targets(), 1);
-        // A stage that needs no surface writes no colour, with the one
-        // exception that named this test's shape: the velocity stage
-        // writes motion and reads no surface, so "needs surface" is the
-        // material-function question and "writes colour" is not its
-        // consequence any more.
+        assert_eq!(MaterialStage::PEEL_FRONT.color_targets(), 1);
+        assert_eq!(MaterialStage::PEEL_DEPTH.color_targets(), 1);
+        assert_eq!(MaterialStage::PEEL_RESOLVE.color_targets(), 2);
+        // A stage that needs no surface writes no colour, except the two
+        // that write something other than a surface: velocity writes
+        // motion, peel_depth writes a depth pair. "Needs surface" is the
+        // material-function question.
         for stage in MaterialStage::ALL {
             assert_eq!(
                 stage.needs_surface(),
-                matches!(stage.output(), StageOutput::Color | StageOutput::GBuffer)
+                matches!(
+                    stage.output(),
+                    StageOutput::Color | StageOutput::GBuffer | StageOutput::PeelResolve
+                )
             );
             assert_eq!(
                 stage.always_has_fragment(),
@@ -1825,6 +1925,22 @@ mod tests {
         entries.sort_unstable();
         entries.dedup();
         assert_eq!(entries.len(), MATERIAL_STAGES.len());
+    }
+
+    #[test]
+    fn peel_layers_clamp_to_eight() {
+        use crate::macros::{MacroSet, MacroValue};
+        let mut macros = MacroSet::new();
+        assert_eq!(peel_layers(&macros), PEEL_LAYERS_DEFAULT as u32);
+        macros.set(PEEL_LAYERS_MACRO, MacroValue::Int(0));
+        assert_eq!(peel_layers(&macros), 1);
+        macros.set(PEEL_LAYERS_MACRO, MacroValue::Int(8));
+        assert_eq!(peel_layers(&macros), 8);
+        macros.set(PEEL_LAYERS_MACRO, MacroValue::Int(100));
+        assert_eq!(peel_layers(&macros), 8);
+        assert!(!peel_native(&macros));
+        macros.set(PEEL_NATIVE_MACRO, MacroValue::Flag(true));
+        assert!(peel_native(&macros));
     }
 
     #[test]

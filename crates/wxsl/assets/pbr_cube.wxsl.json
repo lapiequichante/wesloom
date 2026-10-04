@@ -539,16 +539,6 @@
     },
     {
       "from": {
-        "node": 8,
-        "socket": "out"
-      },
-      "to": {
-        "node": 15,
-        "socket": "metallic"
-      }
-    },
-    {
-      "from": {
         "node": 4,
         "socket": "out"
       },

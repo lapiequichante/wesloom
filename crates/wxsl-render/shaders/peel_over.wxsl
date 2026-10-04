@@ -1,0 +1,26 @@
+//! peel over — fold one back layer over the back accumulator.
+//!
+//! The new layer is closer than what the back accumulator already holds, so
+//! it is the foreground: `layer + accum * (1 - layer.a)`, both
+//! premultiplied. Same reason as `peel_under` for being its own pass: the
+//! accumulator is never reloaded.
+//!
+//! Expanded by `pass.peel`. Not a palette node.
+
+@group(3) @binding(0) var accum_image: texture_2d<f32>;
+@group(3) @binding(1) var layer_image: texture_2d<f32>;
+
+@vertex
+fn peel_over_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn peel_over_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let accum = textureLoad(accum_image, pixel, 0);
+    let layer = textureLoad(layer_image, pixel, 0);
+    return layer + accum * (1.0 - layer.a);
+}

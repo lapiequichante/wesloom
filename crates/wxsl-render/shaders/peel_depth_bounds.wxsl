@@ -1,0 +1,34 @@
+//! peel depth bounds — the same window, from the native pair.
+//!
+//! The depth pass wrote `vec2(1 - z, z)` with MAX blending. `.r > 0` is a
+//! front layer (`1 - z`), `.g > 0` a back layer. A channel still at the
+//! clear (0) keeps the previous bound. Same `rg32float` layout as
+//! `peel_bounds.wxsl`, so the geometry stages sample either one.
+//!
+//! Expanded by `pass.peel` on the native path. Not a palette node.
+
+@group(3) @binding(0) var depth_pair: texture_2d<f32>;
+@group(3) @binding(1) var prev_bounds: texture_2d<f32>;
+
+@vertex
+fn peel_depth_bounds_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn peel_depth_bounds_fs(@builtin(position) position: vec4f) -> @location(0) vec2f {
+    let pixel = vec2i(position.xy);
+    let pair = textureLoad(depth_pair, pixel, 0);
+    let prev = textureLoad(prev_bounds, pixel, 0);
+    var new_front = prev.r;
+    if pair.r > 0.0 {
+        new_front = 1.0 - pair.r;
+    }
+    var new_back = prev.g;
+    if pair.g > 0.0 {
+        new_back = pair.g;
+    }
+    return vec2f(new_front, new_back);
+}

@@ -20,6 +20,9 @@
 //! tuned through `set_pass_param` — a buffer write, no recompile. The bloom
 //! in these demos is two passes, a horizontal Gaussian then a vertical one,
 //! because the one-pass kernel's four-texel stride bands.
+//! The `peel` demo is ADR 0047: the same PBR cube graph, with an `alpha`
+//! uniform at 0.3, on a torus and a sphere that pass through each other,
+//! composited by dual depth peeling.
 //! Nothing below is a renderer feature. The bloom pipeline is a document
 //! — lighting into a colour target, then the two bloom passes — compiled
 //! by the same public `compile_pipeline` an application would call, and the
@@ -46,10 +49,12 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+use wxsl::core::abi;
 use wxsl::core::graph::Graph;
-use wxsl::core::graph::NodeId;
-use wxsl::core::node::Value;
+use wxsl::core::graph::{Node, NodeId};
+use wxsl::core::node::{Value, ValueType};
 use wxsl::core::pipeline as doc;
+use wxsl::core::scene::{Tags, TAG_OPAQUE, TAG_TRANSPARENT};
 use wxsl::render::effect::{BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::{
@@ -455,6 +460,20 @@ fn demos() -> Vec<Demo> {
                 step: 1.0 / 60.0,
                 path: swept_transform,
             }),
+            warmup: 0,
+        },
+        Demo {
+            name: "peel",
+            blurb: "a torus and a blue sphere through each other, the PBR cube shader \
+                    with its alpha uniform at 0.3, composited by dual depth peeling",
+            pipeline: Pipeline::Document(peel_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
             warmup: 0,
         },
     ]
@@ -1097,6 +1116,54 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
 }
 
 // ---------------------------------------------------------------------------
+/// Opaque colour and depth, then dual depth peeling of the `transparent`
+/// tag, then the same tonemap every other demo presents through.
+///
+/// The layer count is the default of `wxsl_peel_layers`, four: a ray
+/// through the torus and the sphere meets four surfaces, and four is also
+/// what the baseline path can peel inside the eight-pass budget.
+fn peel_document() -> Graph {
+    let registry = wxsl::core::pipeline::registry();
+    let mut graph = wxsl::core::pipeline::document("dual depth peel");
+    // The opaque pass draws this source. The peel ignores it and draws
+    // `transparent` itself, so the two passes never draw the same instance.
+    let scene = graph.add(Node::new(doc::SOURCE_SCENE).with_setting(doc::SETTING_TAGS, TAG_OPAQUE));
+    let depth = graph.add_node(doc::RESOURCE_DEPTH);
+    let color = graph.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("scene")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let shade = graph.add(Node::new(doc::PASS_GEOMETRY).with_label("opaque"));
+    let peel = graph.add(Node::new(doc::PASS_PEEL).with_label("peel"));
+    let peeled = graph.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("peeled")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let tonemap = graph.add(
+        Node::new(doc::PASS_SCREEN)
+            .with_label("tonemap")
+            .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
+    );
+    let present = graph.add_node(doc::PRESENT);
+    for (from, to) in [
+        ((scene, "draws"), (shade, "draws")),
+        ((depth, "depth"), (shade, "depth")),
+        ((color, "color"), (shade, "into")),
+        ((shade, "depth"), (peel, "depth")),
+        ((shade, "color"), (peel, "scene")),
+        ((peeled, "color"), (peel, "into")),
+        ((peeled, "color"), (tonemap, "image")),
+        ((tonemap, "color"), (present, "surface")),
+    ] {
+        graph
+            .wire(&registry, from, to)
+            .expect("the peel document wires");
+    }
+    graph
+}
+
 // The scene — one PBR cube, the pbr_cube demo's, lit per demo
 // ---------------------------------------------------------------------------
 
@@ -1303,6 +1370,39 @@ fn instance_tints(count: u32) -> Vec<InstanceAttributes> {
         .collect()
 }
 
+/// The PBR cube graph, plus an `alpha` uniform.
+///
+/// The cube's surface output leaves `alpha` at its default of 1, which is
+/// inlined. A `param.value` is a uniform the host can move without
+/// recompiling; this demo pins it at 0.3 and tags the material
+/// `transparent`, which is the only tag `pass.peel` draws.
+fn peel_material_graph(base: &Graph) -> Result<Graph, Box<dyn Error>> {
+    let registry = wxsl::stdlib::registry();
+    let mut graph = base.clone();
+    graph.set_name("peel surfaces");
+    let output = graph
+        .nodes()
+        .find(|(_, node)| node.def == abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .expect("the PBR cube graph ends at output.surface");
+    let alpha = graph.add(
+        Node::new("param.value")
+            .with_label("alpha")
+            .with_setting("name", "alpha")
+            .with_param("value", Value::F32(0.3)),
+    );
+    graph
+        .set_generic(&registry, alpha, "T", ValueType::F32)
+        .map_err(|error| format!("the alpha uniform does not resolve: {error}"))?;
+    graph
+        .wire(&registry, (alpha, "out"), (output, "alpha"))
+        .map_err(|error| format!("the alpha uniform does not wire: {error}"))?;
+    graph
+        .validate(&registry)
+        .map_err(|error| format!("the peel material does not validate: {error}"))?;
+    Ok(graph)
+}
+
 fn cube_transform(time: f32) -> Mat4 {
     Mat4::from_rotation_y(time * 0.45) * Mat4::from_rotation_x(time * 0.21)
 }
@@ -1359,6 +1459,35 @@ fn cube_draws<'a>(
         .collect()
 }
 
+/// The torus and the sphere, sharing the peel material. The sphere sits
+/// in the torus's tube so a ray through the pair meets both surfaces.
+/// `sphere_bindings` is the same material with its `tint` uniform blue.
+fn peel_draws<'a>(
+    torus: &'a Mesh,
+    sphere: &'a Mesh,
+    material: &'a wxsl::render::Material,
+    torus_bindings: &'a wxsl::render::MaterialBindings,
+    sphere_bindings: &'a wxsl::render::MaterialBindings,
+    tint: &'a InstanceAttributes,
+    time: f32,
+) -> DrawList<'a> {
+    let spin = Mat4::from_rotation_y(time * 0.35);
+    let torus_place = spin * Mat4::from_rotation_x(0.7);
+    let sphere_place = spin * Mat4::from_translation(Vec3::new(0.72, 0.08, 0.12));
+    [
+        (torus, torus_place, torus_bindings),
+        (sphere, sphere_place, sphere_bindings),
+    ]
+    .into_iter()
+    .map(|(mesh, place, bindings)| {
+        DrawItem::new(mesh, material)
+            .with_transform(place)
+            .with_bindings(bindings)
+            .with_attributes(tint)
+    })
+    .collect()
+}
+
 /// Everything a frame needs, shared by every demo: one renderer, one
 /// mesh, one material, one set of bindings.
 struct Stage {
@@ -1377,6 +1506,14 @@ struct Stage {
     sampler: wgpu::Sampler,
     /// The feature set the current material was resolved against.
     material_features: &'static [&'static str],
+    /// The peel demo's surfaces: the cube graph with the alpha uniform,
+    /// on a torus and a sphere that occupy the same space.
+    peel_material: wxsl::render::Material,
+    peel_bindings: wxsl::render::MaterialBindings,
+    /// Same material, with the `tint` uniform set blue.
+    sphere_bindings: wxsl::render::MaterialBindings,
+    sphere: Mesh,
+    torus: Mesh,
     /// The bake demo's own material and the table its bake pass writes
     /// through (ADR 0045): the graph is parsed once, the effect and the
     /// material are compiled from it, the texture is the *material's*
@@ -1434,6 +1571,34 @@ impl Stage {
             &sampler,
         )?;
         let bake = BakeStage::new(&gpu, &mut renderer)?;
+        let peel_graph = peel_material_graph(&scene_graph)?;
+        let peel_material = wxsl::render::Material::with_config(
+            &peel_graph,
+            &registry,
+            &wxsl::render::material::MaterialConfig::default()
+                .with_tags(Tags::from_iter([TAG_TRANSPARENT]))
+                .with_shadows(false, false),
+        )?;
+        let peel_bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            &mut renderer,
+            &peel_material,
+            &texture,
+            &sampler,
+        )?;
+        let mut sphere_bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            &mut renderer,
+            &peel_material,
+            &texture,
+            &sampler,
+        )?;
+        sphere_bindings.set("tint", Value::Vec3([0.05, 0.22, 1.0]))?;
+        sphere_bindings.upload(&gpu.device, &gpu.queue)?;
+        let sphere = Mesh::sphere(&gpu.device, 0.85);
+        let torus = Mesh::torus(&gpu.device, 1.15, 0.38);
         Ok(Stage {
             gpu,
             renderer,
@@ -1445,6 +1610,11 @@ impl Stage {
             texture,
             sampler,
             material_features: &[],
+            peel_material,
+            peel_bindings,
+            sphere_bindings,
+            sphere,
+            torus,
             bake: Some(bake),
         })
     }
@@ -1497,6 +1667,29 @@ impl Stage {
         self.ensure_material(demo.features)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
+        if demo.name == "peel" {
+            let tint =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
+            let draws = peel_draws(
+                &self.torus,
+                &self.sphere,
+                &self.peel_material,
+                &self.peel_bindings,
+                &self.sphere_bindings,
+                &tint,
+                time,
+            );
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
         // A demo with a material of its own draws it; every other demo
         // draws the shared cube. The bake material declares no per-instance
         // attributes, so its tints are empty and one copy draws.

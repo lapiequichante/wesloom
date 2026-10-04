@@ -131,3 +131,7 @@ required-features = ["render", "stdlib"]
 [[test]]
 name = "shadows"
 required-features = ["render", "stdlib"]
+
+[[test]]
+name = "peeling"
+required-features = ["render", "stdlib"]

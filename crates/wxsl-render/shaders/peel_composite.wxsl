@@ -1,0 +1,34 @@
+//! peel composite — front and back accumulators over the opaque colour.
+//!
+//! Front was under-blended nearest-first, back over-blended farthest-first,
+//! both premultiplied. `front + back * (1 - front.a)` is the transparent
+//! stack; what is left of the stack shows the opaque colour. One layer
+//! left in an iteration is written only to the front accumulator, so a
+//! surface is not composited twice.
+//!
+//! Linear radiance, like every other intermediate. The display transform
+//! is whichever pass follows, when one does.
+//!
+//! Expanded by `pass.peel`. Not a palette node.
+
+@group(3) @binding(0) var front_image: texture_2d<f32>;
+@group(3) @binding(1) var back_image: texture_2d<f32>;
+@group(3) @binding(2) var scene_image: texture_2d<f32>;
+
+@vertex
+fn peel_composite_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn peel_composite_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let front = textureLoad(front_image, pixel, 0);
+    let back = textureLoad(back_image, pixel, 0);
+    let scene = textureLoad(scene_image, pixel, 0);
+    let acc_rgb = front.rgb + back.rgb * (1.0 - front.a);
+    let acc_a = front.a + back.a * (1.0 - front.a);
+    return vec4f(acc_rgb + scene.rgb * (1.0 - acc_a), 1.0);
+}

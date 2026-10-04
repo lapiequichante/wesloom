@@ -1206,7 +1206,7 @@ impl Emitter<'_> {
             }
             self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
             match self.options.stage.output() {
-                abi::StageOutput::Color => {
+                abi::StageOutput::Color | abi::StageOutput::PeelResolve => {
                     // The dispatch and the whole shading function come from
                     // the material's lighting model, generated here rather
                     // than imported from a fixed module: the call inside
@@ -1254,7 +1254,7 @@ impl Emitter<'_> {
                         self.request_import(abi::VELOCITY_MODULE, abi::PREVIOUS_CONTEXT_FN);
                     }
                 }
-                abi::StageOutput::Nothing => {}
+                abi::StageOutput::Nothing | abi::StageOutput::PeelDepth => {}
             }
         }
     }
@@ -2094,6 +2094,46 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface, stage: abi:
     out.push_str("}\n");
 }
 
+/// The pass-group bindings a peel stage's fragment samples, in the order
+/// the peel pass lists its reads. Other stages declare none: a geometry
+/// pass that reads the pass group is a peel.
+fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
+    let bindings = match stage {
+        abi::MaterialStage::PEEL_FRONT | abi::MaterialStage::PEEL_DEPTH => {
+            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+             @group(3) @binding(1) var wxsl_peel_bounds: texture_2d<f32>;\n"
+        }
+        abi::MaterialStage::PEEL_BACK => {
+            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+             @group(3) @binding(1) var wxsl_peel_bounds: texture_2d<f32>;\n\
+             @group(3) @binding(2) var wxsl_peel_front: texture_depth_2d;\n"
+        }
+        abi::MaterialStage::PEEL_RESOLVE => {
+            "\nstruct WxslPeelColors {\n    \
+             @location(0) front: vec4f,\n    \
+             @location(1) back: vec4f,\n}\n\
+             \n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+             @group(3) @binding(1) var wxsl_peel_pair: texture_2d<f32>;\n"
+        }
+        _ => return,
+    };
+    out.push_str(bindings);
+}
+
+/// Discard fragments behind the opaque surface or outside the window the
+/// previous iteration left. The bias on the window is `1e-5`: wide enough
+/// that the layer just peeled is not taken again, narrow enough that the
+/// crack between two surfaces stays under a pixel. Defines `wxsl_peel_z`
+/// and `wxsl_peel_px`.
+fn peel_window() -> &'static str {
+    "    let wxsl_peel_z = vertex.clip_position.z;\n    \
+     let wxsl_peel_px = vec2i(vertex.clip_position.xy);\n    \
+     let wxsl_peel_scene_z = textureLoad(wxsl_scene_depth, wxsl_peel_px, 0);\n    \
+     let wxsl_peel_window = textureLoad(wxsl_peel_bounds, wxsl_peel_px, 0);\n    \
+     if wxsl_peel_z >= wxsl_peel_scene_z || wxsl_peel_z <= wxsl_peel_window.r + 1e-5 || wxsl_peel_z >= wxsl_peel_window.g - 1e-5 {\n        \
+     discard;\n    }\n"
+}
+
 /// Emit the vertex entry, and the fragment entry this stage calls for.
 ///
 /// The vertex stage is the same for every stage — the paths differ in what
@@ -2326,11 +2366,14 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     // fragment still receives the ABI's own `VertexOut`, so the original
     // function fits as it always did.
     let velocity = stage.output() == abi::StageOutput::Velocity;
+    // The depth pair is position, like velocity's motion: a context exists
+    // only so an alpha test can discard before the pair is written.
+    let peel_depth = stage == abi::MaterialStage::PEEL_DEPTH;
     let context_fn = match velocity && geometry.is_empty() {
         true => abi::VELOCITY_CONTEXT_FN,
         false => abi::SURFACE_CONTEXT_FN,
     };
-    let prologue = match velocity {
+    let prologue = match velocity || peel_depth {
         true => match parts.discard.is_some() {
             true => format!(
                 "    let {ctx} = {context}(vertex);\n{unpack}{test}",
@@ -2345,10 +2388,62 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             context = context_fn,
         ),
     };
+    write_peel_declarations(out, stage);
     let body = match stage.output() {
+        abi::StageOutput::Color if stage == abi::MaterialStage::PEEL_FRONT
+            || stage == abi::MaterialStage::PEEL_BACK =>
+        {
+            let window = peel_window();
+            let back = match stage == abi::MaterialStage::PEEL_BACK {
+                true => {
+                    "    let wxsl_peeled_front = textureLoad(wxsl_peel_front, wxsl_peel_px, 0);\n    \
+                     if wxsl_peeled_front < 0.999 && wxsl_peel_z <= wxsl_peeled_front + 1e-5 {\n        \
+                     discard;\n    }\n"
+                }
+                false => "",
+            };
+            format!(
+                "-> @location(0) vec4f {{\n{prologue}{window}{back}    \
+                 let wxsl_peel_lit = {shade}({material}({ctx}{args}), {ctx});\n    \
+                 return vec4f(wxsl_peel_lit.rgb * wxsl_peel_lit.a, wxsl_peel_lit.a);\n}}\n",
+                ctx = abi::CONTEXT_VAR,
+                shade = abi::SHADE_SURFACE_FN,
+                material = options.material_fn,
+            )
+        }
         abi::StageOutput::Color => format!(
             "-> @location(0) vec4f {{\n{prologue}    \
              return {shade}({material}({ctx}{args}), {ctx});\n}}\n",
+            ctx = abi::CONTEXT_VAR,
+            shade = abi::SHADE_SURFACE_FN,
+            material = options.material_fn,
+        ),
+        abi::StageOutput::PeelDepth => {
+            let window = peel_window();
+            format!(
+                "-> @location(0) vec2f {{\n{prologue}{window}    \
+                 return vec2f(1.0 - wxsl_peel_z, wxsl_peel_z);\n}}\n"
+            )
+        }
+        abi::StageOutput::PeelResolve => format!(
+            "-> WxslPeelColors {{\n{prologue}    \
+             let wxsl_peel_z = vertex.clip_position.z;\n    \
+             let wxsl_peel_px = vec2i(vertex.clip_position.xy);\n    \
+             let wxsl_peel_scene_z = textureLoad(wxsl_scene_depth, wxsl_peel_px, 0);\n    \
+             if wxsl_peel_z >= wxsl_peel_scene_z {{ discard; }}\n    \
+             let wxsl_peel_pair_v = textureLoad(wxsl_peel_pair, wxsl_peel_px, 0);\n    \
+             let wxsl_peel_front_z = 1.0 - wxsl_peel_pair_v.r;\n    \
+             let wxsl_peel_back_z = wxsl_peel_pair_v.g;\n    \
+             let wxsl_peel_lit = {shade}({material}({ctx}{args}), {ctx});\n    \
+             let wxsl_peel_premul = vec4f(wxsl_peel_lit.rgb * wxsl_peel_lit.a, wxsl_peel_lit.a);\n    \
+             var wxsl_peel_front_color = vec4f(0.0);\n    \
+             var wxsl_peel_back_color = vec4f(0.0);\n    \
+             if wxsl_peel_pair_v.r > 0.0 && abs(wxsl_peel_z - wxsl_peel_front_z) <= 2e-4 {{\n        \
+             wxsl_peel_front_color = wxsl_peel_premul;\n    }}\n    \
+             if wxsl_peel_pair_v.g > 0.0 && abs(wxsl_peel_front_z - wxsl_peel_back_z) > 2e-5 && abs(wxsl_peel_z - wxsl_peel_back_z) <= 2e-4 {{\n        \
+             wxsl_peel_back_color = wxsl_peel_premul;\n    }}\n    \
+             if wxsl_peel_front_color.a == 0.0 && wxsl_peel_back_color.a == 0.0 {{ discard; }}\n    \
+             return WxslPeelColors(wxsl_peel_front_color, wxsl_peel_back_color);\n}}\n",
             ctx = abi::CONTEXT_VAR,
             shade = abi::SHADE_SURFACE_FN,
             material = options.material_fn,
