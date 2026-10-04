@@ -1,0 +1,59 @@
+//! bloom_x — the horizontal half of a separable bloom.
+//!
+//! The one-pass bloom samples a thirteen-tap disc at a four-texel stride.
+//! That stride is the banding: a highlight stamps a ring of dots instead of
+//! a disc, and a low threshold turns the rings into bands across the frame.
+//! A separable Gaussian samples every texel along one axis, and the vertical
+//! pass (`bloom_y.wxsl`) does the same along the other, which is the disc
+//! without the holes.
+//!
+//! This pass thresholds linear radiance — the same knee the one-pass bloom
+//! uses — and blurs that signal horizontally. It does not add the image
+//! back. The vertical pass does, so the glow is blurred on both axes before
+//! it is composited. `RADIUS` and `SIGMA` are the kernel; `bloom_y.wxsl`
+//! must use the same pair, or the two axes disagree.
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+/// How far the Gaussian reaches, in texels. Past this the weight is noise.
+const RADIUS: i32 = 12;
+/// The Gaussian's width, in texels. Wider is a softer halo.
+const SIGMA: f32 = 4.0;
+
+fn weight(offset: f32) -> f32 {
+    let s = offset / SIGMA;
+    return exp(-0.5 * s * s);
+}
+
+/// The part of `color` that glows. Everything at or under the threshold
+/// contributes nothing, and the knee eases it in so a highlight crossing
+/// the line brightens the glow instead of popping it.
+fn bright_pass(color: vec3f) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    let kept = smoothstep(params.threshold, params.threshold + params.knee, luminance);
+    return color * kept;
+}
+
+@vertex
+fn bloom_x_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn bloom_x_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    var sum = bright_pass(textureLoad(image, pixel, 0).rgb) * weight(0.0);
+    var sum_w = weight(0.0);
+    for (var tap = 1; tap <= RADIUS; tap++) {
+        let w = weight(f32(tap));
+        let step = vec2i(tap, 0);
+        sum += bright_pass(textureLoad(image, pixel + step, 0).rgb) * w;
+        sum += bright_pass(textureLoad(image, pixel - step, 0).rgb) * w;
+        sum_w += w * 2.0;
+    }
+    return vec4f(sum / sum_w, 1.0);
+}

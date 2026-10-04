@@ -1,0 +1,46 @@
+//! bloom_y — the vertical half of a separable bloom, and the composite.
+//!
+//! Reads the horizontal pass's bright signal (`bloom_x.wxsl`) and the
+//! unblurred image. The same Gaussian as the horizontal pass, along y,
+//! then added back onto the image: `RADIUS` and `SIGMA` must match that
+//! file, or the halo is wider on one axis than the other. `strength` is
+//! how much of the blurred glow comes back; the threshold lived on the
+//! horizontal pass, and thresholding again here would throw the glow away.
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var glow_image: texture_2d<f32>;
+
+/// How far the Gaussian reaches, in texels. The same value as `bloom_x.wxsl`.
+const RADIUS: i32 = 12;
+/// The Gaussian's width, in texels. The same value as `bloom_x.wxsl`.
+const SIGMA: f32 = 4.0;
+
+fn weight(offset: f32) -> f32 {
+    let s = offset / SIGMA;
+    return exp(-0.5 * s * s);
+}
+
+@vertex
+fn bloom_y_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn bloom_y_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    var sum = textureLoad(glow_image, pixel, 0).rgb * weight(0.0);
+    var sum_w = weight(0.0);
+    for (var tap = 1; tap <= RADIUS; tap++) {
+        let w = weight(f32(tap));
+        let step = vec2i(0, tap);
+        sum += textureLoad(glow_image, pixel + step, 0).rgb * w;
+        sum += textureLoad(glow_image, pixel - step, 0).rgb * w;
+        sum_w += w * 2.0;
+    }
+    let base = textureLoad(color_image, pixel, 0).rgb;
+    return vec4f(base + sum / sum_w * params.strength, 1.0);
+}

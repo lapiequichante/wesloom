@@ -17,6 +17,8 @@
 // floor (so that noise in a dark region is not an "edge") and a fraction of
 // the local maximum (so that a bright region needs a proportionally bigger
 // step to count). Below either, the centre texel is returned untouched.
+// The floor sits low on purpose: the far edge of a lit cube is a dark
+// line against the clear colour, and a higher floor skips it.
 //
 // Feed it linear radiance and it anti-aliases light; feed it a display-
 // encoded image and it anti-aliases pixels. The second is usually what is
@@ -27,10 +29,10 @@ import package::color::luminance::luminance;
 import package::sample::load_2d::load_2d;
 
 // Contrast below this is never an edge, however dark the neighbourhood.
-const WXSL_FXAA_FLOOR: f32 = 0.02;
+const WXSL_FXAA_FLOOR: f32 = 0.008;
 // And contrast below this fraction of the local maximum is never an edge,
 // however bright it is.
-const WXSL_FXAA_RELATIVE: f32 = 0.12;
+const WXSL_FXAA_RELATIVE: f32 = 0.06;
 
 fn fxaa(
     image: texture_2d<f32>,
@@ -58,19 +60,42 @@ fn fxaa(
     }
 
     // Which way the luminance climbs, and therefore — turned a quarter —
-    // which way the edge runs. One texel along it in each direction is the
-    // whole kernel: the point is to mix the two sides of a staircase step,
-    // not to blur.
+    // which way the edge runs. `across` steps onto the other side of the
+    // edge; `along` runs with it. A one-texel blend along the edge leaves
+    // a shallow staircase alone in the middle of each step, which is what
+    // the far edges of a cube are, so the kernel reaches four texels along
+    // and two across.
     let gradient = vec2f(right - left, down - up);
     let magnitude = max(length(gradient), 1e-5);
+    let across = gradient / magnitude * texel;
     let along = vec2f(-gradient.y, gradient.x) / magnitude * texel;
 
-    let ahead = load_2d(image, uv + along).rgb;
-    let behind = load_2d(image, uv - along).rgb;
-    let blurred = (center * 2.0 + ahead + behind) * 0.25;
+    let a1 = load_2d(image, uv + along).rgb;
+    let a2 = load_2d(image, uv + along * 2.0).rgb;
+    let a3 = load_2d(image, uv + along * 3.0).rgb;
+    let a4 = load_2d(image, uv + along * 4.0).rgb;
+    let b1 = load_2d(image, uv - along).rgb;
+    let b2 = load_2d(image, uv - along * 2.0).rgb;
+    let b3 = load_2d(image, uv - along * 3.0).rgb;
+    let b4 = load_2d(image, uv - along * 4.0).rgb;
+    let c1 = load_2d(image, uv + across).rgb;
+    let c2 = load_2d(image, uv - across).rgb;
+    let d1 = load_2d(image, uv + across * 2.0).rgb;
+    let d2 = load_2d(image, uv - across * 2.0).rgb;
+    // Weights sum to one. The across taps are the larger share: in the
+    // middle of a long step the along-neighbours match the centre, and
+    // only the other side of the edge is a different colour.
+    let blurred = center * 0.10
+        + (a1 + b1) * 0.07
+        + (a2 + b2) * 0.04
+        + (a3 + b3) * 0.03
+        + (a4 + b4) * 0.02
+        + (c1 + c2) * 0.14
+        + (d1 + d2) * 0.15;
 
-    // How much of it to keep: a full-contrast edge takes the blur whole, a
-    // marginal one takes a little, and `strength` scales the lot.
-    let amount = saturate(contrast / max(high, 1e-5)) * saturate(strength);
+    // A detected edge takes most of the blur. Scaling only by contrast/high
+    // leaves a dim edge — the back of the cube — almost untouched even
+    // after it has cleared the threshold. `strength` still scales the lot.
+    let amount = saturate(max(contrast / max(high, 1e-5), 0.75)) * saturate(strength);
     return mix(center, blurred, amount);
 }

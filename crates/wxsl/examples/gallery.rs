@@ -17,11 +17,12 @@
 //! anti-aliaser and the display transform every other demo also presents
 //! through — are node graphs rather than shader files. The eleventh,
 //! `bloom-tuned`, is ADR 0042's: the same bloom chain with its parameters
-//! tuned through `set_pass_param` — a buffer write, no recompile.
-//! Nothing below touches
-//! `wxsl-render`'s source — the bloom pipeline is the shipped deferred
-//! preset's document with two nodes added and one rewired, compiled by
-//! the same public `compile_pipeline` an application would call, and the
+//! tuned through `set_pass_param` — a buffer write, no recompile. The bloom
+//! in these demos is two passes, a horizontal Gaussian then a vertical one,
+//! because the one-pass kernel's four-texel stride bands.
+//! Nothing below is a renderer feature. The bloom pipeline is a document
+//! — lighting into a colour target, then the two bloom passes — compiled
+//! by the same public `compile_pipeline` an application would call, and the
 //! proof effects are registered the same way an application's would be.
 //!
 //! ```text
@@ -281,8 +282,8 @@ fn demos() -> Vec<Demo> {
         },
         Demo {
             name: "deferred-bloom",
-            blurb: "deferred lighting into a colour target, bloom over it — an effect \
-                    chain as a document edit",
+            blurb: "deferred lighting into a colour target, then a separable bloom — \
+                    blur along x, then along y — as a document edit",
             pipeline: Pipeline::Document(deferred_bloom_document),
             instances: 1,
             // A highlight bright enough to cross bloom's threshold.
@@ -296,8 +297,8 @@ fn demos() -> Vec<Demo> {
         },
         Demo {
             name: "bloom-instances",
-            blurb: "the same chain, six tinted copies from one draw list",
-            pipeline: Pipeline::Document(deferred_bloom_document),
+            blurb: "FXAA, then the separable bloom, six tinted copies from one draw list",
+            pipeline: Pipeline::Document(bloom_instances_document),
             instances: 6,
             key_intensity: 160.0,
             features: &[],
@@ -310,8 +311,8 @@ fn demos() -> Vec<Demo> {
         Demo {
             name: "bloom-tuned",
             blurb: "the same chain with bloom's parameters tuned live — set_pass_param \
-                    on the pass label moves threshold and strength with no recompile; \
-                    the sliders an editor canvas draws are this call",
+                    moves threshold on the horizontal pass and strength on the vertical \
+                    one, with no recompile",
             pipeline: Pipeline::Document(deferred_bloom_document),
             instances: 1,
             key_intensity: 160.0,
@@ -320,7 +321,10 @@ fn demos() -> Vec<Demo> {
             // The threshold below the lit surface's radiance, so the whole
             // scene glows, and the strength above one, so the glow leads —
             // visibly not the default image, from the same document.
-            params: &[("bloom", "threshold", 0.35), ("bloom", "strength", 1.6)],
+            params: &[
+                ("bloom", "threshold", 0.35),
+                ("bloom-y", "strength", 1.6),
+            ],
             material: None,
             motion: None,
             warmup: 0,
@@ -868,7 +872,10 @@ fn minimal_forward_document() -> Graph {
 /// presents. Three nodes and a rewire, in a demo, because that is exactly
 /// what the stock presets do — a chain is a chain wherever it is built.
 fn present_through_tonemap(graph: &mut Graph, head: NodeId, present: NodeId) {
-    let registry = wxsl::core::pipeline::registry();
+    // The document registry, not the static one: a head whose effect has
+    // more than one image — the separable bloom's vertical pass — is a
+    // derived row, and its `into` socket is not on the fixed pass.
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
     let hdr = graph.add(
         wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
             .with_label("linear")
@@ -892,13 +899,12 @@ fn present_through_tonemap(graph: &mut Graph, head: NodeId, present: NodeId) {
     }
 }
 
-/// The shipped deferred preset with a bloom chain composed onto it: the
-/// lighting pass writes a `resource.color` instead of the frame's target,
-/// a `pass.screen` node running `bloom` reads it, and its `into` stays
-/// unconnected so *it* writes the frame's target. Two nodes and a rewire
-/// — the composition that used to be hand-written Rust.
+/// The shipped deferred preset with a separable bloom composed onto it.
+/// Lighting writes an HDR target; [`separable_bloom`] blurs the bright
+/// part along x and then along y and adds it back. The one-pass bloom's
+/// taps sit four texels apart, which bands, so these demos do not use it.
 fn deferred_bloom_document() -> Graph {
-    let registry = wxsl::core::pipeline::registry();
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
     let mut graph = wxsl::core::pipeline::document("deferred bloom");
     let scene = graph.add_node(doc::SOURCE_SCENE);
     let lights = graph.add_node(doc::SOURCE_LIGHTS);
@@ -920,10 +926,93 @@ fn deferred_bloom_document() -> Graph {
     );
     let lighting =
         graph.add(wxsl::core::graph::Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
-    let bloom = graph.add(
+    let present = graph.add_node(doc::PRESENT);
+    let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {
+        graph.wire(&registry, from, to).expect("gallery wiring");
+    };
+    wire((scene, "draws"), (shadows, "draws"));
+    wire((lights, "shadows"), (shadows, "into"));
+    wire((scene, "draws"), (material, "draws"));
+    wire((gbuffer, "gbuffer"), (material, "gbuffer"));
+    wire((gbuffer, "gbuffer"), (lighting, "gbuffer"));
+    wire((scene_color, "color"), (lighting, "into"));
+    let bloom = separable_bloom(&mut graph, scene_color);
+    graph
+        .wire(&registry, (bloom, "color"), (present, "surface"))
+        .expect("gallery wiring");
+    // Bloom thresholds *linear* radiance, so it belongs before the display
+    // transform — which is the physically correct order, and the one the
+    // move in ADR 0039 made expressible.
+    present_through_tonemap(&mut graph, bloom, present);
+    graph
+}
+
+/// Horizontal Gaussian of the bright part of `source`, then the same
+/// Gaussian along y, added back onto `source`. Returns the vertical pass,
+/// which is the head of the chain.
+///
+/// `threshold` and `knee` are on the pass labelled `bloom`. `strength` is
+/// on the pass labelled `bloom-y`. The glow resource is HDR: the bright
+/// signal is linear radiance, and an 8-bit intermediate would clamp it.
+fn separable_bloom(graph: &mut Graph, source: NodeId) -> NodeId {
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let glow = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("glow")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let bloom_x = graph.add(
         wxsl::core::graph::Node::new(doc::PASS_SCREEN)
             .with_label("bloom")
-            .with_setting(doc::SETTING_EFFECT, "wxsl.bloom"),
+            .with_setting(doc::SETTING_EFFECT, "wxsl.bloom_x"),
+    );
+    let bloom_y = graph.add(
+        wxsl::core::graph::Node::new(format!("{}wxsl.bloom_y", doc::PASS_SCREEN_PREFIX))
+            .with_label("bloom-y"),
+    );
+    for (from, to) in [
+        ((source, "color"), (bloom_x, "image")),
+        ((glow, "color"), (bloom_x, "into")),
+        ((source, "color"), (bloom_y, "color")),
+        ((glow, "color"), (bloom_y, "glow")),
+    ] {
+        graph.wire(&registry, from, to).expect("gallery wiring");
+    }
+    bloom_y
+}
+
+/// The deferred bloom pipeline with FXAA inserted before the separable
+/// bloom: deferred lighting writes into an HDR target, FXAA anti-aliases
+/// luminance edges in linear radiance, then the horizontal and vertical
+/// bloom passes run, and the result is presented through tonemap.
+fn bloom_instances_document() -> Graph {
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let mut graph = wxsl::core::pipeline::document("deferred bloom instances with fxaa");
+    let scene = graph.add_node(doc::SOURCE_SCENE);
+    let lights = graph.add_node(doc::SOURCE_LIGHTS);
+    let shadows = graph.add_node(doc::PASS_SHADOW);
+    let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+    let material = graph.add(
+        wxsl::core::graph::Node::new(doc::PASS_GEOMETRY)
+            .with_label("deferred material")
+            .with_setting(doc::SETTING_STAGE, "gbuffer"),
+    );
+    let scene_color = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("scene")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let lighting =
+        graph.add(wxsl::core::graph::Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
+    let antialiased = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("antialiased")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let fxaa = graph.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_label("fxaa")
+            .with_setting(doc::SETTING_EFFECT, "wxsl.fxaa"),
     );
     let present = graph.add_node(doc::PRESENT);
     let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {
@@ -935,11 +1024,12 @@ fn deferred_bloom_document() -> Graph {
     wire((gbuffer, "gbuffer"), (material, "gbuffer"));
     wire((gbuffer, "gbuffer"), (lighting, "gbuffer"));
     wire((scene_color, "color"), (lighting, "into"));
-    wire((scene_color, "color"), (bloom, "image"));
-    wire((bloom, "color"), (present, "surface"));
-    // Bloom thresholds *linear* radiance, so it belongs before the display
-    // transform — which is the physically correct order, and the one the
-    // move in ADR 0039 made expressible.
+    wire((scene_color, "color"), (fxaa, "image"));
+    wire((antialiased, "color"), (fxaa, "into"));
+    let bloom = separable_bloom(&mut graph, antialiased);
+    graph
+        .wire(&registry, (bloom, "color"), (present, "surface"))
+        .expect("gallery wiring");
     present_through_tonemap(&mut graph, bloom, present);
     graph
 }

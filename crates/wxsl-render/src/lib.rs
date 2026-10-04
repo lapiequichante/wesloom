@@ -92,9 +92,9 @@ pub use bindings::{BindingLayouts, MaterialBindings};
 pub use draw::{DrawItem, DrawList, InstanceAttributes};
 pub use effect::{
     Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectOutputShape,
-    EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE, BRDF_LUT, BRDF_LUT_MODULE,
-    DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE, RAMP_FILL, RAMP_MODULE, RAMP_VIEW,
-    RAMP_VIEW_MODULE,
+    EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE, BLOOM_X, BLOOM_X_MODULE, BLOOM_Y,
+    BLOOM_Y_MODULE, BRDF_LUT, BRDF_LUT_MODULE, DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE,
+    RAMP_FILL, RAMP_MODULE, RAMP_VIEW, RAMP_VIEW_MODULE,
 };
 pub use environment::{
     Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,

@@ -60,6 +60,10 @@ use wxsl_core::wxsl::WxslIdent;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
+/// Module path the horizontal half of the separable bloom is mounted under.
+pub const BLOOM_X_MODULE: &str = "package::wxsl::bloom_x";
+/// Module path the vertical half of the separable bloom is mounted under.
+pub const BLOOM_Y_MODULE: &str = "package::wxsl::bloom_y";
 /// Module path the shipped tonemap effect's shader is mounted under.
 pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 /// Module path the BRDF-LUT bake's shader is mounted under.
@@ -570,6 +574,83 @@ pub const BLOOM: Effect = Effect {
     },
 };
 
+/// The horizontal half of a separable bloom. Thresholds linear radiance and
+/// blurs the bright signal along x. The vertical pass ([`BLOOM_Y`]) finishes
+/// the Gaussian and adds it back; this pass writes the glow alone, so a
+/// document chains the two through a `resource.color`.
+///
+/// The one-pass [`BLOOM`] samples thirteen taps four texels apart, which
+/// stamps rings. This pair samples every texel of a Gaussian, which is the
+/// same halo without the bands.
+pub const BLOOM_X: Effect = Effect {
+    id: "wxsl.bloom_x",
+    label: "bloom horizontal",
+    description: "Threshold an image and blur the bright part horizontally. \
+                  Pair with bloom vertical.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_x_vs",
+        fragment_entry: "bloom_x_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The image to extract highlights from, as linear radiance.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "threshold",
+            default: Value::F32(1.0),
+        },
+        EffectParameter {
+            name: "knee",
+            default: Value::F32(0.6),
+        },
+    ],
+    shader: EffectShader::Source {
+        path: BLOOM_X_MODULE,
+        wxsl: include_str!("../shaders/bloom_x.wxsl"),
+    },
+};
+
+/// The vertical half of a separable bloom, and the composite. Two images —
+/// the unblurred frame and the horizontal pass's glow — so it does not fit
+/// the fixed `pass.screen` socket set; a document places
+/// `pass.screen.wxsl.bloom_y`.
+pub const BLOOM_Y: Effect = Effect {
+    id: "wxsl.bloom_y",
+    label: "bloom vertical",
+    description: "Blur a horizontal bloom along y and add it back onto the image.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_y_vs",
+        fragment_entry: "bloom_y_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The unblurred image, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "glow",
+            kind: EffectInputKind::Image,
+            description: "The horizontal pass's bright signal.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        default: Value::F32(0.85),
+    }],
+    shader: EffectShader::Source {
+        path: BLOOM_Y_MODULE,
+        wxsl: include_str!("../shaders/bloom_y.wxsl"),
+    },
+};
+
 /// Tonemap: the display transform, as the last pass of every stock
 /// chain — the filmic curve and the sRGB encode that used to sit inside
 /// the generated `shade_surface` under a macro
@@ -814,11 +895,19 @@ pub struct EffectRegistry {
 
 impl EffectRegistry {
     /// The effects this crate ships: the migrated lighting pass, the
-    /// display transform every stock chain ends in, bloom, the TAA
-    /// resolve, and the motion blur.
+    /// display transform every stock chain ends in, bloom (the one-pass
+    /// row and the separable pair), the TAA resolve, and the motion blur.
     pub fn shipped() -> Self {
         EffectRegistry {
-            effects: vec![DEFERRED_LIGHTING, TONEMAP, BLOOM, TAA, MOTION_BLUR],
+            effects: vec![
+                DEFERRED_LIGHTING,
+                TONEMAP,
+                BLOOM,
+                BLOOM_X,
+                BLOOM_Y,
+                TAA,
+                MOTION_BLUR,
+            ],
         }
     }
 
@@ -1069,9 +1158,9 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            5,
-            "lighting, tonemap, bloom — and, since plan3 N2, the TAA resolve \
-             and the motion blur"
+            7,
+            "lighting, tonemap, bloom, the separable bloom pair — and, since \
+             plan3 N2, the TAA resolve and the motion blur"
         );
 
         let lighting = registry
@@ -1106,7 +1195,7 @@ mod tests {
             ..DEFERRED_LIGHTING
         };
         let registry = EffectRegistry::shipped().with(replacement);
-        assert_eq!(registry.len(), 5, "replacing, not appending");
+        assert_eq!(registry.len(), 7, "replacing, not appending");
         assert_eq!(
             registry
                 .get("deferred_lighting")
@@ -1136,6 +1225,59 @@ mod tests {
         assert!(
             !wxsl.contains("@binding(1)"),
             "one input, one binding — a second is a drift from the descriptor"
+        );
+    }
+
+    #[test]
+    fn the_separable_bloom_is_two_passes_sharing_one_kernel() {
+        // The banding fix: a horizontal extract and a vertical composite,
+        // and the two files name the same Gaussian. A radius that drifts
+        // between them is an oval halo, which is the same class of bug as
+        // a binding that drifts from its descriptor.
+        assert!(BLOOM_X.fits_pass_screen(), "one image fits pass.screen");
+        assert!(
+            !BLOOM_Y.fits_pass_screen(),
+            "two images need the derived row"
+        );
+        assert_eq!(
+            BLOOM_X
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name)
+                .collect::<Vec<_>>(),
+            ["threshold", "knee"]
+        );
+        assert_eq!(BLOOM_Y.parameters[0].name, "strength");
+
+        let EffectShader::Source {
+            wxsl: horizontal, ..
+        } = BLOOM_X.shader
+        else {
+            panic!("bloom_x ships its source");
+        };
+        let EffectShader::Source { wxsl: vertical, .. } = BLOOM_Y.shader else {
+            panic!("bloom_y ships its source");
+        };
+        assert!(horizontal.contains("@group(3) @binding(0) var image:"));
+        assert!(!horizontal.contains("@binding(1)"));
+        assert!(vertical.contains("@group(3) @binding(0) var color_image:"));
+        assert!(vertical.contains("@group(3) @binding(1) var glow_image:"));
+        assert!(!vertical.contains("@binding(2)"));
+        for (wxsl, entry) in [(horizontal, "fn bloom_x_fs("), (vertical, "fn bloom_y_fs(")] {
+            assert!(wxsl.contains(entry), "missing `{entry}`");
+            assert!(wxsl.contains("const RADIUS: i32 = 12;"), "{entry}");
+            assert!(wxsl.contains("const SIGMA: f32 = 4.0;"), "{entry}");
+        }
+        assert!(horizontal.contains("params.threshold"));
+        assert!(vertical.contains("params.strength"));
+        // The uniform address space rounds a struct up to 16 bytes, so one
+        // f32 and two f32s are the same size.
+        assert_eq!(BLOOM_X.param_layout().size(), 16);
+        assert_eq!(BLOOM_Y.param_layout().size(), 16);
+        let header = BLOOM_Y.params_header();
+        assert!(
+            header.contains("@group(3) @binding(2) var<uniform> params:"),
+            "{header}"
         );
     }
 

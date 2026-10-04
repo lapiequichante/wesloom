@@ -2557,6 +2557,134 @@ mod tests {
     }
 
     #[test]
+    fn a_separable_bloom_chains_horizontal_then_vertical() {
+        // The one-pass kernel samples four texels apart and bands. The
+        // replacement is two passes: extract and blur along x into a
+        // resource, then blur along y and composite onto the unblurred
+        // image. The vertical pass has two images, so it is the derived row.
+        let registry = document_registry(&effects());
+        let mut graph = wxsl_core::pipeline::document("separable bloom");
+        let scene = graph.add_node(doc::SOURCE_SCENE);
+        let lights = graph.add_node(doc::SOURCE_LIGHTS);
+        let shadows = graph.add_node(doc::PASS_SHADOW);
+        let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+        let material = graph.add(
+            Node::new(doc::PASS_GEOMETRY)
+                .with_label("deferred material")
+                .with_setting(doc::SETTING_STAGE, "gbuffer"),
+        );
+        let scene_color = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("scene")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let lighting = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("deferred lighting")
+                .with_setting(doc::SETTING_EFFECT, "wxsl.deferred_lighting"),
+        );
+        let glow = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("glow")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let bloom_x = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("bloom")
+                .with_setting(doc::SETTING_EFFECT, "wxsl.bloom_x"),
+        );
+        let bloom_y = graph.add(
+            Node::new(format!("{}wxsl.bloom_y", doc::PASS_SCREEN_PREFIX)).with_label("bloom-y"),
+        );
+        // The vertical pass is a derived row, so it cannot feed `present`
+        // directly — present wants a `pass.screen` or a geometry pass. The
+        // tonemap is that pass, which is also where the chain belongs.
+        let linear = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("linear")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        let tonemap = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("tonemap")
+                .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((scene, "draws"), (shadows, "draws")),
+            ((lights, "shadows"), (shadows, "into")),
+            ((scene, "draws"), (material, "draws")),
+            ((gbuffer, "gbuffer"), (material, "gbuffer")),
+            ((gbuffer, "gbuffer"), (lighting, "gbuffer")),
+            ((scene_color, "color"), (lighting, "into")),
+            ((scene_color, "color"), (bloom_x, "image")),
+            ((glow, "color"), (bloom_x, "into")),
+            ((scene_color, "color"), (bloom_y, "color")),
+            ((glow, "color"), (bloom_y, "glow")),
+            ((linear, "color"), (bloom_y, "into")),
+            ((linear, "color"), (tonemap, "image")),
+            ((tonemap, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("wiring");
+        }
+        let compiled =
+            compile(&graph, &registry, &effects(), &config()).expect("the chain compiles");
+        let schedule = compiled.schedule().expect("and schedules");
+        let position = |label: &str| {
+            compiled
+                .passes()
+                .iter()
+                .position(|pass| pass.label == label)
+                .unwrap_or_else(|| panic!("no pass labelled `{label}`"))
+        };
+        let horizontal = position("bloom");
+        let vertical = position("bloom-y");
+        assert!(
+            schedule
+                .order()
+                .iter()
+                .position(|index| *index == horizontal)
+                < schedule.order().iter().position(|index| *index == vertical),
+            "the vertical pass reads the horizontal pass's resource"
+        );
+        let horizontal_pass = &compiled.passes()[horizontal];
+        assert!(
+            matches!(&horizontal_pass.kind, PassKind::Screen { effect } if effect == "wxsl.bloom_x")
+        );
+        assert_eq!(horizontal_pass.reads.len(), 1);
+        let vertical_pass = &compiled.passes()[vertical];
+        assert!(
+            matches!(&vertical_pass.kind, PassKind::Screen { effect } if effect == "wxsl.bloom_y")
+        );
+        assert_eq!(
+            vertical_pass.reads.len(),
+            2,
+            "the unblurred image and the glow"
+        );
+        let glow_read = vertical_pass.reads[1].resource;
+        let vertical_wrote = vertical_pass.color[0].resource;
+        let horizontal_wrote = horizontal_pass.color[0].resource;
+        assert_ne!(vertical_wrote, RenderGraph::TARGET);
+        assert_eq!(
+            horizontal_wrote, glow_read,
+            "the glow the horizontal pass writes is the vertical pass's second read"
+        );
+        let tonemap_at = position("tonemap");
+        assert_eq!(
+            compiled.passes()[tonemap_at].color[0].resource,
+            RenderGraph::TARGET
+        );
+        assert!(
+            schedule.order().iter().position(|index| *index == vertical)
+                < schedule
+                    .order()
+                    .iter()
+                    .position(|index| *index == tonemap_at),
+            "tonemap reads what the vertical pass wrote"
+        );
+    }
+
+    #[test]
     fn reading_the_presented_target_through_an_image_input_is_reported() {
         // The one un-compilable chain shape: the lighting pass writes the
         // frame's target and bloom's image input is wired to its output.

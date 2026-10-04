@@ -8,9 +8,6 @@
 # consumers resolve freely — which a library consumer does anyway, since
 # Cargo ignores a dependency's lockfile.
 
-# Output the demo writes when `--out` is not given.
-pbr_cube_forward.png
-pbr_cube_deferred.png
 
 .agent-tmp
 

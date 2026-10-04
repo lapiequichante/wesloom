@@ -93,7 +93,14 @@ against (ADR 0033 documented that gap honestly: a chain failed in
   approximation, and its threshold reads the sRGB-encoded frame colour
   rather than pre-tonemap HDR. Moving tonemap out of `shade_surface`
   (plan.md M7) is what makes the physically-right threshold a two-line
-  change in this file; the effect is written to expect it.
+  change in this file; the effect is written to expect it. That kernel's
+  taps sit four texels apart, which bands: a highlight stamps a ring. The
+  gallery's bloom documents chain `wxsl.bloom_x` (threshold, then a
+  normalized Gaussian along x) into `wxsl.bloom_y` (the same Gaussian
+  along y, added back onto the unblurred image). Two effects and a
+  `resource.color` between them — a document chain, which is what this
+  ADR already schedules. A bloom pyramid with internal transients stays
+  deferred. `wxsl.bloom` remains the one-pass row.
 * The variant cache keys effects under `VariantKind::Effect` by (id,
   macros, lighting-set signature when generated); a background pipeline
   swap requests them like material stages, through the same

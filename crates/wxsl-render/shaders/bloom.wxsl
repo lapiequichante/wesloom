@@ -1,5 +1,10 @@
 //! bloom — glow for the bright parts of an image.
 //!
+//! One fullscreen pass. Its thirteen taps sit four texels apart, which
+//! bands — a highlight stamps a ring rather than a disc. The gallery's
+//! bloom documents use the separable pair (`bloom_x.wxsl`, then
+//! `bloom_y.wxsl`) instead. This row stays for a chain that wants one pass.
+//!
 //! One fullscreen pass over what the previous pass wrote: everything
 //! brighter than `THRESHOLD` is kept (with a soft knee, so the effect
 //! fades in rather than cutting at a line), blurred with a fixed 13-tap
