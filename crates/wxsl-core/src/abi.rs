@@ -1131,10 +1131,7 @@ impl MaterialStage {
     /// is the one colour-writing stage that answers `false`, and the one
     /// reason this is not `self.output() != StageOutput::Nothing`.
     pub fn needs_surface(self) -> bool {
-        matches!(
-            self.output(),
-            StageOutput::Color | StageOutput::GBuffer
-        )
+        matches!(self.output(), StageOutput::Color | StageOutput::GBuffer)
     }
 
     /// Whether a pipeline built for this stage always has a fragment
@@ -1780,7 +1777,10 @@ mod tests {
             MaterialStage::parse("  GBuffer "),
             Some(MaterialStage::GBUFFER)
         );
-        assert_eq!(MaterialStage::parse("velocity"), Some(MaterialStage::VELOCITY));
+        assert_eq!(
+            MaterialStage::parse("velocity"),
+            Some(MaterialStage::VELOCITY)
+        );
         assert_eq!(MaterialStage::parse("shadowy"), None);
         let mut names: Vec<&str> = MATERIAL_STAGES.iter().map(|stage| stage.name).collect();
         names.sort_unstable();
@@ -1809,10 +1809,7 @@ mod tests {
         for stage in MaterialStage::ALL {
             assert_eq!(
                 stage.needs_surface(),
-                matches!(
-                    stage.output(),
-                    StageOutput::Color | StageOutput::GBuffer
-                )
+                matches!(stage.output(), StageOutput::Color | StageOutput::GBuffer)
             );
             assert_eq!(
                 stage.always_has_fragment(),

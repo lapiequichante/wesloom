@@ -203,6 +203,24 @@ writes through it as an imported resource, the material samples it like
 any texture of its own. See
 [ADR 0045](adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md).
 
+**Velocity** — screen motion per fragment: where this fragment was last
+frame, as uv per frame, `y` down. The `velocity` **material stage**'s
+vertex entry transforms each vertex against this frame's camera and
+instance row *and* the previous frame's (the frame group carries both);
+the fragment writes the difference. Consumers read it — TAA to
+reproject the history, motion blur to smear along it. A velocity
+target's unwritten texel is *no motion*, not the frame's clear colour.
+See [ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md).
+
+**TAA** — temporal antialiasing, as a policy'd chain: a velocity pass, a
+`resource.color` with `history: 1`, and a resolve
+(`wxsl.taa`) that blends the frame with its reprojected history and
+writes the blend back into the ring. The disocclusion answer is a
+clamp — the history survives this frame's neighbourhood box or it does
+not get blended — plus a falloff measured against the current pixel,
+which is what keeps an unwritten first frame from poisoning the ring.
+See [ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md).
+
 **ADR** — Architecture Decision Record; see `docs/adr/README.md`.
 
 **Facade crate** — `wxsl`, the crate most consumers depend on directly;

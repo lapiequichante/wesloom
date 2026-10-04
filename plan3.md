@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8 and N5 have landed — ADRs 0038 through 0045. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5 and N2 have landed — ADRs 0038 through 0046. The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -20,7 +20,7 @@ earlier plans' items did.
 
 | From | Still open | Reshaped by |
 |---|---|---|
-| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040 —, M8 (peeling), ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
+| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040, its motion half with ADR 0046 —, M8 (peeling), ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
 | plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, ~~P8 (identity/contracts)~~ — landed, ADR 0044 | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
@@ -36,7 +36,7 @@ earlier plans' items did.
   ambient, which is the reader the Once-baked BRDF LUT has been sitting
   in `shaders/brdf_lut.wxsl` for. The motion half (Velocity stage,
   previous-frame transforms, TAA, motion blur) is independent enough to
-  be its own item.
+  be its own item — N2 below, landed with ADR 0046.
 * **M8 became what plan2 predicted**: "another preset document plus two
   stages". The interesting residue is the portability rule's first real
   bite — dual depth peeling wants float blending, which is the one place
@@ -195,7 +195,7 @@ same "how does a graph declare what the pipeline wires into it" question
 N3 and N4 both owe. The graph-authored effects are the tonemap and FXAA;
 `filter/fxaa.wxsl` is the node, and the `fxaa` gallery demo is the chain.
 
-### N2 — Motion: the Velocity stage, and TAA
+### N2 — Motion: the Velocity stage, and TAA *(landed, ADR 0046)*
 
 The last slice of plan.md's M7, split out because it touches geometry and
 instance rows rather than the screen ABI:
@@ -215,6 +215,44 @@ instance rows rather than the screen ABI:
 * Done when: the gallery's spinning cube under TAA shows no edge
   shimmer, and a moving cube blurs.
 * ADR: "Velocity is a stage; TAA is a policy'd chain."
+
+**Landed as written**, with the mechanism arriving one stage row at a
+time. The `velocity` stage is the table row the plan always named — and
+the one vertex entry in the ABI that differs from every other's: it
+transforms each vertex twice, this frame and last, and its fragment is
+the interpolated difference, with **both** clips riding the output as
+plain varyings because `@builtin(position)` arrives in a fragment as
+framebuffer coordinates. The previous frame lives beside the current
+one, per the stride rule: `BINDING_PREVIOUS_INSTANCES` (a second array,
+indexed by the same `instance_index`, filled from each draw's
+`with_previous`) and `camera.previous_view_proj` (from
+`Environment::previous_camera`, the `previous_time` of the camera) —
+both "no motion" by default, and `Camera::jitter` beside them for the
+host's sub-pixel half, which composes because each frame's jitter rides
+its own matrix. The graph half cost nothing new: the vertex partition is
+emitted once and evaluated **twice** — last frame against
+`previous_vertex_context`, which is what M5's macro was for, realized as
+a second clock rather than a second compilation. TAA is the policy'd
+chain the ADR title claims: `wxsl.taa` and `wxsl.motion_blur` ship as
+effects, and a screen effect whose wiring the fixed `pass.screen` cannot
+name gets a derived `pass.screen.<effect>` row — the N3 mechanism
+closing the second-image hole for screen effects too, with the history
+depth on the *input's* declaration (`EffectInput.history`), so the
+resolve reads its own last output through the ring it writes and orders
+against the scene without ever ordering against itself. The done-when is
+`motion.rs` as a measurement: the resolve's frame-to-frame difference on
+the spinning cube is below the raw chain's (0.313 vs 0.317) while
+tracking the scene within 0.02, a still scene converges exactly, the
+velocity buffer matches the test's own projection for translation,
+rotation *and* camera motion, and the swept cube loses half its
+horizontal gradient energy under the blur. Two bugs the plan could not
+have named, both worth remembering: a depth attachment loaded with
+`depth_write: false` is a read, not a write — counting it as a write
+made a third depth-loading pass mutually dependent with the pass before
+it — and a velocity target clears to **zero motion**, not the frame's
+radiance clear, because a background claiming the clear colour as motion
+bleeds the history across every silhouette. The gallery gains `taa` and
+`motion-blur`; both documents, no hand-built Rust.
 
 ### N3 — Compute and buffers in documents *(landed, ADR 0041)*
 
@@ -704,8 +742,9 @@ none of it knows or cares which backend is underneath.
 6. ~~**P8**~~ — *landed (ADR 0044)*: contracts, before M8's second pipeline
    shape and before any cross-author exchange is invited.
 7. ~~**N5**~~ — *landed (ADR 0045)*: the bake, over the policy machinery
-   and the effect seam that were already there — then **N2** (motion/TAA),
-   which adds the Velocity stage.
+   and the effect seam that were already there — then ~~**N2**~~ —
+   *landed (ADR 0046)*: the Velocity stage, the previous-frame rows, and
+   the resolve that turns a history ring into antialiasing.
 8. **M8** (peeling) — the largest remaining render feature, and the one
    that wants P8's contracts published first.
 9. **N6** (the subsurface model), **N7** (lighting scale) — feature work

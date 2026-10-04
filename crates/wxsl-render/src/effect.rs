@@ -983,16 +983,16 @@ impl EffectRegistry {
                             ),
                         ))
                         .input(
-                            Socket::new("into", ValueType::ColorTarget).optional().with_doc(
-                                "Where to write. Unconnected means the frame's own target.",
-                            ),
+                            Socket::new("into", ValueType::ColorTarget)
+                                .optional()
+                                .with_doc(
+                                    "Where to write. Unconnected means the frame's own target.",
+                                ),
                         )
-                        .output(
-                            Socket::new("color", ValueType::ColorTarget).with_doc(
-                                "What the effect wrote — the frame's target when \
+                        .output(Socket::new("color", ValueType::ColorTarget).with_doc(
+                            "What the effect wrote — the frame's target when \
                                  `into` is unconnected.",
-                            ),
-                        )
+                        ))
                         .setting(policy_setting());
                         for input in effect.inputs {
                             def = def.input(

@@ -424,7 +424,7 @@ fn demos() -> Vec<Demo> {
             key_intensity: 22.0,
             features: &[],
             sky: None,
-            params: &[("taa", "blend", 0.0)],
+            params: &[],
             material: None,
             // The cube spins, so its velocity is real; the history needs
             // frames behind it before the captured one shows what the
@@ -1225,6 +1225,15 @@ fn swept_transform(time: f32) -> Mat4 {
     Mat4::from_translation(Vec3::new(travel, 0.0, 0.0)) * Mat4::from_rotation_y(time * 1.8)
 }
 
+/// How a frame's cube moves: the demo's motion, if it has one, and the
+/// frame step its previous-frame transform answers for — one bundle so
+/// the draw-list builder stays readable.
+#[derive(Clone, Copy)]
+struct MotionPlan {
+    motion: Option<Motion>,
+    step: f32,
+}
+
 fn cube_draws<'a>(
     mesh: &'a Mesh,
     material: &'a wxsl::render::Material,
@@ -1232,15 +1241,14 @@ fn cube_draws<'a>(
     tints: &'a [InstanceAttributes],
     count: u32,
     time: f32,
-    motion: Option<Motion>,
-    step: f32,
+    plan: MotionPlan,
 ) -> DrawList<'a> {
     (0..count.max(1))
         .map(|index| {
             let offset = index as f32 - (count.max(1) - 1) as f32 * 0.5;
             let place = Mat4::from_translation(Vec3::new(offset * 2.4, 0.0, 0.0));
             let mut item = DrawItem::new(mesh, material)
-                .with_transform(match motion {
+                .with_transform(match plan.motion {
                     Some(motion) => place * (motion.path)(time),
                     None => place * cube_transform(time),
                 })
@@ -1250,8 +1258,8 @@ fn cube_draws<'a>(
             // states it: every other draw stays `None`, which the frame
             // group reads as this frame's own transform — zero motion,
             // and the behaviour every frame had before the row existed.
-            if let Some(motion) = motion {
-                item = item.with_previous(place * (motion.path)((time - step).max(0.0)));
+            if let Some(motion) = plan.motion {
+                item = item.with_previous(place * (motion.path)((time - plan.step).max(0.0)));
             }
             if let Some(tint) = tints.get(index as usize) {
                 item = item.with_attributes(tint);
@@ -1424,8 +1432,10 @@ impl Stage {
             tints,
             instances,
             time,
-            demo.motion,
-            step,
+            MotionPlan {
+                motion: demo.motion,
+                step,
+            },
         );
         self.renderer.render(
             &self.gpu.device,

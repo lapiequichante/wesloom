@@ -439,12 +439,7 @@ impl CameraUniform {
     /// `camera` and mean whichever view the pass named. The previous
     /// frame's halves answer "this view did not move".
     pub fn new(view_proj: Mat4, position: Vec3) -> Self {
-        CameraUniform::new_with_previous(
-            view_proj,
-            view_proj,
-            position,
-            position,
-        )
+        CameraUniform::new_with_previous(view_proj, view_proj, position, position)
     }
 
     /// One point of view, with what it was last frame stated explicitly.

@@ -86,10 +86,14 @@ fn taa_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     // The disocclusion clamp: the history may only claim to be this
     // surface if it survives this frame's own neighbourhood. Min and max
-    // of the 3x3 box, history pulled inside it, and the blend scaled down
-    // by how far outside it landed — the standard AABB rejection, which
-    // trades some long-lived accumulation for never ghosting a thing
-    // that is genuinely gone.
+    // of the 3x3 box, pulled halfway toward the current pixel before the
+    // history is clamped into it — the shrink is what keeps a *changing*
+    // shading field from trailing: at a boundary the raw box is wide
+    // enough to bless almost any old texel, and a surface whose material
+    // turns under it would smear for dozens of frames. Halfway is the
+    // standing compromise — still wide enough to accumulate at the edges
+    // (which is the antialiasing), narrow enough that a changed value
+    // lands outside and is rejected fast.
     var lo = current;
     var hi = current;
     for (var y = -1; y <= 1; y++) {
@@ -102,6 +106,8 @@ fn taa_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             hi = max(hi, neighbour);
         }
     }
+    lo = mix(lo, current, vec3f(0.5));
+    hi = mix(hi, current, vec3f(0.5));
     let clamped = clamp(history, lo, hi);
     let box_size = max(hi - lo, vec3f(1e-3));
     // How far the history sits from what this pixel shows *now*, in box

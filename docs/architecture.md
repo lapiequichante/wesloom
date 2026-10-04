@@ -81,13 +81,18 @@ function nodes `build.rs` derived from the sources).
 
 **`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
 `wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
-`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs,
-outputs and parameters, screen or compute entry points, shader source —
-the registry a pass names into, plan2 P4/P10, ADR 0042; `Effect::from_bake`
-generates one from a material subgraph, ADR 0045), `library`
+`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs —
+with a per-input `history` for the temporal ones — outputs and
+parameters, screen or compute entry points, shader source — the registry
+a pass names into, plan2 P4/P10, ADR 0042; `Effect::from_bake` generates
+one from a material subgraph, ADR 0045; TAA and motion blur ship as
+screen effects whose derived `pass.screen.<effect>` rows carry the
+declaration's sockets, ADR 0046), `library`
 (`ShaderLibrary`),
 `material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
 variant cache), `renderer` (the front end that hides the path switch),
+`draw` (the draw list — each draw's transform *and*, since ADR 0046, its
+previous-frame one),
 `setup` (the capability contract: a setup's published capabilities and the
 device-free check against a scene, ADR 0044), `scene` (camera,
 lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
@@ -209,7 +214,12 @@ workgroup count on the descriptor, storage writes declared as outputs —
 and a compute effect joins the document vocabulary as a
 `pass.compute.<effect>` node whose sockets are its declaration
 ([ADR 0041](adr/0041-compute-and-buffers-join-the-document-vocabulary.md);
-`document_registry` supplies the derived rows). The BRDF-LUT and
+`document_registry` supplies the derived rows). A screen effect whose
+wiring the fixed socket set cannot name — a resolve with two image
+inputs and a history — gets a derived `pass.screen.<effect>` row the
+same way, its sockets the declaration and an input's `history` saying
+which frame it reads
+([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md)). The BRDF-LUT and
 buffer-ramp demos are documents — a `pass.compute` node and, for the
 ramp, a `resource.buffer` both passes wire from. An effect can declare
 **parameters** ([ADR 0042](adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md))
@@ -222,7 +232,8 @@ and nothing recompiles; the variant key folds the layout, never a value.
 `cargo run -p wxsl --example gallery -- --screenshot` renders
 the stock pipelines, the minimal document, the bloom chain (as authored
 and tuned live), the policy/buffer/channel proofs, the bake demo (ADR
-0045) and the fxaa chain side by side.
+0045), the fxaa chain, and the motion pair — the spinning cube under TAA
+and the swept cube under its blur (ADR 0046) — side by side.
 
 A pass also carries a **policy** — `per frame`, `once`, `on resize` or
 `on demand` (plan2 P10). The renderer's frame loop honours it: a pass
@@ -239,6 +250,18 @@ material that samples it, handed to the renderer with
 must be declared before the pass that samples its table: the material's
 sample is a dependency the scheduler cannot see, and declaration order is
 its tie-break.
+
+**Motion** ([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md))
+is a stage like the others: the `velocity` row's vertex entry transforms
+each vertex against this frame's camera and instance row *and* last
+frame's — the frame group carries second copies beside the current ones
+(`BINDING_PREVIOUS_INSTANCES`, `camera.previous_view_proj`), filled by
+the host from each draw's `previous` transform and
+`Environment::previous_camera` — and the fragment writes the interpolated
+difference, uv per frame, `y` down. TAA is the policy'd chain over it: a
+`resource.color` with `history: 1`, the resolve reading its own last
+output through the ring, and the tonemap after. A velocity target clears
+to zero — its empty value is *no motion*, not the frame's radiance.
 
 `RenderGraph::schedule` is a pure function and is tested without a device.
 It orders the passes by what they read and write (never by declaration

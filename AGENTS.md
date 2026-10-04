@@ -184,10 +184,19 @@ facade crate's feature set, not about the workspace.
   matters because a location the two entry points number differently
   compiles fine and draws the wrong thing.
 - `cargo test -p wxsl --test frame_of_reference` — the two ABI flags
-  nothing consumes yet: `wxsl_relative_to_eye` must change no pixel near
-  the origin (an exact equality, because the algebra cancels), and
-  `wxsl_previous_frame` must move every time-driven node back one frame
-  at once.
+  M5 landed while the vertex stage was open: `wxsl_relative_to_eye` must
+  change no pixel near the origin (an exact equality, because the
+  algebra cancels), and `wxsl_previous_frame` must move every
+  time-driven node back one frame at once.
+- `cargo test -p wxsl --test motion` — the velocity stage and its first
+  two consumers on a real device (ADR 0046): the velocity buffer checked
+  against the projection the test computes itself (translation,
+  rotation, and camera motion — `Environment::previous_camera`'s whole
+  point), a still scene converging under the resolve without inventing
+  motion, the spinning cube settling (the resolve's frame-to-frame
+  difference below the raw chain's, while tracking the scene), the
+  swept cube smearing along its own motion, and the chain leaving the
+  lit frame untouched. Skips with no adapter.
 - The geometry tests share `crates/wxsl/tests/probe/mod.rs`, and that is
   the point:
   the computed uniform layout and the computed instance row are the only
@@ -260,8 +269,10 @@ facade crate's feature set, not about the workspace.
   deferred-plus-bloom chain (as authored and again with its parameters
   tuned live, ADR 0042), the policy/buffer/channel proofs
   (BRDF-LUT bake, buffer ramp, subsurface channels), the bake demo (ADR
-  0045), and the fxaa chain (ADR 0040), one PNG each plus a
-  contact sheet, or all of them live in one window without the flag. The
+  0045), the fxaa chain (ADR 0040), and the motion pair — the spinning
+  cube under TAA and the swept cube under its blur (ADR 0046) — one PNG
+  each plus a contact sheet, or all of them live in one window without
+  the flag. The
   fastest way to see whether a *pipeline* change (presets, effects, the
   compiler) still renders — and the working example of composing a
   pipeline as a document from an application.
@@ -328,7 +339,12 @@ facade crate's feature set, not about the workspace.
 - A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
   geometry pass names one. Adding a stage is that row plus the constant
   naming it, plus whatever `codegen::write_entry_points` has to emit for
-  it — not a new arm in every match. `RenderPath` is gone: which pass list
+  it — not a new arm in every match. The `velocity` stage (ADR 0046) is
+  the shape of the exceptions: its fragment reads no surface
+  (`needs_surface` is the material-function question), it carries two
+  extra clip varyings (the builtin arrives in a fragment as framebuffer
+  coordinates), and its target clears to *zero motion*, not the frame's
+  radiance. `RenderPath` is gone: which pass list
   is `StockPipeline`, which variant is `MaterialStage`.
   Anything the scheduler can check — attachment counts, depth formats, a
   resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,
@@ -355,6 +371,18 @@ facade crate's feature set, not about the workspace.
   belongs to the bake alone; and the bake pass is declared **before**
   the pass that samples it, because the material's sample is a
   dependency the scheduler cannot see.
+- **Motion** is a stage plus second copies in the frame group (ADR
+  0046): the `velocity` row transforms every vertex against this
+  frame's camera and instance row and the previous frame's
+  (`BINDING_PREVIOUS_INSTANCES`, `camera.previous_view_proj` — filled
+  by the host from `DrawItem::with_previous` and
+  `Environment::previous_camera`, both "no motion" by default), the
+  graph's vertex partition is evaluated twice through
+  `previous_vertex_context` rather than emitted twice, and a temporal
+  input's `history` lives on the effect's declaration — a screen effect
+  the fixed `pass.screen` cannot wire gets a derived
+  `pass.screen.<effect>` row whose sockets are the declaration, the
+  same mechanism the compute passes use.
 - A **material feature** is a row in `wxsl_core::lighting::FEATURES` plus
   a `.wxsl` module under `shaders/wxsl/features/` (ADR 0037): the second
   source of G-buffer channels, tagged in the collected

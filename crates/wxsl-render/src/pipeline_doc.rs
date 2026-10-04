@@ -1017,13 +1017,11 @@ impl<'a> Compiler<'a> {
                         .and_then(|desc| desc.texture())
                         .map(|shape| match shape {
                             crate::pass::ResourceShape::Texture { format, .. } => *format,
-                            crate::pass::ResourceShape::Buffer { .. } => unreachable!(
-                                "typing only lets a colour target feed an `into`"
-                            ),
+                            crate::pass::ResourceShape::Buffer { .. } => {
+                                unreachable!("typing only lets a colour target feed an `into`")
+                            }
                         });
-                    if format != Some(gbuffer_format(
-                        abi::GBufferPrecision::HighDynamicRangePair,
-                    )) {
+                    if format != Some(gbuffer_format(abi::GBufferPrecision::HighDynamicRangePair)) {
                         return Err(PipelineError::VelocityTargetFormat {
                             node: name,
                             format: format
@@ -1031,8 +1029,16 @@ impl<'a> Compiler<'a> {
                                 .unwrap_or_else(|| "the frame's own target".to_string()),
                         });
                     }
+                    // And an unwritten texel of a velocity target means
+                    // *no motion*, not the frame's radiance clear: a
+                    // background that claimed the clear colour as motion
+                    // would reproject every empty pixel a step sideways
+                    // and bleed the history across silhouettes. The stage
+                    // owns what its output means where nothing drew.
+                    vec![Attachment::clear(wrote, wgpu::Color::TRANSPARENT)]
+                } else {
+                    vec![self.color_attachment(wrote)]
                 }
-                vec![self.color_attachment(wrote)]
             }
             abi::StageOutput::GBuffer => {
                 if color_wired || into_wired {
@@ -2155,10 +2161,10 @@ mod tests {
                 .with_label("velocity")
                 .with_setting(doc::SETTING_STAGE, "velocity"),
         );
-        let taa = graph.add(Node::new(format!("{}wxsl.taa", doc::PASS_SCREEN_PREFIX)).with_label("taa"));
-        let tonemap = graph.add(
-            Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
-        );
+        let taa =
+            graph.add(Node::new(format!("{}wxsl.taa", doc::PASS_SCREEN_PREFIX)).with_label("taa"));
+        let tonemap = graph
+            .add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
             ((scene, "draws"), (material, "draws")),
@@ -2215,8 +2221,10 @@ mod tests {
             .map(|index| ResourceId(index as u32))
             .expect("the history resource exists");
         assert!(
-            resolve.reads.iter().any(|read| read.resource == history_id
-                && read.history == 1),
+            resolve
+                .reads
+                .iter()
+                .any(|read| read.resource == history_id && read.history == 1),
             "the resolve reads its own ring one frame back: {:?}",
             resolve.reads
         );
@@ -2276,18 +2284,14 @@ mod tests {
         let mut graph = wxsl_core::pipeline::document("velocity into 8-bit");
         let scene = graph.add_node(doc::SOURCE_SCENE);
         let depth = graph.add_node(doc::RESOURCE_DEPTH);
-        let material = graph.add(
-            Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "forward_lit"),
-        );
-        let color = graph.add(
-            Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "hdr"),
-        );
-        let velocity = graph.add(
-            Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "standard"),
-        );
-        let motion = graph.add(
-            Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "velocity"),
-        );
+        let material = graph
+            .add(Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "forward_lit"));
+        let color =
+            graph.add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "hdr"));
+        let velocity = graph
+            .add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "standard"));
+        let motion =
+            graph.add(Node::new(doc::PASS_GEOMETRY).with_setting(doc::SETTING_STAGE, "velocity"));
         for (from, to) in [
             ((scene, "draws"), (material, "draws")),
             ((depth, "depth"), (material, "depth")),
@@ -2314,8 +2318,8 @@ mod tests {
         let registry = make_registry();
         let mut graph = wxsl_core::pipeline::document("taa on the fixed set");
         let color = graph.add_node(doc::RESOURCE_COLOR);
-        let taa = graph
-            .add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.taa"));
+        let taa =
+            graph.add(Node::new(doc::PASS_SCREEN).with_setting(doc::SETTING_EFFECT, "wxsl.taa"));
         let present = graph.add_node(doc::PRESENT);
         for (from, to) in [
             ((color, "color"), (taa, "image")),

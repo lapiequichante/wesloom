@@ -332,18 +332,23 @@ pub fn generate(
         && previous_clip_location(&interface.geometry) + 1 >= abi::MAX_VARYING_LOCATIONS as u32
     {
         let output = outputs.surface;
-        return Err(CodegenError::Invalid(GraphErrors(vec![GraphError::WrongStage {
-            node: output,
-            def: graph.node(output).map(|n| n.def.clone()).unwrap_or_default(),
-            output,
-            reason: format!(
-                "the velocity stage needs two more inter-stage locations than \
+        return Err(CodegenError::Invalid(GraphErrors(vec![
+            GraphError::WrongStage {
+                node: output,
+                def: graph
+                    .node(output)
+                    .map(|n| n.def.clone())
+                    .unwrap_or_default(),
+                output,
+                reason: format!(
+                    "the velocity stage needs two more inter-stage locations than \
                  this material's geometry leaves ({} of {} spent), and the \
                  two clip positions have nowhere to ride",
-                previous_clip_location(&interface.geometry),
-                abi::MAX_VARYING_LOCATIONS,
-            ),
-        }])));
+                    previous_clip_location(&interface.geometry),
+                    abi::MAX_VARYING_LOCATIONS,
+                ),
+            },
+        ])));
     }
     let source = emitter.finish(graph, &macros, &parts);
     let source_hash = stable_hash(source.as_bytes());
@@ -1241,14 +1246,8 @@ impl Emitter<'_> {
                     // is stripped, and one arm per stage reads better than
                     // import accounting per shape.
                     self.request_import(abi::VELOCITY_MODULE, abi::VELOCITY_OUT_STRUCT);
-                    self.request_import(
-                        abi::VELOCITY_MODULE,
-                        abi::TRANSFORM_VERTEX_VELOCITY_FN,
-                    );
-                    self.request_import(
-                        abi::VELOCITY_MODULE,
-                        abi::PREVIOUS_CLIP_POSITION_FN,
-                    );
+                    self.request_import(abi::VELOCITY_MODULE, abi::TRANSFORM_VERTEX_VELOCITY_FN);
+                    self.request_import(abi::VELOCITY_MODULE, abi::PREVIOUS_CLIP_POSITION_FN);
                     self.request_import(abi::VELOCITY_MODULE, abi::VELOCITY_CONTEXT_FN);
                     self.request_import(abi::VELOCITY_MODULE, abi::SCREEN_MOTION_FN);
                     if displaces {
@@ -2664,8 +2663,7 @@ mod tests {
         assert!(!source.contains(abi::SHADE_SURFACE_FN), "{source}");
         assert!(!source.contains(abi::PACK_GBUFFER_FN), "{source}");
         assert!(
-            source
-                .contains("import package::wxsl::velocity::"),
+            source.contains("import package::wxsl::velocity::"),
             "the whole velocity ABI comes from its one module: {source}"
         );
     }
