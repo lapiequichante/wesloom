@@ -1,9 +1,21 @@
 # AGENTS.md
 
-Instructions for AI coding agents (and a useful refresher for humans)
-working in this repository. If you're an agent: read this file, then
-`docs/architecture.md`, then the ADR whose number is referenced by the code
-you're about to touch, before writing anything nontrivial.
+Guidance for coding agents working in this repository. Before a non-trivial
+change, read this file, `docs/architecture.md`, and the relevant ADR.
+
+## Working style
+
+- Prefer the smallest change that fully solves the request. Reuse existing
+  modules, APIs, patterns, and tests before adding abstractions or files.
+- Do not refactor, reformat, rename, or “improve” unrelated code. Keep diffs
+  easy to review and preserve existing public behavior unless the request
+  requires a change.
+- Make reasonable assumptions and proceed; ask only when a missing choice
+  would materially change the design or risk data loss.
+- Verify proportionally: run focused tests first, then the relevant broader
+  checks. Do not skip validation merely to keep the diff small.
+- Keep explanations and comments concise. Document decisions and invariants,
+  not obvious mechanics. Update an ADR only when the design decision changes.
 
 ## What this repo is
 
@@ -33,7 +45,8 @@ version:
 | Crate | Depends on | Needs GUI toolkit? | Needs wgpu? |
 |---|---|---|---|
 | `wxsl-core` | nothing in-workspace | no | no |
-| `wxsl-render` | `wxsl-core` | no | yes |
+| `wxsl-frame` | `wxsl-core` | no | no (ADR 0048) |
+| `wxsl-render` | `wxsl-core`, `wxsl-frame`, `wxsl-lang` | no | yes |
 | `wxsl-editor` | `wxsl-core`, `wxsl-render`, `wxsl-lang` | no toolkit — it draws itself | yes (ADR 0013) |
 | `wxsl-stdlib` | `wxsl-core` (plus `wxsl-lang` at build time only) | no | no |
 | `wxsl` (facade) | all of the above, behind features | never | via `render`/`editor` features |
@@ -100,6 +113,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo check -p wxsl --no-default-features        # graph model only: no wgpu, no GUI
+cargo check -p wxsl-frame --all-targets         # shared plans: no GPU/WXSL compiler
+cargo tree -p wxsl-frame -e normal             # only wxsl-core in-workspace; no wgpu/GUI
 cargo tree -p wxsl --no-default-features -e normal | grep -E 'wgpu|winit|egui'  # must print nothing
 ```
 
@@ -113,7 +128,27 @@ considering a change to the crate/feature boundaries finished. Note that
 `wgpu` dependency is not optional — the "no wgpu" guarantee is about the
 facade crate's feature set, not about the workspace.
 
-### What the tests cover
+### Test routing
+
+Use the narrowest relevant check while iterating, then run the full checks
+needed by the changed boundary. The commands below are a reference map, not
+a requirement to run every test for every change:
+
+- graph, typing, codegen, documents: `cargo test -p wxsl-core`
+- scheduling, presets, effects, capabilities and frame layouts: `cargo test -p wxsl-frame`
+- stdlib or generated shader sources: `cargo test -p wxsl-stdlib --test lighting_models`
+- wgpu adapters, shader variants and renderer UI: `cargo test -p wxsl-render`
+- WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
+- editor/UI behavior: `cargo test -p wxsl --features editor --test editor_frame`
+- visual/pipeline smoke test: `cargo run -p wxsl --example pbr_cube -- --headless`
+
+GPU tests may skip when no adapter is available; a skip is not evidence that
+the GPU path passed. Changes to shared layouts or ABI tables deserve both a
+focused test and the relevant integration/render test.
+
+The detailed coverage notes below are useful for choosing a test, but should
+not be expanded casually when new tests are added; keep this file about
+routing and invariants.
 
 - `cargo test -p wxsl-core` — the graph model: typing, cycle rejection,
   validation, codegen, macro precedence, stage analysis, and the pipeline
@@ -213,7 +248,7 @@ facade crate's feature set, not about the workspace.
   trips through its JSON form, that a tag expression selects what a pass
   draws, and that a two-instance scene renders. Only the last needs a
   device.
-- `cargo test -p wxsl-render` — the render graph's scheduling, which is a
+- `cargo test -p wxsl-frame` — the render graph's scheduling, which is a
   pure function and needs no GPU: pass ordering, transient texture reuse,
   history rotation, buffer resources ordering without ever aliasing, the
   policy stable-storage rule, and every pass-list mistake that is reported as a named
@@ -295,6 +330,10 @@ facade crate's feature set, not about the workspace.
   justify it in the PR description and keep the unsafe block minimal.
 - Keep `wxsl-core` free of `wgpu` and GUI-toolkit dependencies, full
   stop — that boundary is the reason the crate exists.
+- `wxsl-frame` has the same device-free boundary and depends only on
+  `wxsl-core` within the workspace. It owns neutral frame descriptions,
+  scheduling, pipeline compilation, presets, capabilities and environment
+  data. `wxsl-render` adapts these to wgpu and re-exports shared APIs.
 - New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
   (see that directory's `README.md` for the category layout, the originality
   rule, and the authoring rules that keep a function reachable from a
@@ -304,13 +343,13 @@ facade crate's feature set, not about the workspace.
   its own trailing `// … @default <value>`.
 - The shader ABI has two halves that must be edited together:
   `wxsl_core::abi`'s tables and `crates/wxsl-stdlib/shaders/wxsl/`.
-  Same for the uniform layouts: `wxsl_render::environment`'s `#[repr(C)]`
+  Same for the uniform layouts: `wxsl_frame::environment`'s `#[repr(C)]`
   structs mirror `shaders/wxsl/bindings.wxsl`. See ADR 0008 and ADR 0021.
 - A pipeline is **data**: a list of `wxsl_render::pass::PassDesc` over a set
   of `ResourceDesc`, run by `wxsl_render::graph` (ADR 0021). Adding a pass
   means building one more `PassDesc`, never writing `begin_render_pass`.
   Since ADR 0033 the two *stock* pipelines are preset documents
-  (`crates/wxsl-render/assets/presets/*.pipeline.json`) over the pipeline
+  (`crates/wxsl-frame/assets/presets/*.pipeline.json`) over the pipeline
   node registry (`wxsl_core::pipeline`), compiled by
   `wxsl_render::pipeline_doc` — never edit generated pass lists in Rust;
   the hand-built `forward_graph`/`deferred_graph` are the reference the
@@ -322,10 +361,10 @@ facade crate's feature set, not about the workspace.
   its palette as a `pass.screen` row with the `effect` preset, never as a
   derived node.
 - An **effect** is data (ADR 0034, extended to compute by ADR 0035): a
-  `wxsl_render::effect::Effect` row — declared inputs and outputs in
+  `wxsl_frame::effect::Effect` row (re-exported by `wxsl-render`) — declared inputs and outputs in
   pass-group binding order, screen or compute entry points, and its
   shader (generated, or a `.wxsl` file the effect owns, like
-  `crates/wxsl-render/shaders/bloom.wxsl`). A pass names it by id; the
+  `crates/wxsl-frame/shaders/bloom.wxsl`). A pass names it by id; the
   compiler validates wiring against `inputs`, and the descriptor-vs-shader
   contract (bindings, entries) is pinned by tests in `effect.rs`. Adding
   an effect is a row and a file, never a `PassKind` arm — `ScreenShader`
@@ -487,16 +526,13 @@ facade crate's feature set, not about the workspace.
   scene document, as `pbr_cube.wxsl.json` is for the node format.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it. The pipeline documents under
-  `crates/wxsl-render/assets/presets/` are the same format over the
+  `crates/wxsl-frame/assets/presets/` are the same format over the
   pipeline registry — read `deferred.pipeline.json` next to it to see
   both.
 - `docs/architecture.md` — crate graph, data flow, the forward/deferred
   shader-switching design, macro variables, feature-flag matrix.
-- `plan.md` → `plan2.md` → `plan3.md` — the planning chain: what landed
-  and why, and — in plan3 — the queue of everything still open (the
-  screen domain, the pipeline canvas, the contracts, and the deferred
-  halves ADRs 0034–0037 named). Check the newest plan before starting
-  any feature-sized work.
+- `plan.md` → `plan2.md` → `plan3.md` → `plan4.md` — the planning chain and
+  current queue. Check the newest plan before starting feature-sized work.
 - `docs/adr/` — the decision log. Start at `docs/adr/README.md`.
 - `docs/glossary.md` — terms (WXSL vs WGSL, node graph vs render graph,
   forward vs deferred, etc.) used without re-explanation elsewhere.

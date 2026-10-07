@@ -162,7 +162,7 @@ impl Renderer {
             variants: ShaderVariants::new(),
             pipelines: PipelineCache::new(),
             pool,
-            graph,
+            graph: graph.into(),
             schedule,
             stock: Some(stock),
             swap: None,
@@ -496,7 +496,8 @@ impl Renderer {
     ///
     /// Validated immediately: a pass list that cannot be ordered is an
     /// error here rather than a `wgpu` complaint mid-frame.
-    pub fn set_graph(&mut self, graph: RenderGraph) -> Result<(), RenderError> {
+    pub fn set_graph(&mut self, graph: impl Into<RenderGraph>) -> Result<(), RenderError> {
+        let graph = graph.into();
         self.schedule = graph.schedule()?;
         self.graph = graph;
         self.stock = None;
@@ -507,7 +508,7 @@ impl Renderer {
 
     fn rebuild(&mut self) {
         let Some(stock) = self.stock else { return };
-        self.graph = stock.graph(&self.config);
+        self.graph = stock.graph(&self.config).into();
         self.schedule = self
             .graph
             .schedule()
@@ -532,16 +533,16 @@ impl Renderer {
         materials: &[&Material],
     ) -> Result<(), RenderError> {
         let graph = pipeline.graph(&self.config);
-        self.request_graph_inner(graph, Some(pipeline), materials)
+        self.request_graph_inner(graph.into(), Some(pipeline), materials)
     }
 
     /// The same, for a pass list an application built itself.
     pub fn request_graph(
         &mut self,
-        graph: RenderGraph,
+        graph: impl Into<RenderGraph>,
         materials: &[&Material],
     ) -> Result<(), RenderError> {
-        self.request_graph_inner(graph, None, materials)
+        self.request_graph_inner(graph.into(), None, materials)
     }
 
     fn request_graph_inner(
@@ -723,19 +724,19 @@ impl Renderer {
 
     /// The current target size and format.
     pub fn target(&self) -> TargetConfig {
-        self.config.target
+        self.config.target.into()
     }
 
     /// Resize the render targets.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.config.target = TargetConfig {
+        self.config.target = wxsl_frame::pipeline::TargetConfig {
             width: width.max(1),
             height: height.max(1),
             ..self.config.target
         };
         self.rebuild();
         self.pool
-            .configure(device, &self.schedule, self.config.target);
+            .configure(device, &self.schedule, self.config.target.into());
     }
 
     /// The shader library imports are resolved against.
@@ -995,7 +996,7 @@ impl Renderer {
             }
         }
         self.pool
-            .configure(device, &self.schedule, self.config.target);
+            .configure(device, &self.schedule, self.config.target.into());
         // After the pool, because this is the one resource read from
         // outside the pass list: the frame group binds it, so the renderer
         // is what carries the view across (`abi::BINDING_SHADOW_MAPS`).
@@ -1359,7 +1360,7 @@ fn record_pass(
                         item.mesh.draw_instances(render, *instance..*instance + 1);
                     }
                     DrawSource::Indirect {
-                        buffer,
+                        buffer: _,
                         offset,
                         count,
                         ..
@@ -1370,7 +1371,12 @@ fn record_pass(
                         // is the same, not that it is already optimal.
                         item.mesh.bind(render);
                         for record in 0..u64::from(*count) {
-                            render.draw_indexed_indirect(buffer, offset + record * 20);
+                            render.draw_indexed_indirect(
+                                pass.indirect_buffer
+                                    .as_ref()
+                                    .expect("record resolved the indirect buffer"),
+                                offset + record * 20,
+                            );
                         }
                     }
                 }

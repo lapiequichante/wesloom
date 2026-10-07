@@ -1,856 +1,61 @@
-//! The render graph: a list of [`PassDesc`]s in, a recorded frame out.
-//!
-//! A pipeline is no longer a Rust struct that writes `begin_render_pass` by
-//! hand — it is a [`RenderGraph`], and this module is the engine that runs
-//! one ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
-//! It has exactly three jobs:
-//!
-//! 1. **Order the passes.** A pass that reads what another wrote runs after
-//!    it. Reading *history* creates no edge, which is what lets a temporal
-//!    pass read last frame's output without a cycle.
-//! 2. **Allocate the resources.** A transient target is created at its first
-//!    write and its texture is free for reuse after its last read; a
-//!    persistent one gets a ring so this frame's write does not destroy what
-//!    last frame's read needs.
-//! 3. **Record.** Resolve attachments to views, build the pass bind group,
-//!    begin the pass, and hand it to the caller to issue draws into.
-//!
-//! The first two are pure functions over data — [`RenderGraph::schedule`]
-//! needs no device and is tested without one, which matters because CI has
-//! no GPU.
-//!
-//! ```text
-//!   RenderGraph ──schedule──> Schedule ──configure──> ResourcePool
-//!   (passes and                (order,                 (the textures)
-//!    resource descs)            slot per resource)          │
-//!                                     └────── record ───────┘
-//! ```
-
-use std::collections::HashMap;
-use std::fmt;
+//! wgpu resource allocation and recording for shared frame plans (ADR 0048).
 
 use crate::error::RenderError;
 use crate::pass::{
-    Attachment, DepthAttachment, Dimension, Extent, Load, PassDesc, PassKind, Persistence, Policy,
-    ResourceDesc, ResourceId, ResourceShape,
+    Attachment, DepthAttachment, Load, PassDesc, PassKind, ResourceId, ResourceShape,
 };
 use crate::pipeline::TargetConfig;
+use crate::types::{texture_dimension, view_dimension, WgpuType};
+use std::collections::HashMap;
 use wxsl_core::abi;
 
-/// A pipeline, as a list of passes over a set of resources.
+pub use wxsl_frame::graph::{Allocation, GraphError, Schedule, SlotDesc, SlotShape};
+
+/// A shared frame plan with wgpu recording operations.
 #[derive(Clone, Debug)]
-pub struct RenderGraph {
-    resources: Vec<ResourceDesc>,
-    passes: Vec<PassDesc>,
-    shadow_maps: Option<ResourceId>,
-    /// The G-buffer layout this graph's `gbuffer`-stage passes are built
-    /// for: what the scheduler checks a material pass's attachment count
-    /// against. The base targets unless the graph says otherwise — see
-    /// `RenderGraph::with_gbuffer_layout`, which a pipeline built from a
-    /// lighting-model set calls
-    /// (`wxsl_core::lighting::LightingSet::gbuffer_layout`).
-    gbuffer_layout: Vec<abi::GBufferTarget>,
-}
+pub struct RenderGraph(wxsl_frame::graph::RenderGraph);
 
 impl RenderGraph {
-    /// The frame's own target, which every graph has and nobody allocates.
-    pub const TARGET: ResourceId = ResourceId(0);
+    /// The caller-supplied frame target.
+    pub const TARGET: ResourceId = wxsl_frame::graph::RenderGraph::TARGET;
 
-    /// An empty graph whose target is in `format`.
+    /// An empty graph using the native target format.
     pub fn new(format: wgpu::TextureFormat) -> Self {
-        RenderGraph {
-            resources: vec![ResourceDesc::imported("target", format)],
-            passes: Vec::new(),
-            shadow_maps: None,
-            gbuffer_layout: abi::GBUFFER_BASE_TARGETS.to_vec(),
-        }
+        Self(wxsl_frame::graph::RenderGraph::new(
+            wxsl_frame::types::TextureFormat::from_wgpu(format),
+        ))
     }
 
-    /// Look up a resource description.
-    pub fn resource_desc(&self, id: ResourceId) -> Option<&ResourceDesc> {
-        self.resources.get(id.index())
-    }
-
-    /// Make `resource` stable storage: persistent, keeping no history.
-    ///
-    /// What a pass whose policy is not `per frame` needs its target to be
-    /// (plan2 P10) — the scheduler rejects anything less, because a
-    /// transient's slot is reused within a frame and an off-frame read of
-    /// a rotating ring is of some other frame's bake. The pipeline
-    /// compiler calls this when a policy'd pass writes a chain's colour
-    /// target: documents carry less than pass lists on purpose, and this
-    /// is a derivation, not a new knob.
-    pub fn make_stable_storage(&mut self, resource: ResourceId) {
-        if let Some(desc) = self.resources.get_mut(resource.index()) {
-            desc.persistence = Persistence::Persistent { history: 0 };
-        }
-    }
-    ///
-    /// Without this, a `gbuffer`-stage pass is checked against the ABI's
-    /// base targets; with it, against exactly what the enabled set
-    /// requests — which is what keeps the scheduler's target-count check
-    /// exact once that count stops being fixed.
-    pub fn with_gbuffer_layout(mut self, layout: Vec<abi::GBufferTarget>) -> Self {
-        self.gbuffer_layout = layout;
-        self
-    }
-
-    /// The G-buffer layout this graph was built for.
-    pub fn gbuffer_layout(&self) -> &[abi::GBufferTarget] {
-        &self.gbuffer_layout
-    }
-
-    /// Declare a resource, returning the id passes refer to it by.
-    pub fn resource(&mut self, desc: ResourceDesc) -> ResourceId {
-        self.resources.push(desc);
-        ResourceId(self.resources.len() as u32 - 1)
-    }
-
-    /// Add a pass. Declaration order is only a tie-break: the schedule
-    /// orders passes by what they read and write.
-    pub fn pass(&mut self, desc: PassDesc) -> &mut Self {
-        self.passes.push(desc);
-        self
-    }
-
-    /// The declared resources, indexed by [`ResourceId::index`].
-    pub fn resources(&self) -> &[ResourceDesc] {
-        &self.resources
-    }
-
-    /// The resource labelled `label`, if one is declared.
-    ///
-    /// How the renderer matches a host-supplied view to the imported
-    /// resource it is a view *of* — by name, the same name the scene's
-    /// bake declaration and the pipeline's `resource.color` agree on.
-    pub fn resource_by_label(&self, label: &str) -> Option<ResourceId> {
-        self.resources
-            .iter()
-            .position(|desc| desc.label == label)
-            .map(|index| ResourceId(index as u32))
-    }
-
-    /// The passes, in declaration order.
-    pub fn passes(&self) -> &[PassDesc] {
-        &self.passes
-    }
-
-    /// Declare `desc` as the graph's shadow maps: the layered depth texture
-    /// the renderer binds into the frame group.
-    ///
-    /// Named rather than inferred, because this is the one resource read
-    /// from *outside* the graph. Every other read is a
-    /// [`crate::pass::Read`] and therefore an ordering edge and a usage
-    /// flag; this one is bound beside the camera and the lights, where a
-    /// pass list has no say (`abi::BINDING_SHADOW_MAPS`). The shadow passes
-    /// still order correctly because nothing else writes the resource and
-    /// declaration order is the tie-break.
-    pub fn declare_shadow_maps(&mut self, desc: ResourceDesc) -> ResourceId {
-        let id = self.resource(desc);
-        self.shadow_maps = Some(id);
-        id
-    }
-
-    /// The shadow maps, if this pipeline has any.
-    pub fn shadow_maps(&self) -> Option<ResourceId> {
-        self.shadow_maps
-    }
-
-    /// Order the passes, validate them, and decide which physical texture
-    /// serves each resource.
-    ///
-    /// Pure: no device, no allocation of anything but memory. Everything
-    /// that can be wrong with a pass list is wrong here rather than as a
-    /// `wgpu` validation error three layers down.
-    pub fn schedule(&self) -> Result<Schedule, GraphError> {
-        self.validate()?;
-        let order = self.topological_order()?;
-        Ok(self.allocate(order))
-    }
-
-    /// Everything checkable about a pass list before a device sees it.
-    fn validate(&self) -> Result<(), GraphError> {
-        for pass in &self.passes {
-            for id in pass.written().chain(pass.reads.iter().map(|r| r.resource)) {
-                if id.index() >= self.resources.len() {
-                    return Err(GraphError::UnknownResource {
-                        pass: pass.label.clone(),
-                        resource: id,
-                    });
-                }
-            }
-
-            // Attachments are texture writes: a buffer in a colour or
-            // depth slot is a shape mistake, and naming it here beats a
-            // bind-group complaint three layers down (plan2 P11).
-            for id in pass
-                .color
-                .iter()
-                .map(|attachment| attachment.resource)
-                .chain(pass.depth.iter().map(|depth| depth.resource))
-            {
-                if self
-                    .resources
-                    .get(id.index())
-                    .is_some_and(|desc| desc.texture().is_none())
-                {
-                    return Err(GraphError::AttachmentNotATexture {
-                        pass: pass.label.clone(),
-                        resource: self.resources[id.index()].label.clone(),
-                    });
-                }
-            }
-
-            // A pass writing three colour targets needs a shader that
-            // returns three. This is the one mismatch `wgpu` reports as an
-            // entry-point signature error with no mention of the pass.
-            if let Some(expected) = expected_color_targets(&pass.kind, self) {
-                if pass.color.len() != expected {
-                    return Err(GraphError::WrongColorTargetCount {
-                        pass: pass.label.clone(),
-                        expected,
-                        found: pass.color.len(),
-                    });
-                }
-            }
-
-            // The depth format is in the pipeline state, so a pass whose
-            // attachment disagrees with it builds a pipeline that cannot be
-            // used with its own render pass.
-            let attached = pass
-                .depth
-                .and_then(|depth| self.resources.get(depth.resource.index()))
-                .map(|desc| {
-                    desc.texture().map(|shape| {
-                        let ResourceShape::Texture { format, .. } = shape else {
-                            unreachable!("texture() answers only textures")
-                        };
-                        *format
-                    })
-                });
-            if attached.flatten() != pass.state.depth_format {
-                return Err(GraphError::DepthFormatMismatch {
-                    pass: pass.label.clone(),
-                    attached: attached.flatten(),
-                    state: pass.state.depth_format,
-                });
-            }
-
-            for read in &pass.reads {
-                let desc = &self.resources[read.resource.index()];
-                // Sampling a texture the same pass is drawing into is a
-                // read-write hazard, and `wgpu` reports it as a bind group
-                // error with no mention of the attachment. Loading an
-                // attachment is the legitimate way to read what is already
-                // there; this is not.
-                if read.history == 0 && pass.written().any(|id| id == read.resource) {
-                    return Err(GraphError::ReadsWhatItWrites {
-                        pass: pass.label.clone(),
-                        resource: desc.label.clone(),
-                    });
-                }
-                let depth = read.history as usize;
-                if depth >= desc.persistence.ring_length() {
-                    return Err(GraphError::NoSuchHistory {
-                        pass: pass.label.clone(),
-                        resource: desc.label.clone(),
-                        history: read.history,
-                        available: desc.persistence.ring_length() as u32 - 1,
-                    });
-                }
-            }
-
-            // A pass that does not run every frame must write only stable
-            // storage: a transient's texture is free for reuse within the
-            // frame, so its contents would be undefined on every frame the
-            // pass skips — and the frame's own target is re-presented every
-            // frame by definition. With this, *skipping* is safe: whatever
-            // the pass last wrote is exactly what a later pass reads.
-            if pass.policy != Policy::PerFrame {
-                for id in pass.written() {
-                    let desc = &self.resources[id.index()];
-                    // An imported resource *other than the frame's own
-                    // target* is stable in the strongest sense the rule is
-                    // about: nobody here can reallocate it. The host owns
-                    // the texture (a bake table most of all), so a skipped
-                    // pass leaves its last write on a texture that cannot
-                    // have moved — the rule's purpose holds by ownership
-                    // rather than by the pool's ring. The target is
-                    // imported too, but it is re-presented every frame by
-                    // definition and is the frame's, not the host's.
-                    let stable = (desc.imported && id != RenderGraph::TARGET)
-                        || matches!(desc.persistence, Persistence::Persistent { history: 0 });
-                    if !stable {
-                        return Err(GraphError::PolicyNeedsStableStorage {
-                            pass: pass.label.clone(),
-                            resource: desc.label.clone(),
-                            policy: pass.policy,
-                            imported: desc.imported,
-                        });
-                    }
-                }
-            }
-        }
-
-        // Every resource read this frame must have been written this frame,
-        // unless it is imported (someone else wrote it) or persistent (the
-        // ring holds what an earlier frame wrote).
-        let mut written = vec![false; self.resources.len()];
-        for pass in &self.passes {
-            for id in pass.written() {
-                written[id.index()] = true;
-            }
-        }
-        for pass in &self.passes {
-            for id in pass.read_this_frame() {
-                let desc = &self.resources[id.index()];
-                if !written[id.index()] && !desc.imported {
-                    return Err(GraphError::NeverWritten {
-                        pass: pass.label.clone(),
-                        resource: desc.label.clone(),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Kahn's algorithm over write-before-read edges, with declaration
-    /// order as the tie-break so a graph that needs no reordering keeps the
-    /// order it was written in.
-    ///
-    /// The edges come from the resources, not from the order the passes
-    /// were declared in: a pass list written back to front schedules the
-    /// same as one written front to back, which is the entire point of
-    /// describing a pipeline rather than sequencing it.
-    fn topological_order(&self) -> Result<Vec<usize>, GraphError> {
-        let count = self.passes.len();
-        let mut edges: Vec<Vec<usize>> = vec![Vec::new(); count];
-        let mut incoming = vec![0usize; count];
-        let mut connect = |from: usize, to: usize, edges: &mut Vec<Vec<usize>>| {
-            if from != to && !edges[from].contains(&to) {
-                edges[from].push(to);
-                incoming[to] += 1;
-            }
-        };
-
-        let mut writers: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (index, pass) in self.passes.iter().enumerate() {
-            for id in pass.written() {
-                writers.entry(id.index()).or_default().push(index);
-            }
-        }
-        // A reader runs after every writer of what it reads.
-        for (index, pass) in self.passes.iter().enumerate() {
-            for id in pass.read_this_frame() {
-                for writer in writers.get(&id.index()).into_iter().flatten() {
-                    connect(*writer, index, &mut edges);
-                }
-            }
-        }
-        // Two passes writing the same resource keep their declared order,
-        // which is what makes "clear it, then draw more into it" mean what
-        // it looks like.
-        for chain in writers.values() {
-            for pair in chain.windows(2) {
-                connect(pair[0], pair[1], &mut edges);
-            }
-        }
-
-        let mut ready: Vec<usize> = (0..count).filter(|index| incoming[*index] == 0).collect();
-        let mut order = Vec::with_capacity(count);
-        while !ready.is_empty() {
-            // Lowest declaration index first, so the order is deterministic.
-            let position = ready
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, pass)| **pass)
-                .map(|(position, _)| position)
-                .expect("ready is not empty");
-            let pass = ready.remove(position);
-            order.push(pass);
-            for &next in &edges[pass] {
-                incoming[next] -= 1;
-                if incoming[next] == 0 {
-                    ready.push(next);
-                }
-            }
-        }
-
-        if order.len() != count {
-            let stuck = (0..count)
-                .find(|index| !order.contains(index))
-                .expect("a pass is missing");
-            return Err(GraphError::Cycle {
-                pass: self.passes[stuck].label.clone(),
-            });
-        }
-        Ok(order)
-    }
-
-    /// Assign a physical slot to every resource, reusing a transient's
-    /// texture once its last reader has run.
-    fn allocate(&self, order: Vec<usize>) -> Schedule {
-        // Position in `order` of each pass, so a lifetime is an interval.
-        let mut position = vec![0usize; self.passes.len()];
-        for (step, pass) in order.iter().enumerate() {
-            position[*pass] = step;
-        }
-
-        let mut usage = vec![wgpu::TextureUsages::empty(); self.resources.len()];
-        let mut buffer_usage = vec![wgpu::BufferUsages::empty(); self.resources.len()];
-        let mut first = vec![usize::MAX; self.resources.len()];
-        let mut last = vec![0usize; self.resources.len()];
-        let mut used = vec![false; self.resources.len()];
-        let touch = |resource: ResourceId,
-                     step: usize,
-                     used: &mut Vec<bool>,
-                     first: &mut Vec<usize>,
-                     last: &mut Vec<usize>| {
-            let index = resource.index();
-            if !used[index] {
-                used[index] = true;
-                first[index] = step;
-            }
-            first[index] = first[index].min(step);
-            last[index] = last[index].max(step);
-        };
-
-        // Which usage a touch infers depends on what the resource is: a
-        // read of a texture binds it as a sampled texture, a read of a
-        // buffer as storage — the pass group decides at record time.
-        for (pass_index, pass) in self.passes.iter().enumerate() {
-            let step = position[pass_index];
-            for attachment in &pass.color {
-                usage[attachment.resource.index()] |= wgpu::TextureUsages::RENDER_ATTACHMENT;
-                touch(attachment.resource, step, &mut used, &mut first, &mut last);
-            }
-            if let Some(depth) = pass.depth {
-                usage[depth.resource.index()] |= wgpu::TextureUsages::RENDER_ATTACHMENT;
-                touch(depth.resource, step, &mut used, &mut first, &mut last);
-            }
-            for read in &pass.reads {
-                match self.resources[read.resource.index()].shape {
-                    ResourceShape::Texture { .. } => {
-                        usage[read.resource.index()] |= wgpu::TextureUsages::TEXTURE_BINDING;
-                    }
-                    ResourceShape::Buffer { .. } => {
-                        buffer_usage[read.resource.index()] |= wgpu::BufferUsages::STORAGE;
-                    }
-                }
-                touch(read.resource, step, &mut used, &mut first, &mut last);
-            }
-            for write in &pass.writes {
-                match self.resources[write.index()].shape {
-                    ResourceShape::Texture { .. } => {
-                        usage[write.index()] |= wgpu::TextureUsages::STORAGE_BINDING;
-                    }
-                    ResourceShape::Buffer { .. } => {
-                        buffer_usage[write.index()] |= wgpu::BufferUsages::STORAGE;
-                    }
-                }
-                touch(*write, step, &mut used, &mut first, &mut last);
-            }
-        }
-
-        let mut slots: Vec<SlotDesc> = Vec::new();
-        let mut slot_free_after: Vec<usize> = Vec::new();
-        let mut allocations = vec![Allocation::Imported; self.resources.len()];
-
-        // Resources in order of first use, so a greedy assignment sees a
-        // slot's whole lifetime before deciding whether to reuse it.
-        let mut candidates: Vec<usize> = (0..self.resources.len())
-            .filter(|index| used[*index] && !self.resources[*index].imported)
-            .collect();
-        candidates.sort_by_key(|index| (first[*index], *index));
-
-        for index in candidates {
-            let desc = &self.resources[index];
-            let slot_desc = SlotDesc {
-                label: desc.label.clone(),
-                shape: match desc.shape {
-                    ResourceShape::Texture {
-                        extent,
-                        dimension,
-                        layers,
-                        format,
-                        usage: extra,
-                    } => SlotShape::Texture {
-                        extent,
-                        dimension,
-                        layers,
-                        format,
-                        usage: usage[index] | extra,
-                    },
-                    ResourceShape::Buffer { size, usage: extra } => SlotShape::Buffer {
-                        size,
-                        usage: buffer_usage[index] | extra,
-                    },
-                },
-            };
-            let length = desc.persistence.ring_length();
-            if desc.persistence == Persistence::Transient && desc.texture().is_some() {
-                // Reuse a compatible slot whose last reader has already run.
-                let reusable = slots.iter().enumerate().position(|(slot, existing)| {
-                    slot_free_after[slot] < first[index] && existing.aliasable_with(&slot_desc)
-                });
-                if let Some(slot) = reusable {
-                    slot_free_after[slot] = last[index];
-                    // The union of usages, so a texture reused as a sampled
-                    // target is created with both flags.
-                    if let (
-                        SlotShape::Texture {
-                            usage: existing, ..
-                        },
-                        SlotShape::Texture { usage: extra, .. },
-                    ) = (&mut slots[slot].shape, &slot_desc.shape)
-                    {
-                        *existing |= *extra;
-                    }
-                    allocations[index] = Allocation::Ring {
-                        base: slot,
-                        length: 1,
-                    };
-                    continue;
-                }
-            }
-            let base = slots.len();
-            for ring in 0..length {
-                let mut entry = slot_desc.clone();
-                if length > 1 {
-                    entry.label = format!("{} [{ring}]", slot_desc.label);
-                }
-                slots.push(entry);
-                // A persistent slot is never free for anything else — a
-                // ring of one included. `Persistent { history: 0 }` is how
-                // a resource says "somebody outside the pass list holds a
-                // view of me", and handing its texture to a later transient
-                // would rebind that view to someone else's contents.
-                let transient = desc.persistence == Persistence::Transient;
-                slot_free_after.push(if transient { last[index] } else { usize::MAX });
-            }
-            allocations[index] = Allocation::Ring { base, length };
-        }
-
-        Schedule {
-            order,
-            allocations,
-            slots,
-        }
+    /// Set the layout the geometry pass is checked against.
+    pub fn with_gbuffer_layout(self, layout: Vec<abi::GBufferTarget>) -> Self {
+        Self(self.0.with_gbuffer_layout(layout))
     }
 }
 
-/// How many colour targets a pass of this kind must have, or `None` when
-/// the kind does not constrain it.
-///
-/// For a geometry pass this comes straight from the stage table: a stage
-/// that returns a G-buffer needs one attachment per G-buffer target, and a
-/// depth-only stage needs none.
-fn expected_color_targets(kind: &PassKind, graph: &RenderGraph) -> Option<usize> {
-    match kind {
-        PassKind::Geometry { stage, .. } => Some(match stage.output() {
-            // A G-buffer pass writes what the *enabled set* requested, not
-            // the fixed base count the stage's own row names.
-            abi::StageOutput::GBuffer => graph.gbuffer_layout.len(),
-            _ => stage.color_targets(),
-        }),
-        PassKind::Screen { .. } => Some(1),
-        PassKind::Compute { .. } => Some(0),
+impl From<wxsl_frame::graph::RenderGraph> for RenderGraph {
+    fn from(graph: wxsl_frame::graph::RenderGraph) -> Self {
+        Self(graph)
     }
 }
 
-/// Where a resource's contents actually live.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Allocation {
-    /// Supplied by the caller each frame; the graph allocates nothing.
-    Imported,
-    /// `length` physical slots starting at `base`, rotated once per frame.
-    /// A transient is the degenerate case, `length == 1`, and may share its
-    /// slot with any other transient whose lifetime does not overlap.
-    Ring {
-        /// Index of the first slot.
-        base: usize,
-        /// How many slots the ring holds.
-        length: usize,
-    },
-}
-
-/// One physical resource the pool has to create.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SlotDesc {
-    /// Label for the `wgpu` texture or buffer.
-    pub label: String,
-    /// What it is made of, with every usage any resource in the slot
-    /// needs.
-    pub shape: SlotShape,
-}
-
-/// The make-up of one physical slot: the pool's mirror of
-/// [`ResourceShape`], with the inferred and declared usages unioned.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SlotShape {
-    /// A texture.
-    Texture {
-        /// Size.
-        extent: Extent,
-        /// Shape.
-        dimension: Dimension,
-        /// Layers, faces or depth.
-        layers: u32,
-        /// Texel format.
-        format: wgpu::TextureFormat,
-        /// Every usage any resource in this slot needs.
-        usage: wgpu::TextureUsages,
-    },
-    /// A storage buffer.
-    Buffer {
-        /// Size in bytes.
-        size: u64,
-        /// Every usage any resource in this slot needs.
-        usage: wgpu::BufferUsages,
-    },
-}
-
-impl SlotDesc {
-    fn aliasable_with(&self, other: &SlotDesc) -> bool {
-        match (&self.shape, &other.shape) {
-            (
-                SlotShape::Texture {
-                    extent: a,
-                    dimension: ad,
-                    layers: al,
-                    format: af,
-                    ..
-                },
-                SlotShape::Texture {
-                    extent: b,
-                    dimension: bd,
-                    layers: bl,
-                    format: bf,
-                    ..
-                },
-            ) => a == b && ad == bd && al == bl && af == bf,
-            _ => false,
-        }
+impl From<RenderGraph> for wxsl_frame::graph::RenderGraph {
+    fn from(graph: RenderGraph) -> Self {
+        graph.0
     }
 }
 
-/// A validated, ordered, allocated plan for one graph.
-///
-/// Computed once per graph rather than once per frame: nothing in it
-/// depends on the frame number or the target size, which is exactly why it
-/// can be tested with no device.
-#[derive(Clone, Debug)]
-pub struct Schedule {
-    order: Vec<usize>,
-    allocations: Vec<Allocation>,
-    slots: Vec<SlotDesc>,
-}
-
-impl Schedule {
-    /// The passes, in the order they will be recorded.
-    pub fn order(&self) -> &[usize] {
-        &self.order
-    }
-
-    /// The physical textures the pool must create.
-    pub fn slots(&self) -> &[SlotDesc] {
-        &self.slots
-    }
-
-    /// Where a resource lives.
-    pub fn allocation(&self, resource: ResourceId) -> Allocation {
-        self.allocations
-            .get(resource.index())
-            .copied()
-            .unwrap_or(Allocation::Imported)
-    }
-
-    /// Which physical slot serves `resource` on `frame`, reading `history`
-    /// frames back.
-    ///
-    /// The rotation is the whole of the temporal story: the write goes to
-    /// `frame % length` and a read of `h` frames ago to `(frame - h) %
-    /// length`, so with a ring of three, frame 5 writes slot 2 while
-    /// reading slots 1 and 0.
-    pub fn slot(&self, resource: ResourceId, frame: u64, history: u32) -> Option<usize> {
-        match self.allocation(resource) {
-            Allocation::Imported => None,
-            Allocation::Ring { base, length } => {
-                let length = length as u64;
-                let back = u64::from(history) % length;
-                Some(base + ((frame + length - back) % length) as usize)
-            }
-        }
+impl std::ops::Deref for RenderGraph {
+    type Target = wxsl_frame::graph::RenderGraph;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-/// What is wrong with a pass list.
-#[derive(Clone, Debug, PartialEq)]
-pub enum GraphError {
-    /// A pass names a resource that was never declared.
-    UnknownResource {
-        /// The pass's label.
-        pass: String,
-        /// The id it named.
-        resource: ResourceId,
-    },
-    /// The passes cannot be ordered: something reads what it writes, or two
-    /// passes wait on each other.
-    Cycle {
-        /// One pass in the cycle.
-        pass: String,
-    },
-    /// A pass reads a resource nothing writes.
-    NeverWritten {
-        /// The pass's label.
-        pass: String,
-        /// The resource's label.
-        resource: String,
-    },
-    /// A pass has a number of colour attachments its shader cannot return.
-    WrongColorTargetCount {
-        /// The pass's label.
-        pass: String,
-        /// What the pass kind requires.
-        expected: usize,
-        /// What the pass declares.
-        found: usize,
-    },
-    /// The depth attachment's format is not the one the pipeline state says.
-    DepthFormatMismatch {
-        /// The pass's label.
-        pass: String,
-        /// Format of the attached resource, if there is one.
-        attached: Option<wgpu::TextureFormat>,
-        /// Format the pipeline state expects.
-        state: Option<wgpu::TextureFormat>,
-    },
-    /// A pass samples a resource it is also drawing into.
-    ReadsWhatItWrites {
-        /// The pass's label.
-        pass: String,
-        /// The resource's label.
-        resource: String,
-    },
-    /// A pass reads further back than the resource's history goes.
-    NoSuchHistory {
-        /// The pass's label.
-        pass: String,
-        /// The resource's label.
-        resource: String,
-        /// Frames back the pass asked for.
-        history: u32,
-        /// Frames back the resource keeps.
-        available: u32,
-    },
-    /// A pass whose [`Policy`] is not `per frame` writes a resource whose
-    /// contents do not survive frames. On every frame the pass skips,
-    /// whatever reads it would read undefined memory — make the target
-    /// persistent (no history) instead.
-    PolicyNeedsStableStorage {
-        /// The pass's label.
-        pass: String,
-        /// The resource's label.
-        resource: String,
-        /// The policy the pass runs under.
-        policy: Policy,
-        /// Whether the resource was imported (the frame's own target) —
-        /// which gets its own sentence, because "the target" is the
-        /// likeliest way to arrive here.
-        imported: bool,
-    },
-    /// A colour or depth attachment names a buffer. Attachments are
-    /// texture writes; a buffer is read and written as storage, through
-    /// the pass group.
-    AttachmentNotATexture {
-        /// The pass's label.
-        pass: String,
-        /// The buffer's label.
-        resource: String,
-    },
-}
-
-impl fmt::Display for GraphError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GraphError::UnknownResource { pass, resource } => write!(
-                f,
-                "pass `{pass}` names resource {}, which this graph does not have",
-                resource.index()
-            ),
-            GraphError::Cycle { pass } => write!(
-                f,
-                "the passes cannot be ordered: `{pass}` is in a cycle (a pass reading what it \
-                 writes wants `Read::previous`, not `Read::current`)"
-            ),
-            GraphError::NeverWritten { pass, resource } => write!(
-                f,
-                "pass `{pass}` reads `{resource}`, which no pass writes and nothing imports"
-            ),
-            GraphError::WrongColorTargetCount {
-                pass,
-                expected,
-                found,
-            } => write!(
-                f,
-                "pass `{pass}` has {found} colour attachments but its shader writes {expected}"
-            ),
-            GraphError::DepthFormatMismatch {
-                pass,
-                attached,
-                state,
-            } => write!(
-                f,
-                "pass `{pass}` attaches a {attached:?} depth target but its state says {state:?}"
-            ),
-            GraphError::ReadsWhatItWrites { pass, resource } => write!(
-                f,
-                "pass `{pass}` samples `{resource}` and draws into it in the same pass; to read \
-                 what is already there, load the attachment instead"
-            ),
-            GraphError::NoSuchHistory {
-                pass,
-                resource,
-                history,
-                available,
-            } => write!(
-                f,
-                "pass `{pass}` reads `{resource}` {history} frames back, but it keeps {available}"
-            ),
-            GraphError::PolicyNeedsStableStorage {
-                pass,
-                resource,
-                policy,
-                imported,
-            } => {
-                write!(
-                    f,
-                    "pass `{pass}` runs {policy}, but it writes `{resource}`, whose contents do \
-                     not survive frames"
-                )?;
-                if *imported {
-                    f.write_str(
-                        " — that is the frame's own target, which is presented every frame; \
-                         write a persistent resource instead and present that",
-                    )
-                } else {
-                    f.write_str(
-                        " — make it persistent (with no history) so the pass's last \
-                     output is what a later frame reads",
-                    )
-                }
-            }
-            GraphError::AttachmentNotATexture { pass, resource } => write!(
-                f,
-                "pass `{pass}` attaches `{resource}`, which is a buffer — attachments are \
-                 texture writes; bind it through the pass group instead"
-            ),
-        }
+impl std::ops::DerefMut for RenderGraph {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
-
-impl std::error::Error for GraphError {}
 
 /// The textures a [`Schedule`] asked for.
 ///
@@ -1002,13 +207,13 @@ impl ResourcePool {
                         },
                         mip_level_count: 1,
                         sample_count: 1,
-                        dimension: dimension.texture_dimension(),
-                        format,
-                        usage,
+                        dimension: texture_dimension(dimension),
+                        format: format.to_wgpu(),
+                        usage: usage.to_wgpu(),
                         view_formats: &[],
                     });
                     let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                        dimension: Some(dimension.view_dimension()),
+                        dimension: Some(view_dimension(dimension)),
                         ..Default::default()
                     });
                     Slot::Texture { texture, view }
@@ -1017,7 +222,7 @@ impl ResourcePool {
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some(&format!("wxsl {}", desc.label)),
                         size,
-                        usage: usage | wgpu::BufferUsages::STORAGE,
+                        usage: usage.to_wgpu() | wgpu::BufferUsages::STORAGE,
                         mapped_at_creation: false,
                     });
                     Slot::Buffer { buffer }
@@ -1091,6 +296,8 @@ impl ResourcePool {
 /// The pass currently being recorded, and what the caller needs to build a
 /// pipeline for it.
 pub struct RecordedPass<'a> {
+    /// Resolved argument buffer for an indirect geometry pass.
+    pub indirect_buffer: Option<wgpu::Buffer>,
     /// The description this pass came from.
     pub desc: &'a PassDesc,
     /// Its index in the graph's declaration order, which is how a caller
@@ -1155,14 +362,14 @@ impl RenderGraph {
                 .find(|(resource, _)| *resource == id)
                 .map(|(_, view)| (*view).clone())
                 .ok_or_else(|| RenderError::MissingImport {
-                    resource: self.resources[id.index()].label.clone(),
+                    resource: self.resources()[id.index()].label.clone(),
                 })
         };
         for &index in schedule.order() {
             if !run(index) {
                 continue;
             }
-            let pass = &self.passes[index];
+            let pass = &self.passes()[index];
 
             // The pass bind group: the resources it reads, in order, at
             // binding 0..n of `abi::GROUP_PASS`. The G-buffer the deferred
@@ -1175,23 +382,38 @@ impl RenderGraph {
                 .color
                 .iter()
                 .map(|attachment| {
-                    let format = match self.resources[attachment.resource.index()].shape {
+                    let format = match self.resources()[attachment.resource.index()].shape {
                         ResourceShape::Texture { format, .. } => format,
                         ResourceShape::Buffer { .. } => {
                             return Err(RenderError::Graph(GraphError::AttachmentNotATexture {
                                 pass: pass.label.clone(),
-                                resource: self.resources[attachment.resource.index()].label.clone(),
+                                resource: self.resources()[attachment.resource.index()]
+                                    .label
+                                    .clone(),
                             }));
                         }
                     };
                     Ok(Some(wgpu::ColorTargetState {
-                        format,
-                        blend: attachment.blend.or(pass.state.blend),
+                        format: format.to_wgpu(),
+                        blend: attachment.blend.or(pass.state.blend).map(WgpuType::to_wgpu),
                         write_mask: wgpu::ColorWrites::ALL,
                     }))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let indirect_buffer = pass
+                .indirect_buffer()
+                .map(|id| {
+                    schedule
+                        .slot(id, frame, 0)
+                        .and_then(|slot| pool.buffer(slot))
+                        .cloned()
+                        .ok_or_else(|| RenderError::MissingImport {
+                            resource: self.resources()[id.index()].label.clone(),
+                        })
+                })
+                .transpose()?;
             let recorded = RecordedPass {
+                indirect_buffer,
                 desc: pass,
                 index,
                 pass_bindings,
@@ -1233,7 +455,7 @@ impl RenderGraph {
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: match attachment.load {
-                                        Load::Clear(color) => wgpu::LoadOp::Clear(color),
+                                        Load::Clear(color) => wgpu::LoadOp::Clear(color.to_wgpu()),
                                         Load::Load => wgpu::LoadOp::Load,
                                     },
                                     store: store_op(attachment.store),
@@ -1309,14 +531,15 @@ impl RenderGraph {
             pass.reads.len() + pass.writes.len() + usize::from(params.is_some()),
         );
         for read in &pass.reads {
-            kinds.push(match self.resources[read.resource.index()].shape {
+            kinds.push(match self.resources()[read.resource.index()].shape {
                 ResourceShape::Texture {
                     format, dimension, ..
                 } => PassBinding::Texture {
                     sample_type: format
+                        .to_wgpu()
                         .sample_type(None, None)
                         .unwrap_or(wgpu::TextureSampleType::Float { filterable: true }),
-                    view_dimension: dimension.view_dimension(),
+                    view_dimension: view_dimension(dimension),
                 },
                 ResourceShape::Buffer { size, .. } => PassBinding::Buffer {
                     read_only: true,
@@ -1325,12 +548,12 @@ impl RenderGraph {
             });
         }
         for write in &pass.writes {
-            kinds.push(match self.resources[write.index()].shape {
+            kinds.push(match self.resources()[write.index()].shape {
                 ResourceShape::Texture {
                     format, dimension, ..
                 } => PassBinding::StorageTexture {
-                    format,
-                    view_dimension: dimension.view_dimension(),
+                    format: format.to_wgpu(),
+                    view_dimension: view_dimension(dimension),
                 },
                 ResourceShape::Buffer { size, .. } => PassBinding::Buffer {
                     read_only: false,
@@ -1464,7 +687,7 @@ impl RenderGraph {
         // ADR 0045). The parameter block has no slot either — its buffer
         // came in with the pass.
         let imported_view = |resource: ResourceId| -> Option<&wgpu::TextureView> {
-            self.resources[resource.index()]
+            self.resources()[resource.index()]
                 .imported
                 .then(|| {
                     imports
@@ -1586,21 +809,9 @@ fn store_op(store: bool) -> wgpu::StoreOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass::{Attachment, DrawSource, PassState, Policy, Read, DEPTH_FORMAT};
-    use wxsl_core::abi::{self, MaterialStage};
-    use wxsl_core::scene::TagExpr;
+    use crate::pass::Read;
 
     const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-    fn draw_all() -> DrawSource {
-        DrawSource::Scene(TagExpr::Always)
-    }
-
-    /// A pass that writes `target`, clearing it, with no depth.
-    fn writer(label: &str, target: ResourceId) -> PassDesc {
-        PassDesc::screen(label, "deferred_lighting")
-            .with_color(Attachment::clear(target, wgpu::Color::BLACK))
-    }
 
     #[test]
     fn an_effect_parameter_block_joins_the_group_after_the_reads_and_writes() {
@@ -1609,7 +820,10 @@ mod tests {
         // after whatever the pass reads and writes, and its size is the
         // layout's (plan3 N4).
         let mut graph = RenderGraph::new(COLOR);
-        let image = graph.resource(ResourceDesc::color("image", COLOR));
+        let image = graph.resource(crate::pass::ResourceDesc::color(
+            "image",
+            wxsl_frame::types::TextureFormat::from_wgpu(COLOR),
+        ));
         let pass = PassDesc::screen("bloom", "bloom").with_reads([Read::current(image)]);
 
         let plain = graph.pass_binding_kinds(&pass, None);
@@ -1619,298 +833,5 @@ mod tests {
         let tuned = graph.pass_binding_kinds(&pass, Some(16));
         assert_eq!(tuned[0], plain[0], "the block must not renumber the reads");
         assert_eq!(tuned[1], PassBinding::Uniform { size: 16 });
-    }
-
-    #[test]
-    fn the_transient_allocator_reuses_one_texture_across_two_lifetimes() {
-        // `a` is written and consumed before `b` is born, so the two never
-        // coexist and one texture serves both. Without this, every
-        // intermediate in a postprocess chain costs its own target.
-        let mut graph = RenderGraph::new(COLOR);
-        let a = graph.resource(ResourceDesc::color("a", COLOR));
-        let b = graph.resource(ResourceDesc::color("b", COLOR));
-        graph.pass(writer("write a", a));
-        graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
-        graph.pass(writer("write b", b));
-        graph.pass(
-            PassDesc::screen("b to target", "deferred_lighting")
-                .with_color(Attachment::load(RenderGraph::TARGET))
-                .with_reads([Read::current(b)]),
-        );
-
-        let schedule = graph.schedule().expect("schedules");
-        assert_eq!(schedule.order(), &[0, 1, 2, 3]);
-        assert_eq!(
-            schedule.slots().len(),
-            1,
-            "two non-overlapping transients should share one texture: {:?}",
-            schedule.slots()
-        );
-        assert_eq!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
-        assert_eq!(
-            schedule.allocation(RenderGraph::TARGET),
-            Allocation::Imported
-        );
-    }
-
-    #[test]
-    fn overlapping_lifetimes_get_a_texture_each() {
-        // `a` is still alive when `b` is born — the pass that writes `b`
-        // is sampling `a` at that moment — so sharing would corrupt it.
-        let mut graph = RenderGraph::new(COLOR);
-        let a = graph.resource(ResourceDesc::color("a", COLOR));
-        let b = graph.resource(ResourceDesc::color("b", COLOR));
-        graph.pass(writer("write a", a));
-        graph.pass(writer("a to b", b).with_reads([Read::current(a)]));
-        graph.pass(writer("b to target", RenderGraph::TARGET).with_reads([Read::current(b)]));
-
-        let schedule = graph.schedule().expect("schedules");
-        assert_eq!(schedule.slots().len(), 2);
-        assert_ne!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
-    }
-
-    #[test]
-    fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
-        // The temporal case: what this frame writes must not be what the
-        // next frame reads as "one frame ago".
-        let mut graph = RenderGraph::new(COLOR);
-        let history = graph.resource(ResourceDesc::color("history", COLOR).persistent(2));
-        graph.pass(writer("accumulate", history).with_reads([Read::previous(history, 1)]));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(history)]));
-
-        let schedule = graph.schedule().expect("schedules");
-        assert_eq!(schedule.slots().len(), 3, "history: 2 is a ring of three");
-
-        let mut written = Vec::new();
-        for frame in 0..6u64 {
-            let now = schedule.slot(history, frame, 0).expect("allocated");
-            let one_ago = schedule.slot(history, frame, 1).expect("allocated");
-            let two_ago = schedule.slot(history, frame, 2).expect("allocated");
-            if frame >= 1 {
-                assert_eq!(one_ago, written[frame as usize - 1], "frame {frame}");
-            }
-            if frame >= 2 {
-                assert_eq!(two_ago, written[frame as usize - 2], "frame {frame}");
-            }
-            assert_ne!(now, one_ago);
-            assert_ne!(now, two_ago);
-            written.push(now);
-        }
-        // And it is a ring, not a leak: three textures serve every frame.
-        assert!(written.iter().all(|slot| *slot < 3));
-    }
-
-    #[test]
-    fn passes_are_ordered_by_what_they_read() {
-        // Declared backwards on purpose: the schedule must not need the
-        // author to have got the order right.
-        let mut graph = RenderGraph::new(COLOR);
-        let middle = graph.resource(ResourceDesc::color("middle", COLOR));
-        graph.pass(writer("second", RenderGraph::TARGET).with_reads([Read::current(middle)]));
-        graph.pass(writer("first", middle));
-
-        let schedule = graph.schedule().expect("schedules");
-        assert_eq!(schedule.order(), &[1, 0]);
-    }
-
-    #[test]
-    fn a_pass_sampling_its_own_attachment_is_reported() {
-        let mut graph = RenderGraph::new(COLOR);
-        let loop_back = graph.resource(ResourceDesc::color("loop", COLOR));
-        graph.pass(writer("self", loop_back).with_reads([Read::current(loop_back)]));
-        match graph.schedule() {
-            Err(GraphError::ReadsWhatItWrites { pass, resource }) => {
-                assert_eq!((pass.as_str(), resource.as_str()), ("self", "loop"));
-            }
-            other => panic!("expected a read-write hazard, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn two_passes_waiting_on_each_other_are_a_cycle() {
-        let mut graph = RenderGraph::new(COLOR);
-        let left = graph.resource(ResourceDesc::color("left", COLOR));
-        let right = graph.resource(ResourceDesc::color("right", COLOR));
-        graph.pass(writer("writes left", left).with_reads([Read::current(right)]));
-        graph.pass(writer("writes right", right).with_reads([Read::current(left)]));
-        assert!(matches!(graph.schedule(), Err(GraphError::Cycle { .. })));
-    }
-
-    #[test]
-    fn reading_further_back_than_the_ring_goes_is_reported() {
-        let mut graph = RenderGraph::new(COLOR);
-        let once = graph.resource(ResourceDesc::color("once", COLOR).persistent(1));
-        graph.pass(writer("too far", once).with_reads([Read::previous(once, 2)]));
-        assert!(matches!(
-            graph.schedule(),
-            Err(GraphError::NoSuchHistory { history: 2, .. })
-        ));
-    }
-
-    #[test]
-    fn a_geometry_pass_must_have_as_many_targets_as_its_stage_writes() {
-        let mut graph = RenderGraph::new(COLOR);
-        graph.pass(
-            PassDesc::geometry("gbuffer", draw_all(), MaterialStage::GBUFFER)
-                .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
-                .with_state(PassState::FULLSCREEN),
-        );
-        match graph.schedule() {
-            Err(GraphError::WrongColorTargetCount {
-                expected, found, ..
-            }) => {
-                assert_eq!((expected, found), (abi::GBUFFER_BASE_TARGETS.len(), 1));
-            }
-            other => panic!("expected a target-count error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_depth_attachment_must_match_the_states_depth_format() {
-        let mut graph = RenderGraph::new(COLOR);
-        let depth = graph.resource(ResourceDesc::color("depth", DEPTH_FORMAT));
-        graph.pass(
-            PassDesc::geometry("forward", draw_all(), MaterialStage::FORWARD_LIT)
-                .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
-                .with_depth(DepthAttachment::clear(depth, 1.0))
-                .with_state(
-                    PassState::OPAQUE
-                        .with_depth_format(Some(wgpu::TextureFormat::Depth24PlusStencil8)),
-                ),
-        );
-        assert!(matches!(
-            graph.schedule(),
-            Err(GraphError::DepthFormatMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn reading_a_resource_nobody_writes_is_reported_not_drawn_black() {
-        let mut graph = RenderGraph::new(COLOR);
-        let orphan = graph.resource(ResourceDesc::color("orphan", COLOR));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(orphan)]));
-        match graph.schedule() {
-            Err(GraphError::NeverWritten { resource, .. }) => assert_eq!(resource, "orphan"),
-            other => panic!("expected a never-written error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_slot_is_created_with_every_usage_its_resources_need() {
-        // Drawn into, then sampled: a texture created with only one of the
-        // two flags is a validation error at the first frame.
-        let mut graph = RenderGraph::new(COLOR);
-        let a = graph.resource(ResourceDesc::color("a", COLOR));
-        graph.pass(writer("write a", a));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(a)]));
-
-        let schedule = graph.schedule().expect("schedules");
-        let SlotShape::Texture { usage, .. } = schedule.slots()[0].shape else {
-            panic!("a texture");
-        };
-        assert!(usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
-        assert!(usage.contains(wgpu::TextureUsages::TEXTURE_BINDING));
-    }
-
-    #[test]
-    fn a_pass_that_skips_frames_may_only_write_stable_storage() {
-        // The once-baked LUT is the design case: written once, read every
-        // frame — sound only because the target survives frames.
-        let mut graph = RenderGraph::new(COLOR);
-        let lut = graph.resource(ResourceDesc::color("brdf lut", COLOR).persistent(0));
-        graph.pass(
-            PassDesc::compute("bake", "brdf_lut")
-                .with_write(lut)
-                .with_policy(Policy::Once),
-        );
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(lut)]));
-        let schedule = graph.schedule().expect("the LUT graph schedules");
-        assert_eq!(schedule.order(), &[0, 1]);
-        // Storage writes get their usage flag, like any other write.
-        let SlotShape::Texture { usage, .. } = schedule.slots()[0].shape else {
-            panic!("a texture");
-        };
-        assert!(usage.contains(wgpu::TextureUsages::STORAGE_BINDING));
-
-        // The same bake into a transient is the mistake the rule exists
-        // for: the slot is reused within the frame, so the second frame's
-        // read would be of whatever rented the texture meanwhile.
-        let mut graph = RenderGraph::new(COLOR);
-        let scratch = graph.resource(ResourceDesc::color("scratch", COLOR));
-        graph.pass(
-            PassDesc::compute("bake", "brdf_lut")
-                .with_write(scratch)
-                .with_policy(Policy::Once),
-        );
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(scratch)]));
-        match graph.schedule() {
-            Err(GraphError::PolicyNeedsStableStorage {
-                resource, policy, ..
-            }) => {
-                assert_eq!(resource, "scratch");
-                assert_eq!(policy, Policy::Once);
-            }
-            other => panic!("expected a stable-storage error, got {other:?}"),
-        }
-
-        // And writing the frame's own target under a policy is the same
-        // mistake wearing the target's face.
-        let mut graph = RenderGraph::new(COLOR);
-        graph.pass(
-            PassDesc::screen("backdrop", "lut_view")
-                .with_policy(Policy::Once)
-                .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK)),
-        );
-        let error = graph.schedule().expect_err("the target is not stable");
-        assert!(error.to_string().contains("frame's own target"), "{error}");
-    }
-
-    #[test]
-    fn buffers_participate_in_ordering_and_never_share_a_slot() {
-        // A compute pass fills a buffer; a screen pass reads it as
-        // storage. The read is an ordering edge, exactly as a texture
-        // read is — which is the whole of P11's point (plan2 P11).
-        let mut graph = RenderGraph::new(COLOR);
-        let ramp = graph.resource(ResourceDesc::buffer("ramp", 256));
-        graph.pass(writer("show", RenderGraph::TARGET).with_reads([Read::current(ramp)]));
-        graph.pass(PassDesc::compute("fill", "ramp_fill").with_write(ramp));
-        // Declared second on purpose: the schedule must not need the
-        // author to have got the order right.
-        let schedule = graph.schedule().expect("schedules");
-        assert_eq!(schedule.order(), &[1, 0]);
-        // Storage usage is inferred for a buffer any pass touches.
-        let SlotShape::Buffer { usage, .. } = schedule.slots()[0].shape else {
-            panic!("a buffer");
-        };
-        assert!(usage.contains(wgpu::BufferUsages::STORAGE));
-
-        // And two buffers never share, however neatly their lifetimes
-        // would fit: the aliasing rule is "never" for now, because a
-        // buffer aliasing bug corrupts a whole block.
-        let mut graph = RenderGraph::new(COLOR);
-        let a = graph.resource(ResourceDesc::buffer("a", 64));
-        let b = graph.resource(ResourceDesc::buffer("b", 64));
-        graph.pass(PassDesc::compute("write a", "ramp_fill").with_write(a));
-        graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
-        graph.pass(PassDesc::compute("write b", "ramp_fill").with_write(b));
-        graph.pass(writer("b to target", RenderGraph::TARGET).with_reads([Read::current(b)]));
-        let schedule = graph.schedule().expect("schedules");
-        assert_ne!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
-        assert_eq!(schedule.slots().len(), 2, "one slot per buffer");
-    }
-
-    #[test]
-    fn a_buffer_in_an_attachment_slot_is_named() {
-        // Attachments are texture writes; a buffer belongs to the pass
-        // group. The mistake is a named error, not a bind-group complaint.
-        let mut graph = RenderGraph::new(COLOR);
-        let scratch = graph.resource(ResourceDesc::buffer("scratch", 64));
-        graph.pass(writer("write", scratch));
-        match graph.schedule() {
-            Err(GraphError::AttachmentNotATexture { resource, .. }) => {
-                assert_eq!(resource, "scratch")
-            }
-            other => panic!("expected an attachment-shape error, got {other:?}"),
-        }
     }
 }

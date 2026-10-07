@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/wxsl-core",
     "crates/wxsl-lang",
+    "crates/wxsl-frame",
     "crates/wxsl-render",
     "crates/wxsl-editor",
     "crates/wxsl-stdlib",
@@ -20,6 +21,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 wxsl-core = { path = "crates/wxsl-core", version = "0.0.0" }
 wxsl-lang = { path = "crates/wxsl-lang", version = "0.0.0" }
+wxsl-frame = { path = "crates/wxsl-frame", version = "0.0.0" }
 wxsl-render = { path = "crates/wxsl-render", version = "0.0.0" }
 wxsl-editor = { path = "crates/wxsl-editor", version = "0.0.0" }
 wxsl-stdlib = { path = "crates/wxsl-stdlib", version = "0.0.0" }
@@ -31,6 +33,7 @@ lalrpop-util = { version = "0.22", default-features = false }
 # GPU API for wxsl-render (ADR 0005).
 wgpu = "30.0.1"
 bytemuck = { version = "1.25", features = ["derive"] }
+bitflags = "2"
 glam = { version = "0.33", features = ["bytemuck"] }
 serde = { version = "1.0", features = ["derive"] }
 # Glyph outlines for the renderer's MSDF text stack (ADR 0014). Pure Rust,

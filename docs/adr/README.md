@@ -16,7 +16,7 @@ is signal, don't delete it.
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
-| [0002](0002-cargo-workspace-crate-boundaries.md) | Cargo workspace layout and crate boundaries | Accepted |
+| [0002](0002-cargo-workspace-crate-boundaries.md) | Cargo workspace layout and crate boundaries | Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md) |
 | [0003](0003-wesl-as-the-shading-language.md) | WESL as the shading language, `wesl`/`wesl-cli` as the compiler | Superseded by [0011](0011-own-the-shading-language.md) |
 | [0004](0004-node-editor-is-an-optional-additive-ui-layer.md) | Visual node editor is an optional, additive UI layer | Accepted, amended by [0013](0013-the-editor-draws-itself-with-wxsl-render.md), [0019](0019-node-colour-and-name-are-instance-metadata.md) |
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
@@ -35,7 +35,7 @@ is signal, don't delete it.
 | [0018](0018-one-generic-node-per-operation.md) | One generic node per operation, with WGSL's own operand rules | Accepted |
 | [0019](0019-node-colour-and-name-are-instance-metadata.md) | A node's colour and name belong to the node, not to its kind | Accepted, amended by [0023](0023-a-material-declares-its-resources.md) |
 | [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md) | A node definition is derived from its WXSL source | Accepted |
-| [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0033](0033-pipelines-are-documents.md) |
+| [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0033](0033-pipelines-are-documents.md), [0048](0048-the-frame-plan-is-device-free.md) |
 | [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md), [0033](0033-pipelines-are-documents.md), [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
 | [0023](0023-a-material-declares-its-resources.md) | A material declares its resources: uniforms, textures, and the application's slot | Accepted |
 | [0024](0024-a-material-declares-the-geometry-it-requires.md) | A material declares the vertex and instance attributes it requires | Accepted, amended by [0027](0027-a-graph-computes-its-own-interpolants.md) |
@@ -44,11 +44,11 @@ is signal, don't delete it.
 | [0027](0027-a-graph-computes-its-own-interpolants.md) | A graph computes its own interpolants | Accepted, amended by [0032](0032-stage-analysis-computes-the-cut-between-stages.md) |
 | [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) | Lighting models dispatched by a G-buffer id, with a composable G-buffer layout | Accepted, amended by [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) |
 | [0029](0029-a-corpus-gate-and-error-scopes-for-generated-shaders.md) | A corpus gate for generated shaders, error scopes in GPU tests, and the budget numbers from the spec table | Accepted |
-| [0030](0030-a-pipeline-config-instead-of-threaded-parameters.md) | One `PipelineConfig` instead of parameters threaded by hand | Accepted |
+| [0030](0030-a-pipeline-config-instead-of-threaded-parameters.md) | One `PipelineConfig` instead of parameters threaded by hand | Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md) |
 | [0031](0031-shader-text-lives-in-templates-generators-fill-holes.md) | Shader text lives in template files; generators fill holes | Accepted |
 | [0032](0032-stage-analysis-computes-the-cut-between-stages.md) | Stage analysis computes the cut between stages | Accepted |
-| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
-| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md), [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
+| [0033](0033-pipelines-are-documents.md) | Pipelines are documents, and the stock ones are preset files | Accepted, amended by [0034](0034-effects-are-first-class-units.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md), [0048](0048-the-frame-plan-is-device-free.md) |
+| [0034](0034-effects-are-first-class-units.md) | Effects are first-class units: declared inputs, a registry, and chains as documents | Accepted, amended by [0035](0035-execution-policies.md), [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md), [0048](0048-the-frame-plan-is-device-free.md) |
 | [0035](0035-execution-policies.md) | Execution policies: once, on resize, on demand — and compute effects | Accepted, amended by [0039](0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md) |
 | [0036](0036-buffers-are-graph-resources.md) | Buffers are graph resources, with storage bindings in the pass group | Accepted |
 | [0037](0037-semantic-channels.md) | Semantic channels: G-buffer requests collected with sources, and the material feature | Accepted, amended by [0038](0038-a-materials-configuration-is-one-value.md) |
@@ -62,6 +62,7 @@ is signal, don't delete it.
 | [0045](0045-a-bake-is-an-effect-over-a-material-subgraph.md) | A bake is an effect over a material subgraph, and the table is the material's | Accepted |
 | [0046](0046-velocity-is-a-stage-taa-is-a-policyd-chain.md) | Velocity is a stage; TAA is a policy'd chain | Accepted |
 | [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) | Dual depth peeling, and the baseline/native split for blendable float targets | Accepted |
+| [0048](0048-the-frame-plan-is-device-free.md) | The frame plan is device-free | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

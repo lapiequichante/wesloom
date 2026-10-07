@@ -1,0 +1,12 @@
+// Compute-written indexed-indirect arguments for the shared-frame test.
+// The parameter declaration is generated from the effect descriptor.
+@group(3) @binding(0) var<storage, read_write> arguments: array<u32>;
+
+@compute @workgroup_size(1)
+fn fill_arguments() {
+    arguments[0] = params.index_count;
+    arguments[1] = 1u;
+    arguments[2] = 0u;
+    arguments[3] = 0u;
+    arguments[4] = 0u;
+}

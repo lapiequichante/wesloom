@@ -77,7 +77,7 @@ compiling, one material per attempt, after mesh upload had begun.
   `RenderSetup::capabilities` publishes the provided stages, the channel
   plan, the lighting set and the required effects as one value;
   `RenderSetup::check(&scene, &registry)` returns *every*
-  [`Incompatibility`](../../crates/wxsl-render/src/setup.rs) between the
+  [`Incompatibility`](../../crates/wxsl-frame/src/setup.rs) between the
   scene and the setup, by name — a plan that does not build, an effect no
   registered effect provides, a model the lighting set does not enable, a
   material pinning a feature macro the plan does not carry, or a material

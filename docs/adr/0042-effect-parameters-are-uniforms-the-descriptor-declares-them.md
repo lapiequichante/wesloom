@@ -147,6 +147,6 @@ and a parameter is host state about a pass, which made the label the key.
   *(Landed since: the pipeline canvas's inspector draws the sliders, and
   a move there still compiles nothing —
   [ADR 0043](0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md).)*
-* If this changes, also update `wxsl-render/src/effect.rs`'s module doc
+* If this changes, also update `wxsl-frame/src/effect.rs`'s module doc
   (the contract it states), AGENTS.md's effect bullet, and the
   bind-group table in `docs/architecture.md`.

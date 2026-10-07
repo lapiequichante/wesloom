@@ -52,10 +52,10 @@
 //! [`library::ShaderLibrary`], which is also how it can override an ABI
 //! module or add hand-written WXSL of its own.
 //!
-//! The exception is the *effects* this crate ships
+//! The exception is the *effects* shared through `wxsl-frame`
 //! ([`effect`]): a screen effect is a self-describing unit whose shader
-//! travels with it — bloom's WXSL lives beside its descriptor under
-//! `shaders/`, mounted when the variant is compiled. An application's own
+//! travels with it — bloom's WXSL lives under `wxsl-frame/shaders/`,
+//! mounted when the variant is compiled. An application's own
 //! effects carry their sources the same way, or resolve against the
 //! library like everything else.
 
@@ -63,7 +63,6 @@
 
 pub mod bindings;
 pub mod draw;
-pub mod effect;
 pub mod environment;
 pub mod error;
 #[cfg(feature = "gltf")]
@@ -79,8 +78,12 @@ pub mod pipeline_doc;
 pub mod renderer;
 pub mod setup;
 pub mod swap;
+pub mod types;
 pub mod ui;
 pub mod variants;
+
+/// Shared effect declarations and their owned shader sources (ADR 0048).
+pub use wxsl_frame::effect;
 
 // Re-exported so a dependant can name a `wgpu::Device` or a `glam::Mat4`
 // without having to pin the same versions itself — and so that "which wgpu

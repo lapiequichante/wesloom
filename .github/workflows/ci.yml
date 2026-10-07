@@ -29,6 +29,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check -p wxsl --no-default-features
+      - run: cargo check -p wxsl-frame --all-targets
+      - name: Frame descriptions pull in no renderer, compiler or GUI dependency (ADR 0048)
+        run: |
+          tree=$(cargo tree -p wxsl-frame -e normal)
+          echo "$tree"
+          if echo "$tree" | grep -Eq 'wgpu|winit|egui|wxsl-render|wxsl-editor|wxsl-stdlib|wxsl-lang'; then
+            echo "::error::unexpected dependency in the device-free frame crate"
+            exit 1
+          fi
       - name: The graph model alone pulls in no renderer or GUI dependency
         run: |
           tree=$(cargo tree -p wxsl --no-default-features -e normal)

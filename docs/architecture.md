@@ -21,12 +21,15 @@ default build (ADR 0007).
 graph LR
     core["wxsl-core<br/>(graph model + WXSL codegen)<br/>no wgpu, no GUI"]
     lang["wxsl-lang<br/>(WXSL compiler:<br/>parser + WGSL backend)"]
+    frame["wxsl-frame<br/>(frame plans, scheduling, presets)<br/>no wgpu, no GUI"]
     render["wxsl-render<br/>(wgpu pipelines,<br/>forward/deferred switching)"]
     editor["wxsl-editor<br/>(visual node editor,<br/>draws itself with wxsl-render)"]
     stdlib["wxsl-stdlib<br/>(original base nodes)<br/>MIT/Apache-2.0"]
     facade["wxsl<br/>(facade crate, feature-gated re-exports)"]
 
     render --> core
+    render --> frame
+    frame --> core
     render --> lang
     editor --> core
     editor --> render
@@ -59,6 +62,16 @@ shows `wxsl-core` and nothing else.
 
 ## Module map
 
+The device-free plan lives in `wxsl-frame`
+([ADR 0048](adr/0048-the-frame-plan-is-device-free.md)). Backends consume
+the same descriptions, scheduler and pipeline compiler; wgpu allocation
+and recording remain in `wxsl-render`. Shared APIs are re-exported under
+the existing renderer module paths.
+
+`cargo run -p wxsl-frame --example plan_frame` compiles and schedules both
+stock presets without a GPU or WXSL compiler. The `effect_interfaces`
+example inspects effect declarations and generated parameter blocks.
+
 What lives where, now that the crates have contents. Each module's own doc
 comment is the detailed version.
 
@@ -79,30 +92,23 @@ the generated shader text), `scene` (the scene document), `wesl`
 module path), `registry` (the operators as node definitions, plus the
 function nodes `build.rs` derived from the sources).
 
-**`wxsl-render`** — `pipeline` (`StockPipeline`, the preset loader, the
-`wgpu` pipeline cache), `pipeline_doc` (the pipeline compiler: document →
-`RenderGraph`, plan2 P3), `effect` (effects as data: declared inputs —
-with a per-input `history` for the temporal ones — outputs and
-parameters, screen or compute entry points, shader source — the registry
-a pass names into, plan2 P4/P10, ADR 0042; `Effect::from_bake` generates
-one from a material subgraph, ADR 0045; TAA and motion blur ship as
-screen effects whose derived `pass.screen.<effect>` rows carry the
-declaration's sockets, ADR 0046), `library`
-(`ShaderLibrary`),
-`material` (a graph compiled to WXSL), `variants` (WXSL → WGSL and the
-variant cache), `renderer` (the front end that hides the path switch),
-`draw` (the draw list — each draw's transform *and*, since ADR 0046, its
-previous-frame one),
-`setup` (the capability contract: a setup's published capabilities and the
-device-free check against a scene, ADR 0044), `scene` (camera,
-lights, uniform layouts), `mesh` (vertex format, cube, sphere, plane, torus),
-`gpu` (device setup, offscreen rendering and readback), `error`, and `ui` —
-the 2D layer with nothing to do with materials (ADR 0013): `draw` (the
-instanced primitive and the draw list), `atlas` (the shared glyph and image
-texture), `msdf` (distance fields from outlines, on the CPU), `msdf_gpu` (the
-same as a compute pass, and the backend switch), `font` (outlines and metrics
-from bytes the application supplies), `text` (the glyph cache and shaping),
-`input` (windowing-agnostic events), `renderer` (the UI pass).
+**`wxsl-frame`** — `types` (neutral formats, graphics state and usage flags),
+`pass` (pass/resource descriptions), `graph` (validation, scheduling and
+slot allocation), `pipeline` (config, presets and reference pass lists),
+`pipeline_doc` (document compilation), `effect` (declarations, shaders,
+parameters and registry), `setup` (capabilities and scene checks), and
+`environment` (camera, lights, frame values and host layouts).
+
+**`wxsl-render`** — `graph` (resource pools and wgpu recording over the
+shared plan), `pipeline` (native target adapters and pipeline caches),
+`types` (exhaustive neutral ↔ wgpu mappings), `environment` (GPU frame
+bindings), `library` (`ShaderLibrary`), `material` (graph → WXSL),
+`variants` (WXSL → WGSL and the variant cache), `renderer` (frame submission
+and pipeline switching), `draw` (draw lists and transforms), `mesh`
+(geometry), `gpu` (device setup and readback), `error`, `swap`, and `ui`
+(the renderer's 2D layer, ADR 0013). `pass`, `effect` and `setup`
+re-export the shared APIs; `pipeline_doc` adapts its compiled graph to the
+wgpu recording wrapper.
 
 **`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `canvas`
 (the pan/zoom node canvas: layout, links, hit-testing, dragging), `highlight`
@@ -185,10 +191,10 @@ from has two spellings, tested to agree
   Edges carry render-graph resources (`DrawQueue`, `ColorTarget`,
   `DepthTarget`, `ShadowMaps`, `GBuffer`, `StorageBuffer` — handle types
   outside `ValueType::ALL`, like the texture sockets).
-  `wxsl_render::pipeline_doc::compile` is a pure function turning the
+  `wxsl_frame::pipeline_doc::compile` is a pure function turning the
   document into a `RenderGraph`; every error names the document node. The
   two stock pipelines are preset files
-  (`crates/wxsl-render/assets/presets/*.pipeline.json`) that
+  (`crates/wxsl-frame/assets/presets/*.pipeline.json`) that
   `StockPipeline::graph` loads and compiles.
 * **As hand-built Rust.** `forward_graph` and `deferred_graph` stay as the
   reference pass lists the presets' parity tests compile against; an
@@ -201,7 +207,8 @@ G-buffer pass (`gbuffer`) followed by a fullscreen lighting pass.
 
 A `pass.screen` node names an **effect** by id
 ([ADR 0034](adr/0034-effects-are-first-class-units.md)): a
-`wxsl_render::effect::Effect` — declared inputs in pass-group binding
+`wxsl_frame::effect::Effect` (also available through `wxsl_render::effect`)
+— declared inputs in pass-group binding
 order, entry points, and the shader (generated for the lighting set, or a
 WXSL file the effect owns). The shipped registry holds the migrated
 lighting pass and bloom, whose chain — lighting into a `resource.color`,
@@ -571,7 +578,7 @@ declares a material's bind group is surface-domain by construction.
 |---|---|---|---|
 | `surface` | `SurfaceContext` in, `Surface` out | `codegen::generate` | one module per `MaterialStage` |
 | `screen` | `ScreenContext` in, one colour out | `codegen::generate_screen` | one fullscreen pass |
-| `document` | the pass vocabulary (`crate::pipeline`) | `wxsl-render`'s document compiler | a `RenderGraph` |
+| `document` | the pass vocabulary (`crate::pipeline`) | `wxsl-frame`'s document compiler | a `RenderGraph` |
 
 The screen ABI (`package::wxsl::screen`) is a tenth the size of the surface
 one: `uv`, `time`, `pixel`, `texel`, and the one image the pass binds.

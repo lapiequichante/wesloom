@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md)
 
 ## Context
 
@@ -70,6 +70,11 @@ crate graph or the facade's feature graph.
   model is still settling) to a single PR.
 
 ## Consequences
+
+- [ADR 0048](0048-the-frame-plan-is-device-free.md) introduces
+  `wxsl-frame`, depending only on `wxsl-core` within the workspace.
+  `wxsl-render` depends on it; frame descriptions, scheduling, pipeline
+  compilation, presets, capability checks and environment data live there.
 
 - Adding a dependency to `wxsl-core` is a bigger deal than adding one to
   `wxsl-editor` — it's shared by every consumer regardless of features

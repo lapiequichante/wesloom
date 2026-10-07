@@ -2934,6 +2934,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wxsl-frame"
+version = "0.0.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "glam",
+ "serde_json",
+ "wxsl-core",
+]
+
+[[package]]
 name = "wxsl-lang"
 version = "0.0.0"
 dependencies = [
@@ -2949,10 +2960,10 @@ dependencies = [
  "bytemuck",
  "glam",
  "gltf",
- "serde_json",
  "ttf-parser",
  "wgpu",
  "wxsl-core",
+ "wxsl-frame",
  "wxsl-lang",
 ]
 

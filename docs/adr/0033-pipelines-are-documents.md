@@ -2,7 +2,7 @@
 
 Date: 2026-09-12
 
-Status: Accepted
+Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md)
 
 Amends [ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md)
 (the pass list is data; this decides who authors it) and
@@ -113,6 +113,11 @@ recorded because they were considered:
   allows.
 
 ## Consequences
+
+* ADR 0048 moves the compiler, config, presets and reference pass lists to
+  `wxsl-frame`, which depends on `wxsl-core` but no backend. Renderer paths
+  re-export or adapt them; preset documents and their parity tests stay
+  together under `wxsl-frame/assets/presets`.
 
 * `StockPipeline::graph` can now fail in principle (a broken embedded
   preset) and panics; the parity and round-trip tests exist so that a

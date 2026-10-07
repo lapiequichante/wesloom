@@ -12,6 +12,7 @@ use wxsl::core::graph::Node;
 use wxsl::core::pipeline as doc;
 use wxsl::render::effect::{EffectRegistry, BRDF_LUT, LUT_VIEW};
 use wxsl::render::gpu::OffscreenTarget;
+use wxsl::render::types::{Color, TextureFormat, TextureUsages};
 use wxsl::render::wgpu;
 use wxsl::render::{
     Attachment, DrawList, Extent, PassDesc, Persistence, PipelineConfig, Policy, Read, RenderGraph,
@@ -26,13 +27,13 @@ use probe::{gpu, render_list_in, unlit};
 fn lut_graph(bake_policy: Policy) -> RenderGraph {
     let mut graph = RenderGraph::new(wgpu::TextureFormat::Rgba8Unorm);
     let lut = graph.resource(
-        ResourceDesc::color("brdf lut", wgpu::TextureFormat::Rgba16Float)
+        ResourceDesc::color("brdf lut", TextureFormat::Rgba16Float)
             .with_extent(Extent::Fixed {
                 width: 64,
                 height: 64,
             })
             // Written by the bake as storage, read by the view as texture.
-            .with_usage(wgpu::TextureUsages::TEXTURE_BINDING)
+            .with_usage(TextureUsages::TEXTURE_BINDING)
             .persistent(0),
     );
     graph.pass(
@@ -42,7 +43,7 @@ fn lut_graph(bake_policy: Policy) -> RenderGraph {
     );
     graph.pass(
         PassDesc::screen("lut view", "lut_view")
-            .with_color(Attachment::clear(RenderGraph::TARGET, wgpu::Color::BLACK))
+            .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK))
             .with_reads([Read::current(lut)]),
     );
     graph

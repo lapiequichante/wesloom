@@ -1,4 +1,4 @@
-//! Effects as first-class units: the pass-level twin of what a node is to
+//! Shared effects as first-class units: the pass-level twin of what a node is to
 //! a material.
 //!
 //! Before this module, a screen pass ran one of an enum's variants — and
@@ -9,7 +9,7 @@
 //! ([plan2 P4](../../../plan2.md)). The pipeline compiler validates a
 //! `pass.screen` node against the registry's declarations; the renderer
 //! compiles and runs the shader they name. An application adds an effect
-//! with [`Renderer::add_effect`] and a document names it by `effect` id —
+//! with `wxsl_render::Renderer::add_effect` and a document names it by `effect` id —
 //! passes, like shaders before them, are addable without touching
 //! `wxsl-render` (ADR 0009's rule, extended).
 //!
@@ -250,7 +250,7 @@ pub enum EffectShader {
 
 impl EffectShader {
     /// Where the text is mounted and what it is, for the compiler.
-    pub(crate) fn source(&self) -> Option<(&'static str, std::borrow::Cow<'static, str>)> {
+    pub fn source(&self) -> Option<(&'static str, std::borrow::Cow<'static, str>)> {
         match self {
             EffectShader::Lighting => None,
             EffectShader::Source { path, wxsl } => Some((path, std::borrow::Cow::Borrowed(*wxsl))),
@@ -420,7 +420,7 @@ impl Effect {
 
     /// Whether this effect declares an input wired through the named
     /// socket.
-    pub(crate) fn declares(&self, socket: &str) -> bool {
+    pub fn declares(&self, socket: &str) -> bool {
         self.inputs.iter().any(|input| input.name == socket)
     }
 
@@ -465,7 +465,7 @@ impl Effect {
     /// A parameter's name has to be a WGSL identifier, because it becomes
     /// a struct field; the descriptor rows are static, reviewed data, so a
     /// name that is not one is a bug at rest and said so where it sits.
-    pub(crate) fn param_layout(&self) -> BufferLayout {
+    pub fn param_layout(&self) -> BufferLayout {
         let fields = self.parameters.iter().map(|parameter| {
             (
                 WxslIdent::new(parameter.name).unwrap_or_else(|| {
@@ -487,7 +487,7 @@ impl Effect {
     /// Prepended to the module when the variant compiles, so the effect's
     /// file reads `params.threshold` and never states the struct itself:
     /// the descriptor is the one declaration, and this text is its shadow.
-    pub(crate) fn params_header(&self) -> String {
+    pub fn params_header(&self) -> String {
         if self.parameters.is_empty() {
             return String::new();
         }

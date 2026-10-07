@@ -2,7 +2,7 @@
 
 Date: 2026-09-12
 
-Status: Accepted
+Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md)
 
 ## Context
 
@@ -51,6 +51,10 @@ signatures name exactly the facts each one consumes.
   track record.
 
 ## Consequences
+
+* ADR 0048 moves the single config to `wxsl-frame::pipeline`, with neutral
+  format and clear-color types. `wxsl-render` re-exports it and adapts its
+  native target constructor; there is still one shared pipeline config.
 
 * `Renderer::set_lighting` remains the validated entry point (module
   presence, attachment budget); the config field itself is

@@ -88,8 +88,8 @@ The LUT bake's target is 64×64, and no fraction of the window says that.
 behaviour, scaled by the existing `scale` setting) or fixed pixels as
 `64x64`, compiled to `Extent::Fixed`. Anything else is the named error.
 
-[`EffectRegistry::node_defs`]: ../../../crates/wxsl-render/src/effect.rs
-[`document_registry`]: ../../../crates/wxsl-render/src/pipeline_doc.rs
+[`EffectRegistry::node_defs`]: ../../../crates/wxsl-frame/src/effect.rs
+[`document_registry`]: ../../../crates/wxsl-frame/src/pipeline_doc.rs
 
 ## Alternatives considered
 

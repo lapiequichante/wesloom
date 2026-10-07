@@ -2,7 +2,7 @@
 
 Date: 2026-09-13
 
-Status: Accepted
+Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md)
 
 Amends [ADR 0033](0033-pipelines-are-documents.md) (`pass.screen` names an
 effect in a registry, not a hardcoded enum variant) and extends
@@ -80,6 +80,10 @@ against (ADR 0033 documented that gap honestly: a chain failed in
   [ADR 0042](0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md).)*
 
 ## Consequences
+
+* [ADR 0048](0048-the-frame-plan-is-device-free.md) moves the declarations
+  and owned shader files to `wxsl-frame`; `wxsl-render::effect` re-exports
+  the same API for existing callers.
 
 * Adding a post effect is: one shader file, one `Effect` row,
   `add_effect` — no `wxsl-render` edit, no new pass kind, no new match

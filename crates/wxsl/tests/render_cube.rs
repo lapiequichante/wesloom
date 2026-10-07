@@ -14,6 +14,7 @@ use wxsl::core::graph::Graph;
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::material::Material;
+use wxsl::render::types::{Color, TextureFormat, TextureUsages, WgpuType};
 use wxsl::render::wgpu;
 use wxsl::render::{
     Camera, DrawItem, Environment, Light, MaterialBindings, RenderRequest, Renderer, StockPipeline,
@@ -660,12 +661,12 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
     let build = |clear: wgpu::Color| {
         let mut graph = RenderGraph::new(format);
         let history = graph.resource(
-            ResourceDesc::color("history", format)
+            ResourceDesc::color("history", TextureFormat::from_wgpu(format))
                 .persistent(2)
-                .with_usage(wgpu::TextureUsages::COPY_SRC),
+                .with_usage(TextureUsages::COPY_SRC),
         );
         let pass = PassDesc::screen("accumulate", "deferred_lighting")
-            .with_color(Attachment::clear(history, clear))
+            .with_color(Attachment::clear(history, Color::from_wgpu(clear)))
             .with_reads([Read::previous(history, 1)]);
         graph.pass(pass);
         (graph, history)

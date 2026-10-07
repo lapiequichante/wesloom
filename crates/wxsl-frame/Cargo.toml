@@ -1,0 +1,20 @@
+[package]
+name = "wxsl-frame"
+description = "Device-free frame descriptions and planning for wxsl."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+bitflags = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+serde_json = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

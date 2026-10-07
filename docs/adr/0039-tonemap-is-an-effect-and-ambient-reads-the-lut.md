@@ -53,7 +53,7 @@ holds.
 
 `shade_surface` returns `lit * scene.exposure` — linear radiance, exposed
 but neither curved nor encoded — and the shipped `tonemap` effect
-(`wxsl-render/shaders/tonemap.wxsl`) applies `tonemap_filmic` and
+(`wxsl-frame/shaders/tonemap.wxsl`, moved by ADR 0048) applies `tonemap_filmic` and
 `linear_to_srgb` over the whole image, into the frame's own target. Every
 stock pipeline ends in it, in all three of the spellings that have to
 agree: the preset documents, the hand-built reference graphs, and
@@ -66,7 +66,7 @@ imports them — so there remains exactly one filmic curve in this repo.
 *Amended by [ADR 0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md):
 the shipped `tonemap` is now a screen **graph** wiring those same two
 library functions, registered under the same id. The file
-(`wxsl-render/shaders/tonemap.wxsl`) stays as the descriptor form a
+(`wxsl-frame/shaders/tonemap.wxsl`) stays as the descriptor form a
 renderer built without the node library falls back to.*
 
 Consequences of the move, taken deliberately:

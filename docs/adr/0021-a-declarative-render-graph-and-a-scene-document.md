@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)
+Status: Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0048](0048-the-frame-plan-is-device-free.md)
 
 Amends [0005](0005-render-pipeline-abstraction-and-shader-switching.md),
 [0008](0008-surface-graphs-and-a-named-shader-abi.md),
@@ -150,6 +150,10 @@ either a lie or a translator nobody asked for.
   first; a graph that produces that data is then a small step.
 
 ## Consequences
+
+* [ADR 0048](0048-the-frame-plan-is-device-free.md) moves device-free
+  planning and neutral pass/resource descriptions into `wxsl-frame`.
+  GPU allocation and recording remain in `wxsl-render`.
 
 * **`RenderRequest` changed shape**: `scene`/`model`/`mesh`/`material`
   become `environment` and `draws`. `single_draw` covers the one-object

@@ -376,6 +376,21 @@ effect is a graph first (ADR 0040):
 
 ## Suggested order
 
+**B1 completed on 2026-10-07** (ADR 0048). `wxsl-frame` owns the neutral
+pass/resource vocabulary, scheduler, pipeline compiler/config, presets,
+effects, capability contract and environment data/host layouts. Its only
+workspace dependency is `wxsl-core`; CI checks the no-GPU/no-WXSL-compiler
+boundary. wgpu allocation, recording and exhaustive type mappings stay in
+`wxsl-render`, which re-exports or adapts shared APIs.
+
+Verification: workspace all-feature tests (including GPU tests on Apple M5),
+clippy, formatting, headless/editor feature builds and dependency checks.
+The frame crate has 94 passing tests (one preset-writing helper ignored),
+including the scheduler and preset-parity corpus. Compute-written indirect
+arguments render identically to a direct draw. `plan_frame` compiles and
+schedules both presets without a device; the headless cube's mean
+forward/deferred difference remains 0.0002.
+
 1. **B1** — the split. Everything else in the B-series depends on it,
    and it is the only item whose cost is uncertain enough to want
    started first. **S1** lands in the same window (days, independent).
