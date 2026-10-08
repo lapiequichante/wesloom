@@ -570,6 +570,7 @@ pub const SHADOW_MAP_RESOLUTION: u32 = 1024;
 /// needs; `wxsl-render` maps that onto concrete `wgpu` texture formats,
 /// which is knowledge this crate deliberately does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum GBufferPrecision {
     /// Four values in `[0, 1]`: 8-bit normalized is enough.
     Normalized,
@@ -632,6 +633,7 @@ impl GBufferPrecision {
 
 /// One G-buffer render target written by the deferred fragment entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct GBufferTarget {
     /// The [`GBUFFER_STRUCT`] field written to this target.
     pub field: &'static str,
@@ -1104,6 +1106,13 @@ pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
 /// the variant cache key and of every pass description.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MaterialStage(u8);
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for MaterialStage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
 
 impl MaterialStage {
     /// Shade in the material's own fragment pass.

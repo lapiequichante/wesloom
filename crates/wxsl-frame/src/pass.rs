@@ -35,7 +35,7 @@ use crate::types::{
 ///
 /// Opaque and `Copy`: a pass holds ids, never textures, so the same pass
 /// list can be scheduled against a 512-pixel preview and a 4K window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct ResourceId(pub(crate) u32);
 
 impl ResourceId {
@@ -46,7 +46,8 @@ impl ResourceId {
 }
 
 /// The shape of a texture resource.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Dimension {
     /// A plain 2D texture.
     #[default]
@@ -66,7 +67,8 @@ pub enum Dimension {
 /// were implicit ABI infrastructure the scheduler could not see. Declared,
 /// they join the same reasoning as attachments: a pass that writes a
 /// buffer orders the passes that read it, and the pool allocates it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResourceShape {
     /// A texture: size, shape and texel format.
     Texture {
@@ -98,7 +100,7 @@ pub enum ResourceShape {
 ///
 /// `Imported` is the escape hatch and the reason the frame's own target is
 /// expressible: the graph is handed the view rather than creating it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ResourceDesc {
     /// Label, used for the `wgpu` texture or buffer and in diagnostics.
     pub label: String,
@@ -243,7 +245,8 @@ impl ResourceDesc {
 }
 
 /// What happens to a colour attachment's existing contents.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Load {
     /// Overwrite with a constant. Cheaper than loading on tiled hardware.
     Clear(Color),
@@ -253,7 +256,7 @@ pub enum Load {
 }
 
 /// One colour attachment of a render pass.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Attachment {
     /// What is being written.
     pub resource: ResourceId,
@@ -352,7 +355,7 @@ pub const MAX_BLEND: BlendState = BlendState {
 };
 
 /// The depth-stencil attachment of a render pass.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DepthAttachment {
     /// The depth resource.
     pub resource: ResourceId,
@@ -400,7 +403,7 @@ impl DepthAttachment {
 /// descriptor, which is what lets a shadow pass cull front faces, a
 /// transparent pass blend, and a peel pass use a different depth format —
 /// all with the same material shader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct PassState {
     /// Which face is culled, if any.
     pub cull_mode: Option<Face>,
@@ -473,7 +476,8 @@ impl PassState {
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 
 /// Where a geometry pass's draws come from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DrawSource {
     /// The frame's draw list, filtered by a tag expression. The material
     /// says what it is, the pass says what it draws.
@@ -497,7 +501,8 @@ pub enum DrawSource {
 }
 
 /// What kind of work a pass does.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PassKind {
     /// Draw geometry, with each material compiled for `stage`.
     Geometry {
@@ -530,7 +535,7 @@ pub enum PassKind {
 }
 
 /// One resource a pass reads, and from which frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct Read {
     /// The resource.
     pub resource: ResourceId,
@@ -558,7 +563,7 @@ impl Read {
 }
 
 /// One pass, as data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct PassDesc {
     /// Label, used for the `wgpu` pass and in diagnostics.
     pub label: String,
@@ -817,7 +822,8 @@ mod tests {
 }
 
 /// How big a resource is.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Extent {
     /// A fraction of the frame's target: 1.0 for full resolution, 0.5 for a
     /// half-res bloom chain. Rounded up, and never zero.
@@ -870,7 +876,8 @@ impl Default for Extent {
 /// undefined on every frame the pass skips. That rule is one of the
 /// scheduler's checks, and it is what makes skipping safe: a skipped pass
 /// leaves behind exactly the contents its last run wrote.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Policy {
     /// Record it every frame — every pass today, and every pass whose
     /// output the frame changes.
@@ -938,7 +945,8 @@ impl std::fmt::Display for Policy {
 }
 
 /// How long a resource's contents have to live.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Persistence {
     /// Created at first write, dead after its last read, and its memory
     /// reusable by any later resource of the same shape.
@@ -975,7 +983,8 @@ impl Persistence {
 /// A pass renders from a view rather than carrying a matrix, because the
 /// matrices are the *environment*'s and a pass list is built once and
 /// scheduled against many frames.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PassView {
     /// The frame's camera.
     #[default]

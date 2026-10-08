@@ -264,7 +264,7 @@ pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
 }
 
 /// Size, format and clear colour of what is being rendered into.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TargetConfig {
     /// Width in pixels.
     pub width: u32,

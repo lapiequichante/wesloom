@@ -19,7 +19,7 @@ use crate::types::{BufferUsages, TextureFormat, TextureUsages};
 use wxsl_core::abi;
 
 /// A pipeline, as a list of passes over a set of resources.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct RenderGraph {
     resources: Vec<ResourceDesc>,
     passes: Vec<PassDesc>,
@@ -589,7 +589,8 @@ fn expected_color_targets(kind: &PassKind, graph: &RenderGraph) -> Option<usize>
 }
 
 /// Where a resource's contents actually live.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Allocation {
     /// Supplied by the caller each frame; the graph allocates nothing.
     Imported,
@@ -605,7 +606,7 @@ pub enum Allocation {
 }
 
 /// One physical resource the pool has to create.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SlotDesc {
     /// Label for the `wgpu` texture or buffer.
     pub label: String,
@@ -616,7 +617,8 @@ pub struct SlotDesc {
 
 /// The make-up of one physical slot: the pool's mirror of
 /// [`ResourceShape`], with the inferred and declared usages unioned.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SlotShape {
     /// A texture.
     Texture {
@@ -669,7 +671,7 @@ impl SlotDesc {
 /// Computed once per graph rather than once per frame: nothing in it
 /// depends on the frame number or the target size, which is exactly why it
 /// can be tested with no device.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Schedule {
     order: Vec<usize>,
     allocations: Vec<Allocation>,

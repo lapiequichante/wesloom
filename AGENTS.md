@@ -46,6 +46,7 @@ version:
 |---|---|---|---|
 | `wxsl-core` | nothing in-workspace | no | no |
 | `wxsl-frame` | `wxsl-core` | no | no (ADR 0048) |
+| `wxsl-ffi` (C ABI cdylib) | `wxsl-core`, `wxsl-frame`, `wxsl-lang`, `wxsl-stdlib` | no | no (ADR 0049) |
 | `wxsl-render` | `wxsl-core`, `wxsl-frame`, `wxsl-lang` | no | yes |
 | `wxsl-editor` | `wxsl-core`, `wxsl-render`, `wxsl-lang` | no toolkit — it draws itself | yes (ADR 0013) |
 | `wxsl-stdlib` | `wxsl-core` (plus `wxsl-lang` at build time only) | no | no |
@@ -115,6 +116,7 @@ cargo test --workspace --all-features
 cargo check -p wxsl --no-default-features        # graph model only: no wgpu, no GUI
 cargo check -p wxsl-frame --all-targets         # shared plans: no GPU/WXSL compiler
 cargo tree -p wxsl-frame -e normal             # only wxsl-core in-workspace; no wgpu/GUI
+cargo tree -p wxsl-ffi -e normal               # shared C ABI: no renderer/GUI
 cargo tree -p wxsl --no-default-features -e normal | grep -E 'wgpu|winit|egui'  # must print nothing
 ```
 
@@ -136,6 +138,7 @@ a requirement to run every test for every change:
 
 - graph, typing, codegen, documents: `cargo test -p wxsl-core`
 - scheduling, presets, effects, capabilities and frame layouts: `cargo test -p wxsl-frame`
+- C ABI, generated header and compiler/layout parity: `cargo test -p wxsl-ffi`, then `bash dawn/tests/run_abi_smoke.sh`
 - stdlib or generated shader sources: `cargo test -p wxsl-stdlib --test lighting_models`
 - wgpu adapters, shader variants and renderer UI: `cargo test -p wxsl-render`
 - WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
@@ -334,6 +337,11 @@ routing and invariants.
   `wxsl-core` within the workspace. It owns neutral frame descriptions,
   scheduling, pipeline compilation, presets, capabilities and environment
   data. `wxsl-render` adapts these to wgpu and re-exports shared APIs.
+- `wxsl-ffi` exposes shared computations as data (ADR 0049): versioned
+  JSON documents in, plans/WGSL/computed layouts out. It never depends on
+  a renderer normally; `wxsl-render` is a dev-dependency for parity tests.
+  Unsafe foreign-memory access stays in `ffi.rs`; its generated header is
+  test-pinned. Fixed frame-buffer generation remains B6, not ABI mirrors.
 - New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
   (see that directory's `README.md` for the category layout, the originality
   rule, and the authoring rules that keep a function reachable from a

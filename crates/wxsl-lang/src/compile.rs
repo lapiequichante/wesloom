@@ -27,6 +27,66 @@ use crate::diagnostic::Diagnostics;
 use crate::emit::{emit, emit_wgsl};
 use crate::resolve::{resolve, Modules};
 
+/// A source-rendered failure at the backend-independent compilation boundary.
+#[derive(Debug)]
+pub enum CompileError {
+    /// The root is not a valid module path.
+    InvalidModulePath {
+        /// The invalid spelling.
+        module: String,
+    },
+    /// The compiler refused a source, with its diagnostic rendered in context.
+    ShaderCompile {
+        /// Root being compiled.
+        module: String,
+        /// Diagnostic including source lines and carets.
+        diagnostic: String,
+    },
+}
+
+impl core::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidModulePath { module } => write!(f, "invalid module path `{module}`"),
+            Self::ShaderCompile { module, diagnostic } => {
+                write!(f, "compiling `{module}`: {diagnostic}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompileError {}
+
+/// Compile with the graph model's macro values; shared by native backends and FFI.
+pub fn compile_with_macros(
+    modules: &Modules,
+    root: &str,
+    macros: &wxsl_core::macros::MacroSet,
+) -> Result<String, CompileError> {
+    if crate::ModulePath::parse(root).is_none() {
+        return Err(CompileError::InvalidModulePath {
+            module: root.to_string(),
+        });
+    }
+    let bindings = macros
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                wxsl_core::macros::MacroValue::Flag(flag) => crate::Value::Bool(flag),
+                wxsl_core::macros::MacroValue::Int(number) => crate::Value::Int(i64::from(number)),
+                wxsl_core::macros::MacroValue::Float(number) => {
+                    crate::Value::Float(f64::from(number))
+                }
+            };
+            (name.to_string(), value)
+        })
+        .collect();
+    compile(modules, root, &bindings).map_err(|diagnostics| CompileError::ShaderCompile {
+        module: root.to_string(),
+        diagnostic: diagnostics.render(&|path| modules.get(path).map(str::to_string)),
+    })
+}
+
 /// Compile `root` and its imports to WGSL.
 pub fn compile(modules: &Modules, root: &str, bindings: &Bindings) -> Result<String, Diagnostics> {
     let module = resolve(modules, root, bindings)?;

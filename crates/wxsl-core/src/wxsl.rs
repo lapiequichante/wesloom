@@ -15,6 +15,8 @@ use core::fmt;
 /// verbatim in generated source. Validating them at construction keeps a
 /// malformed name from turning into a confusing shader-compiler error later.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct WxslIdent(String);
 
 impl WxslIdent {

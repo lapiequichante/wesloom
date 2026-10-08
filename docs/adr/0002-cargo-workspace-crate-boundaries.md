@@ -2,7 +2,8 @@
 
 Date: 2026-09-08
 
-Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md)
+Status: Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md),
+[0049](0049-share-the-core-through-a-data-only-c-abi.md)
 
 ## Context
 
@@ -70,6 +71,12 @@ crate graph or the facade's feature graph.
   model is still settling) to a single PR.
 
 ## Consequences
+
+- [ADR 0049](0049-share-the-core-through-a-data-only-c-abi.md) adds
+  `wxsl-ffi`, a cdylib over core/frame/lang/stdlib for C consumers. Like
+  the facade, it assembles a vocabulary without reversing any base-crate
+  dependency. Its normal tree excludes render/editor/wgpu; a renderer
+  dev-dependency pins WGSL parity but is not linked into the cdylib.
 
 - [ADR 0048](0048-the-frame-plan-is-device-free.md) introduces
   `wxsl-frame`, depending only on `wxsl-core` within the workspace.

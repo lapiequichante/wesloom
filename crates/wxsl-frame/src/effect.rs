@@ -45,6 +45,7 @@
 //! — an application registers them with `Renderer::add_effect` exactly as
 //! it would its own.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use wxsl_core::abi;
@@ -52,6 +53,7 @@ use wxsl_core::codegen::{self, GeneratedShader, ScreenOptions};
 use wxsl_core::error::CodegenError;
 use wxsl_core::graph::Graph;
 use wxsl_core::identity;
+use wxsl_core::lighting::{ChannelRequest, LightingSet};
 use wxsl_core::macros::MacroSet;
 use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, Value, ValueType};
 use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
@@ -88,7 +90,7 @@ pub const PEEL_OVER_MODULE: &str = "package::wxsl::peel_over";
 /// `kind` is what the compiler does with it — the spellings exist
 /// because a G-buffer input expands to one texture per layout target plus
 /// depth, an image is exactly one read, and a buffer one more.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct EffectInput {
     /// The socket this input is wired through (the `pass.screen` socket in
     /// a document).
@@ -109,7 +111,8 @@ pub struct EffectInput {
 
 /// The shape of an effect input, and therefore how many pass-group
 /// bindings it becomes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EffectInputKind {
     /// The G-buffer: one texture per layout target, then depth — the order
     /// the generated lighting pass declares its bindings in.
@@ -129,7 +132,8 @@ pub enum EffectInputKind {
 /// The *binding* still comes from the wired resource's shape, in the
 /// pass's `writes`, after every input — the shape here types the socket and
 /// is what the pipeline compiler checks the wiring against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EffectOutputShape {
     /// A storage buffer — wired from a `resource.buffer`.
     Buffer,
@@ -142,7 +146,7 @@ pub enum EffectOutputShape {
 /// effect's storage target.
 ///
 /// A screen effect writes its attachment and declares no outputs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct EffectOutput {
     /// The name the output goes by — the `pass.compute.<effect>` output
     /// socket a document wires.
@@ -162,7 +166,7 @@ pub struct EffectOutput {
 /// and implies the other, which is one less way for a descriptor row to
 /// disagree with itself. Bloom's `THRESHOLD` was the `const` this exists to
 /// retire: a re-tune used to be a new descriptor row.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct EffectParameter {
     /// The field name in the generated struct, and how the host sets it.
     /// A WGSL identifier — it becomes one.
@@ -180,7 +184,8 @@ impl EffectParameter {
 
 /// What work an effect does, and therefore which entry points a `wgpu`
 /// pipeline is built from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EffectKind {
     /// One fullscreen triangle, with a vertex and a fragment entry. The
     /// fragment writes the pass's colour attachment.
@@ -296,6 +301,34 @@ pub struct Effect {
 }
 
 impl Effect {
+    /// The mounted shader with its computed parameter declarations, shared by backends.
+    pub fn module_source(
+        &self,
+        set: &LightingSet,
+        features: &[ChannelRequest],
+    ) -> (&'static str, Cow<'static, str>) {
+        let (path, source) = self.shader.source().unwrap_or_else(|| {
+            (
+                abi::LIGHTING_PASS_MODULE,
+                Cow::Owned(wxsl_core::lighting::lighting_pass_source(set, features)),
+            )
+        });
+        let header = self.params_header();
+        if header.is_empty() {
+            (path, source)
+        } else {
+            (path, Cow::Owned(format!("{header}{source}")))
+        }
+    }
+
+    /// Only generated lighting inherits the material macro set.
+    pub fn shader_macros(&self, macros: &MacroSet) -> MacroSet {
+        match self.shader {
+            EffectShader::Lighting => macros.clone(),
+            EffectShader::Source { .. } | EffectShader::Graph { .. } => MacroSet::new(),
+        }
+    }
+
     /// Build a screen effect from a screen graph (ADR 0040).
     ///
     /// The graph is compiled to WXSL here and now, so that a graph that

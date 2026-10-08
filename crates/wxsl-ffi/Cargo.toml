@@ -1,0 +1,31 @@
+[package]
+name = "wxsl-ffi"
+description = "Data-only C ABI for wxsl's shared planning and shader compilation."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wxsl-core = { workspace = true }
+wxsl-frame = { workspace = true }
+wxsl-lang = { workspace = true }
+wxsl-stdlib = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+wxsl-render = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+

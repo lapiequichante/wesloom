@@ -16,7 +16,7 @@ is signal, don't delete it.
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
-| [0002](0002-cargo-workspace-crate-boundaries.md) | Cargo workspace layout and crate boundaries | Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md) |
+| [0002](0002-cargo-workspace-crate-boundaries.md) | Cargo workspace layout and crate boundaries | Accepted, amended by [0048](0048-the-frame-plan-is-device-free.md), [0049](0049-share-the-core-through-a-data-only-c-abi.md) |
 | [0003](0003-wesl-as-the-shading-language.md) | WESL as the shading language, `wesl`/`wesl-cli` as the compiler | Superseded by [0011](0011-own-the-shading-language.md) |
 | [0004](0004-node-editor-is-an-optional-additive-ui-layer.md) | Visual node editor is an optional, additive UI layer | Accepted, amended by [0013](0013-the-editor-draws-itself-with-wxsl-render.md), [0019](0019-node-colour-and-name-are-instance-metadata.md) |
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
@@ -63,6 +63,7 @@ is signal, don't delete it.
 | [0046](0046-velocity-is-a-stage-taa-is-a-policyd-chain.md) | Velocity is a stage; TAA is a policy'd chain | Accepted |
 | [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) | Dual depth peeling, and the baseline/native split for blendable float targets | Accepted |
 | [0048](0048-the-frame-plan-is-device-free.md) | The frame plan is device-free | Accepted |
+| [0049](0049-share-the-core-through-a-data-only-c-abi.md) | Share the core through a data-only C ABI | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

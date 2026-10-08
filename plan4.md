@@ -148,6 +148,31 @@ splits in two, and the seam is exactly where the `wgpu` references stop.
 
 ### B2 — The C ABI
 
+**Completed on 2026-10-08** — [ADR 0049](docs/adr/0049-share-the-core-through-a-data-only-c-abi.md).
+`wxsl-ffi` exports pipeline compilation/scheduling, raw/effect WXSL→WGSL,
+material-stage compilation with computed layouts, and scene/setup checks.
+The header is generated from Rust declarations; results own JSON, WGSL,
+parameter bytes and field-table views until explicitly freed. Transport and
+document ABI mismatches are refused by name. Normal dependencies include
+core/frame/lang/stdlib, never a renderer or GUI. Custom effect/model
+registrations remain outside this first cut; module overlays and derived
+function nodes are supported. See `crates/wxsl-ffi/README.md` for the contract.
+
+Verification: 13 Rust ABI tests, plus dynamically loaded C and C++ harnesses
+in `dawn/tests`. Both presets export the shared graph/schedule; all nine
+material stages match native Rust WGSL byte-for-byte. Every host-shared
+value type is checked in parameter/user/instance layouts, including packed
+matrix/vector/boolean offsets, plus effect parameters, ownership, concurrent
+calls, malformed inputs, panic containment and named capability/version
+refusals. Workspace all-feature tests, clippy, feature builds and dependency
+boundaries pass. The Apple M5 headless cube still differs by 0.0002 between
+forward and deferred. `bash dawn/tests/run_abi_smoke.sh` runs without a GPU
+or Dawn SDK. The Dawn renderer and fixed-layout generation remain B3/B6.
+
+N8's format decision is recorded in ADR 0049: retain versioned JSON and
+WXSL for authoring/runtime compilation; offline device-only applications
+consume plan JSON, WGSL and layout artifacts without embedding the compiler.
+
 One cdylib exposing the shared core to C++, and the header C++ includes.
 The seam carries **data, never behaviour**: versioned documents in,
 schedules / WGSL text / layout tables out.
@@ -394,8 +419,8 @@ forward/deferred difference remains 0.0002.
 1. **B1** — the split. Everything else in the B-series depends on it,
    and it is the only item whose cost is uncertain enough to want
    started first. **S1** lands in the same window (days, independent).
-2. **B2** — the C ABI, minimal (documents, schedule, WGSL, layouts,
-   check). N8's format decision rides here.
+2. **B2 — completed** — the C ABI, minimal (documents, schedule, WGSL,
+   layouts, check), with N8's format decision recorded in ADR 0049.
 3. **B3 + B6** — the Dawn renderer and the generated headers, offline
    first. The long stretch; **S2** fills its pauses.
 4. **B5** — the parity harness green on `pbr_cube`, then widened. From

@@ -11,10 +11,11 @@ license.workspace = true
 
 [dependencies]
 wxsl-core = { workspace = true }
-bitflags = { workspace = true }
+bitflags = { workspace = true, features = ["serde"] }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

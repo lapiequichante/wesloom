@@ -117,6 +117,7 @@ impl ValueType {
 
 /// One field of a [`BufferLayout`]: where it is and how big it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct FieldLayout {
     /// The field's name, as written in the generated struct and as the host
     /// addresses it.
@@ -136,6 +137,7 @@ pub struct FieldLayout {
 /// key, and tightly packed, so the `f32`-then-`vec3f` case costs nothing
 /// rather than wasting 12 bytes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct BufferLayout {
     fields: Vec<FieldLayout>,
     size: u32,
@@ -422,6 +424,7 @@ fn lay_out(entries: Vec<(WxslIdent, ValueType)>, min_align: u32) -> BufferLayout
 
 /// A texture or a sampler the material declares, and where it is bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ResourceBinding {
     /// The name the graph gave it. Also the variable's name in the
     /// generated WGSL, and how the host addresses it.
@@ -445,6 +448,7 @@ pub struct ResourceBinding {
 /// this resource and cannot fill it. It states the shape, hands out the
 /// `BindGroupLayout`, and the application hands back a `BindGroup`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct UserBlock {
     /// The variable name, which is what a node reads through.
     pub name: WxslIdent,
@@ -469,6 +473,7 @@ impl UserBlock {
 /// slot the mesh's stream is bound at, and a `@location` in the extended
 /// varyings that carry it to the fragment stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct VertexAttributeBinding {
     /// The name the graph gave it, which is also the name of the mesh
     /// stream that must supply it.
@@ -498,6 +503,7 @@ pub struct VertexAttributeBinding {
 /// cannot supply one is a named error rather than a frame that looks wrong
 /// ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct GeometryInterface {
     vertex: Vec<VertexAttributeBinding>,
     instance: BufferLayout,
@@ -511,6 +517,7 @@ pub struct GeometryInterface {
 /// material *requires* of it — but it is an inter-stage location, and
 /// there is exactly one accountant for those.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct VaryingBinding {
     /// Its name: what the writing node names, what the reading node
     /// names, and the field name in the IO structs.
@@ -706,6 +713,7 @@ impl Default for GeometryInterface {
 /// already follows for the nodes it emits, and it has to be the same rule
 /// or the bind group and the shader would disagree.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct MaterialInterface {
     /// The material's own uniform parameters, at
     /// `abi::BINDING_MATERIAL_PARAMS` of `abi::GROUP_MATERIAL`. Empty when

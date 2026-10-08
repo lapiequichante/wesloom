@@ -1,7 +1,8 @@
 //! Backend-neutral graphics vocabulary for frame plans (ADR 0048).
 
 /// AstcBlock in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AstcBlock {
     /// B4x4.
     B4x4,
@@ -34,7 +35,8 @@ pub enum AstcBlock {
 }
 
 /// AstcChannel in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AstcChannel {
     /// Unorm.
     Unorm,
@@ -45,7 +47,8 @@ pub enum AstcChannel {
 }
 
 /// Face in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Face {
     /// Front.
     Front,
@@ -54,7 +57,8 @@ pub enum Face {
 }
 
 /// CompareFunction in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompareFunction {
     /// Never.
     Never,
@@ -75,7 +79,8 @@ pub enum CompareFunction {
 }
 
 /// BlendFactor in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BlendFactor {
     /// Zero.
     Zero,
@@ -114,7 +119,8 @@ pub enum BlendFactor {
 }
 
 /// BlendOperation in a frame's graphics state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BlendOperation {
     /// Add.
     Add,
@@ -129,7 +135,8 @@ pub enum BlendOperation {
 }
 
 /// Texture formats named by frame resources.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TextureFormat {
     /// R8Unorm.
     R8Unorm,
@@ -293,7 +300,7 @@ pub enum TextureFormat {
 }
 
 /// A linear RGBA clear color.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Color {
     /// Red.
     pub r: f64,
@@ -321,7 +328,7 @@ impl Color {
 }
 
 /// One blend equation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BlendComponent {
     /// Source multiplier.
     pub src_factor: BlendFactor,
@@ -346,7 +353,7 @@ impl BlendComponent {
 }
 
 /// Color and alpha blend equations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BlendState {
     /// Color equation.
     pub color: BlendComponent,
@@ -379,6 +386,7 @@ impl BlendState {
 bitflags::bitflags! {
     /// Uses a texture resource permits.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     pub struct TextureUsages: u32 {
         /// COPY_SRC usage.
         const COPY_SRC = 1 << 0;
@@ -400,6 +408,7 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// Uses a buffer resource permits.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     pub struct BufferUsages: u32 {
         /// MAP_READ usage.
         const MAP_READ = 1 << 0;

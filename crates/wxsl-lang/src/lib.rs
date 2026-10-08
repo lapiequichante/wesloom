@@ -52,7 +52,7 @@ lalrpop_util::lalrpop_mod!(
 );
 
 pub use ast::{Module, ModulePath};
-pub use compile::{compile, compile_to_wxsl};
+pub use compile::{compile, compile_to_wxsl, compile_with_macros, CompileError};
 pub use cond::{Bindings, Value};
 pub use diagnostic::{Diagnostic, Diagnostics, Severity};
 pub use emit::{emit, emit_wgsl};

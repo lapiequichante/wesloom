@@ -26,10 +26,10 @@ use std::sync::Arc;
 
 use std::fmt::Write as _;
 
-use wxsl_core::abi::{self, MaterialStage};
+use wxsl_core::abi::MaterialStage;
 use wxsl_core::codegen;
 use wxsl_core::lighting::{ChannelRequest, LightingSet};
-use wxsl_core::macros::{MacroSet, MacroValue};
+use wxsl_core::macros::MacroSet;
 use wxsl_core::wxsl::stable_hash;
 
 use crate::effect::{Effect, EffectShader};
@@ -321,10 +321,7 @@ impl MaterialRequest {
 /// declares its own knobs and reads no material's — which is also what
 /// keeps a material macro from recompiling every effect in the chain.
 fn effect_macros(effect: &Effect, macros: &MacroSet) -> MacroSet {
-    match effect.shader {
-        EffectShader::Lighting => macros.clone(),
-        EffectShader::Source { .. } | EffectShader::Graph { .. } => MacroSet::new(),
-    }
+    effect.shader_macros(macros)
 }
 
 /// Everything needed to compile one effect's shader, owned.
@@ -357,23 +354,7 @@ impl EffectRequest {
         set: &LightingSet,
         features: &[ChannelRequest],
     ) -> Self {
-        let (path, source) = match effect.shader.source() {
-            Some(mounted) => mounted,
-            None => (
-                abi::LIGHTING_PASS_MODULE,
-                Cow::Owned(wxsl_core::lighting::lighting_pass_source(set, features)),
-            ),
-        };
-        // The parameter block is the declaration's shadow, prepended so
-        // the module's own text reads `params.…` without stating the
-        // struct (ADR 0042). An effect with no parameters compiles
-        // byte-for-byte as it did.
-        let header = effect.params_header();
-        let source = if header.is_empty() {
-            source
-        } else {
-            Cow::Owned(format!("{header}{}", source))
-        };
+        let (path, source) = effect.module_source(set, features);
         let label = match effect.shader {
             EffectShader::Lighting => format!("{} ({})", effect.label, set.signature()),
             _ => effect.label.to_string(),
@@ -428,16 +409,6 @@ pub fn compile(
     root: &str,
     macros: &MacroSet,
 ) -> Result<String, RenderError> {
-    // Validate the root path before the compiler sees it: `wxsl-lang`
-    // keys its module map by string, so a malformed path would otherwise
-    // be reported as a missing module rather than as the malformed path
-    // it is. Dropping this check was an oversight of the migration.
-    if wxsl_lang::ast::ModulePath::parse(root).is_none() {
-        return Err(RenderError::InvalidModulePath {
-            module: root.to_string(),
-        });
-    }
-
     let mut modules = wxsl_lang::Modules::new();
     for (path, source) in library.iter() {
         modules.insert(path, source);
@@ -446,35 +417,14 @@ pub fn compile(
         modules.insert(*path, source.as_ref());
     }
 
-    wxsl_lang::compile(&modules, root, &bindings(macros)).map_err(|diagnostics| {
-        RenderError::ShaderCompile {
-            module: root.to_string(),
-            // Rendered with the module sources in hand, so the diagnostic
-            // carries the offending line and a caret rather than just a
-            // position. For generated code that is the difference between a
-            // usable error and a shrug.
-            diagnostic: diagnostics.render(&|path| modules.get(path).map(str::to_string)),
+    wxsl_lang::compile_with_macros(&modules, root, macros).map_err(|error| match error {
+        wxsl_lang::CompileError::InvalidModulePath { module } => {
+            RenderError::InvalidModulePath { module }
+        }
+        wxsl_lang::CompileError::ShaderCompile { module, diagnostic } => {
+            RenderError::ShaderCompile { module, diagnostic }
         }
     })
-}
-
-/// Convert the graph model's macro values into the compiler's bindings.
-///
-/// Two types for the same idea, on purpose: `wxsl-core` owns the node
-/// format's spelling of a macro and `wxsl-lang` owns the language's, and
-/// neither crate depends on the other (ADR 0002).
-fn bindings(macros: &MacroSet) -> wxsl_lang::Bindings {
-    macros
-        .iter()
-        .map(|(name, value)| {
-            let value = match value {
-                MacroValue::Flag(flag) => wxsl_lang::Value::Bool(flag),
-                MacroValue::Int(number) => wxsl_lang::Value::Int(i64::from(number)),
-                MacroValue::Float(number) => wxsl_lang::Value::Float(f64::from(number)),
-            };
-            (name.to_string(), value)
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ graph LR
     core["wxsl-core<br/>(graph model + WXSL codegen)<br/>no wgpu, no GUI"]
     lang["wxsl-lang<br/>(WXSL compiler:<br/>parser + WGSL backend)"]
     frame["wxsl-frame<br/>(frame plans, scheduling, presets)<br/>no wgpu, no GUI"]
+    ffi["wxsl-ffi<br/>(data-only C ABI)<br/>no wgpu, no GUI"]
     render["wxsl-render<br/>(wgpu pipelines,<br/>forward/deferred switching)"]
     editor["wxsl-editor<br/>(visual node editor,<br/>draws itself with wxsl-render)"]
     stdlib["wxsl-stdlib<br/>(original base nodes)<br/>MIT/Apache-2.0"]
@@ -30,6 +31,10 @@ graph LR
     render --> core
     render --> frame
     frame --> core
+    ffi --> core
+    ffi --> frame
+    ffi --> lang
+    ffi --> stdlib
     render --> lang
     editor --> core
     editor --> render
@@ -98,6 +103,16 @@ slot allocation), `pipeline` (config, presets and reference pass lists),
 `pipeline_doc` (document compilation), `effect` (declarations, shaders,
 parameters and registry), `setup` (capabilities and scene checks), and
 `environment` (camera, lights, frame values and host layouts).
+
+**`wxsl-ffi`** — `api` (JSON requests delegating to core/frame/compiler),
+`ffi` (C byte/table views and result ownership), plus a build-generated C
+header. No GPU dependency: `wxsl-render` is a dev-dependency only, for exact
+variant parity tests. The shipped vocabulary is embedded; applications may
+overlay WXSL modules and derive additional function nodes. The contract is
+data, never renderer behavior ([ADR 0049](adr/0049-share-the-core-through-a-data-only-c-abi.md)).
+`bash dawn/tests/run_abi_smoke.sh` dynamically loads the cdylib from both C
+and C++, validates both presets and compares all nine WGSL material stages
+with native Rust variants. The Dawn device half remains plan4 B3.
 
 **`wxsl-render`** — `graph` (resource pools and wgpu recording over the
 shared plan), `pipeline` (native target adapters and pipeline caches),
@@ -307,6 +322,8 @@ Only the WXSL-to-WGSL half runs on the worker — a pure function over text,
 no device in it. On a single-threaded target there is no worker and the
 swap blocks, which is what the indicator is for. See
 [ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
+`wxsl_lang::compile_with_macros` is the shared compilation entry point for
+these workers and the C ABI; the renderer only adapts its diagnostic type.
 
 ## What a frame draws
 
@@ -816,6 +833,8 @@ Implemented and tested end to end:
 | Area | State |
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
+| `wxsl-frame`: neutral plans, document compilation, scheduling, effects and capability checks | done |
+| `wxsl-ffi`: generated C header, plan/WGSL/layout exports, load-time checks and C/C++ parity harness | done; Dawn device half remains B3 |
 | `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, execution policies, buffer resources, compute and screen effects, channel plans, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |

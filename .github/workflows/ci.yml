@@ -30,6 +30,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check -p wxsl --no-default-features
       - run: cargo check -p wxsl-frame --all-targets
+      - run: cargo check -p wxsl-ffi --lib
+      - name: C ABI pulls in no GPU or editor dependency (ADR 0049)
+        run: |
+          tree=$(cargo tree -p wxsl-ffi -e normal)
+          echo "$tree"
+          if echo "$tree" | grep -Eq 'wgpu|winit|egui|wxsl-render|wxsl-editor'; then
+            echo "::error::unexpected dependency in the C ABI library"
+            exit 1
+          fi
       - name: Frame descriptions pull in no renderer, compiler or GUI dependency (ADR 0048)
         run: |
           tree=$(cargo tree -p wxsl-frame -e normal)
@@ -68,6 +77,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --all-features
+      - name: Dynamic C and C++ ABI parity (no GPU or Dawn SDK required)
+        run: bash dawn/tests/run_abi_smoke.sh
       # `crates/wxsl/tests/render_cube.rs` needs a GPU adapter and skips
       # itself when there is none, so the job above passing does not prove
       # the renderer runs. Print whether it skipped, so a runner that quietly
