@@ -1,0 +1,21 @@
+// Downsample 2x
+//
+// The mean of the 2×2 texel block a half-resolution pixel covers: one
+// plain box downsample, the step every mipmap chain and blur pyramid
+// repeats. At odd sizes the last row/column is clamped onto the edge
+// texel, which weights it — the honest cheap answer, and why a chain
+// that needs exact halves rounds its targets up.
+fn downsample2(
+    image: texture_2d<f32>,
+    uv: vec2f,    // Where to sample, in 0..1 of the source. @default 0.0, 0.0
+    texel: vec2f, // One texel of `image` in uv units. @default 0.0, 0.0
+) -> vec3f {
+    let size = vec2i(textureDimensions(image));
+    let top = max(size - vec2i(1, 1), vec2i(0, 0));
+    let p = clamp(vec2i(uv / max(texel, vec2f(1e-6))), vec2i(0, 0), top) * 2;
+    let a = textureLoad(image, clamp(p, vec2i(0, 0), top), 0).rgb;
+    let b = textureLoad(image, clamp(p + vec2i(1, 0), vec2i(0, 0), top), 0).rgb;
+    let c = textureLoad(image, clamp(p + vec2i(0, 1), vec2i(0, 0), top), 0).rgb;
+    let d = textureLoad(image, clamp(p + vec2i(1, 1), vec2i(0, 0), top), 0).rgb;
+    return (a + b + c + d) * 0.25;
+}

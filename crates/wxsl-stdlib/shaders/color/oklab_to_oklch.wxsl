@@ -1,0 +1,17 @@
+// OKLab to OKLCh
+//
+// Cartesian to cylindrical: L through unchanged, the a/b pair as chroma
+// and hue. The hue is in **turns** (0..1, a full circle), matching
+// `rotate_uv` and the animation nodes' phase convention; `oklch_to_oklab`
+// turns it back.
+fn oklab_to_oklch(
+    lab: vec3f, // OKLab: L, a, b. @default 0.5, 0.0, 0.0
+) -> vec3f {
+    let chroma = length(lab.yz);
+    // A grey has no hue; pinning it to 0 keeps a hue socket usable.
+    var hue = 0.0;
+    if chroma > 1e-6 {
+        hue = fract(atan2(lab.z, lab.y) / 6.283185307179586 + 1.0);
+    }
+    return vec3f(lab.x, chroma, hue);
+}

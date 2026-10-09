@@ -1,0 +1,19 @@
+// SDF smooth intersection
+//
+// Intersection of two fields with a filleted seam of width `k` — the
+// counterpart of `smooth_union` for the inside of both.
+//
+// The kernel is the same polynomial smooth minimum applied to the negated
+// pair, so `k` of 0 degenerates to plain `max` exactly as the union's does
+// to plain `min`.
+fn sdf_smooth_intersection(
+    a: f32, // First field. @default 0.0
+    b: f32, // Second field. @default 0.0
+    k: f32, // Width of the filleted seam. @default 0.1
+) -> f32 {
+    if k <= 1e-6 {
+        return max(a, b);
+    }
+    let blend = saturate(0.5 - (b - a) / (2.0 * k));
+    return mix(a, b, blend) - k * blend * (1.0 - blend);
+}

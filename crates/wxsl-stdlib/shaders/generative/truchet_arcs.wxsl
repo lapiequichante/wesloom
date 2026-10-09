@@ -1,0 +1,28 @@
+// Truchet arcs
+//
+// The classic two-arcs Truchet tile: each cell draws one of two quarter-
+// circle pairs — which one decided per cell, so the tiles join into
+// meandering curves with no visible tiling. 1 on the arcs, 0 between.
+//
+// The choice is hashed from the cell index, so it is stable under
+// camera movement and identical across backends.
+fn truchet_arcs(
+    uv: vec2f, // Texture coordinates, one tile per unit. @default 0.0, 0.0
+    cells: vec2f, // Tiles across the uv. @default 4.0, 4.0
+    width: f32,   // Arc stroke width, in cell units. @default 0.1
+) -> f32 {
+    let scaled = uv * max(cells, vec2f(1.0));
+    let cell = vec3i(scaled.x, scaled.y, 0);
+    var h = bitcast<u32>(cell.x) * 374761393u + bitcast<u32>(cell.y) * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    let flip = (h & 1u) == 1u;
+
+    var local = fract(scaled);
+    if flip {
+        local.x = 1.0 - local.x;
+    }
+    let a = abs(length(local) - 0.5);
+    let b = abs(length(local - vec2f(1.0)) - 0.5);
+    return 1.0 - step(max(width, 0.0), min(a, b));
+}

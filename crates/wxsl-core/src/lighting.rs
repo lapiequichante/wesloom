@@ -681,6 +681,14 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         }),
         doc: "PBR plus a second clear-coat lobe, asking for a G-buffer target.",
     },
+    LightingModel {
+        id: 4,
+        name: "wxsl.cloth",
+        module: "package::lighting::models::cloth",
+        function: "lighting_cloth",
+        extra: None,
+        doc: "Fabric: a roughness-wrapped diffuse with a Charlie sheen layer.",
+    },
 ];
 
 /// The id of the model [`LightingSet::default_set`] shades with, and the

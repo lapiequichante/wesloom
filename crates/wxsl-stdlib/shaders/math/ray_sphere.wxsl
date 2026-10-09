@@ -1,0 +1,25 @@
+// Ray sphere intersection
+//
+// Where a ray meets a sphere centred at the origin: the two path lengths
+// along `direction` where it enters and leaves. A negative near root
+// means the origin is inside; both negative means the sphere is behind.
+//
+// The result is a vec2 of (near, far). No hit returns (−1, −1). The
+// direction need not be normalized — the roots are in units of it — but
+// an unnormalized direction makes those units meaningless, so normalize
+// unless the caller wants parameter-space roots.
+fn ray_sphere(
+    origin: vec3f,    // Ray origin, sphere at the origin. @default 0.0, 0.0, 0.0
+    direction: vec3f, // Ray direction. @default 0.0, 0.0, -1.0
+    radius: f32,      // Sphere radius. @default 1.0
+) -> vec2f {
+    let a = max(dot(direction, direction), 1e-6);
+    let b = dot(origin, direction);
+    let c = dot(origin, origin) - max(radius, 0.0) * max(radius, 0.0);
+    let discriminant = b * b - a * c;
+    if discriminant < 0.0 {
+        return vec2f(-1.0);
+    }
+    let root = sqrt(discriminant);
+    return vec2f((-b - root) / a, (-b + root) / a);
+}

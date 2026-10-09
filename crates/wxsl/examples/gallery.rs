@@ -218,6 +218,12 @@ struct Demo {
     key_intensity: f32,
     /// The material features the demo's pipeline enables (plan2 P12).
     features: &'static [&'static str],
+    /// Which lighting model shades the shared cube, when the demo's is
+    /// not the stock default. Naming a model demands the *set* carry it,
+    /// so entering such a demo widens the renderer's lighting set and
+    /// leaving restores the stock one — the recompile that costs is the
+    /// demo switch itself.
+    model: Option<&'static str>,
     /// A sky to light the demo by instead of the lights: sky above,
     /// bounce below, with the lamps switched off. What is left is
     /// `ambient_environment` alone, and therefore the environment-BRDF
@@ -264,6 +270,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -277,6 +284,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -290,6 +298,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -305,6 +314,7 @@ fn demos() -> Vec<Demo> {
             // A highlight bright enough to cross bloom's threshold.
             key_intensity: 160.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -318,6 +328,7 @@ fn demos() -> Vec<Demo> {
             instances: 6,
             key_intensity: 160.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -333,6 +344,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 160.0,
             features: &[],
+            model: None,
             sky: None,
             // The threshold below the lit surface's radiance, so the whole
             // scene glows, and the strength above one, so the glow leads —
@@ -354,6 +366,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -369,6 +382,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -384,6 +398,21 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &["subsurface"],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "cloth",
+            blurb: "the same cube shaded by the cloth model: a roughness-wrapped                     diffuse and a Charlie sheen layer, entering the wide                     lighting set for the one demo that needs it",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            model: Some("wxsl.cloth"),
             sky: None,
             params: &[],
             material: None,
@@ -397,6 +426,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 0.0,
             features: &[],
+            model: None,
             // Bright enough to be the whole scene, and blue enough that the
             // specular response is visibly the *sky* rather than the
             // surface's own colour.
@@ -415,6 +445,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: Some(bake_material_graph),
@@ -428,6 +459,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -443,6 +475,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 22.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -464,6 +497,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 22.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -481,6 +515,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            model: None,
             sky: None,
             params: &[],
             material: None,
@@ -1076,6 +1111,23 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     if renderer.features() != demo.features {
         renderer.set_features(demo.features)?;
     }
+    // A model-name demo needs the wide set; every other demo wants the
+    // stock single-model one back. Comparing on the one model only the
+    // wide set carries keeps this a no-op between two wide demos.
+    let wide = demo.model.is_some();
+    let carries_cloth = renderer
+        .lighting()
+        .models()
+        .iter()
+        .any(|model| model.name == "wxsl.cloth");
+    if wide != carries_cloth {
+        let set = if wide {
+            wxsl::core::lighting::default_set()?
+        } else {
+            wxsl::core::lighting::default_single_set()
+        };
+        renderer.set_lighting(set)?;
+    }
     // The bake table's view rides only with its demo: the next pass list
     // declares no such resource, and a view nothing declares is an error
     // by name — so the demo that owns it takes it back when it leaves.
@@ -1517,6 +1569,7 @@ struct Stage {
     sampler: wgpu::Sampler,
     /// The feature set the current material was resolved against.
     material_features: &'static [&'static str],
+    material_model: Option<&'static str>,
     /// The peel demo's surfaces: the cube graph with the alpha uniform,
     /// on a torus and a sphere that occupy the same space.
     peel_material: wxsl::render::Material,
@@ -1621,6 +1674,7 @@ impl Stage {
             texture,
             sampler,
             material_features: &[],
+            material_model: None,
             peel_material,
             peel_bindings,
             sphere_bindings,
@@ -1634,8 +1688,12 @@ impl Stage {
     /// differs from the current one (plan2 P12). A material is resolved
     /// against the plan of the pipeline it will draw under — that is the
     /// handshake the frame compile checks.
-    fn ensure_material(&mut self, features: &'static [&'static str]) -> Result<(), Box<dyn Error>> {
-        if self.material_features == features {
+    fn ensure_material(
+        &mut self,
+        features: &'static [&'static str],
+        model: Option<&'static str>,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.material_features == features && self.material_model == model {
             return Ok(());
         }
         let registry = wxsl::stdlib::registry();
@@ -1644,6 +1702,7 @@ impl Stage {
             &registry,
             &wxsl::render::material::MaterialConfig {
                 features: wxsl::core::lighting::feature_requests(features)?,
+                model: model.map(str::to_string),
                 ..wxsl::render::material::MaterialConfig::default()
             },
             self.renderer.lighting(),
@@ -1658,6 +1717,7 @@ impl Stage {
         )?;
         self.material = material;
         self.material_features = features;
+        self.material_model = model;
         Ok(())
     }
 
@@ -1675,7 +1735,7 @@ impl Stage {
         step: f32,
     ) -> Result<(), Box<dyn Error>> {
         apply(demo, &mut self.renderer)?;
-        self.ensure_material(demo.features)?;
+        self.ensure_material(demo.features, demo.model)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
         if demo.name == "peel" {

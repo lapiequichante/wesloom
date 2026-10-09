@@ -1,0 +1,16 @@
+// SDF chamfer union
+//
+// Union of two fields cut by a 45-degree chamfer of width `r` along the
+// seam, instead of smooth union's rounded blend.
+//
+// The chamfer plane is the diagonal between the two surfaces, so the
+// result bounds the plain union from below near the seam and equals it
+// everywhere else.
+fn sdf_chamfer_union(
+    a: f32, // First field. @default 0.0
+    b: f32, // Second field. @default 0.0
+    r: f32, // Chamfer width. @default 0.1
+) -> f32 {
+    let cut = (a + b - max(r, 0.0)) * 0.7071067811865476;
+    return min(min(a, b), cut);
+}

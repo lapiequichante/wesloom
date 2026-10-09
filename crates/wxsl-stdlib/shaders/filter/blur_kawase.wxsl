@@ -1,0 +1,26 @@
+// Kawase blur
+//
+// Four diagonal taps at a half-texel-shifted offset. One pass of it is
+// already a soft blur, and *repeating* it with growing offsets — the
+// Kawase dual-filter scheme — approximates a wide Gaussian at a fraction
+// of the taps: this is what mobile chains reach for when a separable
+// Gaussian is still too wide.
+//
+// `offset` is in texels and is what a chain animates between passes
+// (0, 1, 2, 2, 3 …); this node is one pass of that sequence.
+fn blur_kawase(
+    image: texture_2d<f32>,
+    uv: vec2f,    // Where to filter, in 0..1. @default 0.0, 0.0
+    texel: vec2f, // One texel of `image` in uv units. @default 0.0, 0.0
+    offset: f32,  // Tap offset in texels; grows down a Kawase chain. @default 0.0
+) -> vec3f {
+    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    let centre = clamp(vec2i(uv / max(texel, vec2f(1e-6))), vec2i(0, 0), size);
+    let d = max(offset + 0.5, 0.0);
+    let delta = vec2i(d);
+    let a = textureLoad(image, clamp(centre + vec2i(-delta.x, -delta.y), vec2i(0, 0), size), 0).rgb;
+    let b = textureLoad(image, clamp(centre + vec2i(delta.x, -delta.y), vec2i(0, 0), size), 0).rgb;
+    let c = textureLoad(image, clamp(centre + vec2i(-delta.x, delta.y), vec2i(0, 0), size), 0).rgb;
+    let e = textureLoad(image, clamp(centre + vec2i(delta.x, delta.y), vec2i(0, 0), size), 0).rgb;
+    return (a + b + c + e) * 0.25;
+}

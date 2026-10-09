@@ -1,0 +1,22 @@
+// Vignette
+//
+// Darkens a radiance value toward the frame's edge: 1 at the centre
+// (unchanged), falling to 0 outside `radius`, over `softness` of falloff.
+//
+// The aspect correction keeps the falloff circular on a non-square
+// frame; `texel` (one texel of the image in uv units) carries the
+// aspect here as texel.y / texel.x. Multiply the value by the result —
+// it is a light attenuation, so it belongs before the display transform
+// like any other radiance change.
+fn vignette(
+    color: vec3f,  // Linear radiance in. @default 1.0, 1.0, 1.0
+    uv: vec2f,     // Where on the frame, 0..1. @default 0.5, 0.5
+    texel: vec2f,  // One texel of the image, for the aspect. @default 0.0, 0.0
+    radius: f32,   // Where the falloff starts, in half-heights. @default 0.7
+    softness: f32, // How far the falloff spreads. @default 0.3
+) -> vec3f {
+    let aspect = max(texel.y, 1e-6) / max(texel.x, 1e-6);
+    let p = (uv - vec2f(0.5)) * vec2f(aspect, 1.0);
+    let r = max(radius, 0.0);
+    return color * (1.0 - smoothstep(r, r + max(softness, 1e-6), length(p)));
+}

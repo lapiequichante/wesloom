@@ -1,0 +1,21 @@
+// SDF hexagon
+//
+// Signed distance to a regular flat-topped hexagon in the plane, `radius`
+// from centre to a corner.
+//
+// The technique folds the sample into the wedge where one edge is nearest
+// and measures against it, which keeps the field exact outside — the
+// two-fold reflection is where the classic formulation loses exactness.
+// Technique from Inigo Quilez's 2D-distance-functions articles.
+fn sdf_hexagon(
+    p: vec2f,    // Sample point. @default 0.0, 0.0
+    radius: f32, // Centre to corner. @default 0.5
+) -> f32 {
+    let r = max(radius, 0.0);
+    let kx = -0.8660254037844386;
+    let ky = 0.5;
+    let fold = min(dot(vec2f(kx, ky), abs(p)), 0.0);
+    let q = abs(p) - vec2f(fold) * vec2f(kx, ky) * 2.0;
+    let edge = vec2f(clamp(q.x, -r * kx, r * kx), r);
+    return length(q - edge) * sign(q.y);
+}

@@ -1,0 +1,28 @@
+// Height fog optical depth
+//
+// The optical depth of an exponential height fog along a path: density
+// `ground_density` at the start height, falling off by `falloff` per
+// metre upward, integrated analytically over `distance` metres of path
+// and `height_delta` of climb.
+//
+// The integral of exp(−k·h) along the segment has the (1 − exp(−a))/a
+// form, whose limit at a = 0 is 1 — the guard carries that case. Both
+// exponentials are bounded, so depths far below the ground saturate at a
+// large-but-finite fog rather than a NaN. Feed the result to
+// `fog_transmittance` as exp(−depth) or compose with `fog_composite`.
+fn height_fog_depth(
+    start_height: f32, // Height the path starts at, metres. @default 0.0
+    height_delta: f32, // Height change over the path, metres. @default 0.0
+    distance: f32,     // Path length, metres. @default 10.0
+    ground_density: f32,// Density at height 0, per metre. @default 0.05
+    falloff: f32,      // Density falloff per metre of height. @default 0.1
+) -> f32 {
+    let k = max(falloff, 0.0);
+    let a = clamp(k * height_delta, -40.0, 40.0);
+    var integral = 1.0;
+    if abs(a) > 0.0001 {
+        integral = (1.0 - exp(-a)) / a;
+    }
+    return max(ground_density, 0.0) * exp(clamp(-k * start_height, -40.0, 40.0))
+        * max(distance, 0.0) * integral;
+}

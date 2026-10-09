@@ -1,0 +1,15 @@
+// IOR to F0
+//
+// The reflectance at normal incidence for an interface between two
+// indices of refraction: what `fresnel_schlick` takes as its F0. The
+// direction of the ratio does not matter — glass to air and air to glass
+// reflect identically at normal incidence.
+fn ior_to_f0(
+    transmitted: f32, // IOR on the far side. @default 1.5
+    incident: f32,    // IOR on the near side. @default 1.0
+) -> f32 {
+    let t = max(transmitted, 1e-6);
+    let i = max(incident, 1e-6);
+    let ratio = (t - i) / (t + i);
+    return ratio * ratio;
+}

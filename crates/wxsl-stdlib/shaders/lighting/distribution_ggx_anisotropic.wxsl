@@ -1,0 +1,25 @@
+// GGX distribution, anisotropic
+//
+// The GGX microfacet distribution for a half vector expressed in the
+// tangent frame — brushed metal, hair, worn surfaces that drag highlights
+// along one axis.
+//
+// `half_tangent` is the normalized half vector in tangent space: x along
+// the tangent, y along the bitangent, z along the normal. The two widths
+// are the GGX alpha widths of those axes — **not** perceptual roughness
+// (square it first); `anisotropic_widths` converts the usual
+// roughness-plus-anisotropy pair into them.
+//
+// At equal widths this is the isotropic `distribution_ggx` on the same
+// half vector.
+fn distribution_ggx_anisotropic(
+    half_tangent: vec3f, // Half vector in the tangent frame. @default 0.0, 0.0, 1.0
+    alpha_x: f32,        // Width along the tangent. @default 0.25
+    alpha_y: f32,        // Width along the bitangent. @default 0.25
+) -> f32 {
+    let ax = max(alpha_x, 0.001);
+    let ay = max(alpha_y, 0.001);
+    let h = normalize(half_tangent);
+    let q = h.x * h.x / (ax * ax) + h.y * h.y / (ay * ay) + h.z * h.z;
+    return 1.0 / max(3.141592653589793 * ax * ay * q * q, 1e-7);
+}

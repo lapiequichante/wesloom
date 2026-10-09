@@ -1,0 +1,40 @@
+// GGX visibility, anisotropic
+//
+// The Smith height-correlated visibility for a stretched GGX lobe: how
+// much of the distribution survives microfacet shadowing and masking when
+// the lobe is narrower along one tangent axis than the other. Pair with
+// `distribution_ggx_anisotropic` and a Fresnel term.
+//
+// The view and light vectors may be given in world space; they are
+// projected onto the tangent frame here, so the frame must be orthonormal
+// (`tangent_basis` builds one).
+//
+// SPDX-License-Identifier: MIT
+// Copyright © 2010-2026 three.js authors
+// Ported from: https://github.com/mrdoob/three.js
+// Source: src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js
+// Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+// Symbol: V_GGX_SmithCorrelated_Anisotropic
+// Changes: GLSL to WXSL; the two tangent-space dot products computed
+//          inside from world-space vectors; guards on the denominators;
+//          socket metadata. License text: ../../NOTICE.
+fn visibility_ggx_anisotropic(
+    tangent: vec3f,   // Surface tangent, unit length. @default 1.0, 0.0, 0.0
+    bitangent: vec3f, // Surface bitangent, unit length. @default 0.0, 1.0, 0.0
+    normal: vec3f,    // Surface normal, unit length. @default 0.0, 0.0, 1.0
+    view: vec3f,      // Direction from the surface to the eye. @default 0.0, 0.0, 1.0
+    light: vec3f,     // Direction from the surface to the light. @default 0.0, 0.0, 1.0
+    alpha_x: f32,     // Width along the tangent. @default 0.25
+    alpha_y: f32,     // Width along the bitangent. @default 0.25
+) -> f32 {
+    let t = normalize(tangent);
+    let b = normalize(bitangent);
+    let n = normalize(normal);
+    let v = normalize(view);
+    let l = normalize(light);
+    let n_dot_v = max(dot(n, v), 1e-5);
+    let n_dot_l = max(dot(n, l), 1e-5);
+    let gv = n_dot_l * length(vec3f(alpha_x * dot(t, v), alpha_y * dot(b, v), n_dot_v));
+    let gl = n_dot_v * length(vec3f(alpha_x * dot(t, l), alpha_y * dot(b, l), n_dot_l));
+    return 0.5 / max(gv + gl, 1e-6);
+}

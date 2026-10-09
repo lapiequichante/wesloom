@@ -1,0 +1,13 @@
+// SDF union
+//
+// The outside of either field: `min` of two distances.
+//
+// A CSG operator's result is a valid boundary everywhere, but it is not
+// guaranteed to be an exact Euclidean distance — keep that in mind before
+// using it as a ray-march step length far from the surfaces.
+fn sdf_union(
+    a: f32, // First field. @default 0.0
+    b: f32, // Second field. @default 0.0
+) -> f32 {
+    return min(a, b);
+}

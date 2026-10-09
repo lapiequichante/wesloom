@@ -1,0 +1,12 @@
+// SDF intersection
+//
+// Only where both fields are inside: `max` of two distances.
+//
+// The boundary is exact where the two surfaces cross, but the operator
+// overstates distances near a concave seam — march with a safety factor.
+fn sdf_intersection(
+    a: f32, // First field. @default 0.0
+    b: f32, // Second field. @default 0.0
+) -> f32 {
+    return max(a, b);
+}

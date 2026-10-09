@@ -1,0 +1,26 @@
+// Film grain
+//
+// Adds a deterministic per-pixel noise around zero to a radiance value:
+// the texture a flat gradient needs to stop banding, and the vintage
+// look when pushed harder.
+//
+// The noise is hashed from pixel coordinates and the frame time, so it
+// re-seeds every frame without ever diverging between backends or
+// replaying differently under a screenshot. `amount` is a fraction of
+// the value at moderate brightness — grain before the tonemap has an
+// exposure-dependent response, which is either the point or a reason to
+// move it after the curve.
+fn film_grain(
+    color: vec3f, // Linear radiance in. @default 1.0, 1.0, 1.0
+    pixel: vec2f, // This pixel's coordinates. @default 0.0, 0.0
+    time: f32,    // Seconds since the renderer started. @default 0.0
+    amount: f32,  // Grain strength as a fraction of the value. @default 0.05
+) -> vec3f {
+    let q = vec2u(max(pixel, vec2f(0.0)));
+    var h = q.x * 374761393u + q.y * 668265263u
+        + u32(max(time, 0.0) * 60.0) * 2246822519u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    let noise = f32(h >> 8u) / 16777216.0 - 0.5;
+    return color + color * (noise * 2.0 * max(amount, 0.0));
+}

@@ -1,0 +1,23 @@
+// Thin film phase
+//
+// The optical phase difference a wave accumulates crossing a film of the
+// given thickness twice — once in, once after reflecting off the film's
+// lower interface: 4π · n · d · cosθ / λ.
+//
+// This is one term of a thin-film (iridescent) reflection, not the
+// effect: a complete iridescence also needs Snell refraction into the
+// film, Fresnel amplitudes at both interfaces, the phase inversions, and
+// a spectral integration into RGB. Compose those around this phase, or
+// wait for the full model — three coloured cosines are not iridescence.
+//
+// Inputs are in nanometres because that is what thin-film literature and
+// colour matching functions are written in.
+fn thin_film_phase(
+    thickness_nm: f32, // Film thickness. @default 400.0
+    film_ior: f32,     // Index of refraction of the film. @default 1.3
+    cos_inside: f32,   // Cosine of the angle *inside* the film. @default 1.0
+    wavelength_nm: f32,// Wavelength being integrated. @default 550.0
+) -> f32 {
+    return 12.566370614359172 * max(thickness_nm, 0.0) * max(film_ior, 0.0)
+        * clamp(cos_inside, 0.0, 1.0) / max(wavelength_nm, 1.0);
+}

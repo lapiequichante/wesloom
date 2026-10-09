@@ -1,0 +1,13 @@
+// SDF subtract
+//
+// The first field with the second carved out of it: `a` where it is inside
+// and `b` is outside.
+//
+// The seam of the cut is the reflection of `b`'s boundary, so normals stay
+// continuous across it only if `b`'s were.
+fn sdf_subtract(
+    a: f32, // The field being carved. @default 0.0
+    b: f32, // The field cutting. @default 0.0
+) -> f32 {
+    return max(a, -b);
+}

@@ -1,0 +1,16 @@
+// SDF capsule
+//
+// Signed distance to the capsule around a 2D segment: every point within
+// `radius` of the segment from `a` to `b` is inside. A degenerate segment
+// (a == b) is a circle.
+fn sdf_capsule(
+    p: vec2f,     // Sample point. @default 0.0, 0.0
+    a: vec2f,     // Segment start. @default -0.3, 0.0
+    b: vec2f,     // Segment end. @default 0.3, 0.0
+    radius: f32,  // @default 0.2
+) -> f32 {
+    let segment = b - a;
+    let span = max(dot(segment, segment), 1e-6);
+    let t = clamp(dot(p - a, segment) / span, 0.0, 1.0);
+    return length(p - a - segment * t) - max(radius, 0.0);
+}

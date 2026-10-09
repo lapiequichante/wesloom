@@ -1,0 +1,12 @@
+// SDF cylinder
+//
+// Signed distance to a capped cylinder around the y axis: a disc of
+// `radius` extruded `half_height` in each direction. Exact outside.
+fn sdf_cylinder(
+    p: vec3f,       // Sample point. @default 0.0, 0.0, 0.0
+    half_height: f32,// Distance from the mid-plane to each cap. @default 0.5
+    radius: f32,    // @default 0.5
+) -> f32 {
+    let d = abs(vec2f(length(p.xz), p.y)) - vec2f(max(radius, 0.0), max(half_height, 0.0));
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2f(0.0)));
+}

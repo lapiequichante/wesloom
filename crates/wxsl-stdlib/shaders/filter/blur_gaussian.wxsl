@@ -1,0 +1,38 @@
+// Gaussian blur, one axis
+//
+// The Gaussian-weighted mean along one direction — `(1, 0)` for
+// horizontal, `(0, 1)` for vertical, one tap per texel of it. Separability
+// is the whole point: an H pass then a V pass of this node costs radius
+// taps per pixel instead of the square a 2D kernel would, which is how
+// bloom pyramids and DOF afford their widths.
+//
+// `axis` is the per-tap step in texels, so a diagonal pass is legal too
+// (its taps round to whole texels, as a loaded kernel must). Weights come
+// from `sigma` in texels and are normalized in the loop, so a sigma of
+// 0.0001 or less degenerates to the identity rather than dividing by
+// zero. The radius is a macro: pick it at least 2–3·sigma, or the
+// truncation flattens the curve into a box.
+@macro const WXSL_GAUSSIAN_RADIUS: i32 = 5; // Taps each side of the centre. A loop bound.
+
+fn blur_gaussian(
+    image: texture_2d<f32>,
+    uv: vec2f,     // Where to filter, in 0..1. @default 0.0, 0.0
+    texel: vec2f,  // One texel of `image` in uv units. @default 0.0, 0.0
+    axis: vec2f,   // Per-tap step, in texels. @default 1.0, 0.0
+    sigma: f32,    // Standard deviation, in texels. @default 2.0
+) -> vec3f {
+    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    let centre = clamp(vec2i(uv / max(texel, vec2f(1e-6))), vec2i(0, 0), size);
+    let step_texels = vec2i(axis);
+    var sum = vec3f(0.0);
+    var weight_sum = 0.0;
+    let s = max(sigma, 0.0001);
+    for (var i: i32 = -WXSL_GAUSSIAN_RADIUS; i <= WXSL_GAUSSIAN_RADIUS; i = i + 1) {
+        let x = f32(i);
+        let weight = exp(-0.5 * x * x / (s * s));
+        let tap = clamp(centre + step_texels * i, vec2i(0, 0), size);
+        sum = sum + weight * textureLoad(image, tap, 0).rgb;
+        weight_sum = weight_sum + weight;
+    }
+    return sum / max(weight_sum, 1e-6);
+}

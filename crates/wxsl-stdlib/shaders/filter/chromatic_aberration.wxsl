@@ -1,0 +1,24 @@
+// Chromatic aberration
+//
+// Samples the red and blue channels at points pulled toward and away
+// from the frame's centre while green stays put: the lens-dispersion
+// fringe, cheapest of the post effects and therefore the most overused.
+//
+// `strength` is in uv units at the frame edge — resolution-independent
+// by construction, so it does not change with the window. Coordinates
+// clamp to the edge; a wrap would seam at the border.
+fn chromatic_aberration(
+    image: texture_2d<f32>,
+    uv: vec2f,    // Where to sample, 0..1. @default 0.5, 0.5
+    texel: vec2f, // One texel of `image` in uv units. @default 0.0, 0.0
+    strength: f32,// Pull at the frame edge, in uv units. @default 0.01
+) -> vec3f {
+    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    let centre = clamp(vec2i(uv / max(texel, vec2f(1e-6))), vec2i(0, 0), size);
+    let delta = (uv - vec2f(0.5)) * strength;
+    let pull = vec2i(delta / max(texel, vec2f(1e-6)));
+    let r = textureLoad(image, clamp(centre + pull, vec2i(0, 0), size), 0).r;
+    let g = textureLoad(image, centre, 0).g;
+    let b = textureLoad(image, clamp(centre - pull, vec2i(0, 0), size), 0).b;
+    return vec3f(r, g, b);
+}

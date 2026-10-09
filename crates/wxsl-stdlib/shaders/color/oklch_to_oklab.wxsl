@@ -1,0 +1,11 @@
+// OKLCh to OKLab
+//
+// Cylindrical back to cartesian: chroma becomes the a/b radius at the
+// given hue. The hue is in turns, as `oklab_to_oklch` writes it.
+fn oklch_to_oklab(
+    lch: vec3f, // OKLCh: L, chroma, hue in turns. @default 0.5, 0.0, 0.0
+) -> vec3f {
+    let angle = lch.z * 6.283185307179586;
+    let chroma = max(lch.y, 0.0);
+    return vec3f(lch.x, chroma * cos(angle), chroma * sin(angle));
+}

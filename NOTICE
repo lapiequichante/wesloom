@@ -6,10 +6,33 @@ original licenses and notices; this file does not relicense them.
 three.js — MIT — Copyright © 2010-2026 three.js authors
 Source: https://github.com/mrdoob/three.js
 Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
-Source file: src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js
-Original symbol: IBLSheenBRDF
-Adapted file: crates/wxsl-stdlib/shaders/lighting/sheen_ibl_response.wxsl
-Changes: WXSL translation, scalar N·V input, bounded inputs and socket metadata.
+Adapted files (source files and symbols listed per file):
+- crates/wxsl-stdlib/shaders/lighting/sheen_ibl_response.wxsl
+  from src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js,
+  symbol IBLSheenBRDF; WXSL translation, scalar N·V input, bounded inputs
+  and socket metadata.
+- crates/wxsl-stdlib/shaders/lighting/visibility_ggx_anisotropic.wxsl
+  from src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js,
+  symbol V_GGX_SmithCorrelated_Anisotropic; WXSL translation, world-space
+  vectors projected onto the tangent frame inside, guarded denominators
+  and socket metadata.
+- crates/wxsl-stdlib/shaders/color/tonemap_aces.wxsl
+  from src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js,
+  symbols ACESFilmicToneMapping and RRTAndODTFit; WXSL translation, the
+  fit inlined into one function, exposure folded out, WGSL column-order
+  matrices.
+Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
+
+webgl-noise — MIT — Copyright (C) 2011 Ashima Arts (Simplex noise),
+Copyright (C) 2011-2016 Stefan Gustavson
+Source: https://github.com/ashima/webgl-noise
+Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
+Adapted files:
+- crates/wxsl-stdlib/shaders/generative/simplex3.wxsl
+  from src/noise3D.glsl, symbol snoise; WXSL translation with the
+  mod289/permute/taylorInvSqrt helpers inlined; no behaviour change.
+- crates/wxsl-stdlib/shaders/generative/simplex2.wxsl
+  from src/noise2D.glsl, symbol snoise; the same translation rules.
 Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
 
 Research checkouts under refs/ are not distributed components. Their presence

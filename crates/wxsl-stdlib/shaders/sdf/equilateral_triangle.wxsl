@@ -1,0 +1,21 @@
+// SDF equilateral triangle
+//
+// Signed distance to an equilateral triangle in the plane, pointing up,
+// `radius` from centre to a vertex.
+//
+// Technique from Inigo Quilez's 2D-distance-functions articles: fold the
+// sample across the left edge into the fundamental region, then measure
+// against the base.
+fn sdf_equilateral_triangle(
+    p: vec2f,    // Sample point. @default 0.0, 0.0
+    radius: f32, // Centre to vertex. @default 0.5
+) -> f32 {
+    let r = max(radius, 0.0);
+    let k = 1.7320508075688772;
+    var q = vec2f(abs(p.x) - r, p.y + r / k);
+    if q.x + k * q.y > 0.0 {
+        q = vec2f(q.x - k * q.y, -k * q.x - q.y) * 0.5;
+    }
+    q.x = q.x - clamp(q.x, -2.0 * r, 0.0);
+    return -length(q) * sign(q.y);
+}

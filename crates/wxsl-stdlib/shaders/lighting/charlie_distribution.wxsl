@@ -1,0 +1,22 @@
+// Charlie distribution
+//
+// The sheen microfacet distribution: a slowly-falling lobe that spreads
+// over the whole hemisphere instead of tightening to a mirror peak, which
+// is what fabric needs. Companion to `distribution_ggx` for cloth.
+//
+// `roughness` is perceptual (alpha = roughness²), the same convention the
+// GGX nodes here use. Original implementation of the Estevez–Kulla form —
+// computed in double-free plain arithmetic, so it does not share the
+// upstream fp16 floor tricks; verify the integral against a reference
+// before trusting the numbers in a shipped model.
+//
+// Technique: Estevez and Kulla (2017), "Production Friendly Microfacet
+// Sheen BRDF".
+fn charlie_distribution(
+    n_dot_h: f32,   // Cosine between normal and half vector. @default 1.0
+    roughness: f32, // Perceptual roughness, 0..1. @default 0.5
+) -> f32 {
+    let alpha = max(clamp(roughness, 0.0, 1.0) * clamp(roughness, 0.0, 1.0), 0.001);
+    let n = clamp(n_dot_h, 0.0, 1.0);
+    return (2.0 + 1.0 / alpha) * pow(max(1.0 - n * n, 0.0), 0.5 / alpha) / 6.283185307179586;
+}

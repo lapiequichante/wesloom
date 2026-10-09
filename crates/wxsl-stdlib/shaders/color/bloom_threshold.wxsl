@@ -1,0 +1,24 @@
+// Bloom threshold
+//
+// Keeps the part of a radiance value above `threshold`, with a soft knee
+// `knee` wide below it where the contribution fades in instead of
+// stepping. Grey above the threshold passes unchanged; anything under it
+// contributes nothing.
+//
+// Feed it linear radiance: the whole point of a threshold this early in a
+// chain is that "bright" means brighter than diffuse white, not brighter
+// than the display range. The output is still radiance, ready for a blur.
+fn bloom_threshold(
+    radiance: vec3f, // Linear radiance in. @default 1.0, 1.0, 1.0
+    threshold: f32,  // Where highlights begin. @default 1.0
+    knee: f32,       // Width of the soft knee below the threshold. @default 0.5
+) -> vec3f {
+    let c = max(radiance, vec3f(0.0));
+    let brightness = max(c.x, max(c.y, c.z));
+    let k = max(knee, 1e-6);
+    // A quadratic ramp across the knee meets the linear branch with a
+    // continuous derivative, so no seam shows where they hand over.
+    let soft = clamp(brightness - threshold + k, 0.0, 2.0 * k);
+    let contribution = max(brightness - threshold, soft * soft / (4.0 * k));
+    return c * contribution / max(brightness, 1e-6);
+}

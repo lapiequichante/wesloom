@@ -1,0 +1,21 @@
+// Anisotropic widths
+//
+// Converts the authoring pair — a perceptual roughness and an anisotropy
+// in 0..1 — into the two GGX alpha widths `distribution_ggx_anisotropic`
+// and `visibility_ggx_anisotropic` want: `x` along the tangent, `y` along
+// the bitangent.
+//
+// At anisotropy 0 the pair collapses to the isotropic alpha
+// (roughness²) and the anisotropic nodes agree with their isotropic
+// counterparts. A *signed* anisotropy — choosing which axis drags the
+// highlight — is a convention an authoring layer should settle on top of
+// this, not something this node guesses.
+fn anisotropic_widths(
+    roughness: f32,  // Perceptual roughness, 0..1. @default 0.5
+    anisotropy: f32, // How stretched, 0..1. @default 0.0
+) -> vec2f {
+    let r = clamp(roughness, 0.0, 1.0);
+    let alpha = max(r * r, 0.001);
+    let aspect = sqrt(max(1.0 - 0.9 * clamp(anisotropy, 0.0, 1.0), 0.1));
+    return vec2f(alpha / aspect, alpha * aspect);
+}

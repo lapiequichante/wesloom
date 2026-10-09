@@ -1,0 +1,18 @@
+// Fog composite
+//
+// Folds fog into a shaded radiance: what survived the path, plus what the
+// fog scattered in front of the surface. `inscattering` is the radiance
+// the fog itself contributes along that path, already integrated —
+// a uniform fog colour times the path's (1 − transmittance) is the usual
+// stand-in.
+//
+// Linear radiance in, linear radiance out: fog before the tonemap, never
+// after.
+fn fog_composite(
+    radiance: vec3f,     // Shaded surface radiance. @default 1.0, 1.0, 1.0
+    inscattering: vec3f, // Radiance the fog adds. @default 0.5, 0.5, 0.5
+    transmission: f32,   // `fog_transmittance` over the same path. @default 0.5
+) -> vec3f {
+    let t = clamp(transmission, 0.0, 1.0);
+    return radiance * t + inscattering * (1.0 - t);
+}

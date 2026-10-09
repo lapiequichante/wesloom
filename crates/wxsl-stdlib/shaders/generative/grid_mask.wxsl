@@ -1,0 +1,14 @@
+// Grid mask
+//
+// 1 on the lines of a grid, 0 in the cells — a grid whose line width is
+// a fraction of a cell, so it stays the same width in uv terms however
+// many cells there are.
+fn grid_mask(
+    uv: vec2f,       // Texture coordinates, 0..1 per repeat. @default 0.0, 0.0
+    cells: vec2f,    // Cells across the uv. @default 8.0, 8.0
+    line_width: f32, // Line width as a fraction of a cell, 0..0.5. @default 0.05
+) -> f32 {
+    let local = fract(uv * max(cells, vec2f(1.0)));
+    let border = min(local, vec2f(1.0) - local);
+    return 1.0 - step(clamp(line_width, 0.0, 0.5), min(border.x, border.y));
+}

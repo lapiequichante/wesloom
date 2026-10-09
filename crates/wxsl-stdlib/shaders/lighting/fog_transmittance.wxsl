@@ -1,0 +1,15 @@
+// Fog transmittance
+//
+// The fraction of light that survives a path through homogeneous fog:
+// Beer–Lambert extinction over `distance` metres at an extinction
+// coefficient of `extinction` per metre. Multiply radiance by it.
+//
+// The companion `fog_composite` adds what the fog scatters back in.
+// A spatially varying density needs the integral along the ray, not this
+// closed form.
+fn fog_transmittance(
+    distance: f32,   // Path length, metres. @default 10.0
+    extinction: f32, // Extinction coefficient, per metre. @default 0.05
+) -> f32 {
+    return exp(-max(distance, 0.0) * max(extinction, 0.0));
+}

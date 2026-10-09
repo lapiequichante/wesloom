@@ -50,7 +50,46 @@ use wxsl_render::effect::{Effect, EffectRegistry};
 pub fn registry(registry: &NodeRegistry) -> Result<EffectRegistry, CodegenError> {
     Ok(EffectRegistry::shipped()
         .with(tonemap(registry)?)
-        .with(fxaa(registry)?))
+        .with(fxaa(registry)?)
+        .with(vignette(registry)?)
+        .with(film_grain(registry)?)
+        .with(chromatic_aberration(registry)?))
+}
+
+/// Edge darkening, as a graph: one call to the `filter.vignette` node over
+/// the image, at this pixel's uv and texel size.
+pub fn vignette(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
+    Effect::from_graph(
+        "wxsl.vignette",
+        "Vignette",
+        "Darken the frame toward its edges, in linear radiance.",
+        vignette_graph(registry),
+        registry,
+    )
+}
+
+/// Film grain, as a graph: deterministic per-pixel noise, re-seeded per
+/// frame, over the image.
+pub fn film_grain(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
+    Effect::from_graph(
+        "wxsl.film_grain",
+        "Film grain",
+        "Add deterministic per-pixel grain; stops banding, or dates a picture.",
+        film_grain_graph(registry),
+        registry,
+    )
+}
+
+/// Chromatic aberration, as a graph: the red and blue channels pulled
+/// toward and away from the centre, green left where it is.
+pub fn chromatic_aberration(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
+    Effect::from_graph(
+        "wxsl.chromatic_aberration",
+        "Chromatic aberration",
+        "Lens-dispersion fringing; strongest at the frame edge.",
+        chromatic_aberration_graph(registry),
+        registry,
+    )
 }
 
 /// The display transform, as a graph: load the image, curve it, encode it.
@@ -145,6 +184,101 @@ pub fn fxaa_graph(registry: &NodeRegistry) -> Graph {
     graph
 }
 
+/// The graph [`vignette`] compiles: load the image, darken its edges.
+pub fn vignette_graph(registry: &NodeRegistry) -> Graph {
+    let mut graph = Graph::in_domain("vignette", GraphDomain::Screen);
+    let image = graph.add_node(abi::SCREEN_IMAGE_ID);
+    let uv = graph.add_node(abi::context_node_id("uv"));
+    let texel = graph.add_node(abi::context_node_id("texel"));
+    let load = graph.add_node("sample.load_2d");
+    let split = graph.add_node("convert.split.vec4f");
+    let color = graph.add_node("convert.combine.vec3f");
+    let dark = graph.add_node("filter.vignette");
+    let out = graph.add_node(abi::SCREEN_OUTPUT_ID);
+
+    wire(&mut graph, registry, (image, "out"), (load, "tex"));
+    wire(&mut graph, registry, (uv, "out"), (load, "uv"));
+    wire(&mut graph, registry, (load, "out"), (split, "v"));
+    for channel in ["x", "y", "z"] {
+        wire(&mut graph, registry, (split, channel), (color, channel));
+    }
+    wire(&mut graph, registry, (color, "out"), (dark, "color"));
+    wire(&mut graph, registry, (uv, "out"), (dark, "uv"));
+    wire(&mut graph, registry, (texel, "out"), (dark, "texel"));
+    wire(
+        &mut graph,
+        registry,
+        (dark, "out"),
+        (out, abi::SOCKET_SCREEN_COLOR),
+    );
+    wire(
+        &mut graph,
+        registry,
+        (split, "w"),
+        (out, abi::SOCKET_SCREEN_ALPHA),
+    );
+    graph
+}
+
+/// The graph [`film_grain`] compiles: load the image, grain it.
+pub fn film_grain_graph(registry: &NodeRegistry) -> Graph {
+    let mut graph = Graph::in_domain("film grain", GraphDomain::Screen);
+    let image = graph.add_node(abi::SCREEN_IMAGE_ID);
+    let uv = graph.add_node(abi::context_node_id("uv"));
+    let pixel = graph.add_node(abi::context_node_id("pixel"));
+    let time = graph.add_node(abi::context_node_id("time"));
+    let load = graph.add_node("sample.load_2d");
+    let split = graph.add_node("convert.split.vec4f");
+    let color = graph.add_node("convert.combine.vec3f");
+    let grain = graph.add_node("filter.film_grain");
+    let out = graph.add_node(abi::SCREEN_OUTPUT_ID);
+
+    wire(&mut graph, registry, (image, "out"), (load, "tex"));
+    wire(&mut graph, registry, (uv, "out"), (load, "uv"));
+    wire(&mut graph, registry, (load, "out"), (split, "v"));
+    for channel in ["x", "y", "z"] {
+        wire(&mut graph, registry, (split, channel), (color, channel));
+    }
+    wire(&mut graph, registry, (color, "out"), (grain, "color"));
+    wire(&mut graph, registry, (pixel, "out"), (grain, "pixel"));
+    wire(&mut graph, registry, (time, "out"), (grain, "time"));
+    wire(
+        &mut graph,
+        registry,
+        (grain, "out"),
+        (out, abi::SOCKET_SCREEN_COLOR),
+    );
+    wire(
+        &mut graph,
+        registry,
+        (split, "w"),
+        (out, abi::SOCKET_SCREEN_ALPHA),
+    );
+    graph
+}
+
+/// The graph [`chromatic_aberration`] compiles: three loads, the outer
+/// two pulled along the vector from the centre.
+pub fn chromatic_aberration_graph(registry: &NodeRegistry) -> Graph {
+    let mut graph = Graph::in_domain("chromatic aberration", GraphDomain::Screen);
+    let image = graph.add_node(abi::SCREEN_IMAGE_ID);
+    let uv = graph.add_node(abi::context_node_id("uv"));
+    let texel = graph.add_node(abi::context_node_id("texel"));
+    let pull = graph.add_node("filter.chromatic_aberration");
+    let out = graph.add_node(abi::SCREEN_OUTPUT_ID);
+
+    wire(&mut graph, registry, (image, "out"), (pull, "image"));
+    wire(&mut graph, registry, (uv, "out"), (pull, "uv"));
+    wire(&mut graph, registry, (texel, "out"), (pull, "texel"));
+    wire(
+        &mut graph,
+        registry,
+        (pull, "out"),
+        (out, abi::SOCKET_SCREEN_COLOR),
+    );
+    graph
+}
+
 /// Connect two sockets of a graph this module built.
 ///
 /// Panics rather than returning: the graphs above are fixed, so a wire that
@@ -173,8 +307,8 @@ mod tests {
         let graph = tonemap.graph().expect("authored as a graph");
         assert_eq!(graph.domain(), GraphDomain::Screen);
         // Replacing, not appending: the stock documents name `tonemap`, and
-        // what they get is this.
-        assert_eq!(effects.len(), EffectRegistry::shipped().len() + 1);
+        // what they get is this. The other four graph effects are additive.
+        assert_eq!(effects.len(), EffectRegistry::shipped().len() + 4);
     }
 
     #[test]

@@ -1,0 +1,43 @@
+// ACES filmic tonemap
+//
+// Maps unbounded positive radiance into 0..1 through the ACES fit: a
+// pre-tonemap colour space transform into AP1, the RRT+ODT rational fit,
+// and the transform back. Brighter and more saturated in the midtones
+// than the filmic curve; desaturates highlights as they roll off.
+//
+// This is the fit three.js ships (Narkowicz's AP1 rational fit with the
+// 1/0.6 brighter-viewing exposure), not the full ACES reference
+// transform: it is a curve, and like `tonemap_reinhard_jodie` it does no
+// sRGB encoding — the display transform owns that.
+//
+// SPDX-License-Identifier: MIT
+// Copyright © 2010-2026 three.js authors
+// Ported from: https://github.com/mrdoob/three.js
+// Source: src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
+// Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+// Symbol: ACESFilmicToneMapping (with RRTAndODTFit inlined)
+// Changes: GLSL to WXSL; exposure folded out (the graph or caller scales
+//          first); matrices in WGSL column order as upstream wrote them;
+//          the fit inlined into the one function a node may declare.
+// License text: ../../NOTICE.
+fn tonemap_aces(
+    color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+) -> vec3f {
+    // sRGB => XYZ => D65_2_D60 => AP1 => RRT_SAT
+    let input_matrix = mat3x3f(
+        0.59719, 0.07600, 0.02840,
+        0.35458, 0.90834, 0.13383,
+        0.04823, 0.01566, 0.83777);
+    // ODT_SAT => XYZ => D60_2_D65 => sRGB
+    let output_matrix = mat3x3f(
+        1.60475, -0.10208, -0.00327,
+        -0.53108, 1.10813, -0.07276,
+        -0.07367, -0.00605, 1.07602);
+
+    var fitted = input_matrix * max(color, vec3f(0.0)) / 0.6;
+    // The RRT and ODT fit, per channel.
+    let a = fitted * (fitted + vec3f(0.0245786)) - vec3f(0.000090537);
+    let b = fitted * (vec3f(0.983729) * fitted + vec3f(0.4329510)) + vec3f(0.238081);
+    fitted = a / b;
+    return saturate(output_matrix * fitted);
+}

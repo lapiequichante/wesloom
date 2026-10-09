@@ -1,0 +1,16 @@
+// Checker pattern
+//
+// 0 or 1 alternating per cell of a `cells`-by-`cells` grid over the uv.
+//
+// The arithmetic floors the *sum* of the two cell indices, which is why
+// the parity is right across cell borders without an fmod. A fractional
+// output would blur the edges — this stays a hard pattern; antialias it
+// through the render target's own filtering, not here.
+fn checker(
+    uv: vec2f,    // Texture coordinates, 0..1 per repeat. @default 0.0, 0.0
+    cells: vec2f, // Cells across the uv. @default 8.0, 8.0
+) -> f32 {
+    let cell = floor(uv * max(cells, vec2f(1.0)));
+    let sum = cell.x + cell.y;
+    return sum - 2.0 * floor(sum * 0.5);
+}

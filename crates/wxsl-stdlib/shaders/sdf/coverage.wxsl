@@ -1,0 +1,19 @@
+// SDF coverage
+//
+// Anti-aliased inside/outside coverage of a distance field, as an alpha in
+// 0..1: 1 fully inside, 0 fully outside, a linear ramp of width `w` across
+// the boundary.
+//
+// `width` is in the same units as `distance` and is what decides the
+// quality — in a fragment, pass `max(fwidth(distance), epsilon)` so the
+// ramp is always about one pixel wide; a constant width aliases exactly
+// where the field crosses texel boundaries steeply. The result is an alpha
+// for blending, not a discard decision: for perforation that must reach
+// the shadow passes, compare the distance against a discard instead.
+fn sdf_coverage(
+    distance: f32, // A signed distance field. @default 0.0
+    width: f32,    // Half the transition ramp, in distance units. @default 0.01
+) -> f32 {
+    let w = max(abs(width), 1e-6);
+    return 1.0 - smoothstep(-w, w, distance);
+}

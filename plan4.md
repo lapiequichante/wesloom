@@ -397,6 +397,55 @@ Everything here is surface-domain nodes, corpus-gated the day it lands.
 * ADR: none per function (the mechanism is ADR 0020's); the palette
   consequences, if any, are N9's.
 
+**Mostly landed on 2026-10-09**, following the guide's ticket order.
+The palette is at 171 nodes; every one compiles through the real
+compiler on every material stage (`graph_to_wgsl`), and the corpus gate
+is green. What shipped:
+
+* **SDF** (sdf/): the operator half — `union`, `intersection`,
+  `subtract`, `onion`, `round`, `smooth_intersection`,
+  `chamfer_union` — the 2D shapes (`circle`, `rounded_box`, `capsule`,
+  `hexagon`, `equilateral_triangle`, the last two from Inigo Quilez's
+  articles as technique), 3D `torus` and `cylinder`, and `coverage`,
+  the anti-aliased alpha. Coverage takes its `width` from the caller,
+  which keeps the node domain-agnostic — the fragment-only derivative
+  contract (`roughness_aa`'s blocker) is *not* shipped and stays queued
+  below.
+* **Colour** (color/): OKLab↔linear and OKLab↔OKLCh (hue in turns, the
+  library's phase convention; Ottosson's definition as technique,
+  original dot-product translation), `tonemap_reinhard_jodie`, and
+  `tonemap_aces` — the full three.js fit, ported under ADR 0053's rule
+  (MIT, NOTICE updated). `bloom_threshold` (the soft-knee extract)
+  lives here too rather than in filter/: it is a pure colour
+  operation, no image.
+* **BRDFs** (lighting/): `charlie_distribution` and
+  `visibility_neubelt` (original implementations of the Estevez–Kulla
+  forms), `distribution_ggx_anisotropic` (the guide's half-vector-in-
+  tangent-frame form), `visibility_ggx_anisotropic` (three.js port),
+  `anisotropic_widths` (the roughness+anisotropy → alpha-pair
+  convention; signed anisotropy deliberately left to an authoring
+  layer), `ior_to_f0`/`f0_to_ior`, `thin_film_phase` — the phase term
+  only, with the doc saying honestly what a complete iridescence still
+  owes.
+* **The cloth model** (`wxsl.cloth`, id 4) — S2-D's first increment,
+  in the clearcoat shape: a roughness-wrapped diffuse plus a
+  Charlie-sheen layer that takes its energy out of the diffuse rather
+  than adding on top. No G-buffer request (`extra: None`), so a
+  single-model set is unchanged in shape and the forward/deferred
+  parity tests cover it by iterating `DEFAULT_MODELS`. The gallery
+  gains the `cloth` demo — the mechanism cost: `Demo` grew a `model`
+  field, entering the demo widens the renderer's lighting set to
+  `default_set()` and leaving restores the stock one, since a material
+  may only name a model its set carries.
+
+Not yet, deliberately: full spectral iridescence (the Khronos port is
+queued and costed — helpers must inline into one function), AgX (it is
+gamut matrices, a log domain, contrast and looks — a curve named AgX
+would be the dishonest thing the guide warns about), roughness AA
+(needs the fragment-only stage contract — queued as plan5's D1, with
+the forward-shaded escape hatch as D2), and the surface-schema half
+of S2-D (per-fragment sheen tint/thickness as real channels).
+
 ### S3 — The world batch
 
 What surrounds the surface:
@@ -421,6 +470,31 @@ What surrounds the surface:
   follows the computed-layouts rule (B2) and lands as its own small
   decision.
 
+**Partly landed on 2026-10-09.** What shipped:
+
+* **Noise** (generative/): `simplex2` and `simplex3` — the Ashima/
+  Gustavson noise, ported under the permissive-ports rule (MIT, NOTICE
+  updated, helpers inlined because a node source is one function) — and
+  `worley3` (F1/F2, integer-hashed feature points jittered at most a
+  quarter cell, the 27-cell neighbourhood documented as the F2
+  approximation it is).
+* **Procedural textures** (generative/): `checker`, `grid_mask`,
+  `brick_mask`, `truchet_arcs` (the tile choice hashed from the cell
+  index, so it is stable under camera movement and identical across
+  backends).
+* **Fog and phases** (lighting/): `fog_transmittance`,
+  `fog_composite`, `height_fog_depth` (the analytic exponential-height
+  integral), `rayleigh_phase`, `hg_phase` — the media vocabulary, all
+  linear-radiance-honest.
+* **Space and math**: `direction_to_equirect` (space/) and
+  `ray_sphere` (math/) — the primitives the sky and IBL work stands on.
+
+Not yet: the single-scattering sky itself, and the IBL prefilter
+pipeline — both named in the guide as ADR-bearing (bindings, host HDR
+imports, per-roughness mips), so they stay queued rather than half-
+landed. The phases and ray-sphere primitives above are their
+groundwork, exactly as the guide ordered.
+
 ### S4 — The screen batch
 
 Post effects as screen-domain graphs, per the rule that a new post
@@ -441,6 +515,33 @@ effect is a graph first (ADR 0040):
   one S4 effect is in a shipped preset.
 * ADR: the sub-document synthesis, if it lands here, gets its own —
   plan3 queued it twice already.
+
+**Nodes and effects landed on 2026-10-09; the pyramid did not.** What
+shipped:
+
+* **Filter nodes** (filter/), sampler-free over `textureLoad` with
+  clamped coordinates — the pass group binds no sampler, which is what
+  keeps every one of these usable inside a screen graph exactly as
+  `fxaa` is: `blur_box` (radius a macro — a loop bound), `blur_gaussian`
+  (one axis per pass, `axis` in texels so a chain separates it),
+  `blur_kawase` (one pass of the growing-offset sequence),
+  `downsample2`, `vignette`, `film_grain` (deterministic integer hash
+  over pixel + frame time — identical across backends, which is the
+  whole reason not to reach for a `sin` hash), `chromatic_aberration`.
+* **Three shipped screen effects** in `wxsl::effects`:
+  `wxsl.vignette`, `wxsl.film_grain`, `wxsl.chromatic_aberration` —
+  graphs, in the tonemap/fxaa shape, so the pipeline canvas's palette
+  grows them for free. They carry no parameters (a screen graph cannot
+  declare any — the restriction codegen documents), so their knobs live
+  on the *nodes*, which an authored chain tunes per instance; the
+  shipped graphs wire the defaults.
+* The gallery's `fxaa` demo already exercises the mechanism all three
+  ride; they compile in the facade's tests the same way.
+
+Not yet: the pyramid (its sizes want the `Extent` vocabulary extended
+before the document can say per-level targets, and the synthesis is
+the ADR plan3 queued twice), and DOF's near/far passes. SSR stays
+queued behind N7/TAA exactly as written.
 
 ## Suggested order
 
@@ -476,6 +577,20 @@ forward/deferred difference remains 0.0002.
    rule), **M10** (now one fix, in the shared half), **M11**, **N9**,
    **N10** (cheaper now — B1's vocabulary is its first half), **N8**'s
    remainder.
+
+**S2/S3/S4 status, 2026-10-09**: S1 landed earlier (ADR 0053); the
+node-and-effect bulk of S2 (SDF, colour, BRDFs, the cloth model —
+S2-D's first increment), S3 (noise, procedural textures, fog, phases,
+the ray/equirect primitives) and S4 (the blur family, vignette, grain,
+chromatic aberration, as nodes and as shipped screen graphs) landed as
+described in the proposal sections above. Still open from the guide's
+twelve tickets: the fragment-only derivative contract (ticket 2),
+full iridescence (6), the single-scattering sky and the IBL ADR
+(8–9), the pyramid synthesis ADR and DOF (11–12). The palette is at
+171 nodes; N9's palette reorganization trigger has fired.
+The derivative contract and its consequences moved to their own plan —
+**plan5** (forward-shaded materials, ordered transparency,
+`max_layers`) owns ticket 2 from here.
 
 The B-series owns the critical path because the owner's priority is the
 backend; the S-series, being flat and unblocked, is what keeps every

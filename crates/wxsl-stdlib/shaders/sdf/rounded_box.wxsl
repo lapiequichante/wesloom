@@ -1,0 +1,15 @@
+// SDF rounded box
+//
+// Signed distance to an axis-aligned rectangle with rounded corners, in the
+// plane. Exact outside; inside it is the bounded distance to the nearest
+// surface, the usual convention.
+fn sdf_rounded_box(
+    p: vec2f,        // Sample point. @default 0.0, 0.0
+    half_size: vec2f,// Half extents, centre to face. @default 0.5, 0.5
+    radius: f32,     // Corner rounding, clamped to the smaller half extent. @default 0.1
+) -> f32 {
+    let size = max(half_size, vec2f(0.0));
+    let r = clamp(radius, 0.0, min(size.x, size.y));
+    let q = abs(p) - size + vec2f(r);
+    return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}

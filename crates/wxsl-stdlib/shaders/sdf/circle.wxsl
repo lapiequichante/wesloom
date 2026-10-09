@@ -1,0 +1,10 @@
+// SDF circle
+//
+// Signed distance to a circle in the plane: negative inside, zero on the
+// rim, exact Euclidean distance outside.
+fn sdf_circle(
+    p: vec2f,    // Sample point. @default 0.0, 0.0
+    radius: f32, // @default 0.5
+) -> f32 {
+    return length(p) - max(radius, 0.0);
+}

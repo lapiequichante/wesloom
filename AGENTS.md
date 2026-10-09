@@ -538,6 +538,13 @@ routing and invariants.
   same scene loaded and rendered under the plan that carries its channel.
   Its scene, `crates/wxsl/assets/scene_check.scene.json`, is the copyable
   scene document, as `pbr_cube.wxsl.json` is for the node format.
+- `crates/wxsl/examples/cinema.rs` — the S2/S3/S4 node batches in one
+  picture: a molten torus (Worley cracks, simplex normal, fbm
+  displacement) through the full post chain — separable bloom, chromatic
+  aberration, vignette, film grain, and an ACES display transform the
+  demo registers itself, in the `wxsl::effects::tonemap` shape.
+  Windowed by default (`Esc`/`Q` quit, `Space` pause); `--screenshot`
+  for one headless PNG, `--frames N` for a spin sequence.
 - `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
   comments in the file explaining it. The pipeline documents under
   `crates/wxsl-frame/assets/presets/` are the same format over the

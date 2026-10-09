@@ -1,0 +1,59 @@
+// Simplex noise (2D)
+//
+// The 2D half of `simplex3`: gradient noise over the skewed triangular
+// lattice, roughly -1..1, zero at lattice points. Cheaper than the 3D
+// version and the right choice for a uv-space field — decals, ripples,
+// masks.
+//
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2011 Ashima Arts (Simplex noise)
+// Copyright (C) 2011-2016 Stefan Gustavson
+// Ported from: https://github.com/ashima/webgl-noise
+// Source: src/noise2D.glsl
+// Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
+// Symbol: snoise
+// Changes: GLSL to WXSL; the mod289/permute helpers inlined (a node
+//          source is one function); no other behaviour change.
+// License text: ../../NOTICE.
+fn simplex2(
+    p: vec2f, // Sample point. @default 0.0, 0.0
+) -> f32 {
+    let c1 = 0.211324865405187; // (3.0-sqrt(3.0))/6.0
+    let c2 = 0.366025403784439; // 0.5*(sqrt(3.0)-1.0)
+
+    // First corner
+    let i = floor(p + dot(p, vec2f(c2)));
+    let x0 = p - i + dot(i, vec2f(c1));
+
+    // Other corner
+    let i1 = select(vec2f(0.0, 1.0), vec2f(1.0, 0.0), x0.x > x0.y);
+    let x12 = vec4f(x0, x0) + vec4f(c1, c1, -0.577350269189626, -0.577350269189626);
+    let x1 = x12.xy - i1;
+    let x2 = x12.zw;
+
+    // Permutations
+    let im = i - floor(i * (1.0 / 289.0)) * 289.0;
+    var perm = (im.y + vec3f(0.0, i1.y, 1.0)) * 34.0 + 10.0;
+    perm = perm * (im.y + vec3f(0.0, i1.y, 1.0));
+    perm = perm - floor(perm * (1.0 / 289.0)) * 289.0;
+    var perm2 = (perm + im.x + vec3f(0.0, i1.x, 1.0)) * 34.0 + 10.0;
+    perm2 = perm2 * (perm + im.x + vec3f(0.0, i1.x, 1.0));
+    perm2 = perm2 - floor(perm2 * (1.0 / 289.0)) * 289.0;
+
+    var m = max(vec3f(0.5) - vec3f(dot(x0, x0), dot(x1, x1), dot(x2, x2)), vec3f(0.0));
+    m = m * m;
+    m = m * m;
+
+    // Gradients: 41 points uniformly over a line, mapped onto a diamond.
+    let x = 2.0 * fract(perm2 * 0.024390243902439) - 1.0;
+    let h = abs(x) - 0.5;
+    let ox = floor(x + 0.5);
+    let a0 = x - ox;
+
+    // Normalise gradients implicitly by scaling m.
+    m = m * (1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h));
+
+    // Compute final noise value at p.
+    let g = vec3f(a0.x * x0.x + h.x * x0.y, a0.y * x1.x + h.y * x1.y, a0.z * x2.x + h.z * x2.y);
+    return 130.0 * dot(m, g);
+}

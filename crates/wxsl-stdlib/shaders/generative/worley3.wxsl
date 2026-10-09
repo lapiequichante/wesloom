@@ -1,0 +1,44 @@
+// Worley noise (3D)
+//
+// Cellular distance noise: the distances to the first and second nearest
+// feature points, one jittered point per grid cell. F1 alone gives cell
+// walls and pebbles; F2 − F1 gives the webbing between them.
+//
+// The neighbourhood is the 27 cells around the sample, which is the
+// standard F1/F2 compromise: exact for F1, and for F2 correct as long as
+// the jitter stays well inside the cell — which it does here, at at most
+// a quarter cell from each centre. Do not promise exact F2 beyond that.
+//
+// Feature points come from an integer hash of the cell index (no
+// sin-based hashes: those band at large coordinates and drift between
+// backends). Original implementation; the cellular-noise technique is
+// Gustavson's.
+fn worley3(
+    p: vec3f, // Sample point. @default 0.0, 0.0, 0.0
+) -> vec2f {
+    let cell = vec3i(floor(p));
+    var first = 1e6;
+    var second = 1e6;
+    for (var z: i32 = -1; z <= 1; z = z + 1) {
+        for (var y: i32 = -1; y <= 1; y = y + 1) {
+            for (var x: i32 = -1; x <= 1; x = x + 1) {
+                let c = cell + vec3i(x, y, z);
+                // One hash per cell, expanded to three jitter components.
+                var h = bitcast<u32>(c.x) * 374761393u
+                    + bitcast<u32>(c.y) * 668265263u
+                    + bitcast<u32>(c.z) * 2246822519u;
+                h = (h ^ (h >> 13u)) * 1274126177u;
+                h = h ^ (h >> 16u);
+                let random = vec3f(
+                    f32(h & 1023u),
+                    f32((h >> 10u) & 1023u),
+                    f32((h >> 20u) & 1023u)) / 1023.0;
+                let feature = vec3f(c) + vec3f(0.5) + (random - vec3f(0.5)) * 0.5;
+                let d = distance(feature, p);
+                second = min(second, max(first, d));
+                first = min(first, d);
+            }
+        }
+    }
+    return vec2f(first, second);
+}

@@ -1,0 +1,22 @@
+// Direction to equirectangular uv
+//
+// Maps a unit-ish direction onto the 0..1 uv of an equirectangular
+// environment map: longitude around the y axis, latitude from pole to
+// pole. y is up and the seam sits on -x, behind the +z-forward
+// convention the tangent basis builds — whether v needs flipping is a
+// property of the texture, and this node assumes the common top-at-v=0.
+//
+// Test with cardinally-coloured textures, not a symmetric one: a
+// rotation or a v-flip hides inside any environment that is blue on top.
+fn direction_to_equirect(
+    direction: vec3f, // Direction to map. @default 0.0, 0.0, 1.0
+) -> vec2f {
+    let norm2 = dot(direction, direction);
+    if norm2 < 1e-6 {
+        return vec2f(0.5);
+    }
+    let d = direction * inverseSqrt(norm2);
+    return vec2f(
+        atan2(d.z, d.x) / 6.283185307179586 + 0.5,
+        0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.14159265358979);
+}

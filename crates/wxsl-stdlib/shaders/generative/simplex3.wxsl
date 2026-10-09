@@ -1,0 +1,88 @@
+// Simplex noise (3D)
+//
+// Gradient noise over the simplex lattice — a skewing of the grid so each
+// sample needs three corners instead of value noise's eight, which is
+// why it has no axis-aligned bias and costs a fraction of what a same-
+// quality grid noise would. Returns roughly -1..1, zero at lattice
+// points.
+//
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2011 Ashima Arts (Simplex noise)
+// Copyright (C) 2011-2016 Stefan Gustavson
+// Ported from: https://github.com/ashima/webgl-noise
+// Source: src/noise3D.glsl
+// Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
+// Symbol: snoise
+// Changes: GLSL to WXSL; the mod289/permute/taylorInvSqrt helpers inlined
+//          (a node source is one function); no other behaviour change.
+// License text: ../../NOTICE.
+fn simplex3(
+    p: vec3f, // Sample point. @default 0.0, 0.0, 0.0
+) -> f32 {
+    // First corner
+    let i = floor(p + dot(p, vec3f(1.0 / 3.0)));
+    let x0 = p - i + dot(i, vec3f(1.0 / 6.0));
+
+    // Other corners: the simplex's two skew steps, ordered by which
+    // component of x0 is largest.
+    let g = step(vec3f(x0.y, x0.z, x0.x), x0);
+    let l = vec3f(1.0) - g;
+    let i1 = min(g, vec3f(l.z, l.x, l.y));
+    let i2 = max(g, vec3f(l.z, l.x, l.y));
+    let x1 = x0 - i1 + vec3f(1.0 / 6.0);
+    let x2 = x0 - i2 + vec3f(1.0 / 3.0);
+    let x3 = x0 - vec3f(0.5);
+
+    // Permutations, with the mod-289 folded into each use.
+    let im = i - floor(i * (1.0 / 289.0)) * 289.0;
+    let pz = vec4f(0.0, i1.z, i2.z, 1.0);
+    let py = vec4f(0.0, i1.y, i2.y, 1.0);
+    let px = vec4f(0.0, i1.x, i2.x, 1.0);
+    var perm = ((im.z + pz) * 34.0 + 10.0) * (im.z + pz);
+    perm = perm - floor(perm * (1.0 / 289.0)) * 289.0;
+    perm = ((perm + py) * 34.0 + 10.0) * (perm + py);
+    perm = perm - floor(perm * (1.0 / 289.0)) * 289.0;
+    perm = ((perm + px) * 34.0 + 10.0) * (perm + px);
+    perm = perm - floor(perm * (1.0 / 289.0)) * 289.0;
+
+    // Gradients: 7x7 points over a square, mapped onto an octahedron.
+    let n_ = 0.142857142857;
+    let ns = n_ * vec3f(2.0, 0.5, 1.0) - vec3f(0.0, 1.0, 0.0);
+
+    let j = perm - 49.0 * floor(perm * ns.z * ns.z);
+    let x_ = floor(j * ns.z);
+    let y_ = floor(j - 7.0 * x_);
+    let x = x_ * ns.x + ns.y;
+    let y = y_ * ns.x + ns.y;
+    let h = vec3f(1.0) - abs(x) - abs(y);
+
+    let b0 = vec4f(x.xy, y.xy);
+    let b1 = vec4f(x.zw, y.zw);
+    let s0 = floor(b0) * 2.0 + 1.0;
+    let s1 = floor(b1) * 2.0 + 1.0;
+    let sh = -step(vec4f(h.x, h.y, h.z, h.w), vec4f(0.0));
+
+    let a0 = vec4f(b0.x, b0.z, b0.y, b0.w) + vec4f(s0.x, s0.z, s0.y, s0.w) * vec4f(sh.x, sh.x, sh.y, sh.y);
+    let a1 = vec4f(b1.x, b1.z, b1.y, b1.w) + vec4f(s1.x, s1.z, s1.y, s1.w) * vec4f(sh.z, sh.z, sh.w, sh.w);
+
+    var p0 = vec3f(a0.x, a0.y, h.x);
+    var p1 = vec3f(a0.z, a0.w, h.y);
+    var p2 = vec3f(a1.x, a1.y, h.z);
+    var p3 = vec3f(a1.z, a1.w, h.w);
+
+    // Normalise gradients (Taylor approximation of inverse square root).
+    let norm = vec4f(
+        1.79284291400159 - 0.85373472095314 * dot(p0, p0),
+        1.79284291400159 - 0.85373472095314 * dot(p1, p1),
+        1.79284291400159 - 0.85373472095314 * dot(p2, p2),
+        1.79284291400159 - 0.85373472095314 * dot(p3, p3));
+    p0 = p0 * norm.x;
+    p1 = p1 * norm.y;
+    p2 = p2 * norm.z;
+    p3 = p3 * norm.w;
+
+    // Mix final noise value.
+    var m = max(vec4f(0.5) - vec4f(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), vec4f(0.0));
+    m = m * m;
+    return 105.0 * dot(m * m, vec4f(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}

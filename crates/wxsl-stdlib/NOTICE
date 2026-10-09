@@ -8,9 +8,47 @@ Original symbol: IBLSheenBRDF
 Adapted file: shaders/lighting/sheen_ibl_response.wxsl
 Changes: GLSL to WXSL, scalar N·V input, clamped inputs and socket metadata.
 
+three.js — MIT
+Source: https://github.com/mrdoob/three.js
+Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+Source file: src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js
+Original symbol: V_GGX_SmithCorrelated_Anisotropic
+Adapted file: shaders/lighting/visibility_ggx_anisotropic.wxsl
+Changes: GLSL to WXSL, world-space vectors projected onto the tangent frame
+inside the function, guarded denominators and socket metadata.
+
+three.js — MIT
+Source: https://github.com/mrdoob/three.js
+Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+Source file: src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
+Original symbols: ACESFilmicToneMapping, RRTAndODTFit
+Adapted file: shaders/color/tonemap_aces.wxsl
+Changes: GLSL to WXSL, the fit inlined into one function, exposure folded
+out to the caller, matrices written in WGSL column order as upstream
+wrote them in GLSL.
+
+webgl-noise — MIT
+Source: https://github.com/ashima/webgl-noise
+Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
+Source file: src/noise3D.glsl
+Original symbol: snoise
+Adapted file: shaders/generative/simplex3.wxsl
+Changes: GLSL to WXSL, mod289/permute/taylorInvSqrt helpers inlined (a node
+source is one function); no behaviour change.
+
+webgl-noise — MIT
+Source: https://github.com/ashima/webgl-noise
+Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
+Source file: src/noise2D.glsl
+Original symbol: snoise
+Adapted file: shaders/generative/simplex2.wxsl
+Changes: the same translation rules as simplex3.
+
 The MIT License
 
 Copyright © 2010-2026 three.js authors
+Copyright (C) 2011 by Ashima Arts (Simplex noise)
+Copyright (C) 2011-2016 by Stefan Gustavson
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

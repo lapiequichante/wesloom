@@ -1,0 +1,22 @@
+// Neubelt visibility
+//
+// The visibility (shadowing-masking) term the sheen lobe pairs with:
+// a cheap approximation that stays well-behaved at grazing angles, where
+// the Smith terms of a mirror BRDF go to extremes.
+//
+// Multiply by `charlie_distribution`, the sheen colour, the incident
+// radiance and `max(N·L, 0)` inside a cloth model. The bound here guards
+// degenerate inputs; it is not by itself an energy-conservation proof —
+// a model using it should keep the sheen lobe within a budget (see the
+// cloth lighting model for one).
+//
+// Technique: Neubelt, Estévez, Kulla — sheen visibility as used in
+// production cloth shading.
+fn visibility_neubelt(
+    n_dot_v: f32, // Cosine between normal and view. @default 0.5
+    n_dot_l: f32, // Cosine between normal and light. @default 0.5
+) -> f32 {
+    let v = clamp(n_dot_v, 0.0, 1.0);
+    let l = clamp(n_dot_l, 0.0, 1.0);
+    return min(1.0, 0.25 / max(v + l - v * l, 1e-6));
+}

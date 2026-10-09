@@ -1,0 +1,59 @@
+// The cloth lighting model
+//
+// Fabric: a diffuse whose terminator is softened by a wrap proportional
+// to the roughness — the reason velvet's dark side rolls off gently
+// instead of cutting off — plus a sheen layer spread by the Charlie
+// distribution and bounded by the Neubelt visibility, tinted by the base
+// colour and strongest along grazing silhouettes.
+//
+// The sheen takes its energy out of the diffuse rather than being added
+// on top: the fraction handed over rises with roughness, so a rough
+// fabric's total reflected energy stays near the smooth one's. The sheen
+// lobe is scaled to the diffuse's own scale (the 1/π the Lambert term
+// carries); the pair is bounded, which is a budget, not a proof — an IBL
+// prefiltered for this distribution would be the exact counterpart, and
+// the environment's specular path is the GGX one.
+//
+// No G-buffer data: the model reads the surface only, so a set of one is
+// the same shape as the PBR's. Not a node: it is one of the entries of
+// `wxsl_core::lighting::DEFAULT_MODELS`, shaded through the lighting-model
+// registry rather than placed on a canvas, so the node derivation skips
+// this directory on purpose.
+
+import package::lighting::charlie_distribution::charlie_distribution;
+import package::lighting::visibility_neubelt::visibility_neubelt;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_cloth(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f, // unused: this model requests no G-buffer data
+) -> vec3f {
+    let n = normalize(surface.normal);
+    let view = normalize(ctx.view_direction);
+    let n_dot_l = saturate(dot(n, light.direction));
+    let n_dot_v = saturate(dot(n, view));
+    let roughness = clamp(surface.roughness, 0.0, 1.0);
+    let metallic = saturate(surface.metallic);
+
+    // Fabric wrap diffuse: the terminator widens with roughness.
+    let wrap = 0.5 * roughness;
+    let wrapped = saturate((dot(n, light.direction) + wrap) / (1.0 + wrap));
+
+    // Rougher fabrics hand more of the surface's energy to the sheen.
+    let sheen_weight = roughness * roughness * (1.0 - metallic);
+    let diffuse = surface.base_color * (1.0 - metallic) * 0.31830989
+        * wrapped * wrapped * (1.0 - sheen_weight);
+
+    // The sheen lobe: Charlie spread, Neubelt visibility, base-colour
+    // tint, scaled onto the diffuse's 1/π convention.
+    let half_vector = normalize(light.direction + view);
+    let spread = charlie_distribution(saturate(dot(n, half_vector)), max(roughness, 0.5));
+    let visibility = visibility_neubelt(n_dot_v, n_dot_l);
+    let sheen = surface.base_color * spread * visibility * n_dot_l * sheen_weight
+        * 3.141592653589793;
+
+    return (diffuse + sheen) * light.radiance;
+}

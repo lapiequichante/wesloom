@@ -1,0 +1,16 @@
+// Rayleigh phase
+//
+// How Rayleigh scattering distributes light over angles: symmetric front
+// and back, dimmest at right angles, the reason the sky is brightest
+// toward and away from the sun and bluest to the side. The value is a
+// probability density (per steradian), not a colour — feed it the
+// scattering coefficient for one.
+//
+// `cos_theta` compares the direction the light travels with the direction
+// it is observed along.
+fn rayleigh_phase(
+    cos_theta: f32, // Cosine of the scattering angle. @default 0.0
+) -> f32 {
+    let mu = clamp(cos_theta, -1.0, 1.0);
+    return 3.0 * (1.0 + mu * mu) / (16.0 * 3.141592653589793);
+}

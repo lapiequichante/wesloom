@@ -1,0 +1,19 @@
+// Henyey-Greenstein phase
+//
+// The one-parameter scattering lobe for media with forward-thrown (mist,
+// haze) or backward-thrown (dense cloud) particles: `asymmetry` of 0 is
+// isotropic, positive throws light forward, negative backward.
+//
+// This is the phase only — the angular distribution. Optical depth,
+// multiple scattering and density are the caller's; a phase alone is not
+// a fog model. `cos_theta` compares propagation direction with the view
+// direction; flipped inputs put the halo behind the light.
+fn hg_phase(
+    cos_theta: f32,  // Cosine of the scattering angle. @default 0.0
+    asymmetry: f32,  // The g parameter, -0.99..0.99. @default 0.5
+) -> f32 {
+    let g = clamp(asymmetry, -0.99, 0.99);
+    let mu = clamp(cos_theta, -1.0, 1.0);
+    let d = max(1.0 + g * g - 2.0 * g * mu, 1e-6);
+    return (1.0 - g * g) / (12.566370614359172 * d * sqrt(d));
+}

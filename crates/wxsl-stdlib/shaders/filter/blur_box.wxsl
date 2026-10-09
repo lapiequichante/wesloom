@@ -1,0 +1,35 @@
+// Box blur
+//
+// The unweighted mean over a square of (2·radius+1)² texels: the cheapest
+// neighbourhood average, and the baseline the fancier kernels are judged
+// against.
+//
+// Reads with `textureLoad` and clamped coordinates, so it works wherever
+// a texture is bound without a sampler — a screen pass reads its input
+// that way. The radius is a macro because it is a loop bound: change it
+// and the shader recompiles, not branches.
+//
+// For real bokeh-shaped softness use `blur_gaussian` twice (once per
+// axis) or `blur_kawase`; a box applied once shows as a square in
+// highlights.
+@macro const WXSL_BOX_RADIUS: i32 = 3; // Texels each side of the centre. A loop bound.
+
+fn blur_box(
+    image: texture_2d<f32>,
+    uv: vec2f,     // Where to filter, in 0..1. @default 0.0, 0.0
+    texel: vec2f,  // One texel of `image` in uv units. @default 0.0, 0.0
+) -> vec3f {
+    let centre = clamp(vec2i(uv / max(texel, vec2f(1e-6))), vec2i(0, 0),
+        vec2i(textureDimensions(image)) - vec2i(1, 1));
+    var sum = vec3f(0.0);
+    var count = 0.0;
+    for (var y: i32 = -WXSL_BOX_RADIUS; y <= WXSL_BOX_RADIUS; y = y + 1) {
+        for (var x: i32 = -WXSL_BOX_RADIUS; x <= WXSL_BOX_RADIUS; x = x + 1) {
+            let tap = clamp(centre + vec2i(x, y), vec2i(0, 0),
+                vec2i(textureDimensions(image)) - vec2i(1, 1));
+            sum = sum + textureLoad(image, tap, 0).rgb;
+            count = count + 1.0;
+        }
+    }
+    return sum / max(count, 1.0);
+}

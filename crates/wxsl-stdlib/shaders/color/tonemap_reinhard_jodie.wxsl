@@ -1,0 +1,19 @@
+// Reinhard-Jodie tonemap
+//
+// Maps unbounded positive radiance into 0..1, blending the plain global
+// Reinhard scale with a per-channel one so saturated highlights keep their
+// hue instead of collapsing to white.
+//
+// This is a *curve*, not the display transform: it returns linear
+// radiance in a bounded range and does no sRGB encoding — chain it into
+// whatever encodes for the display, or use the shipped `tonemap` effect,
+// which owns the encoding. Negative input is clamped away here; the curve
+// has nothing to say about it.
+fn tonemap_reinhard_jodie(
+    color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+) -> vec3f {
+    let c = max(color, vec3f(0.0));
+    let luminance = dot(c, vec3f(0.2126, 0.7152, 0.0722));
+    let per_channel = c / (vec3f(1.0) + c);
+    return mix(c / (vec3f(1.0) + luminance), per_channel, per_channel);
+}

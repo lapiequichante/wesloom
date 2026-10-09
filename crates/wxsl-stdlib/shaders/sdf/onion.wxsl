@@ -1,0 +1,14 @@
+// SDF onion
+//
+// A shell of `thickness` around a field's boundary: the distance field of
+// the surface itself, hollowed out.
+//
+// Distances near the shell are exact; the two surfaces of the shell stop
+// being resolvable once the thickness approaches a texel, which shows up
+// as aliasing rather than as a wrong sign.
+fn sdf_onion(
+    distance: f32, // A signed distance field. @default 0.0
+    thickness: f32,// Shell width. @default 0.1
+) -> f32 {
+    return abs(distance) - max(thickness, 0.0);
+}

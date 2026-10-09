@@ -1,0 +1,14 @@
+// SDF round
+//
+// Inflates a field by `radius`: every surface moves outward that far, and
+// sharp corners become rounded ones of that radius. A negative radius
+// shrinks the field instead.
+//
+// Unlike a smoothing operator this keeps the boundary exactly where it
+// promises, which is why it is the cheap way to bevel a composition.
+fn sdf_round(
+    distance: f32, // A signed distance field. @default 0.0
+    radius: f32,   // How far to grow (negative shrinks). @default 0.1
+) -> f32 {
+    return distance - radius;
+}

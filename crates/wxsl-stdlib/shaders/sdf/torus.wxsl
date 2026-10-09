@@ -1,0 +1,12 @@
+// SDF torus
+//
+// Signed distance to a torus around the y axis: a ring of tube radius
+// `tube` whose centreline has radius `ring`.
+fn sdf_torus(
+    p: vec3f,     // Sample point. @default 0.0, 0.0, 0.0
+    ring: f32,    // Centreline radius. @default 0.35
+    tube: f32,    // Tube radius. @default 0.15
+) -> f32 {
+    let q = vec2f(length(p.xz) - max(ring, 0.0), p.y);
+    return length(q) - max(tube, 0.0);
+}

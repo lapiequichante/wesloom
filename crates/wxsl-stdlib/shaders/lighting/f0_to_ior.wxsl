@@ -1,0 +1,12 @@
+// F0 to IOR
+//
+// The index of refraction a measured normal-incidence reflectance
+// implies, against air — the inverse of `ior_to_f0`. An F0 of 0 is
+// reported as the smallest representable IOR rather than a division by
+// zero; an F0 of 1 would be an infinite IOR and is clamped just inside.
+fn f0_to_ior(
+    f0: f32, // Reflectance at normal incidence, 0..1. @default 0.04
+) -> f32 {
+    let root = sqrt(clamp(f0, 0.0, 0.9999));
+    return (1.0 + root) / (1.0 - root);
+}
