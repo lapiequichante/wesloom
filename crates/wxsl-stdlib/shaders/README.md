@@ -57,7 +57,7 @@ explains the split.
 
 | Module | What it holds |
 |---|---|
-| `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. **Host-shared layout**: mirrored by `wxsl-render`'s `environment` module. |
+| `bindings.wxsl` | The frame bind group: camera and scene uniforms, the instance transform storage buffer, light sampling. Fixed layouts are generated from `wxsl-core::host` (ADR 0050). |
 | `surface.wxsl` | `SurfaceContext` and `Surface`, a material graph's input and output. |
 | `screen.wxsl` | `ScreenContext` and the one image a screen effect reads — the screen domain's ABI (ADR 0040). |
 | `vertex.wxsl` | The vertex stage, shared by every material stage, and the context builder. |

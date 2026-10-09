@@ -14,17 +14,7 @@ import package::wxsl::bindings::{
 };
 import package::wxsl::surface::SurfaceContext;
 
-struct VertexIn {
-    @location(0) position: vec3f,
-    @location(1) normal: vec3f,
-    // xyz = tangent, w = bitangent sign (handedness).
-    @location(2) tangent: vec4f,
-    @location(3) uv: vec2f,
-    // Which row of the frame's instance buffer this vertex's transform is
-    // in. Not a vertex attribute: the vertex buffer holds geometry, and the
-    // draw call decides which instance it is being drawn as.
-    @builtin(instance_index) instance: u32,
-}
+${HOST_LAYOUTS}
 
 struct VertexOut {
     @builtin(position) clip_position: vec4f,

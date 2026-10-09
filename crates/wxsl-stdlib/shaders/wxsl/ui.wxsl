@@ -36,12 +36,6 @@ const UI_KIND_TEXT: u32 = 2u;
 // the ramp.
 const UI_BLEED: f32 = 1.0;
 
-struct UiViewport {
-    // Size of the render target in physical pixels. The vertex stage works
-    // in pixels and converts here, so the CPU side never builds a matrix.
-    size: vec2f,
-    _pad0: vec2f,
-}
 
 // The UI pass binds nothing but the pass group (`abi::GROUP_PASS`): it has no
 // camera, no lights and no material graph, and a viewport plus a texture is
@@ -52,16 +46,7 @@ struct UiViewport {
 @group(3) @binding(1) var ui_texture: texture_2d<f32>;
 @group(3) @binding(2) var ui_sampler: sampler;
 
-struct UiInstanceIn {
-    @location(0) center: vec2f,
-    @location(1) half_extent: vec2f,
-    @location(2) axis: vec2f,
-    @location(3) shape: vec2f,
-    @location(4) uv_min: vec2f,
-    @location(5) uv_max: vec2f,
-    @location(6) color: vec4f,
-    @location(7) kind: u32,
-}
+${HOST_LAYOUTS}
 
 struct UiVertexOut {
     @builtin(position) clip_position: vec4f,

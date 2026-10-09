@@ -112,7 +112,16 @@ overlay WXSL modules and derive additional function nodes. The contract is
 data, never renderer behavior ([ADR 0049](adr/0049-share-the-core-through-a-data-only-c-abi.md)).
 `bash dawn/tests/run_abi_smoke.sh` dynamically loads the cdylib from both C
 and C++, validates both presets and compares all nine WGSL material stages
-with native Rust variants. The Dawn device half remains plan4 B3.
+with native Rust variants.
+
+**`dawn/`** — Conan-managed, pinned Dawn SDK; `wxsl_render_cpp` implements
+only the headless device half. `wxsl-ffi`'s `bake_docs` example exports the
+shared schedules, binding layouts, WGSL and upload bytes. The C++ binary
+links no Rust; runtime compilation remains B4. Both stock presets render
+the PBR and scene documents with Rust image agreement (ADR 0051).
+`wxsl-core::host` generates fixed Rust/C/WXSL layouts, base vertex/UI
+attributes and MSDF buffers (ADR 0050); computed material layouts remain
+in `wxsl-core::resources`.
 
 **`wxsl-render`** — `graph` (resource pools and wgpu recording over the
 shared plan), `pipeline` (native target adapters and pipeline caches),
@@ -713,7 +722,8 @@ Two things follow that are worth knowing before touching either half:
   quad's corners come from the vertex index, so there is no vertex or index
   buffer in the UI path at all. The layout is host-shared three ways —
   `abi::UI_ATTRIBUTES`, `wxsl_render::ui::draw::UiInstance`, and
-  `shaders/wxsl/ui.wxsl` — and they are edited together.
+  `shaders/wxsl/ui.wxsl` — generated from the ABI table by `wxsl-core::host`
+  (ADR 0050), not edited separately.
 * **Text is MSDF, generated in-tree, twice.** `ui::msdf` is the reference
   implementation on the CPU and `shaders/wxsl/msdf.wxsl` is the same
   algorithm as a compute pass; `MsdfBackend` picks one at runtime and a test
@@ -834,7 +844,8 @@ Implemented and tested end to end:
 |---|---|
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
 | `wxsl-frame`: neutral plans, document compilation, scheduling, effects and capability checks | done |
-| `wxsl-ffi`: generated C header, plan/WGSL/layout exports, load-time checks and C/C++ parity harness | done; Dawn device half remains B3 |
+| `wxsl-ffi`: generated C header, plan/WGSL/layout exports, load-time checks and C/C++ parity harness | done |
+| `dawn/`: offline headless renderer, shared-layout generation, PBR/scene parity and resource probes | done; runtime compilation remains B4, wider corpus remains B5 |
 | `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, execution policies, buffer resources, compute and screen effects, channel plans, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |

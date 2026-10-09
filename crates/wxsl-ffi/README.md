@@ -92,7 +92,8 @@ Buffer ids: 0 material params, 1 user block, 2 instance attributes, 3 effect
 params. Boolean storage is `u32`; `interface` JSON retains the logical type.
 Empty layouts have no field rows; their size is still available in metadata.
 Matrices retain WGSL column padding (`mat3x3f`: 48 bytes). No camera/light
-struct mirror crosses this ABI; generated fixed layouts remain B6.
+struct mirror crosses this ABI; fixed layouts are generated separately by
+`wxsl-core::host` (ADR 0050), including `dawn/include/wxsl_host.h`.
 
 ## Verification and header updates
 

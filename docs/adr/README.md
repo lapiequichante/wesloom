@@ -22,7 +22,7 @@ is signal, don't delete it.
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
 | [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
-| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md) |
+| [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md), [0050](0050-host-shared-layouts-are-generated.md) |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md) |
 | [0011](0011-own-the-shading-language.md) | Own the shading language: WXSL replaces WESL | Accepted |
@@ -35,7 +35,7 @@ is signal, don't delete it.
 | [0018](0018-one-generic-node-per-operation.md) | One generic node per operation, with WGSL's own operand rules | Accepted |
 | [0019](0019-node-colour-and-name-are-instance-metadata.md) | A node's colour and name belong to the node, not to its kind | Accepted, amended by [0023](0023-a-material-declares-its-resources.md) |
 | [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md) | A node definition is derived from its WXSL source | Accepted |
-| [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0033](0033-pipelines-are-documents.md), [0048](0048-the-frame-plan-is-device-free.md) |
+| [0021](0021-a-declarative-render-graph-and-a-scene-document.md) | A declarative render graph, and a scene document the pipeline is not in | Accepted, amended by [0022](0022-material-stages-replace-the-render-path-enum.md), [0026](0026-shadows-a-view-per-light-and-two-flags-on-the-material.md), [0033](0033-pipelines-are-documents.md), [0048](0048-the-frame-plan-is-device-free.md), [0050](0050-host-shared-layouts-are-generated.md) |
 | [0022](0022-material-stages-replace-the-render-path-enum.md) | Material stages replace the render-path enum | Accepted, amended by [0025](0025-a-material-graph-spans-shader-stages.md), [0033](0033-pipelines-are-documents.md), [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
 | [0023](0023-a-material-declares-its-resources.md) | A material declares its resources: uniforms, textures, and the application's slot | Accepted |
 | [0024](0024-a-material-declares-the-geometry-it-requires.md) | A material declares the vertex and instance attributes it requires | Accepted, amended by [0027](0027-a-graph-computes-its-own-interpolants.md) |
@@ -64,6 +64,8 @@ is signal, don't delete it.
 | [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) | Dual depth peeling, and the baseline/native split for blendable float targets | Accepted |
 | [0048](0048-the-frame-plan-is-device-free.md) | The frame plan is device-free | Accepted |
 | [0049](0049-share-the-core-through-a-data-only-c-abi.md) | Share the core through a data-only C ABI | Accepted |
+| [0050](0050-host-shared-layouts-are-generated.md) | Host-shared layouts are computed or generated, never mirrored | Accepted |
+| [0051](0051-dawn-implements-only-the-device-half.md) | Dawn implements only the device half, offline first | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

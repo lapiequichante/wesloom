@@ -161,9 +161,9 @@ either a lie or a translator nobody asked for.
 * **The ABI's frame group changed**: `abi::BINDING_OBJECT` becomes
   `BINDING_INSTANCES`, `bindings.wxsl`'s `object: Object` uniform becomes
   `instances: array<Instance>`, and `VertexIn` gains
-  `@builtin(instance_index)`. The host mirror is
-  `environment::InstanceTransform`; the two are still edited together
-  (ADR 0008).
+  `@builtin(instance_index)`. `environment::InstanceTransform` and the
+  shader declaration now come from the same table (ADR 0050), replacing
+  ADR 0008's edit-together rule.
 * **This amends ADR 0010**, whose "storage buffer indexed by
   `instance_index`… stays available as an opt-in later" is now the default.
   The slot allocation is unchanged, exactly as that ADR predicted.

@@ -2940,6 +2940,10 @@ dependencies = [
 name = "wxsl-ffi"
 version = "0.0.0"
 dependencies = [
+ "bytemuck",
+ "glam",
+ "image",
+ "pollster",
  "serde",
  "serde_json",
  "syn 2.0.119",

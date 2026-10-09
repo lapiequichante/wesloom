@@ -20,7 +20,6 @@
 
 use std::borrow::Cow;
 
-use bytemuck::{Pod, Zeroable};
 use wxsl_core::abi;
 use wxsl_core::macros::MacroSet;
 
@@ -72,18 +71,7 @@ impl MsdfBackend {
     }
 }
 
-/// One coloured edge, as the compute shader's `MsdfEdge`.
-///
-/// Unused control points repeat the endpoint so that every kind is one
-/// stride. Host-shared with `shaders/wxsl/msdf.wxsl`: 40 bytes, `vec2f`
-/// alignment, and the two are edited together.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct GpuEdge {
-    points: [[f32; 2]; 4],
-    kind: u32,
-    color: u32,
-}
+include!(concat!(env!("OUT_DIR"), "/GpuEdge.rs"));
 
 impl GpuEdge {
     fn new(edge: &ColoredEdge) -> Self {
@@ -102,26 +90,17 @@ impl GpuEdge {
             ),
         };
         GpuEdge {
-            points,
+            p0: points[0],
+            p1: points[1],
+            p2: points[2],
+            p3: points[3],
             kind,
             color: edge.color.channels(),
         }
     }
 }
 
-/// One glyph to generate, as the compute shader's `MsdfJob`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
-struct GpuJob {
-    translate: [f32; 2],
-    scale: f32,
-    range: f32,
-    size: [u32; 2],
-    edge_begin: u32,
-    edge_end: u32,
-    pixel_offset: u32,
-    _pad0: u32,
-}
+include!(concat!(env!("OUT_DIR"), "/GpuJob.rs"));
 
 /// The compute pipeline that generates distance fields.
 pub struct MsdfCompute {
@@ -251,7 +230,10 @@ impl MsdfCompute {
         // writing no channel is inert: the shader skips it for every channel.
         if edges.is_empty() {
             edges.push(GpuEdge {
-                points: [[0.0; 2]; 4],
+                p0: [0.0; 2],
+                p1: [0.0; 2],
+                p2: [0.0; 2],
+                p3: [0.0; 2],
                 kind: abi::MSDF_EDGE_LINE,
                 color: 0,
             });
@@ -453,11 +435,11 @@ mod tests {
         assert_eq!(line.kind, abi::MSDF_EDGE_LINE);
         // An unused control point repeats the endpoint, so the shader's
         // `msdf_end` finds the right point whatever the kind.
-        assert_eq!(line.points[3], Vec2::X.to_array());
+        assert_eq!(line.p3, Vec2::X.to_array());
 
         let quad = GpuEdge::new(&colored(Segment::Quad([Vec2::ZERO, Vec2::X, Vec2::Y])));
         assert_eq!(quad.kind, abi::MSDF_EDGE_QUAD);
-        assert_eq!(quad.points[3], Vec2::Y.to_array());
+        assert_eq!(quad.p3, Vec2::Y.to_array());
 
         let cubic = GpuEdge::new(&colored(Segment::Cubic([
             Vec2::ZERO,
@@ -466,7 +448,7 @@ mod tests {
             Vec2::ONE,
         ])));
         assert_eq!(cubic.kind, abi::MSDF_EDGE_CUBIC);
-        assert_eq!(cubic.points[3], Vec2::ONE.to_array());
+        assert_eq!(cubic.p3, Vec2::ONE.to_array());
     }
 
     #[test]

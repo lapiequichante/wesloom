@@ -32,7 +32,6 @@
 
 use std::ops::Range;
 
-use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 use wxsl_core::abi;
 
@@ -321,44 +320,9 @@ impl UiKind {
     }
 }
 
-/// One UI primitive.
-///
-/// Host-shared with `abi::UI_ATTRIBUTES` and `shaders/wxsl/ui.wxsl`'s
-/// `UiInstanceIn`: three views of one layout, edited together (ADR 0013).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct UiInstance {
-    /// Centre in physical pixels.
-    pub center: [f32; 2],
-    /// Half the size, in the primitive's own frame.
-    pub half_extent: [f32; 2],
-    /// Unit vector the local x axis points along on screen.
-    pub axis: [f32; 2],
-    /// Corner radius (a glyph's screen-pixel range), and border thickness.
-    pub shape: [f32; 2],
-    /// Texture coordinate of the top-left corner.
-    pub uv_min: [f32; 2],
-    /// Texture coordinate of the bottom-right corner.
-    pub uv_max: [f32; 2],
-    /// Straight RGBA tint.
-    pub color: [f32; 4],
-    /// Primitive kind, flat-interpolated.
-    pub kind: u32,
-}
+include!(concat!(env!("OUT_DIR"), "/UiInstance.rs"));
 
 impl UiInstance {
-    /// Per-instance attributes, matching `UiInstanceIn`'s locations.
-    const ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
-        0 => Float32x2,
-        1 => Float32x2,
-        2 => Float32x2,
-        3 => Float32x2,
-        4 => Float32x2,
-        5 => Float32x2,
-        6 => Float32x4,
-        7 => Uint32,
-    ];
-
     /// The buffer layout to hand to the UI pipeline.
     ///
     /// `Instance` step mode: the pipeline has no per-vertex buffer at all,

@@ -526,7 +526,7 @@ impl RenderGraph {
     /// parameters — the uniform block at the next binding. Device-free,
     /// because a shape is data: this is what the layout, the bind group
     /// and the pipeline caches are all keyed on.
-    fn pass_binding_kinds(&self, pass: &PassDesc, params: Option<u32>) -> Vec<PassBinding> {
+    pub fn pass_binding_kinds(&self, pass: &PassDesc, params: Option<u32>) -> Vec<PassBinding> {
         let mut kinds: Vec<PassBinding> = Vec::with_capacity(
             pass.reads.len() + pass.writes.len() + usize::from(params.is_some()),
         );

@@ -207,6 +207,14 @@ schedules / WGSL text / layout tables out.
 
 ### B3 — The Dawn renderer
 
+**Implemented (offline/headless, 2026-10-09).** `dawn/` builds with Conan 2
+and a SHA-256-pinned official Dawn SDK. `bake_docs` exports both shared
+stock plans, layouts, WGSL and upload bytes. PBR and scene_check match Rust
+in both paths on Apple M5; buffer/history/indirect probes agree too. The
+binary links no Rust. See ADR 0051 and `dawn/README.md` for commands and
+the first offline host's explicit limits. Runtime compilation remains B4;
+the wider corpus/CI GPU harness remains B5.
+
 The C++ half. Offline-first, per decision 4.
 
 * A top-level `dawn/` directory (CMake, pinned Dawn version), not a
@@ -271,6 +279,12 @@ second implementations, now with its widest customer.
   B3's ADR as the acceptance instrument.
 
 ### B6 — Generated host-shared headers
+
+**Implemented (2026-10-09).** `wxsl-core::host` generates fixed frame,
+vertex/UI and MSDF Rust/C/WXSL definitions (ADR 0050). Generated sizes and
+offsets are asserted; the checked-in header is test-pinned and compiled in
+C/C++. A stale header is refused before Dawn setup. Rust GPU layout probes
+and the Dawn/Rust scenes pass; an injected bad upload turns parity red.
 
 `environment.rs`'s `#[repr(C)]` structs are edited together with
 `shaders/wxsl/bindings.wxsl` today — a three-way mirror about to become

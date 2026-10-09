@@ -19,3 +19,6 @@ serde = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[build-dependencies]
+wxsl-core = { workspace = true }

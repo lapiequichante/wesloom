@@ -1,5 +1,6 @@
 /* Dynamic-loading acceptance test; also compiled as C++ through abi_smoke.cpp. */
 #include "wxsl.h"
+#include "wxsl_host.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -103,9 +103,9 @@ module cannot see declarations in the root module that imports it, so
   `abi.rs`'s table and `shaders/wxsl/surface.wxsl`. The tables are
   documented as being in declaration order for that reason, and
   `tests/graph_to_wgsl.rs` compiles every node so a mismatch fails loudly.
-- The same applies to the uniform structs: `wxsl-render`'s `scene` module
-  mirrors `shaders/wxsl/bindings.wxsl` field for field, with a test on the
-  struct sizes, because a layout mismatch corrupts every frame silently.
+- Fixed host structs now follow [ADR 0050](0050-host-shared-layouts-are-generated.md):
+  `wxsl-core::host` generates Rust/C/WXSL layouts, including frame, vertex,
+  UI and MSDF buffers. This replaces their edit-together mirror rule.
 - A stdlib function that reads a macro variable must have that macro declared
   on its node definition, or the generated macro module will not declare it
   and the import will fail. `shaders/README.md` states this as an authoring

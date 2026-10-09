@@ -1,8 +1,11 @@
-//! Camera, lights, frame values and host layouts, without a device (ADR 0048).
+//! Camera, lights and frame values, without a device (ADR 0048).
+//! Fixed host layouts are generated from `wxsl-core::host` (ADR 0050):
+//! matrices are column-major, shadow slice -1 means no shadow, and the
+//! previous camera/time defaults mean no motion.
 
 use std::collections::BTreeMap;
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::Zeroable;
 use glam::{Mat4, Vec2, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
@@ -398,25 +401,7 @@ impl Environment {
     }
 }
 
-/// Host mirror of `Camera` in `shaders/wxsl/bindings.wxsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct CameraUniform {
-    /// View-projection matrix, column-major.
-    pub view_proj: [[f32; 4]; 4],
-    /// Inverse of `view_proj`, for reconstructing world positions from depth.
-    pub inverse_view_proj: [[f32; 4]; 4],
-    /// Camera position in world space.
-    pub position: [f32; 3],
-    _padding: f32,
-    /// What [`CameraUniform::view_proj`] was last frame — the velocity
-    /// stage's second transform. A view slot nobody renders velocity from
-    /// carries its own matrix here.
-    pub previous_view_proj: [[f32; 4]; 4],
-    /// Where [`CameraUniform::position`] was last frame.
-    pub previous_position: [f32; 3],
-    _padding1: f32,
-}
+include!(concat!(env!("OUT_DIR"), "/host.rs"));
 
 impl CameraUniform {
     /// One point of view: its world-to-clip matrix and where it sits.
@@ -446,62 +431,6 @@ impl CameraUniform {
             _padding1: 0.0,
         }
     }
-}
-
-/// Host mirror of `Light` in `shaders/wxsl/bindings.wxsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct LightUniform {
-    /// Position (point) or direction towards the light (directional).
-    pub position_or_direction: [f32; 3],
-    /// 0 for point, 1 for directional.
-    pub kind: f32,
-    /// Linear-light colour.
-    pub color: [f32; 3],
-    /// Intensity multiplier.
-    pub intensity: f32,
-    /// World space to this light's clip space, for the shadow lookup.
-    pub shadow_view_proj: [[f32; 4]; 4],
-    /// Layer of the shadow map array this light rendered into, or -1 for a
-    /// light that casts no shadow.
-    pub shadow_slice: i32,
-    /// Normal-offset bias, in world units.
-    pub shadow_normal_bias: f32,
-    _padding: [f32; 2],
-}
-
-/// Host mirror of `Scene` in `shaders/wxsl/bindings.wxsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct SceneUniform {
-    /// Fixed-size light array; only the first `light_count` are meaningful.
-    pub lights: [LightUniform; MAX_LIGHTS],
-    /// Ambient light from above.
-    pub ambient_sky: [f32; 3],
-    _padding0: f32,
-    /// Ambient light from below.
-    pub ambient_ground: [f32; 3],
-    _padding1: f32,
-    /// How many lights are in use.
-    pub light_count: u32,
-    /// Seconds since start.
-    pub time: f32,
-    /// Exposure multiplier.
-    pub exposure: f32,
-    /// What `time` was last frame.
-    pub previous_time: f32,
-}
-
-/// Host mirror of one element of `instances` in
-/// `shaders/wxsl/bindings.wxsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct InstanceTransform {
-    /// Object-to-world matrix, column-major.
-    pub model: [[f32; 4]; 4],
-    /// Inverse transpose of `model`, as a 4x4 so its layout needs no
-    /// per-column padding. Only the upper 3x3 is read.
-    pub normal_matrix: [[f32; 4]; 4],
 }
 
 impl InstanceTransform {

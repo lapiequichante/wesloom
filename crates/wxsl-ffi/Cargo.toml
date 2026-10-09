@@ -25,6 +25,10 @@ syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
 wxsl-render = { workspace = true }
+glam = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+image = { workspace = true }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

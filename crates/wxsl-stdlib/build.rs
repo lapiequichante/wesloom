@@ -44,6 +44,12 @@ const ABI_DIRECTORY: &str = "wxsl";
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shaders");
     println!("cargo::rerun-if-changed={}", root.display());
+    let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    for module in ["bindings", "vertex", "ui", "msdf"] {
+        let template = std::fs::read_to_string(root.join(format!("wxsl/{module}.wxsl"))).unwrap();
+        let source = wxsl_core::host::shader_template(module, &template);
+        std::fs::write(output.join(format!("{module}.wxsl")), source).unwrap();
+    }
 
     let mut sources = BTreeMap::new();
     for (module_path, path) in node_sources(&root) {

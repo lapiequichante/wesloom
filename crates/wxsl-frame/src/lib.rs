@@ -14,3 +14,6 @@ pub mod pipeline;
 pub mod pipeline_doc;
 pub mod setup;
 pub mod types;
+
+/// Generated fixed host-shared C/C++ layouts (ADR 0050).
+pub const HOST_HEADER: &str = include_str!(concat!(env!("OUT_DIR"), "/wxsl_host.h"));

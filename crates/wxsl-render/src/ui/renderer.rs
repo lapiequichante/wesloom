@@ -46,6 +46,8 @@ struct Registered {
     bind_group: wgpu::BindGroup,
 }
 
+include!(concat!(env!("OUT_DIR"), "/UiViewport.rs"));
+
 /// The UI pass.
 pub struct UiRenderer {
     module: wgpu::ShaderModule,
@@ -143,7 +145,7 @@ impl UiRenderer {
         });
         let viewport = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("wxsl ui viewport"),
-            size: core::mem::size_of::<[f32; 4]>() as u64,
+            size: core::mem::size_of::<UiViewport>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -312,7 +314,10 @@ impl UiRenderer {
         queue.write_buffer(
             &self.viewport,
             0,
-            bytemuck::cast_slice(&[width as f32, height as f32, 0.0, 0.0]),
+            bytemuck::bytes_of(&UiViewport {
+                size: [width as f32, height as f32],
+                ..Default::default()
+            }),
         );
 
         let instances = list.instances();

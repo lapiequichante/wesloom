@@ -2,10 +2,9 @@
 //! extra streams a material may ask for on top of it, and the primitives to
 //! draw with it.
 //!
-//! [`Vertex::LAYOUT`], `abi::VERTEX_IN_FIELDS` and `VertexIn` in
-//! `shaders/wxsl/vertex.wxsl` are three halves of one contract — the
-//! `@location` numbers must line up, and `wxsl-stdlib` has the test that
-//! keeps them lined up.
+//! [`Vertex::LAYOUT`] and `VertexIn` are generated from `abi::VERTEX_IN_FIELDS`
+//! through `wxsl-core::host` (ADR 0050). The tangent's `w` is the bitangent
+//! sign: `bitangent = cross(normal, tangent.xyz) * tangent.w`.
 //!
 //! # Declared attributes are streams of their own
 //!
@@ -19,31 +18,13 @@
 use core::ops::Range;
 use std::collections::BTreeMap;
 
-use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use wxsl_core::node::ValueType;
 use wxsl_core::resources::VertexAttributeBinding;
 
 use crate::error::RenderError;
 
-/// One vertex: position, shading basis, texture coordinates.
-///
-/// The tangent's `w` is the handedness of the bitangent, the usual glTF
-/// convention: `bitangent = cross(normal, tangent.xyz) * tangent.w`. Storing
-/// a sign rather than a third vector keeps the vertex smaller and cannot
-/// disagree with the normal after interpolation.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct Vertex {
-    /// Object-space position.
-    pub position: [f32; 3],
-    /// Object-space normal, unit length.
-    pub normal: [f32; 3],
-    /// Object-space tangent (xyz) and bitangent sign (w).
-    pub tangent: [f32; 4],
-    /// Texture coordinates.
-    pub uv: [f32; 2],
-}
+include!(concat!(env!("OUT_DIR"), "/Vertex.rs"));
 
 /// One declared per-vertex stream's values, on the CPU.
 ///
@@ -119,14 +100,6 @@ struct VertexStream {
 }
 
 impl Vertex {
-    /// Vertex attributes, matching `VertexIn`'s locations.
-    const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
-        0 => Float32x3,
-        1 => Float32x3,
-        2 => Float32x4,
-        3 => Float32x2,
-    ];
-
     /// The buffer layout to hand to a render pipeline.
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: core::mem::size_of::<Vertex>() as wgpu::BufferAddress,

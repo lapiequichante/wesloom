@@ -15,11 +15,29 @@
 
 /// Build the module table, checking at compile time that every named file
 /// exists.
+macro_rules! module_source {
+    ("wxsl/bindings.wxsl") => {
+        include_str!(concat!(env!("OUT_DIR"), "/bindings.wxsl"))
+    };
+    ("wxsl/vertex.wxsl") => {
+        include_str!(concat!(env!("OUT_DIR"), "/vertex.wxsl"))
+    };
+    ("wxsl/ui.wxsl") => {
+        include_str!(concat!(env!("OUT_DIR"), "/ui.wxsl"))
+    };
+    ("wxsl/msdf.wxsl") => {
+        include_str!(concat!(env!("OUT_DIR"), "/msdf.wxsl"))
+    };
+    ($file:tt) => {
+        include_str!(concat!("../shaders/", $file))
+    };
+}
+
 macro_rules! modules {
-    ($($path:literal => $file:literal,)*) => {
+    ($($path:literal => $file:tt,)*) => {
         /// Every WXSL module in this library, as `(module path, source)`.
         pub const MODULES: &[(&str, &str)] = &[
-            $(($path, include_str!(concat!("../shaders/", $file))),)*
+            $(($path, module_source!($file)),)*
         ];
     };
 }

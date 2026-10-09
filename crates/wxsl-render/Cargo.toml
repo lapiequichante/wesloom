@@ -25,3 +25,6 @@ gltf = { workspace = true, optional = true }
 default = []
 # Read geometry from glTF/GLB files (`crate::gltf`).
 gltf = ["dep:gltf"]
+
+[build-dependencies]
+wxsl-core = { workspace = true }

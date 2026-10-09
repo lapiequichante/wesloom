@@ -3,9 +3,8 @@
 //! Unit tests cover the cases I thought of; this one covers the cases the
 //! library actually contains. It reads `wxsl-stdlib`'s shader tree by
 //! relative path rather than by a dependency: `wxsl-stdlib` ships shader
-//! source and node descriptors and does not compile anything itself, so it
-//! has no reason to depend on this crate, and a dev-dependency the other
-//! way would leave the two able to drift silently.
+//! source and node descriptors. ABI layout templates use the same core
+//! generator as its build script, without a circular crate dependency.
 //!
 //! Skips itself if the tree is not where it expects, so this cannot fail for
 //! someone building the crate in isolation.
@@ -48,6 +47,15 @@ fn shader_files(root: &Path) -> Vec<PathBuf> {
     found
 }
 
+fn shader_source(path: &Path) -> String {
+    let source = std::fs::read_to_string(path).expect("readable shader");
+    if path.parent().is_some_and(|p| p.ends_with("wxsl")) {
+        wxsl_core::host::shader_template(path.file_stem().unwrap().to_str().unwrap(), &source)
+    } else {
+        source
+    }
+}
+
 #[test]
 fn every_shipped_shader_lexes() {
     let Some(root) = shader_root() else {
@@ -62,7 +70,7 @@ fn every_shipped_shader_lexes() {
 
     let mut tokens_seen = 0usize;
     for path in &files {
-        let source = std::fs::read_to_string(path).expect("readable shader");
+        let source = shader_source(path);
         match tokenize(&source) {
             Ok(tokens) => {
                 assert!(!tokens.is_empty(), "{} produced no tokens", path.display());
@@ -91,7 +99,7 @@ fn the_corpus_exercises_both_readings_of_an_angle_bracket() {
     let mut templates = 0usize;
     let mut comparisons = 0usize;
     for path in shader_files(&root) {
-        let source = std::fs::read_to_string(&path).expect("readable shader");
+        let source = shader_source(&path);
         for token in tokenize(&source).expect("lexes") {
             match token.node {
                 Tok::TemplateOpen => templates += 1,
@@ -124,7 +132,7 @@ fn every_shipped_shader_parses() {
     let mut imports = 0usize;
     let mut functions = 0usize;
     for path in &files {
-        let source = std::fs::read_to_string(path).expect("readable shader");
+        let source = shader_source(path);
         match parse(&source) {
             Ok(module) => {
                 declarations += module.declarations.len();
@@ -166,7 +174,7 @@ fn every_shipped_shader_round_trips() {
 
     let mut bytes = 0usize;
     for path in shader_files(&root) {
-        let source = std::fs::read_to_string(&path).expect("readable shader");
+        let source = shader_source(&path);
         let once = emit(&parse(&source).expect("parses"));
         let twice = match parse(&once) {
             Ok(module) => emit(&module),
@@ -202,7 +210,7 @@ fn library(root: &Path) -> Modules {
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/")
             .replace('/', "::");
-        let source = std::fs::read_to_string(&path).expect("readable shader");
+        let source = shader_source(&path);
         modules.insert(format!("package::{relative}"), source);
     }
     modules
