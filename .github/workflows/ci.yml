@@ -122,6 +122,8 @@ jobs:
       - run: cargo test --workspace --all-features
       - name: Every stdlib category has a compilable backend sample
         run: cargo test -p wxsl-ffi --example bake_docs
+      - name: S2-S4 guide snippets compile and validate without a GPU
+        run: cargo run -p wxsl-ffi --example check_shader_guide -- docs/s2-s3-s4-implementation-guide.md
       - name: Dynamic C and C++ ABI parity (no GPU or Dawn SDK required)
         run: bash dawn/tests/run_abi_smoke.sh
       # `crates/wxsl/tests/render_cube.rs` needs a GPU adapter and skips

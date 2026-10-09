@@ -1,0 +1,28 @@
+// Sheen IBL response
+//
+// Bounded approximation of the hemispherical Charlie-sheen response.
+// Multiply by sheen colour and environment irradiance; this is not a full BRDF.
+//
+// SPDX-License-Identifier: MIT
+// Copyright © 2010-2026 three.js authors
+// Ported from: https://github.com/mrdoob/three.js
+// Source: src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js
+// Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+// Symbol: IBLSheenBRDF
+// Changes: GLSL to WXSL; expose N·V directly; clamp both input domains;
+//          document socket defaults; retain upstream fit coefficients.
+// Upstream technique: Estevez and Kulla (2017),
+// "Production Friendly Microfacet Sheen BRDF". License text: ../../NOTICE.
+
+fn sheen_ibl_response(
+    n_dot_v: f32,  // Cosine between normal and view. @default 0.5
+    roughness: f32, // Perceptual sheen roughness. @default 0.5
+) -> f32 {
+    let r = clamp(roughness, 0.0, 1.0);
+    let nv = clamp(n_dot_v, 0.0, 1.0);
+    let r2 = r * r;
+    let inverse = 1.0 / (r + 0.1);
+    let a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * inverse;
+    let b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * inverse;
+    return clamp(exp(a * nv + b), 0.0, 1.0);
+}

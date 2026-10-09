@@ -5,15 +5,15 @@
 //! `wxsl-core` nodes. Organized the way libraries like
 //! [LYGIA](https://lygia.xyz) organize themselves (one small function per
 //! file, grouped by category) because that granularity is genuinely a good
-//! design, but every implementation here is written from scratch: no
-//! upstream source is translated or copied. See
-//! `docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md` for why,
+//! design. Original functions and audited permissive ports coexist (ADR 0053).
+//! Ports identify their exact source and retain required notices. See
+//! `docs/adr/0053-permissive-shader-ports-retain-their-provenance.md`,
 //! and `shaders/README.md` for the authoring rule and category layout.
 //!
 //! Ordinary permissively-licensed crate like the rest of the workspace —
 //! unlike its predecessor design (a LYGIA port, see ADR 0006, superseded),
-//! this crate carries no special license and is not isolated for legal
-//! reasons. It stays a separate crate purely for compile-time/binary-size
+//! imported portions retain their licenses in [`THIRD_PARTY_NOTICES`].
+//! It stays a separate crate purely for compile-time/binary-size
 //! modularity (ADR 0002): a consumer with a small custom node set shouldn't
 //! have to compile the whole standard library.
 //!
@@ -56,3 +56,7 @@ pub mod shaders;
 
 pub use registry::{all_nodes, registry};
 pub use shaders::MODULES;
+
+/// Required upstream notices for redistribution, including in binary applications.
+/// Compiling shaders to WGSL does not preserve their source comments.
+pub const THIRD_PARTY_NOTICES: &str = include_str!("../NOTICE");

@@ -23,11 +23,11 @@ change, read this file, `docs/architecture.md`, and the relevant ADR.
 [WXSL](https://wesl-lang.dev) (WGSL Extended) visually or programmatically,
 and running them through a `wgpu` renderer that can switch between forward
 and deferred pipelines without the graph author doing anything special. It
-also ships an original base node library (`wxsl-stdlib`) covering the
+also ships a base node library (`wxsl-stdlib`) covering the
 usual granular shader-function ground (math, color, lighting, SDFs, …) —
 see [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
-for why this is written from scratch rather than ported from an existing
-library.
+for the original design, amended by [ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)
+to allow audited permissive ports.
 
 **Status: implemented, editor included.** The graph model, WXSL codegen, node
 library, the forward/deferred `wgpu` renderer, its 2D UI layer and the visual
@@ -91,19 +91,20 @@ one "Superseded by NNNN" rather than deleting it.
 
 ## Licensing — read this before adding to `wxsl-stdlib`
 
-Every crate in this workspace, including `wxsl-stdlib`, is plain
-MIT/Apache-2.0 — there is no special-cased crate anymore
+Workspace-owned code is MIT/Apache-2.0. Imported code retains its upstream
+license and notices; do not assume that attribution relicenses it.
+There is no non-permissive shader crate
 (`wxsl-lygia` was tried and dropped, see
 [ADR 0006](docs/adr/0006-lygia-port-licensing-and-isolation.md), superseded
 by [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)).
-That simplicity depends on one rule holding: **every function in
-`wxsl-stdlib` is original code.** It's fine to look at how LYGIA,
-Babylon.js, papers, or any other reference solves a problem to learn the
-*technique*; it is not fine to transcribe or lightly rename someone else's
-implementation, regardless of that source's license — that's a derivative
-work, and reintroduces exactly the problem ADR 0007 removed. See
-`crates/wxsl-stdlib/shaders/README.md` for the full authoring rule and
-where new functions go.
+ADR 0053 permits original code and audited MIT, Apache-2.0 or BSD-2/3-Clause
+ports. Before copying, check the exact file and provenance chain at a pinned
+commit. Preserve copyright/license text and applicable notices, identify the
+source/symbol/revision and changes in the shader, and update root and packaged
+crate `NOTICE`. Review the package's SPDX expression when a new upstream license
+changes redistribution obligations. Other licenses need explicit review;
+non-permissive or unclear sources remain technique-only. `refs/` is ignored
+research material, never a build dependency. See `crates/wxsl-stdlib/shaders/README.md`.
 
 ## Build, test, and lint commands
 
@@ -347,7 +348,7 @@ routing and invariants.
   Its optional runtime compiler dynamically loads that same data ABI (ADR 0052);
   never duplicate variant keys, shader compilation or layout rules in C++.
 - New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
-  (see that directory's `README.md` for the category layout, the originality
+  (see that directory's `README.md` for the category layout, the provenance
   rule, and the authoring rules that keep a function reachable from a
   graph). **The file is the node** (ADR 0020): there is no descriptor to
   write in Rust. One `fn` per file; a label line then a documentation

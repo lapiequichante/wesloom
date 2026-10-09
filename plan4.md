@@ -333,6 +333,15 @@ four-way (C++). The fix is the one the parameter buffer already got:
 
 ### S1 — The licensing ADR *(unblocks S2–S4)*
 
+**Implemented (2026-10-09).** ADR 0053 replaces only ADR 0007's blanket
+originality rule. Audited MIT/Apache-2.0/BSD ports retain pinned provenance,
+license text and notices. The first worked port is three.js `IBLSheenBRDF`,
+exposed as `lighting.sheen_ibl_response`; root/packaged notices and a public
+notice string support redistribution. `refs/` is ignored research material.
+The detailed source inventory, proposed tickets and validated WXSL snippets
+for S2/S3/S4 live in `docs/s2-s3-s4-implementation-guide.md`; those lots are
+not implemented by writing the guide.
+
 Decision 1, written down: supersede ADR 0007's blanket originality rule
 for `wxsl-stdlib`.
 

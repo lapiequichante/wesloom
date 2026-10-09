@@ -94,6 +94,7 @@ modules! {
     "package::lighting::fresnel_schlick" => "lighting/fresnel_schlick.wxsl",
     "package::lighting::pbr_direct" => "lighting/pbr_direct.wxsl",
     "package::lighting::pbr_direct_split" => "lighting/pbr_direct_split.wxsl",
+    "package::lighting::sheen_ibl_response" => "lighting/sheen_ibl_response.wxsl",
     "package::lighting::visibility_smith" => "lighting/visibility_smith.wxsl",
 
     // The lighting models (`wxsl_core::lighting::DEFAULT_MODELS`). Kept out

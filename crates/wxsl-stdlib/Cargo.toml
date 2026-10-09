@@ -1,6 +1,6 @@
 [package]
 name = "wxsl-stdlib"
-description = "Original WESL shader function library for wxsl's base nodes: granular, composable functions in the spirit of libraries like LYGIA, written from scratch."
+description = "Granular WXSL shader nodes: original functions and attributed permissive ports."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true

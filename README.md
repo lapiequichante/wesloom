@@ -1,7 +1,7 @@
 # WXSL
 
 Shader node graphs on `wgpu`, with its own shading language, an optional
-visual node editor, and an original from-scratch library of base shader
+visual node editor, and a library of original and audited permissively ported shader
 nodes.
 
 > **Status: working, editor included.** Graphs are authored in code, in the
@@ -52,9 +52,9 @@ nodes.
   ([ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
 - A built-in library of granular base nodes (math, color, lighting, SDFs,
   noise, …), in the spirit of libraries like [LYGIA](https://lygia.xyz) but
-  written entirely from scratch — see
-  [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
-  for why it isn't a port.
+  original functions plus audited permissive ports — see
+  [ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)
+  for the provenance and redistribution rules.
 - An optional visual node editor, strictly opt-in via a Cargo feature, so a
   headless/runtime consumer never compiles it just to use the graph model or
   renderer. It has no GUI-toolkit dependency at all: it draws itself with
@@ -146,7 +146,7 @@ rebound per object.
 | [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: the render graph that turns a list of passes into a frame, WXSL → WGSL compilation, the shader variant cache, a material's bind groups, and the forward and deferred pass lists. |
 | [`wxsl-render`](crates/wxsl-render)'s [`ui`](crates/wxsl-render/src/ui) | The 2D layer the editor is drawn with: a texture atlas, MSDF text from glyph outlines (CPU or compute pass), an instanced draw list, and windowing-agnostic input. Useful without the editor. |
 | [`wxsl-editor`](crates/wxsl-editor) | The visual node editor: pan/zoom canvas, node palette, live material preview, and the generated WXSL and WGSL. Draws itself with `wxsl-render`; no GUI toolkit. |
-| [`wxsl-stdlib`](crates/wxsl-stdlib) | The base node library: original shader functions written from scratch, plus the WXSL side of the shader ABI. |
+| [`wxsl-stdlib`](crates/wxsl-stdlib) | Granular shader nodes, original or attributed permissive ports, plus the WXSL side of the shader ABI. |
 | [`wxsl`](crates/wxsl) | The facade crate most consumers depend on; re-exports the above behind Cargo features. |
 
 Full crate graph, data flow diagrams, and the "why" behind this split live
@@ -168,12 +168,13 @@ wxsl = { version = "0", features = ["editor"] }
 
 ## Licensing
 
-Everything in this workspace, `wxsl-stdlib` included, is dual-licensed
+Workspace-owned code is dual-licensed
 MIT / Apache-2.0 — see [`LICENSE-MIT`](LICENSE-MIT) and
-[`LICENSE-APACHE`](LICENSE-APACHE). `wxsl-stdlib` is original code, not a
-port of any existing shader library; see
-[ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
-for why that mattered enough to write down.
+[`LICENSE-APACHE`](LICENSE-APACHE). Audited shader ports retain their original
+licenses and required notices; see [NOTICE](NOTICE) and
+[ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md).
+Binary applications can redistribute the complete stdlib attributions from
+`wxsl_stdlib::THIRD_PARTY_NOTICES`.
 
 ## Working on this repo
 

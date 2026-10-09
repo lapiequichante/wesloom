@@ -21,7 +21,7 @@ is signal, don't delete it.
 | [0004](0004-node-editor-is-an-optional-additive-ui-layer.md) | Visual node editor is an optional, additive UI layer | Accepted, amended by [0013](0013-the-editor-draws-itself-with-wxsl-render.md), [0019](0019-node-colour-and-name-are-instance-metadata.md) |
 | [0005](0005-render-pipeline-abstraction-and-shader-switching.md) | Render pipeline abstraction with automatic forward/deferred shader switching | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0022](0022-material-stages-replace-the-render-path-enum.md) |
 | [0006](0006-lygia-port-licensing-and-isolation.md) | LYGIA port: licensing and crate isolation | Superseded by [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) |
-| [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Accepted |
+| [0007](0007-original-shader-stdlib-instead-of-a-lygia-port.md) | Original shader standard library instead of a LYGIA port | Originality rule superseded by 0053; other decisions Accepted |
 | [0008](0008-surface-graphs-and-a-named-shader-abi.md) | A material graph describes a surface, against a named shader ABI | Accepted, amended by [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md), [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md), [0025](0025-a-material-graph-spans-shader-stages.md), [0040](0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md), [0050](0050-host-shared-layouts-are-generated.md) |
 | [0009](0009-the-application-supplies-the-shader-library.md) | The application supplies the renderer's shader library | Accepted |
 | [0010](0010-four-bind-groups-allocated-by-update-frequency.md) | Four bind groups, allocated by update frequency | Accepted, amended by [0021](0021-a-declarative-render-graph-and-a-scene-document.md), [0023](0023-a-material-declares-its-resources.md), [0024](0024-a-material-declares-the-geometry-it-requires.md) |
@@ -67,6 +67,7 @@ is signal, don't delete it.
 | [0050](0050-host-shared-layouts-are-generated.md) | Host-shared layouts are computed or generated, never mirrored | Accepted |
 | [0051](0051-dawn-implements-only-the-device-half.md) | Dawn implements only the device half, offline first | Accepted |
 | [0052](0052-runtime-compilation-stays-behind-the-data-abi.md) | Runtime compilation stays behind the data ABI | Accepted |
+| [0053](0053-permissive-shader-ports-retain-their-provenance.md) | Permissive shader ports retain their provenance | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

@@ -9,11 +9,11 @@ When the two disagree, trust the ADRs and fix this file.
 `wxsl-editor`, or programmatically against `wxsl-core` directly),
 compiles that graph to [WXSL](https://wesl-lang.dev), and runs it through a
 `wgpu` renderer (`wxsl-render`) that can switch between forward and
-deferred rendering without you maintaining two graphs. An original,
-from-scratch library of granular base nodes (`wxsl-stdlib`) — math,
+deferred rendering without you maintaining two graphs. A library of
+granular base nodes (`wxsl-stdlib`) — math,
 color, lighting, SDFs, noise, and so on, in the spirit of libraries like
 [LYGIA](https://lygia.xyz) but not derived from one — ships as part of the
-default build (ADR 0007).
+default build (ADR 0007, amended by ADR 0053 for audited permissive ports).
 
 ## Crate graph
 
@@ -25,7 +25,7 @@ graph LR
     ffi["wxsl-ffi<br/>(data-only C ABI)<br/>no wgpu, no GUI"]
     render["wxsl-render<br/>(wgpu pipelines,<br/>forward/deferred switching)"]
     editor["wxsl-editor<br/>(visual node editor,<br/>draws itself with wxsl-render)"]
-    stdlib["wxsl-stdlib<br/>(original base nodes)<br/>MIT/Apache-2.0"]
+    stdlib["wxsl-stdlib<br/>(base nodes + attributed ports)<br/>permissive licences"]
     facade["wxsl<br/>(facade crate, feature-gated re-exports)"]
 
     render --> core
@@ -154,7 +154,7 @@ line that hands the node library's WXSL to the renderer.
 | Feature | Default | Adds | Implies |
 |---|---|---|---|
 | `render` | **on** | `wxsl-render` (wgpu pipelines) | — |
-| `stdlib` | **on** | `wxsl-stdlib` (original base nodes) | — |
+| `stdlib` | **on** | `wxsl-stdlib` (base nodes) | — |
 | `editor` | off | `wxsl-editor` (visual node editor) | `render` |
 | `gltf` | off | glTF/GLB geometry import (`wxsl_render::gltf`) | `render` |
 
@@ -807,8 +807,8 @@ every pass and then ignore.
 `wxsl-stdlib` mirrors the category layout common to granular shader
 libraries under `crates/wxsl-stdlib/shaders/` (`math/`, `color/`,
 `space/`, `lighting/`, `generative/`, `sdf/`, `sample/`, `animation/`,
-`filter/`, `distort/`), one `.wxsl` file per function — but every function
-is original code, not a port. A `wxsl/` directory alongside them holds the
+`filter/`, `distort/`), one `.wxsl` file per function — original code and
+audited permissive ports (ADR 0053). A `wxsl/` directory alongside them holds the
 shader ABI (ADR 0008), which is plumbing rather than granular functions.
 
 Two kinds of node come out of it. Arithmetic is an inline WXSL expression
@@ -834,8 +834,9 @@ function a graph does. An earlier plan to rewrite
 license ([ADR 0006](adr/0006-lygia-port-licensing-and-isolation.md)) turned
 out to be a real adoption cost even fully isolated behind an opt-in
 feature; ADR 0007 replaced it with this from-scratch library, which is why
-`stdlib` needs no special licensing treatment and defaults on. See
-[ADR 0007](adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md) and
+`stdlib` defaults on. ADR 0053 now permits attributed MIT/Apache/BSD ports;
+required notices ship with the crate and are exposed to binary applications.
+See [ADR 0053](adr/0053-permissive-shader-ports-retain-their-provenance.md) and
 `crates/wxsl-stdlib/shaders/README.md`'s authoring rule before adding a
 function.
 

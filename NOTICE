@@ -1,0 +1,16 @@
+wxsl third-party shader notices
+
+Workspace-owned code is MIT OR Apache-2.0. Imported portions retain their
+original licenses and notices; this file does not relicense them.
+
+three.js — MIT — Copyright © 2010-2026 three.js authors
+Source: https://github.com/mrdoob/three.js
+Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+Source file: src/renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js
+Original symbol: IBLSheenBRDF
+Adapted file: crates/wxsl-stdlib/shaders/lighting/sheen_ibl_response.wxsl
+Changes: WXSL translation, scalar N·V input, bounded inputs and socket metadata.
+Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
+
+Research checkouts under refs/ are not distributed components. Their presence
+does not approve every file, asset or dependency for incorporation.

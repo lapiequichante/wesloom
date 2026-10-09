@@ -100,19 +100,23 @@ Nothing in this crate may bind `@group(2)`, and only pass plumbing may bind
 
 ## Authoring rules
 
-**Every function in this crate is original code.** It's fine — encouraged,
-even — to look at how other libraries and engines solve a problem
-(LYGIA's category breakdown, [Babylon.js](https://github.com/BabylonJS/Babylon.js)'s
-shader techniques, papers, blog posts) for the *idea*: what the function
-should do, what a fast approximation looks like, what edge cases matter.
-It is not fine to transcribe or lightly rename someone else's
-implementation — that's a derivative work regardless of the source
-license, and defeats the point of writing this from scratch (see
-`docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md`). If a
-function was written with a specific external reference in mind for the
-*technique* (not the code), a one-line comment naming the reference is
-good practice; it is not a substitute for the implementation being your
-own.
+**Original code and audited permissive ports are allowed** (ADR 0053).
+MIT, Apache-2.0 and BSD-2/3-Clause are the initial approved source licenses.
+Check the exact file and its provenance chain, not only a repository badge.
+Other licenses require review before copying; unclear/non-permissive sources
+remain technique-only. Research checkouts under ignored `refs/` are not shipped.
+
+A port retains upstream copyright/license text and applicable notices. Put
+SPDX license, source repository/path, full commit, original symbol and a changes
+line after the node's label/documentation paragraph. Add it to root `NOTICE`
+and this crate's packaged `NOTICE`, including complete required license text.
+`wxsl_stdlib::THIRD_PARTY_NOTICES` exposes the packaged notices to applications;
+compiled WGSL alone does not carry them. Review package SPDX metadata whenever
+another upstream license is introduced. A technique-only implementation should
+say so rather than falsely claiming to be a port.
+
+Worked example: `lighting/sheen_ibl_response.wxsl`. Keep ports granular and
+WXSL-native; do not copy foreign bindings, preprocessor stacks or engine state.
 
 **A new function needs no node definition — it *is* one.** Write the file,
 add it to `MODULES` in `src/shaders.rs` (a test fails if you forget), and it

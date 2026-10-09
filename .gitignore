@@ -1,5 +1,6 @@
 /target/
 /dawn/CMakeUserPresets.json
+/refs/
 **/target/
 
 # Cargo.lock IS tracked. It was ignored while this was a workspace of

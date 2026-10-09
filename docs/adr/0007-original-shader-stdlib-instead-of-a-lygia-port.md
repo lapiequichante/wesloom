@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: Accepted
+Status: Originality rule superseded by [0053](0053-permissive-shader-ports-retain-their-provenance.md); other decisions Accepted
 
 ## Context
 
