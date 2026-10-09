@@ -140,6 +140,7 @@ a requirement to run every test for every change:
 - scheduling, presets, effects, capabilities and frame layouts: `cargo test -p wxsl-frame`
 - C ABI, generated header and compiler/layout parity: `cargo test -p wxsl-ffi`, then `bash dawn/tests/run_abi_smoke.sh`
 - fixed host layouts or Dawn recording: `cargo test -p wxsl-frame --test host_header`, then `bash dawn/tests/run_renderer_smoke.sh` (requires an adapter)
+- Dawn runtime or category parity: `cargo test -p wxsl-ffi --example bake_docs`, then `bash dawn/tests/run_parity.sh` (requires an adapter)
 - stdlib or generated shader sources: `cargo test -p wxsl-stdlib --test lighting_models`
 - wgpu adapters, shader variants and renderer UI: `cargo test -p wxsl-render`
 - WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
@@ -343,6 +344,8 @@ routing and invariants.
   a renderer normally; `wxsl-render` is a dev-dependency for parity tests.
   Unsafe foreign-memory access stays in `ffi.rs`; its generated header is
   test-pinned. `dawn/` consumes offline exports without linking Rust (ADR 0051).
+  Its optional runtime compiler dynamically loads that same data ABI (ADR 0052);
+  never duplicate variant keys, shader compilation or layout rules in C++.
 - New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
   (see that directory's `README.md` for the category layout, the originality
   rule, and the authoring rules that keep a function reachable from a

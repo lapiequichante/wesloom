@@ -7,11 +7,12 @@
 #include <vector>
 
 namespace wxsl {
+class Compiler;
 // Device half only: all shader, selection, layout and schedule rules arrive as
 // data.
 class Renderer {
 public:
-  explicit Renderer(const std::filesystem::path &assets);
+  explicit Renderer(const std::filesystem::path &assets, Compiler *compiler = nullptr);
   ~Renderer();
   Renderer(const Renderer &) = delete;
   Renderer &operator=(const Renderer &) = delete;
@@ -19,6 +20,10 @@ public:
   void mark_pass(const std::string &label);
   uint64_t pass_run_count(const std::string &label) const;
   nlohmann::json capabilities() const;
+  // Same-layout edits only; failure retains the previous valid material.
+  void compile_material(Compiler &compiler, size_t index, const nlohmann::json &request);
+  void upload_material_params(size_t index, const std::vector<uint8_t> &bytes);
+  size_t pipeline_count() const;
   uint32_t width() const;
   uint32_t height() const;
 

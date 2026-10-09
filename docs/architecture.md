@@ -117,8 +117,11 @@ with native Rust variants.
 **`dawn/`** — Conan-managed, pinned Dawn SDK; `wxsl_render_cpp` implements
 only the headless device half. `wxsl-ffi`'s `bake_docs` example exports the
 shared schedules, binding layouts, WGSL and upload bytes. The C++ binary
-links no Rust; runtime compilation remains B4. Both stock presets render
-the PBR and scene documents with Rust image agreement (ADR 0051).
+links no Rust; optional `wxsl_compiler_cpp` dynamically loads the C ABI for
+synchronous runtime compilation and transactional same-layout material edits
+(ADR 0052). Both stock presets render the PBR and scene documents with Rust
+image agreement (ADR 0051); the parity list adds a gallery document and all
+stdlib categories. GPU CI requires a provisioned `wxsl-gpu` runner.
 `wxsl-core::host` generates fixed Rust/C/WXSL layouts, base vertex/UI
 attributes and MSDF buffers (ADR 0050); computed material layouts remain
 in `wxsl-core::resources`.
@@ -845,7 +848,7 @@ Implemented and tested end to end:
 | `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
 | `wxsl-frame`: neutral plans, document compilation, scheduling, effects and capability checks | done |
 | `wxsl-ffi`: generated C header, plan/WGSL/layout exports, load-time checks and C/C++ parity harness | done |
-| `dawn/`: offline headless renderer, shared-layout generation, PBR/scene parity and resource probes | done; runtime compilation remains B4, wider corpus remains B5 |
+| `dawn/`: headless renderer, generated layouts, optional runtime compiler, scene/category parity and resource probes | done; GPU CI job requires a provisioned labelled runner |
 | `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
 | `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, execution policies, buffer resources, compute and screen effects, channel plans, cube mesh, scene uniforms, offscreen rendering | done |
 | `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |

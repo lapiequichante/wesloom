@@ -1,4 +1,5 @@
 #include "renderer.hpp"
+#include "compiler.hpp"
 #include "wxsl_host.h"
 #include <algorithm>
 #include <array>
@@ -225,9 +226,10 @@ struct Renderer::Impl {
   std::set<std::string> demanded, ran;
   std::map<std::string, uint64_t> run_counts;
   std::map<std::string, gpu::ShaderModule> shader_modules;
+  std::map<std::string, std::string> runtime_sources;
   std::map<std::string, gpu::RenderPipeline> render_pipelines;
 
-  explicit Impl(const std::filesystem::path &assets) : root(assets) {
+  explicit Impl(const std::filesystem::path &assets, Compiler *compiler) : root(assets) {
     const auto manifest = read(root, "manifest.json");
     data = Json::parse(manifest);
     if (data.at("version") != 1)
@@ -237,6 +239,27 @@ struct Renderer::Impl {
     if (data.at("host_layout") != WXSL_HOST_LAYOUT_ID)
       throw std::runtime_error("offline manifest host layout mismatch; "
                                "re-export assets/rebuild the header");
+    if (compiler) {
+      for (const auto &pipeline : data.at("pipelines")) {
+        if (!pipeline.contains("request"))
+          continue; // Pure device probes have no document.
+        compiler->compile(Operation::Check, pipeline.at("check_request"));
+        const auto plan = compiler->compile(Operation::Pipeline, pipeline.at("request"));
+        if (plan->metadata.at("data").at("graph") != pipeline.at("graph") ||
+            plan->metadata.at("data").at("schedule") != pipeline.at("schedule"))
+          throw std::runtime_error("runtime pipeline differs from host bundle; re-export assets");
+      }
+      for (const auto &material : data.at("materials"))
+        for (const auto &stage : material.at("stages")) {
+          const auto compiled = compiler->compile(Operation::Material, stage.at("request"));
+          if (compiled->metadata.at("data").at("signature") != stage.at("signature"))
+            throw std::runtime_error("runtime material layout differs from host bundle");
+          runtime_sources[stage.at("wgsl")] = compiled->wgsl;
+        }
+      for (const auto &effect : data.at("effects"))
+        runtime_sources[effect.at("wgsl")] =
+            compiler->compile(Operation::Shader, effect.at("request"))->wgsl;
+    }
     const gpu::InstanceFeatureName feature = gpu::InstanceFeatureName::TimedWaitAny;
     gpu::InstanceDescriptor descriptor;
     descriptor.requiredFeatureCount = 1;
@@ -322,8 +345,11 @@ struct Renderer::Impl {
   }
   void check() {
     std::lock_guard<std::mutex> lock(errors.mutex);
-    if (!errors.message.empty())
-      throw std::runtime_error("Dawn: " + errors.message);
+    if (!errors.message.empty()) {
+      auto message = std::move(errors.message);
+      errors.message.clear();
+      throw std::runtime_error("Dawn: " + message);
+    }
   }
   uint32_t width() const { return data.at("width"); }
   uint32_t height() const { return data.at("height"); }
@@ -354,16 +380,105 @@ struct Renderer::Impl {
   gpu::ShaderModule shader(const std::string &name) {
     if (const auto found = shader_modules.find(name); found != shader_modules.end())
       return found->second;
-    auto bytes = read(root, name);
-    std::string code(bytes.begin(), bytes.end());
+    std::string code;
+    if (const auto found = runtime_sources.find(name); found != runtime_sources.end())
+      code = found->second;
+    else {
+      auto bytes = read(root, name);
+      code.assign(bytes.begin(), bytes.end());
+    }
+    auto module = shader_source(name, code);
+    shader_modules.emplace(name, module);
+    return module;
+  }
+  gpu::ShaderModule shader_source(const std::string &name, const std::string &code) {
     gpu::ShaderSourceWGSL source;
     source.code = {code.data(), code.size()};
     gpu::ShaderModuleDescriptor descriptor;
     descriptor.nextInChain = &source;
     descriptor.label = {name.data(), name.size()};
     auto module = device.CreateShaderModule(&descriptor);
-    shader_modules.emplace(name, module);
     return module;
+  }
+  void compile_material(Compiler &compiler, size_t index, const Json &request) {
+    auto &row = data.at("materials").at(index);
+    const auto &original = row.at("stages").begin().value().at("request");
+    if (request.value("config", Json::object()) != original.at("config") ||
+        request.value("material", Json::object()).value("cast_shadow", true) !=
+            original.at("material").value("cast_shadow", true) ||
+        request.value("material", Json::object()).value("tags", Json::array()) !=
+            original.at("material").value("tags", Json::array()))
+      throw std::runtime_error("runtime edit changes setup/draw selection; re-export host bundle");
+    MaterialGpu replacement = materials.at(index);
+    Json stages = row.at("stages");
+    std::vector<uint8_t> params;
+    bool changed = false;
+    // All Rust compilation/layout validation finishes before creating GPU
+    // objects.
+    std::map<std::string, std::shared_ptr<const Compiled>> outputs;
+    for (auto stage = stages.begin(); stage != stages.end(); ++stage) {
+      auto input = request;
+      input["stage"] = stage.key();
+      auto output = compiler.compile(Operation::Material, input);
+      if (output->metadata.at("data").at("signature") != stage.value().at("signature"))
+        throw std::runtime_error("runtime material layout changed; re-export host bundle");
+      // Source-library overlays are part of the request, not the graph's key.
+      changed |= stage.value().at("request") != input;
+      stage.value()["request"] = input;
+      stage.value()["fragment_entry"] = output->metadata.at("data").at("fragment_entry");
+      changed |= stage.value().at("variant_key") != output->metadata.at("data").at("variant_key");
+      stage.value()["variant_key"] = output->metadata.at("data").at("variant_key");
+      params = output->params;
+      outputs.emplace(stage.key(), std::move(output));
+    }
+    if (changed)
+      for (const auto &[stage, output] : outputs)
+        replacement.shaders[stage] = shader_source("runtime " + stage, output->wgsl);
+    check();
+    // Validate pipelines too, before changing any persistent parameter bytes.
+    if (changed) {
+      auto previous_material = materials.at(index);
+      auto previous_stages = row.at("stages");
+      auto previous_pipelines = std::move(render_pipelines);
+      auto previous_plan = current;
+      materials.at(index) = std::move(replacement);
+      row["stages"] = stages;
+      try {
+        for (const auto &plan : data.at("pipelines")) {
+          current = plan;
+          for (size_t p = 0; p < plan.at("graph").at("passes").size(); ++p) {
+            const auto &pass = plan.at("graph").at("passes").at(p);
+            if (!pass.at("kind").contains("geometry"))
+              continue;
+            std::vector<gpu::BindGroupLayoutEntry> entries;
+            const auto &bindings = plan.at("pass_data").at(p).at("bindings");
+            for (size_t b = 0; b < bindings.size(); ++b)
+              entries.push_back(layout_entry(static_cast<uint32_t>(b), bindings.at(b)));
+            render_pipeline(pass, layout(entries), index);
+            check();
+          }
+        }
+      } catch (...) {
+        current = std::move(previous_plan);
+        materials.at(index) = std::move(previous_material);
+        row["stages"] = std::move(previous_stages);
+        render_pipelines = std::move(previous_pipelines);
+        throw;
+      }
+      current = std::move(previous_plan);
+    } else {
+      row["stages"] = std::move(stages);
+    }
+    // Existing bind groups retain their layout; default changes are an upload.
+    upload_material_params(index, params);
+  }
+  void upload_material_params(size_t index, const std::vector<uint8_t> &bytes) {
+    const auto size =
+        data.at("materials").at(index).at("interface").at("params").at("size").get<size_t>();
+    if (bytes.size() != size)
+      throw std::runtime_error("material parameter upload size mismatch");
+    if (!bytes.empty())
+      queue.WriteBuffer(materials.at(index).params, 0, bytes.data(), bytes.size());
   }
   Resource resource(const Json &shape) {
     Resource result;
@@ -949,7 +1064,8 @@ struct Renderer::Impl {
   }
 };
 
-Renderer::Renderer(const std::filesystem::path &assets) : impl_(std::make_unique<Impl>(assets)) {}
+Renderer::Renderer(const std::filesystem::path &assets, Compiler *compiler)
+    : impl_(std::make_unique<Impl>(assets, compiler)) {}
 Renderer::~Renderer() = default;
 std::vector<uint8_t> Renderer::render(const std::string &pipeline, uint32_t frames) {
   return impl_->render(pipeline, frames);
@@ -960,6 +1076,13 @@ uint64_t Renderer::pass_run_count(const std::string &label) const {
   return found == impl_->run_counts.end() ? 0 : found->second;
 }
 nlohmann::json Renderer::capabilities() const { return impl_->caps; }
+void Renderer::compile_material(Compiler &compiler, size_t index, const nlohmann::json &request) {
+  impl_->compile_material(compiler, index, request);
+}
+void Renderer::upload_material_params(size_t index, const std::vector<uint8_t> &bytes) {
+  impl_->upload_material_params(index, bytes);
+}
+size_t Renderer::pipeline_count() const { return impl_->render_pipelines.size(); }
 uint32_t Renderer::width() const { return impl_->width(); }
 uint32_t Renderer::height() const { return impl_->height(); }
 } // namespace wxsl

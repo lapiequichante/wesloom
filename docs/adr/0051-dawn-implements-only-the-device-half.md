@@ -55,3 +55,10 @@ descriptor case needs a shared-plan test and a backend agreement test.
 Device probes compare stable compute buffers, history rings and indirect
 geometry against Rust. A deliberately wrong instance upload must fail the
 same image comparator; a mismatched layout fingerprint must fail by name.
+
+B4 adds optional dynamic runtime compilation (ADR 0052), leaving offline
+deployment unchanged. B5's curated list includes the actual gallery
+single-pass document and all ten stdlib categories, including graph FXAA.
+The negative harness also omits a C++ draw instruction and must turn red.
+CI compiles without adapters and exposes an opt-in trusted self-hosted GPU
+job; a missing adapter is a failure there, not a passing skip.

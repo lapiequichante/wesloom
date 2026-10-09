@@ -66,6 +66,7 @@ is signal, don't delete it.
 | [0049](0049-share-the-core-through-a-data-only-c-abi.md) | Share the core through a data-only C ABI | Accepted |
 | [0050](0050-host-shared-layouts-are-generated.md) | Host-shared layouts are computed or generated, never mirrored | Accepted |
 | [0051](0051-dawn-implements-only-the-device-half.md) | Dawn implements only the device half, offline first | Accepted |
+| [0052](0052-runtime-compilation-stays-behind-the-data-abi.md) | Runtime compilation stays behind the data ABI | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

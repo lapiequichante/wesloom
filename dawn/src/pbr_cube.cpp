@@ -1,3 +1,4 @@
+#include "compiler.hpp"
 #include "parity.hpp"
 #include "renderer.hpp"
 #define STB_IMAGE_IMPLEMENTATION
@@ -14,6 +15,8 @@ int main(int argc, char **argv) {
   try {
     std::filesystem::path assets = "target/dawn-assets/pbr", output = "target/dawn-images";
     bool verify = false;
+    std::filesystem::path compiler_library;
+    std::string selected;
     uint32_t frames = 1;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -30,6 +33,10 @@ int main(int argc, char **argv) {
         output = value();
       else if (arg == "--verify")
         verify = true;
+      else if (arg == "--compiler")
+        compiler_library = value();
+      else if (arg == "--pipeline")
+        selected = value();
       else if (arg == "--frames") {
         const auto input = value();
         size_t end = 0;
@@ -40,10 +47,16 @@ int main(int argc, char **argv) {
       } else
         throw std::runtime_error("unknown argument " + arg);
     }
-    wxsl::Renderer renderer(assets);
+    std::unique_ptr<wxsl::Compiler> compiler;
+    if (!compiler_library.empty())
+      compiler = std::make_unique<wxsl::Compiler>(compiler_library);
+    wxsl::Renderer renderer(assets, compiler.get());
     std::cout << renderer.capabilities().dump(2) << '\n';
     std::filesystem::create_directories(output);
-    for (const std::string pipeline : {"forward", "deferred"}) {
+    const std::vector<std::string> pipelines = selected.empty()
+                                                   ? std::vector<std::string>{"forward", "deferred"}
+                                                   : std::vector<std::string>{selected};
+    for (const std::string &pipeline : pipelines) {
       auto pixels = renderer.render(pipeline, frames);
       const auto file = output / ("pbr_cube_" + pipeline + ".png");
       if (!stbi_write_png(file.string().c_str(), static_cast<int>(renderer.width()),

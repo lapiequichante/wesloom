@@ -9,7 +9,7 @@ use std::{
 };
 use wxsl_core::{
     abi::{self, MaterialStage},
-    graph::Graph,
+    graph::{Graph, Node},
     lighting::{self, LightingSet},
     macros::MacroValue,
     node::{Value, ValueType},
@@ -150,6 +150,9 @@ fn compile_effect(
 ) -> Result<Json, Box<dyn Error>> {
     let request = EffectRequest::new(effect.clone(), &config.macros, set, &config.features);
     let wgsl = request.compile(library).1?;
+    let (path, source) = effect.module_source(set, &config.features);
+    let runtime_request = json!({"root": path, "macros": effect.shader_macros(&config.macros),
+        "library": {"modules": {path: source}}});
     let defaults = effect
         .parameters
         .iter()
@@ -158,7 +161,7 @@ fn compile_effect(
     Ok(
         json!({"kind": effect.kind, "wgsl": save(root, &format!("{}.wgsl", effect.id), wgsl)?,
         "params": save(root, &format!("{}.params.bin", effect.id), effect.param_layout().filled(&defaults))?,
-        "param_size": effect.param_layout().size()}),
+        "param_size": effect.param_layout().size(), "request": runtime_request}),
     )
 }
 
@@ -258,12 +261,79 @@ fn device_probes(format: TextureFormat) -> Vec<(String, wxsl_frame::graph::Rende
     ]
 }
 
+fn category_sample(category: &str) -> Result<Graph, Box<dyn Error>> {
+    if matches!(category, "sample" | "filter") {
+        return Ok(serde_json::from_str(include_str!(
+            "../../wxsl/assets/pbr_cube.wxsl.json"
+        ))?);
+    }
+    let (id, input, ty) = match category {
+        "math" => ("math.sine", "a", ValueType::Vec3),
+        "color" => ("color.hsv_to_rgb", "hsv", ValueType::Vec3),
+        "space" => ("space.rotate_uv", "uv", ValueType::Vec2),
+        "lighting" => ("lighting.distribution_ggx", "n_dot_h", ValueType::F32),
+        "generative" => ("generative.value_noise3", "p", ValueType::Vec3),
+        "sdf" => ("sdf.sphere", "p", ValueType::Vec3),
+        "animation" => ("animation.pulse", "time", ValueType::F32),
+        "distort" => ("distort.swirl_uv", "uv", ValueType::Vec2),
+        _ => return Err(format!("unknown stdlib category `{category}`").into()),
+    };
+    let registry = wxsl_stdlib::registry();
+    let mut graph = Graph::new(format!("parity {category}"));
+    let uv = graph.add_node(abi::context_node_id("uv"));
+    let split = graph.add_node("convert.split.vec2f");
+    graph.wire(&registry, (uv, "out"), (split, "v"))?;
+    let coords = graph.add(Node::new("convert.combine.vec3f").with_param("z", Value::F32(0.37)));
+    graph.wire(&registry, (split, "x"), (coords, "x"))?;
+    graph.wire(&registry, (split, "y"), (coords, "y"))?;
+    let sample = graph.add(Node::new(id).with_stage(wxsl_core::graph::StageConstraint::Fragment));
+    if id == "math.sine" {
+        graph.set_generic(&registry, sample, "T", ty)?;
+    }
+    let from = match ty {
+        ValueType::Vec3 => (coords, "out"),
+        ValueType::Vec2 => (uv, "out"),
+        _ => (split, "x"),
+    };
+    graph.wire(&registry, from, (sample, input))?;
+    let output_ty = if id == "math.sine" {
+        ty
+    } else {
+        registry.get(id).ok_or("sample node missing")?.outputs[0].ty
+    };
+    let (color, socket) = match output_ty {
+        ValueType::Vec3 => (sample, "out"),
+        ValueType::Vec2 => {
+            let channels = graph.add_node("convert.split.vec2f");
+            graph.wire(&registry, (sample, "out"), (channels, "v"))?;
+            let rgb =
+                graph.add(Node::new("convert.combine.vec3f").with_param("z", Value::F32(0.2)));
+            graph.wire(&registry, (channels, "x"), (rgb, "x"))?;
+            graph.wire(&registry, (channels, "y"), (rgb, "y"))?;
+            (rgb, "out")
+        }
+        ValueType::F32 => {
+            let rgb = graph.add_node("convert.splat");
+            graph.set_generic(&registry, rgb, "T", ValueType::Vec3)?;
+            graph.wire(&registry, (sample, "out"), (rgb, "value"))?;
+            (rgb, "out")
+        }
+        _ => return Err("sample output is not a colour".into()),
+    };
+    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    graph.wire(&registry, (color, socket), (output, "emissive"))?;
+    graph.validate(&registry)?;
+    Ok(graph)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut root = PathBuf::from("target/dawn-assets/pbr");
     let mut scene_path = None;
     let mut graph_path = None;
     let mut reference = false;
     let mut probes = false;
+    let mut sample = None;
+    let mut pipeline_path = None;
     let mut width = 800;
     let mut height = 600;
     let mut args = std::env::args().skip(1);
@@ -278,6 +348,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--reference" => reference = true,
             "--probes" => probes = true,
+            "--sample" => sample = Some(args.next().ok_or("--sample needs a category")?),
+            "--pipeline" => {
+                pipeline_path = Some(PathBuf::from(
+                    args.next().ok_or("--pipeline needs a document")?,
+                ))
+            }
             "--width" => width = args.next().ok_or("--width needs a value")?.parse()?,
             "--height" => height = args.next().ok_or("--height needs a value")?.parse()?,
             _ => return Err(format!("unknown argument `{arg}`").into()),
@@ -289,7 +365,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let scene: Scene = if let Some(path) = scene_path {
         serde_json::from_slice(&std::fs::read(path)?)?
     } else {
-        let graph: Graph = if let Some(path) = graph_path {
+        let graph: Graph = if let Some(category) = &sample {
+            category_sample(category)?
+        } else if let Some(path) = graph_path {
             serde_json::from_slice(&std::fs::read(path)?)?
         } else {
             serde_json::from_str(include_str!("../../wxsl/assets/pbr_cube.wxsl.json"))?
@@ -421,11 +499,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         attributes.push(defaults);
         let mut stages = BTreeMap::new();
         for stage in MaterialStage::ALL {
-            let result = response(wxsl_ffi::api::material(&serde_json::to_vec(
-                &json!({"graph": entry.graph, "stage": stage.name(), "material": entry.config, "config": wire_config}),
-            )?))?;
+            let request = json!({"graph": entry.graph, "stage": stage.name(), "material": entry.config, "config": wire_config});
+            let result = response(wxsl_ffi::api::material(&serde_json::to_vec(&request)?))?;
             let metadata: Json = serde_json::from_slice(&result.json)?;
-            stages.insert(stage.name(), json!({"wgsl": save(&root, &format!("material{index}.{}.wgsl", stage.name()), &result.wgsl)?, "fragment_entry": metadata["data"]["fragment_entry"]}));
+            stages.insert(stage.name(), json!({"wgsl": save(&root, &format!("material{index}.{}.wgsl", stage.name()), &result.wgsl)?, "fragment_entry": metadata["data"]["fragment_entry"], "request": request, "signature": metadata["data"]["signature"], "variant_key": metadata["data"]["variant_key"]}));
         }
         materials.push(json!({"name": entry.name, "interface": interface,
             "params": save(&root, &format!("material{index}.params.bin"), interface.params.filled(&interface.defaults))?,
@@ -433,12 +510,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         native_materials.push(material);
     }
     manifest["materials"] = json!(materials);
-    let effects = EffectRegistry::shipped()
+    let mut effects = EffectRegistry::shipped()
         .with(BRDF_LUT)
         .with(LUT_VIEW)
         .with(RAMP_FILL)
         .with(RAMP_VIEW)
         .with(INDIRECT);
+    if sample.as_deref() == Some("filter") {
+        effects.add(wxsl::effects::fxaa(&registry)?);
+    }
     let mut compiled_effects = BTreeMap::new();
     for effect in effects.iter() {
         compiled_effects.insert(
@@ -454,7 +534,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             &json!({"pipeline": stock.document(), "config": wire_config}),
         )?))?;
         let data: Json = serde_json::from_slice(&output.json)?;
-        pipelines.insert(stock.name().to_string(), data["data"].clone());
+        let mut pipeline = data["data"].clone();
+        pipeline["request"] = json!({"pipeline": stock.document(), "config": wire_config});
+        pipeline["check_request"] =
+            json!({"pipeline": stock.document(), "scene": scene, "config": wire_config});
+        pipelines.insert(stock.name().to_string(), pipeline);
         graphs.push((stock.name().to_string(), stock.graph(&config)));
     }
     if probes {
@@ -462,6 +546,56 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("device probes require a first draw with at least 36 indices".into());
         }
         graphs.extend(device_probes(config.target.format));
+    }
+    if let Some(path) = pipeline_path {
+        let document: Graph = serde_json::from_slice(&std::fs::read(path)?)?;
+        let request = json!({"pipeline": document, "config": wire_config});
+        let output = response(wxsl_ffi::api::pipeline(&serde_json::to_vec(&request)?))?;
+        let data: Json = serde_json::from_slice(&output.json)?;
+        let graph = wxsl_frame::pipeline_doc::compile(
+            &document,
+            &wxsl_frame::pipeline_doc::document_registry(&effects),
+            &effects,
+            &config,
+        )?;
+        let mut exported = data["data"].clone();
+        exported["request"] = request;
+        exported["check_request"] =
+            json!({"pipeline": document, "scene": scene, "config": wire_config});
+        response(wxsl_ffi::api::check(&serde_json::to_vec(
+            &exported["check_request"],
+        )?))?;
+        pipelines.insert("gallery".into(), exported);
+        graphs.push(("gallery".into(), graph));
+    }
+    if sample.as_deref() == Some("filter") {
+        let mut graph = wxsl_frame::graph::RenderGraph::new(config.target.format);
+        let linear = graph.resource(ResourceDesc::color("linear", TextureFormat::Rgba16Float));
+        let encoded = graph.resource(ResourceDesc::color("encoded", TextureFormat::Rgba16Float));
+        let depth = graph.resource(ResourceDesc::color("depth", TextureFormat::Depth32Float));
+        graph.pass(
+            PassDesc::geometry(
+                "lit",
+                DrawSource::Scene(TagExpr::Always),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(Attachment::clear(linear, config.target.clear_color))
+            .with_depth(DepthAttachment::clear(depth, 1.0)),
+        );
+        graph.pass(
+            PassDesc::screen("tonemap", "wxsl.tonemap")
+                .with_reads([Read::current(linear)])
+                .with_color(Attachment::clear(encoded, Color::BLACK)),
+        );
+        graph.pass(
+            PassDesc::screen("fxaa", "wxsl.fxaa")
+                .with_reads([Read::current(encoded)])
+                .with_color(Attachment::clear(
+                    wxsl_frame::graph::RenderGraph::TARGET,
+                    Color::BLACK,
+                )),
+        );
+        graphs.push(("filter".into(), graph));
     }
     for (name, graph) in &graphs {
         let data = pipelines
@@ -554,6 +688,44 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn every_stdlib_category_has_a_valid_rendered_sample() {
+        let listed = include_str!("../../../dawn/tests/scenes.txt")
+            .lines()
+            .filter_map(|line| {
+                let fields = line.split_whitespace().collect::<Vec<_>>();
+                (fields[1] == "sample").then(|| fields[2].to_string())
+            })
+            .collect::<BTreeSet<_>>();
+        let shipped =
+            std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../wxsl-stdlib/shaders"))
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().into_string().unwrap())
+                .filter(|name| name != "wxsl")
+                .collect::<BTreeSet<_>>();
+        assert_eq!(
+            listed, shipped,
+            "new categories owe the backend harness a sample"
+        );
+        for category in listed {
+            let graph = category_sample(&category).unwrap();
+            for stage in MaterialStage::ALL {
+                response(wxsl_ffi::api::material(
+                    &serde_json::to_vec(&json!({"graph": graph, "stage": stage.name()})).unwrap(),
+                ))
+                .unwrap();
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

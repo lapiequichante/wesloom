@@ -34,12 +34,55 @@ shared. Mesh generation, draw selection, scheduling, layouts and shader
 compilation all happen in Rust. C++ consumes JSON/WGSL/upload bytes and links
 no Rust library. `--frames N` exercises multiple frames with fixed inputs.
 
-This first offline host supplies procedural meshes, default instance/material
+This host supplies procedural meshes, default instance/material
 values and a checker texture. File meshes, application uniform blocks,
-additional vertex streams, external imports and arbitrary pipeline-document
-input are not implemented. Unknown descriptors fail explicitly. Runtime
-compilation is B4; window/editor integration and B5's wider corpus are not
-included here.
+additional vertex streams and external imports are not implemented. Unknown
+descriptors fail explicitly. `--pipeline PATH` adds a document compiled by the
+shared compiler; window/editor integration is outside this headless backend.
+
+## Runtime compilation (B4)
+
+```sh
+cargo build -p wxsl-ffi --lib
+target/dawn-render/pbr_cube_cpp --assets target/dawn-assets/pbr \
+    --compiler "$PWD/target/debug/libwxsl_ffi.dylib" --verify
+```
+
+Use `libwxsl_ffi.so` on Linux or `wxsl_ffi.dll` on Windows. The library is
+loaded dynamically, not linked; it must match the generated C ABI version.
+Runtime mode checks the scene/setup and recompiles bundle requests, using
+no offline WGSL. Offline mode still needs no Rust deployment.
+
+`wxsl::Compiler` copies metadata, WGSL, defaults and field tables before
+freeing each foreign result. Its single-owner cache holds at most 64 successful
+requests; keys/diagnostics/layouts remain Rust computations. `Renderer::compile_material`
+compiles all stages before replacing a material. Same-layout graph/macro edits
+are supported. Layout, setup or draw-selection changes require a new host bundle
+and are refused by name. A failed edit retains the previous rendering.
+`upload_material_params` accepts computed, padded bytes and changes no shader or
+pipeline. Runtime calls are synchronous; there is no worker/editor API yet.
+
+## Backend parity (B5)
+
+```sh
+bash dawn/tests/run_parity.sh
+```
+
+The curated list in `tests/scenes.txt` covers both stock presets on PBR and
+scene_check, the gallery's actual exported single-pass document, and one sample
+per ten stdlib categories (FXAA uses the shipped screen graph). Rust's corpus
+gate still covers every node/stage; these samples add rendered agreement, not
+exhaustive rendered coverage. The category-list test refuses missing categories.
+The comparator keeps ADR 0051's thresholds unchanged. Deliberately omitted
+C++ draw recording and corrupted uploads must fail that same comparator.
+
+The runtime test removes WGSL files from its disposable bundle and checks edits,
+cache hits, parameter writes, ABI/document errors and last-good rendering.
+CI compiles on Linux/macOS without a GPU. To run the GPU job, register a trusted
+self-hosted runner labelled `wxsl-gpu` (Linux/macOS, with Rust, CMake and a GPU),
+then dispatch CI with `gpu=true`. Missing adapters fail the harness; the job
+does not run pull-request code on a persistent runner. Local success does not
+prove the remote runner is provisioned.
 
 ## Generated layouts
 
@@ -83,5 +126,5 @@ ctest --test-dir target/dawn-abi -C Debug --output-on-failure
 ```
 
 API request shapes and ownership are documented in
-`crates/wxsl-ffi/README.md`. Runtime cdylib integration is B4, not a requirement
-of the offline renderer or this harness.
+`crates/wxsl-ffi/README.md`. Runtime cdylib integration is optional, not a
+requirement of the offline renderer or this harness.

@@ -79,6 +79,29 @@ int main(int argc, char **argv) {
       std::ofstream output(fixture.path / "manifest.json");
       output << original;
     }
+    // Drop one C++ recording instruction, leaving the shared plan untouched.
+    auto skipped = original;
+    bool dropped = false;
+    auto &instructions = skipped["pipelines"]["forward"]["pass_data"];
+    for (auto it = instructions.rbegin(); it != instructions.rend(); ++it)
+      if (!it->at("draws").empty()) {
+        (*it)["draws"] = nlohmann::json::array();
+        dropped = true;
+        break;
+      }
+    require(dropped, "negative recording fixture had no draw");
+    {
+      std::ofstream output(fixture.path / "manifest.json");
+      output << skipped;
+    }
+    wxsl::Renderer omitted(fixture.path);
+    const auto correct = renderer.render("forward");
+    require(!wxsl::compare_rgba(omitted.render("forward"), correct.data()).passes(),
+            "omitted C++ draw did not turn parity red");
+    {
+      std::ofstream output(fixture.path / "manifest.json");
+      output << original;
+    }
     const auto instances = fixture.path / original.at("frame").at("instances").get<std::string>();
     std::vector<char> zeros(std::filesystem::file_size(instances), 0);
     {
@@ -86,11 +109,10 @@ int main(int argc, char **argv) {
       output.write(zeros.data(), zeros.size());
     }
     wxsl::Renderer wrong(fixture.path);
-    const auto correct = renderer.render("forward");
     require(!wxsl::compare_rgba(wrong.render("forward"), correct.data()).passes(),
             "broken instance upload did not turn parity red");
     std::cout << "history, stable buffers, indirect draws, stale layout and "
-                 "broken-upload guards passed\n";
+                 "broken-upload and omitted-recording guards passed\n";
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

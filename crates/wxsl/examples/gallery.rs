@@ -75,6 +75,7 @@ OPTIONS:
                            screenshots)
     --start <NAME>         Which demo to show first
     --list                 List the demos and exit
+    --export-pipeline PATH Export the single-pass pipeline document without a device
     -h, --help             Print this help
 
 KEYS (windowed):
@@ -88,6 +89,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::parse(std::env::args().skip(1))?;
     if options.help {
         print!("{USAGE}");
+        return Ok(());
+    }
+    if let Some(path) = options.export_pipeline {
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&minimal_forward_document())?,
+        )?;
         return Ok(());
     }
     let demos = demos();
@@ -123,6 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 // ---------------------------------------------------------------------------
 
 struct Options {
+    export_pipeline: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     size: Option<(u32, u32)>,
     start: Option<String>,
@@ -133,6 +142,7 @@ struct Options {
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut options = Options {
+            export_pipeline: None,
             screenshot: None,
             size: None,
             start: None,
@@ -143,6 +153,7 @@ impl Options {
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| format!("`{arg}` needs a value"));
             match arg.as_str() {
+                "--export-pipeline" => options.export_pipeline = Some(PathBuf::from(value()?)),
                 "-h" | "--help" => options.help = true,
                 "--list" => options.list = true,
                 // `--screenshot` and `--screenshot=DIR` both work; the

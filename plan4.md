@@ -212,8 +212,8 @@ and a SHA-256-pinned official Dawn SDK. `bake_docs` exports both shared
 stock plans, layouts, WGSL and upload bytes. PBR and scene_check match Rust
 in both paths on Apple M5; buffer/history/indirect probes agree too. The
 binary links no Rust. See ADR 0051 and `dawn/README.md` for commands and
-the first offline host's explicit limits. Runtime compilation remains B4;
-the wider corpus/CI GPU harness remains B5.
+the host's explicit limits. Runtime compilation and the wider parity/CI GPU
+harness are provided by B4 and B5 below.
 
 The C++ half. Offline-first, per decision 4.
 
@@ -252,6 +252,13 @@ The C++ half. Offline-first, per decision 4.
 
 ### B5 — The parity harness
 
+**Implemented (2026-10-09).** `dawn/tests/run_parity.sh` consumes one curated
+scene list: PBR, scene_check, the gallery's exported single-pass document, and
+rendered samples for all ten stdlib categories, including graph-authored FXAA.
+It uses ADR 0051's unchanged comparator and negative recording/upload guards.
+CI has Linux/macOS compile jobs and an opt-in trusted `wxsl-gpu` runner job;
+the remote GPU runner must be provisioned separately.
+
 The msdf rule, generalized to backends: **every backend owes the
 harness a green run per shipped preset** — the rule plan3 wrote for
 second implementations, now with its widest customer.
@@ -277,6 +284,19 @@ second implementations, now with its widest customer.
   bug turns it red (the harness's own acceptance test).
 * ADR: none new — it *is* the ADR 0047-era rule, applied; recorded in
   B3's ADR as the acceptance instrument.
+
+### B4 — Runtime compilation through the shared C ABI
+
+**Implemented (headless, synchronous, 2026-10-09).** The optional C++
+`Compiler` loads `wxsl-ffi`, checks versions, copies owned results and caches
+identical requests. Runtime mode checks the bundle's scene/setup, compiles its
+plans and shaders without offline WGSL, and consumes Rust's layout signatures
+and variant keys. `Renderer::compile_material` replaces compatible materials
+transactionally; parameter-byte uploads compile nothing. Named compile/layout
+failures retain the last valid image. Layout, host geometry, draw selection or
+pipeline-configuration changes require re-exporting host data. Offline binaries
+still need no Rust deployment. Worker queues/window/editor integration remain
+outside this cut. See ADR 0052 and `dawn/README.md`.
 
 ### B6 — Generated host-shared headers
 
