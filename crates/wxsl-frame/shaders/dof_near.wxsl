@@ -55,6 +55,10 @@ fn dof_near_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 fn dof_near_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let pixel = vec2i(position.xy);
     let background = textureLoad(far_image, pixel, 0).rgb;
+    // The disc reaches past the frame's edge; a load out of bounds reads
+    // zeros, which would streak black into the blur. Clamp to edge — all
+    // three transients are the pass's own resolution.
+    let size = vec2i(textureDimensions(color_image)) - vec2i(1, 1);
 
     // Dilation: the neighbourhood's widest near-field disc, in front of
     // focus only — the sign convention is the CoC pass's, so near is the
@@ -63,7 +67,7 @@ fn dof_near_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     var near_max = own;
     for (var tap = 0u; tap < TAPS; tap += 1) {
         let offset = disk_sample(tap, TAPS) * params.max_coc;
-        let sample = pixel + vec2i(round(offset));
+        let sample = clamp(pixel + vec2i(round(offset)), vec2i(0), size);
         near_max = max(near_max, -textureLoad(coc_image, sample, 0).x);
     }
     let radius = min(near_max, params.max_coc);
@@ -77,7 +81,7 @@ fn dof_near_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     var weight_sum = 0.0;
     for (var tap = 0u; tap < TAPS; tap += 1) {
         let offset = disk_sample(tap, TAPS) * radius;
-        let sample = pixel + vec2i(round(offset));
+        let sample = clamp(pixel + vec2i(round(offset)), vec2i(0), size);
         let near = -textureLoad(coc_image, sample, 0).x;
         let weight = smoothstep(0.0, 1.0, near);
         sum += textureLoad(color_image, sample, 0).rgb * weight;

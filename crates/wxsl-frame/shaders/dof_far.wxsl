@@ -56,11 +56,15 @@ fn dof_far_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     if radius < 0.5 {
         return vec4f(base, 1.0);
     }
+    // The disc reaches past the frame's edge; a load out of bounds reads
+    // zeros, which would streak black into the blur. Clamp to edge — all
+    // three transients are the pass's own resolution.
+    let size = vec2i(textureDimensions(color_image)) - vec2i(1, 1);
     var sum = vec3f(0.0);
     var weight_sum = 0.0;
     for (var tap = 0u; tap < TAPS; tap += 1) {
         let offset = disk_sample(tap, TAPS) * radius;
-        let sample = pixel + vec2i(round(offset));
+        let sample = clamp(pixel + vec2i(round(offset)), vec2i(0), size);
         let sample_coc = textureLoad(coc_image, sample, 0).x;
         // A near sample is a foreground object in front of this
         // background: fade it out rather than smearing it in.

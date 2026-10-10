@@ -1475,12 +1475,15 @@ fn bloom_instances_document() -> Graph {
 /// Stock pipelines go through `set_pipeline`; documents through the
 /// public compiler and `set_graph`; hand-built pass lists through
 /// `set_graph` directly — the same moves an application makes, and why a
-/// gallery demo is not a renderer feature. Features (plan2 P12) are
-/// applied first, because they reshape the G-buffer every pipeline
-/// variant builds against.
+/// gallery demo is not a renderer feature. Features (plan2 P12) and the
+/// lighting set validate *against each other* — the feature channel is
+/// budgeted against the set that carries it — so the plan is torn down
+/// before it is rebuilt: dropping the channels first means the new set
+/// compiles alone, and the new demo's channels land on the set that was
+/// picked for them.
 fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
-    if renderer.features() != demo.features {
-        renderer.set_features(demo.features)?;
+    if !renderer.features().is_empty() && renderer.features() != demo.features {
+        renderer.set_features(&[])?;
     }
     // Layer models fill the portable budget alone; the subsurface model
     // joins them because the feature's channel pushes a dispatching set
@@ -1500,6 +1503,9 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     };
     if renderer.lighting() != &set {
         renderer.set_lighting(set)?;
+    }
+    if !demo.features.is_empty() && renderer.features() != demo.features {
+        renderer.set_features(demo.features)?;
     }
     // The bake table's view rides only with its demo: the next pass list
     // declares no such resource, and a view nothing declares is an error
