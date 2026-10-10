@@ -23,6 +23,11 @@ public:
   // Same-layout edits only; failure retains the previous valid material.
   void compile_material(Compiler &compiler, size_t index, const nlohmann::json &request);
   void upload_material_params(size_t index, const std::vector<uint8_t> &bytes);
+  // Application-decoded linear RGB, imported by the authored resource label.
+  // Returns the radiance restoration scale, like wgpu's EnvironmentImage.
+  float upload_environment_image(const std::string &label, uint32_t width, uint32_t height,
+                                 const std::vector<float> &rgb);
+  void set_environment_scale(float scale);
   size_t pipeline_count() const;
   uint32_t width() const;
   uint32_t height() const;

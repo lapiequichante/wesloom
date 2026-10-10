@@ -4,6 +4,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stb_image.h>
 #include <stdexcept>
 
@@ -56,6 +57,59 @@ int main(int argc, char **argv) {
     require(second[0] == 255, "history did not rotate to the previous frame");
     verify(renderer, root, "history_probe", renderer.render("history_probe"));
     verify(renderer, root, "indirect_probe", renderer.render("indirect_probe", 3));
+    const auto mips = renderer.render("cube_mips_probe");
+    require(mips == renderer.render("cube_mips_probe", 2), "cube mip bake did not remain stable");
+    verify(renderer, root, "cube_mips_probe", mips);
+    for (const auto *name : {"ibl_constant_probe", "ibl_directional_probe", "ibl_hotspot_probe"}) {
+      const auto baked = renderer.render(name);
+      require(baked == renderer.render(name, 2), "IBL bake did not remain stable");
+      require(renderer.pass_run_count("probe specular 5/2") == 1, "IBL bake ran twice");
+      verify(renderer, root, name, baked);
+    }
+    for (const auto *name : {"ibl_forward_probe", "ibl_deferred_probe"}) {
+      const auto first = renderer.render(name);
+      const auto later = renderer.render(name, 2);
+      if (first != later || renderer.pass_run_count("lighting IBL specular 5/5") != 1)
+        throw std::runtime_error("environment lighting bake did not persist");
+      verify(renderer, root, name, first);
+    }
+    Fixture hdr_fixture(root);
+    const auto hdr_file = hdr_fixture.path / "constant.hdr";
+    {
+      std::ofstream output(hdr_file, std::ios::binary);
+      output << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n";
+      const char pixel[] = {64, 96, char(128), char(131)};
+      output.write(pixel, 4);
+    }
+    int hw, hh, hc;
+    std::unique_ptr<float, decltype(&stbi_image_free)> hdr_pixels(
+        stbi_loadf(hdr_file.string().c_str(), &hw, &hh, &hc, 3), &stbi_image_free);
+    require(hdr_pixels && hw == 1 && hh == 1, "native HDR file decode failed");
+    renderer.set_environment_scale(renderer.upload_environment_image("source HDR", hw, hh,
+        {hdr_pixels.get(), hdr_pixels.get() + 3}));
+    for (const auto *name : {"hdr_forward_probe", "hdr_deferred_probe"}) {
+      const auto hdr = renderer.render(name);
+      require(hdr == renderer.render(name, 2), "imported HDR bake is not stable");
+      verify(renderer, root, name, hdr);
+      const auto count = renderer.pass_run_count("document IBL specular 5/5");
+      renderer.upload_environment_image("source HDR", 1, 1, {4, 0, 0});
+      require(hdr != renderer.render(name), "replacing imported HDR did not change pixels");
+      require(renderer.pass_run_count("document IBL specular 5/5") == count + 1, "import replacement did not rebake");
+      renderer.upload_environment_image("source HDR", 1, 1, {2, 3, 4});
+      require(hdr == renderer.render(name), "restoring imported HDR did not restore pixels");
+    }
+
+    for (const auto &rgb : {std::vector<float>{-1, 0, 0},
+                           std::vector<float>{std::numeric_limits<float>::infinity(), 0, 0},
+                           std::vector<float>{0, 0}}) {
+      bool refused = false;
+      try { renderer.upload_environment_image("source HDR", 1, 1, rgb); }
+      catch (const std::exception &) { refused = true; }
+      require(refused, "invalid HDR upload was accepted");
+    }
+    require(renderer.upload_environment_image("source HDR", 1, 1, {131072, 0, 0}) == 8.0f,
+            "HDR scaling must preserve float16-exceeding radiance");
+    renderer.upload_environment_image("source HDR", 1, 1, {2, 3, 4});
 
     Fixture fixture(root);
     nlohmann::json manifest;

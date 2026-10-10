@@ -259,10 +259,44 @@ ramp, a `resource.buffer` both passes wire from. An effect can declare
 **parameters** ([ADR 0042](adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md))
 — one `{ name, default }` per knob; the layout is computed by
 `wxsl_core::resources`, the shader's struct is generated from it and
-prepended to the module, and the uniform block rides the pass group as
+appended to the module (imports remain first), and the uniform block rides the pass group as
 the binding after the inputs and the outputs. Values are host state per
 pass label — `Renderer::set_pass_param` writes, the next frame presents,
 and nothing recompiles; the variant key folds the layout, never a value.
+Programmatic plans can author initial `PassDesc.parameters` values over the
+descriptor defaults (ADR 0062). Both backends consume the same computed bytes;
+same-label/layout replacement preserves live tuning. `effect::ibl::append_bake`
+uses these values for Once equirect-to-cube, irradiance/PI and GGX roughness-mip
+face passes. `append_filtered_bake` additionally filters a complete source chain
+through separate staging cubes (ADR 0063). A graph declares its diffuse/GGX
+environment resources: scheduler-only reads order forward/deferred lighting
+after every face writer, without adding pass-group bindings. The frame group
+samples them along world normal/reflection with trilinear roughness LOD. Without
+this declaration, the historical analytic environment remains unchanged.
+Applications decode HDR; `upload_environment_image` validates and reversibly
+scales linear RGB before float16 convolution. Replacing a view/effect invalidates
+Once passes; in-place changes call `invalidate_bakes`. The gallery demonstrates
+the local HDR or `--ibl-source sky`. `pass.environment` expands that same filtered
+recipe from an authored image resource, cube/diffuse sizes, mip count and scale
+(ADR 0064). Its radiance output feeds the depth-aware `environment_background`
+effect: colour, opaque depth and radiance cube are explicit reads, camera rays
+are unprojected from the frame's inverse matrix, and exposure is applied before
+tonemap. A `DepthImage` effect input derives a typed depth-target socket.
+Dawn accepts linear RGB imports by resource label and returns the same HDR safety
+scale; the C++ application decodes Radiance files with its existing stb dependency.
+Neither backend library acquires a file decoder dependency.
+`gallery --start ibl-mirror` isolates the reflections on a white metallic sphere
+with exactly zero roughness and no direct lamps.
+`ibl-grid` and `ibl-grid-sky` compare the same stationary 5×5 spheres and matte
+grey floor under HDR and Rayleigh/Mie IBL. Columns sweep roughness 0–1; rows
+from front to back sweep metallic 0–1. One shader uses 25 independent uniform
+blocks. The sky bake binds an extent-only image matching its output so its
+screen-domain UVs do not depend on the HDR file's dimensions.
+Bright HDR emitters are integrated deterministically for diffuse and broad GGX
+lobes, using solid-angle-weighted texels of the filtered source chain. Sharp GGX
+lobes retain importance sampling. This avoids sparse-hit irradiance speckles;
+finite texture resolution and mirror/pixel aliasing are still approximations.
+
 `cargo run -p wxsl --example gallery -- --screenshot` renders
 the stock pipelines, the minimal document, the bloom chain (as authored
 and tuned live), the policy/buffer/channel proofs, the bake demo (ADR
@@ -308,7 +342,7 @@ the textures and buffers, and `RenderGraph::record` opens each pass,
 resolves its attachments, builds its pass bind group from its declared
 reads and writes and hands it to the renderer to draw into.
 
-Two properties of a resource are worth knowing before you need them:
+Three properties of a resource are worth knowing before you need them:
 
 * **Persistence.** `Transient` is created at first write and its texture is
   reusable after its last read; `Persistent { history: n }` is a ring of
@@ -317,6 +351,12 @@ Two properties of a resource are worth knowing before you need them:
   being a cycle. Buffers never alias — their rule is "never" for now.
 * **Dimension.** 2D, 2D array, cube or 3D, because cascaded shadows,
   reflection probes and volumetrics each want a different one.
+* **Mip chain.** `mip_levels` defaults to one. Fixed-size textures can
+  allocate more; colour/depth attachments select one `layer` and `mip`, while
+  sampled views expose the whole chain. The scheduler checks counts, selectors
+  and fixed attachment extents; mip counts prevent incompatible aliasing.
+  Both wgpu and Dawn record these views (ADR 0061). Imported views remain
+  host-selected; storage writes cannot yet select mips or use cube views.
 
 The frame's own target is resource 0, `RenderGraph::TARGET`, and is
 *imported*: the caller supplies a view for it each frame.
@@ -644,6 +684,15 @@ depend on the node library, and a graph-authored effect needs both — and
 stock pipeline presents through a generated module without a document
 changing. `fxaa` is the first effect that arrived as a graph rather than
 being translated into one.
+
+`wxsl.sky` is an editable equirectangular preview over the pure
+`lighting.sky_single_scattering` node: optical integration of exponential
+Rayleigh/Mie density, solar attenuation and planet shadow, in kilometres.
+It writes linear radiance before tonemap and consumes the graph-effect image
+only for its extent. Camera composition is a separate depth-aware effect. The gallery can
+also feed its linear equirectangular result through the S3-D bake into actual
+material lighting (ADRs 0062–0063), replacing the analytic environment explicitly.
+See [ADR 0060](adr/0060-integrate-single-scattering-as-a-pure-sky-node.md).
 
 ## How a shadow gets there
 

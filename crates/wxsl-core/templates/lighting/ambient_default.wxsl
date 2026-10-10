@@ -2,6 +2,15 @@
 fn default_ambient(surface: Surface, ctx: SurfaceContext) -> vec3f {
     let normal = normalize(surface.normal);
     let view_direction = normalize(ctx.view_direction);
+    if scene.environment_enabled > 0.0 {
+        let diffuse = environment_diffuse_radiance(normal) * scene.environment_scale;
+        let specular = environment_specular_radiance(reflect(-view_direction, normal), surface.roughness) * scene.environment_scale;
+        let brdf = environment_brdf(saturate(dot(normal, view_direction)), surface.roughness);
+        let metallic = saturate(surface.metallic);
+        let f0 = mix(vec3f(0.04), surface.base_color, metallic);
+        return surface.base_color * (1.0 - metallic) * diffuse
+            + specular * (f0 * brdf.x + vec3f(brdf.y));
+    }
     return ambient_environment(
         normal,
         view_direction,

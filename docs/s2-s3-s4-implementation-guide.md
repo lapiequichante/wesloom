@@ -723,6 +723,16 @@ doit contenir des mips par roughness, pas seulement un `generateMipmap`.
 
 ### S3-C/D : plan d’intégration réel
 
+État au 2026-10-10 : le nœud pur `lighting.sky_single_scattering` et
+`space.equirect_to_direction` sont livrés (ADR 0060), avec graphe écran
+éditable `wxsl.sky` et capture `sky` dans la galerie. L'intégration à pas
+midpoints porte les densités exponentielles, l'extinction RGB et l'occultation
+planétaire ; le halo vient de HG, sans disque solaire ni multiple scattering.
+Les origines/distances sont en km, les coefficients en km⁻¹. La vue écran est
+equirectangulaire, pas une reconstruction depuis la caméra. Elle ne remplace
+pas directement l'environnement d'éclairage : les points 3–6 sont désormais
+raccordés par les ADRs 0061–0064.
+
 1. Ciel single scattering : rayons planète/atmosphère, densités Rayleigh/Mie,
    extinction RGB, rayon solaire, integration à pas fixes via macro, halo et
    occultation terrestre. Tests jour/nuit, horizon, altitude, caméra extérieure.
@@ -741,6 +751,46 @@ doit contenir des mips par roughness, pas seulement un `generateMipmap`.
 7. Tests physiques : environnement blanc constant reste constant après
    préfiltration, orientations cardinales, coutures des faces, roughness 0/1,
    energy split diffuse/specular, GPU captures aux deux backends.
+
+Prérequis S3-D livré (ADR 0061) : `ResourceShape`/`SlotShape` déclarent
+`mip_levels` ; attachments couleur/profondeur sélectionnent `layer` et `mip`.
+Les deux recorders allouent la chaîne et attachent une seule vue 2D par passe.
+Le sampling cube conserve tous les niveaux. La sonde commune écrit 24 couleurs
+face/mip distinctes sous `Once`, puis les relit au GPU. Les extents multi-mips
+sont fixes ; hazards et scheduling restent à la ressource entière. Les imports
+restent des vues présélectionnées, et les writes storage cube/multi-mips sont
+refusés.
+
+Suite S3-D livrée (ADR 0062) : effets `wxsl.equirect_to_cube`,
+`wxsl.ibl_diffuse` (stocke E/PI) et `wxsl.ibl_specular` (GGX, N=V), assemblés
+par `effect::ibl::append_bake` en passes face/mip Once. Les paramètres initiaux
+face/roughness sont des données du plan ; les bytes par passe sont calculés en
+Rust pour les deux backends. Le cube radiance source a encore un seul mip :
+le LOD par PDF/solid-angle est calculé mais clampé aux niveaux disponibles.
+Ne pas prétendre résoudre l'aliasing des petits émetteurs HDR avant une vraie
+chaîne filtrée source. Imports de fichiers HDR, bindings d'éclairage,
+invalidation de source et authoring cube dans les documents restaient ouverts.
+
+Suite ADR 0063 : `append_filtered_bake` fournit la chaîne source complète, via
+cubes intermédiaires séparés pour conserver les hazards à la ressource entière.
+Les cubes diffuse/GGX sont des ressources explicites du frame group : leurs reads
+ordonnent les consommateurs forward/deferred sans modifier le pass group. L'IBL
+de la galerie utilise un HDR Radiance local ou `--ibl-source sky`. Les pics HDR
+sont mis à l'échelle réversiblement avant les sorties float16. Remplacer la vue
+importée ou l'effet source invalide les bakes ; une modification en place appelle
+`invalidate_bakes`. ADR 0064 clôt ces raccords : `pass.environment` synthétise
+le bake depuis un document ; le host Dawn importe les RGB linéaires et son
+application décode les fichiers Radiance avec stb ; une passe dédiée compose
+le cube radiance depuis les rayons caméra sur la profondeur opaque vide, avant
+tonemap. La galerie HDR/sky utilise ce fond. L'ambient Charlie reste analytique,
+explicitement hors du contrat Lambert/GGX livré ; les extensions spectrales et
+distribution-spécifiques restent des travaux de modèles d'éclairage séparés.
+Les deux grilles `ibl-grid` / `ibl-grid-sky` isolent désormais les ranges exacts.
+Pour éviter les hits HDR rares, le diffuse et les lobes GGX larges intègrent
+une grille cube filtrée déterministe, pondérée par angle solide. Les lobes fins
+restent importance-sampled (4096 échantillons). La convention linéaire
+roughness↔mip reste identique au bake et au lecteur ; ce n'est pas la convention
+PMREM non linéaire de three.js, consulté comme référence technique seulement.
 
 ## 5. S4 — screen graphs et pyramide
 

@@ -118,6 +118,11 @@ and a parameter is host state about a pass, which made the label the key.
 
 ## Consequences
 
+* ADR 0062 adds initial values on programmatic pass descriptions, packed over
+  these defaults by the same layout and exported per pass to Dawn. Generated
+  declarations now follow the source, so WXSL imports retain their required
+  first position; forward references leave the shader contract unchanged.
+
 * Adding a tunable knob to an effect is one descriptor row and reading
   `params.<name>` in its shader. A re-tune is `set_pass_param` — a buffer
   write the next frame presents, with no variant and no pipeline moving.

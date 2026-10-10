@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "abi": 1,
+  "name": "single-scattering sky surface parity",
+  "meshes": [{ "name": "cube", "source": { "kind": "cube", "size": 1.6 } }],
+  "materials": [{
+    "name": "sky",
+    "receive_shadow": false,
+    "graph": {
+      "name": "equirectangular optical sky",
+      "nodes": [
+        { "id": 1, "def": "input.uv" },
+        { "id": 2, "def": "space.equirect_to_direction" },
+        { "id": 3, "def": "lighting.sky_single_scattering", "stage": "Fragment",
+          "params": { "sun_direction": { "vec3": [0.0, 0.3, 1.0] } } },
+        { "id": 4, "def": "output.surface", "params": {
+          "base_color": { "vec3": [0.0, 0.0, 0.0] }, "occlusion": { "f32": 0.0 }
+        } }
+      ],
+      "edges": [
+        { "from": [1, "out"], "to": [2, "uv"] },
+        { "from": [2, "out"], "to": [3, "direction"] },
+        { "from": [3, "out"], "to": [4, "emissive"] }
+      ]
+    }
+  }],
+  "instances": [{ "mesh": 0, "material": 0 }]
+}

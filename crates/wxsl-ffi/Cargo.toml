@@ -29,7 +29,7 @@ wxsl-render = { workspace = true }
 glam = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["hdr"] }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

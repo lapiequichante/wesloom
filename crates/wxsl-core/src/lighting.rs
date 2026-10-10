@@ -1008,6 +1008,8 @@ fn shade_surface_from(
         ("package::wxsl::bindings", "WXSL_MAX_LIGHTS"),
         ("package::wxsl::bindings", "LightSample"),
         ("package::wxsl::bindings", "environment_brdf"),
+        ("package::wxsl::bindings", "environment_diffuse_radiance"),
+        ("package::wxsl::bindings", "environment_specular_radiance"),
         (abi::SHADOW_MODULE, abi::SHADOW_FACTOR_FN),
         (
             "package::lighting::ambient_environment",

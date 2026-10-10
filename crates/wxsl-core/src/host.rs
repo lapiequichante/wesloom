@@ -113,9 +113,9 @@ pub fn structures() -> Vec<Structure> {
             fields: vec![
                 field("lights", "lights", Array("LightUniform", abi::MAX_LIGHTS)),
                 field("ambient_sky", "ambient_sky", Vector(3)),
-                field("_padding0", "_pad0", F32),
+                field("environment_enabled", "environment_enabled", F32),
                 field("ambient_ground", "ambient_ground", Vector(3)),
-                field("_padding1", "_pad1", F32),
+                field("environment_scale", "environment_scale", F32),
                 field("light_count", "light_count", U32),
                 field("time", "time", F32),
                 field("exposure", "exposure", F32),
@@ -439,6 +439,14 @@ pub fn c_header() -> String {
         ("BINDING_SHADOW_SAMPLER", abi::BINDING_SHADOW_SAMPLER),
         ("BINDING_ENVIRONMENT_LUT", abi::BINDING_ENVIRONMENT_LUT),
         (
+            "BINDING_ENVIRONMENT_DIFFUSE",
+            abi::BINDING_ENVIRONMENT_DIFFUSE,
+        ),
+        (
+            "BINDING_ENVIRONMENT_SPECULAR",
+            abi::BINDING_ENVIRONMENT_SPECULAR,
+        ),
+        (
             "BINDING_ENVIRONMENT_SAMPLER",
             abi::BINDING_ENVIRONMENT_SAMPLER,
         ),
@@ -472,7 +480,9 @@ pub fn schema_id() -> u64 {
             abi::BINDING_SHADOW_SAMPLER,
             abi::BINDING_ENVIRONMENT_LUT,
             abi::BINDING_ENVIRONMENT_SAMPLER,
-            abi::BINDING_PREVIOUS_INSTANCES
+            abi::BINDING_PREVIOUS_INSTANCES,
+            abi::BINDING_ENVIRONMENT_DIFFUSE,
+            abi::BINDING_ENVIRONMENT_SPECULAR
         ]
     )
     .unwrap();

@@ -79,6 +79,8 @@ pub enum ResourceShape {
         /// Array layers, cube faces (6) or volume depth. Always 1 for
         /// [`Dimension::D2`].
         layers: u32,
+        /// Number of allocated mip levels, including the base level.
+        mip_levels: u32,
         /// Texel format.
         format: TextureFormat,
         /// Usages beyond the ones the graph infers from how the passes use
@@ -121,6 +123,7 @@ impl ResourceDesc {
                 extent: Extent::default(),
                 dimension: Dimension::D2,
                 layers: 1,
+                mip_levels: 1,
                 format,
                 usage: TextureUsages::empty(),
             },
@@ -181,6 +184,18 @@ impl ResourceDesc {
         self
     }
 
+    /// Allocate a mip chain. Multiple levels require a fixed extent;
+    /// the scheduler checks the count, rather than silently clamping it.
+    pub fn with_mip_levels(mut self, mip_levels: u32) -> Self {
+        if let ResourceShape::Texture {
+            mip_levels: count, ..
+        } = &mut self.shape
+        {
+            *count = mip_levels;
+        }
+        self
+    }
+
     /// Add texture usages on top of the ones the graph infers.
     pub fn with_usage(mut self, usage: TextureUsages) -> Self {
         if let ResourceShape::Texture { usage: at, .. } = &mut self.shape {
@@ -219,6 +234,7 @@ impl ResourceDesc {
                     extent: a,
                     dimension: ad,
                     layers: al,
+                    mip_levels: am,
                     format: af,
                     ..
                 },
@@ -226,6 +242,7 @@ impl ResourceDesc {
                     extent: b,
                     dimension: bd,
                     layers: bl,
+                    mip_levels: bm,
                     format: bf,
                     ..
                 },
@@ -237,6 +254,7 @@ impl ResourceDesc {
                     && a == b
                     && ad == bd
                     && al == bl
+                    && am == bm
                     && af == bf
             }
             _ => false,
@@ -273,6 +291,8 @@ pub struct Attachment {
     pub blend: Option<BlendState>,
     /// Which array layer or cube face, for a layered resource.
     pub layer: u32,
+    /// Which mip level, with zero selecting the base resolution.
+    pub mip: u32,
 }
 
 impl Attachment {
@@ -283,6 +303,7 @@ impl Attachment {
             load: Load::Clear(color),
             store: true,
             layer: 0,
+            mip: 0,
             blend: None,
         }
     }
@@ -294,6 +315,7 @@ impl Attachment {
             load: Load::Load,
             store: true,
             layer: 0,
+            mip: 0,
             blend: None,
         }
     }
@@ -301,6 +323,12 @@ impl Attachment {
     /// Target a single layer of an array or cube resource.
     pub fn with_layer(mut self, layer: u32) -> Self {
         self.layer = layer;
+        self
+    }
+
+    /// Render into one mip level, at that level's extent.
+    pub fn with_mip(mut self, mip: u32) -> Self {
+        self.mip = mip;
         self
     }
 
@@ -383,6 +411,8 @@ pub struct DepthAttachment {
     pub store: bool,
     /// Which array layer, for a shadow cascade.
     pub layer: u32,
+    /// Which mip level.
+    pub mip: u32,
 }
 
 impl DepthAttachment {
@@ -393,6 +423,7 @@ impl DepthAttachment {
             clear: Some(depth),
             store: true,
             layer: 0,
+            mip: 0,
         }
     }
 
@@ -403,6 +434,7 @@ impl DepthAttachment {
             clear: None,
             store: true,
             layer: 0,
+            mip: 0,
         }
     }
 
@@ -410,6 +442,11 @@ impl DepthAttachment {
     /// one cascade.
     pub fn with_layer(mut self, layer: u32) -> Self {
         self.layer = layer;
+        self
+    }
+    /// Render into one mip level, at that level's extent.
+    pub fn with_mip(mut self, mip: u32) -> Self {
+        self.mip = mip;
         self
     }
 }
@@ -584,6 +621,9 @@ impl Read {
 pub struct PassDesc {
     /// Label, used for the `wgpu` pass and in diagnostics.
     pub label: String,
+    /// Initial effect values, packed over its defaults (ADR 0062).
+    /// Existing same-label/layout live tuning takes precedence on replacement.
+    pub parameters: std::collections::BTreeMap<String, wxsl_core::node::Value>,
     /// What the pass does.
     pub kind: PassKind,
     /// Which point of view it renders from.
@@ -728,6 +768,7 @@ impl PassDesc {
     pub fn geometry(label: impl Into<String>, source: DrawSource, stage: MaterialStage) -> Self {
         PassDesc {
             label: label.into(),
+            parameters: Default::default(),
             kind: PassKind::Geometry { source, stage },
             view: PassView::default(),
             color: Vec::new(),
@@ -745,6 +786,7 @@ impl PassDesc {
     pub fn screen(label: impl Into<String>, effect: impl Into<String>) -> Self {
         PassDesc {
             label: label.into(),
+            parameters: Default::default(),
             kind: PassKind::Screen {
                 effect: effect.into(),
             },
@@ -764,6 +806,7 @@ impl PassDesc {
     pub fn compute(label: impl Into<String>, effect: impl Into<String>) -> Self {
         PassDesc {
             label: label.into(),
+            parameters: Default::default(),
             kind: PassKind::Compute {
                 effect: effect.into(),
             },
@@ -777,6 +820,16 @@ impl PassDesc {
             sort: SortOrder::None,
             layers: LayerFilter::All,
         }
+    }
+
+    /// Set an initial value for an effect parameter.
+    pub fn with_parameter(
+        mut self,
+        name: impl Into<String>,
+        value: wxsl_core::node::Value,
+    ) -> Self {
+        self.parameters.insert(name.into(), value);
+        self
     }
 
     /// Add a colour attachment.
@@ -991,6 +1044,16 @@ pub enum Extent {
 }
 
 impl Extent {
+    /// Size of a mip level: integer halving (not viewport scaling's ceil),
+    /// clamped to one texel. Invalid selectors are the scheduler's error.
+    pub fn resolve_mip(self, target_width: u32, target_height: u32, mip: u32) -> (u32, u32) {
+        let (width, height) = self.resolve(target_width, target_height);
+        (
+            width.checked_shr(mip).unwrap_or(0).max(1),
+            height.checked_shr(mip).unwrap_or(0).max(1),
+        )
+    }
+
     /// The pixel size of this extent when the frame's target is
     /// `target_width` x `target_height`.
     pub fn resolve(self, target_width: u32, target_height: u32) -> (u32, u32) {
@@ -1168,6 +1231,18 @@ impl PassView {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn mip_extents_halve_with_floor_and_never_reach_zero() {
+        let extent = Extent::Fixed {
+            width: 7,
+            height: 5,
+        };
+        assert_eq!(extent.resolve_mip(1, 1, 0), (7, 5));
+        assert_eq!(extent.resolve_mip(1, 1, 1), (3, 2));
+        assert_eq!(extent.resolve_mip(1, 1, 2), (1, 1));
+        assert_eq!(extent.resolve_mip(1, 1, u32::MAX), (1, 1));
+    }
 
     #[test]
     fn a_viewport_extent_scales_with_the_target_and_never_reaches_zero() {

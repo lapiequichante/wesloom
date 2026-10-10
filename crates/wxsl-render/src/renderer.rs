@@ -304,6 +304,14 @@ impl Renderer {
     /// replaces the effect under it.
     pub fn add_effect(&mut self, effect: crate::effect::Effect) {
         self.effects.add(effect);
+        self.invalidate_bakes();
+    }
+
+    /// Re-run Once bakes after an in-place source upload or an edited source
+    /// parameter. Replacing an imported view or effect calls this automatically.
+    /// Shader variants and pipelines remain cached.
+    pub fn invalidate_bakes(&mut self) {
+        self.last_run.fill((u64::MAX, (0, 0)));
     }
 
     /// Ask for the pass labelled `label` to run on the next frame — the
@@ -333,8 +341,18 @@ impl Renderer {
     /// both.
     pub fn import_resource(&mut self, label: impl Into<String>, view: wgpu::TextureView) {
         let label = label.into();
+        if self
+            .imports
+            .iter()
+            .any(|(existing, previous)| *existing == label && previous == &view)
+        {
+            return;
+        }
         self.imports.retain(|(existing, _)| *existing != label);
         self.imports.push((label, view));
+        // A changed source invalidates downstream Once bakes. Conservatively
+        // invalidate all policies: imports may feed materials outside the graph.
+        self.invalidate_bakes();
     }
 
     /// Drop the view supplied for `label`, if there is one — the other
@@ -409,12 +427,11 @@ impl Renderer {
                 .get(&pass.label)
                 .is_none_or(|existing| existing.layout.signature() != layout.signature());
             if stale {
-                let defaults = known
-                    .parameters
-                    .iter()
-                    .map(|parameter| (parameter.name.to_string(), parameter.default))
-                    .collect();
-                let data = layout.filled(&defaults);
+                // Invalid authored values are reported before recording by
+                // set_graph/compile_frame, also after effect replacement.
+                let data = known
+                    .initial_parameters(&pass.parameters)
+                    .unwrap_or_else(|_| known.initial_parameters(&Default::default()).unwrap());
                 self.pass_params.insert(
                     pass.label.clone(),
                     PassParamBlock {
@@ -515,6 +532,24 @@ impl Renderer {
     /// error here rather than a `wgpu` complaint mid-frame.
     pub fn set_graph(&mut self, graph: impl Into<RenderGraph>) -> Result<(), RenderError> {
         let graph = graph.into();
+        for pass in graph.passes() {
+            if !pass.parameters.is_empty() {
+                let effect = match &pass.kind {
+                    PassKind::Screen { effect } | PassKind::Compute { effect } => {
+                        self.effects.get(effect)
+                    }
+                    PassKind::Geometry { .. } => None,
+                };
+                let result = effect
+                    .ok_or_else(|| "this pass has no registered effect".to_string())
+                    .and_then(|effect| effect.initial_parameters(&pass.parameters));
+                result.map_err(|reason| RenderError::EffectParameter {
+                    pass: pass.label.clone(),
+                    name: "initial values".into(),
+                    reason,
+                })?;
+            }
+        }
         self.schedule = graph.schedule()?;
         self.graph = graph;
         self.stock = None;
@@ -987,6 +1022,11 @@ impl Renderer {
         // for — and the place a draw that forgot a declared per-instance
         // attribute is told so, before a pass is opened.
         let rows = request.draws.instance_rows()?;
+        self.bindings.set_environment_scale(
+            self.graph
+                .environment_maps()
+                .map(|_| self.graph.environment_scale()),
+        );
         self.bindings.update(
             device,
             queue,
@@ -1017,6 +1057,21 @@ impl Renderer {
         }
         self.pool
             .configure(device, &self.schedule, self.config.target.into());
+        if let Some(maps) = self.graph.environment_maps() {
+            let slots = maps.map(|map| {
+                self.schedule
+                    .slot(map, self.pool.frame(), 0)
+                    .expect("scheduled environment")
+            });
+            let views = slots.map(|slot| self.pool.slot_view(slot).expect("allocated environment"));
+            self.bindings.set_environment_maps(
+                device,
+                Some((self.pool.generation(), slots)),
+                Some(views),
+            );
+        } else {
+            self.bindings.set_environment_maps(device, None, None);
+        }
         // After the pool, because this is the one resource read from
         // outside the pass list: the frame group binds it, so the renderer
         // is what carries the view across (`abi::BINDING_SHADOW_MAPS`).
@@ -1089,6 +1144,7 @@ impl Renderer {
         // bound, so which of the two frame groups it gets is decided from
         // what it writes.
         let shadow_maps = graph.shadow_maps();
+        let environment_maps = graph.environment_maps();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("wxsl frame"),
         });
@@ -1108,9 +1164,17 @@ impl Renderer {
                 })
             },
             |pass, encoder| {
-                let shadows = match shadow_maps {
-                    Some(maps) if pass.desc.written().any(|id| id == maps) => ShadowMaps::Detached,
-                    _ => ShadowMaps::Bound,
+                let shadows = if environment_maps
+                    .is_some_and(|maps| pass.desc.written().any(|id| maps.contains(&id)))
+                {
+                    ShadowMaps::Detached
+                } else {
+                    match shadow_maps {
+                        Some(maps) if pass.desc.written().any(|id| id == maps) => {
+                            ShadowMaps::Detached
+                        }
+                        _ => ShadowMaps::Bound,
+                    }
                 };
                 record_pass(
                     device,
@@ -1145,6 +1209,17 @@ impl Renderer {
     ) -> Result<FramePlan, RenderError> {
         let mut plan = FramePlan::default();
         for (index, pass) in self.graph.passes().iter().enumerate() {
+            if let PassKind::Screen { effect } | PassKind::Compute { effect } = &pass.kind {
+                if let Some(known) = self.effects.get(effect) {
+                    known
+                        .initial_parameters(&pass.parameters)
+                        .map_err(|reason| RenderError::EffectParameter {
+                            pass: pass.label.clone(),
+                            name: "initial values".into(),
+                            reason,
+                        })?;
+                }
+            }
             match &pass.kind {
                 PassKind::Geometry { source, stage } => {
                     // A shadow pass built for a light that is not casting

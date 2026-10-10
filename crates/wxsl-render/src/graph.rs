@@ -194,6 +194,7 @@ impl ResourcePool {
                     extent,
                     dimension,
                     layers,
+                    mip_levels,
                     format,
                     usage,
                 } => {
@@ -205,7 +206,7 @@ impl ResourcePool {
                             height,
                             depth_or_array_layers: layers,
                         },
-                        mip_level_count: 1,
+                        mip_level_count: mip_levels,
                         sample_count: 1,
                         dimension: texture_dimension(dimension),
                         format: format.to_wgpu(),
@@ -277,17 +278,23 @@ impl ResourcePool {
     /// A cube face or a shadow cascade is rendered into one layer at a
     /// time; a plain 2D target's layer 0 is the whole texture, and reuses
     /// the view that already exists.
-    fn attachment_view(&self, slot: usize, layer: u32) -> wgpu::TextureView {
+    fn attachment_view(&self, slot: usize, layer: u32, mip: u32) -> wgpu::TextureView {
         let Slot::Texture { texture, view } = &self.slots[slot] else {
             panic!("attachments are textures; the scheduler checks")
         };
-        if layer == 0 && texture.depth_or_array_layers() == 1 {
+        if layer == 0
+            && mip == 0
+            && texture.depth_or_array_layers() == 1
+            && texture.mip_level_count() == 1
+        {
             return view.clone();
         }
         texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2),
             base_array_layer: layer,
             array_layer_count: Some(1),
+            base_mip_level: mip,
+            mip_level_count: Some(1),
             ..Default::default()
         })
     }
@@ -502,7 +509,7 @@ impl RenderGraph {
         import: &impl Fn(ResourceId) -> Result<wgpu::TextureView, RenderError>,
     ) -> Result<wgpu::TextureView, RenderError> {
         match schedule.slot(attachment.resource, frame, 0) {
-            Some(slot) => Ok(pool.attachment_view(slot, attachment.layer)),
+            Some(slot) => Ok(pool.attachment_view(slot, attachment.layer, attachment.mip)),
             None => import(attachment.resource),
         }
     }
@@ -516,7 +523,7 @@ impl RenderGraph {
         import: &impl Fn(ResourceId) -> Result<wgpu::TextureView, RenderError>,
     ) -> Result<wgpu::TextureView, RenderError> {
         match schedule.slot(depth.resource, frame, 0) {
-            Some(slot) => Ok(pool.attachment_view(slot, depth.layer)),
+            Some(slot) => Ok(pool.attachment_view(slot, depth.layer, depth.mip)),
             None => import(depth.resource),
         }
     }

@@ -130,6 +130,7 @@ modules! {
     "package::lighting::rayleigh_phase" => "lighting/rayleigh_phase.wxsl",
     "package::lighting::roughness_aa" => "lighting/roughness_aa.wxsl",
     "package::lighting::sheen_ibl_response" => "lighting/sheen_ibl_response.wxsl",
+    "package::lighting::sky_single_scattering" => "lighting/sky_single_scattering.wxsl",
     "package::lighting::thin_film_phase" => "lighting/thin_film_phase.wxsl",
     "package::lighting::visibility_ggx_anisotropic" => "lighting/visibility_ggx_anisotropic.wxsl",
     "package::lighting::visibility_neubelt" => "lighting/visibility_neubelt.wxsl",
@@ -176,6 +177,7 @@ modules! {
 
     "package::space::apply_normal_map" => "space/apply_normal_map.wxsl",
     "package::space::direction_to_equirect" => "space/direction_to_equirect.wxsl",
+    "package::space::equirect_to_direction" => "space/equirect_to_direction.wxsl",
     "package::space::rotate_uv" => "space/rotate_uv.wxsl",
     "package::space::tangent_basis" => "space/tangent_basis.wxsl",
 }
@@ -377,9 +379,9 @@ mod tests {
             .collect();
         assert_eq!(
             frame,
-            vec![abi::GROUP_FRAME; 6],
+            vec![abi::GROUP_FRAME; 8],
             "camera, scene, object, the previous-frame object, and the \
-             environment-BRDF table and its sampler (ADR 0039)"
+             environment-BRDF table, its sampler and two environment cubes (ADR 0063)"
         );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its
@@ -394,6 +396,11 @@ mod tests {
         for (binding, declaration) in [
             (abi::BINDING_CAMERA, "var<uniform> camera"),
             (abi::BINDING_SCENE, "var<uniform> scene"),
+            (abi::BINDING_ENVIRONMENT_DIFFUSE, "var environment_diffuse"),
+            (
+                abi::BINDING_ENVIRONMENT_SPECULAR,
+                "var environment_specular",
+            ),
             // A storage buffer, not a uniform: one binding serves every
             // draw in the frame, indexed by `@builtin(instance_index)`.
             (abi::BINDING_INSTANCES, "var<storage, read> instances"),

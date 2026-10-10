@@ -47,9 +47,9 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding) == 104, "LightUniform._p
 typedef struct WxslSceneUniform {
     WxslLightUniform lights[4];
     float ambient_sky[3];
-    float _padding0;
+    float environment_enabled;
     float ambient_ground[3];
-    float _padding1;
+    float environment_scale;
     uint32_t light_count;
     float time;
     float exposure;
@@ -58,9 +58,9 @@ typedef struct WxslSceneUniform {
 WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 496, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 448, "SceneUniform.ambient_sky offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, _padding0) == 460, "SceneUniform._padding0 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_enabled) == 460, "SceneUniform.environment_enabled offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_ground) == 464, "SceneUniform.ambient_ground offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, _padding1) == 476, "SceneUniform._padding1 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_scale) == 476, "SceneUniform.environment_scale offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 480, "SceneUniform.light_count offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 484, "SceneUniform.time offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 488, "SceneUniform.exposure offset");
@@ -155,8 +155,10 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_SHADOW_MAPS 4u
 #define WXSL_BINDING_SHADOW_SAMPLER 5u
 #define WXSL_BINDING_ENVIRONMENT_LUT 6u
+#define WXSL_BINDING_ENVIRONMENT_DIFFUSE 9u
+#define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "2107754369442096739"
+#define WXSL_HOST_LAYOUT_ID "2540132131132367969"
 #undef WXSL_LAYOUT_ASSERT
 #endif

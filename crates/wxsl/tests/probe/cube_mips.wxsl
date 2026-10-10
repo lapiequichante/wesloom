@@ -1,0 +1,27 @@
+// Face/mip recording probe, shared by wgpu and offline Dawn tests.
+import package::wxsl::bindings::environment_lut_sampler;
+
+@group(3) @binding(0) var cube: texture_cube<f32>;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
+    let positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+    let p = positions[index];
+    return VertexOutput(vec4f(p, 0.0, 1.0), vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    let face = min(u32(input.uv.x * 6.0), 5u);
+    let mip = min(u32(input.uv.y * 4.0), 3u);
+    let directions = array<vec3f, 6>(
+        vec3f(1.0, 0.0, 0.0), vec3f(-1.0, 0.0, 0.0),
+        vec3f(0.0, 1.0, 0.0), vec3f(0.0, -1.0, 0.0),
+        vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, -1.0));
+    return textureSampleLevel(cube, environment_lut_sampler, directions[face], f32(mip));
+}

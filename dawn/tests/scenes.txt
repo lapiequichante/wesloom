@@ -2,6 +2,7 @@ pbr default - all
 scene scene crates/wxsl/assets/scene_check.scene.json all
 iridescent scene crates/wxsl/assets/iridescent.scene.json all
 sheen scene crates/wxsl/assets/sheen.scene.json all
+sky scene crates/wxsl/assets/sky.scene.json all
 gallery pipeline target/dawn-assets/gallery.pipeline.json gallery
 category-math sample math all
 category-color sample color all

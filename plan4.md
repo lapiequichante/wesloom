@@ -543,11 +543,71 @@ What surrounds the surface:
 * **Space and math**: `direction_to_equirect` (space/) and
   `ray_sphere` (math/) — the primitives the sky and IBL work stands on.
 
-Not yet: the single-scattering sky itself, and the IBL prefilter
-pipeline — both named in the guide as ADR-bearing (bindings, host HDR
-imports, per-roughness mips), so they stay queued rather than half-
-landed. The phases and ray-sphere primitives above are their
-groundwork, exactly as the guide ordered.
+**S3-C radiance evaluator landed on 2026-10-10 (ADR 0060).**
+`lighting.sky_single_scattering` integrates exponential Rayleigh/Mie density
+and RGB extinction on the view and solar paths, clips at the opaque planet,
+and handles observers outside the atmosphere. Distances/coefficient units are
+explicit; two macros bound midpoint quadrature. `space.equirect_to_direction`
+and the editable `wxsl.sky` screen graph feed a separate `sky` gallery preview,
+in linear radiance before tonemap. No sun disc, ground bounce, ozone or multiple
+scattering are claimed. Tests include a closed-form uniform-medium integral.
+
+**S3-D first prerequisite landed (ADR 0061).** Texture descriptors and physical
+slots now carry real mip counts; colour/depth attachments select a face/layer
+and mip in both recorders. The shared scheduler validates the view bounds and
+fixed extents, preserves whole-resource hazards, and prevents aliasing chains
+with different counts. A common wgpu/Dawn probe records and samples 24 distinct
+face/mip colours with stable Once storage. This is allocation/recording, not
+convolution; imported subresource selection and storage mip writes are refused.
+
+**S3-D bake effects landed (ADR 0062).** A neutral `effect::ibl::append_bake`
+recipe emits Once face/mip passes over a separate radiance cube: bilinear
+longitude-wrapped equirect conversion, cosine diffuse convolution (irradiance/PI),
+and importance-sampled GGX roughness mips. Initial face/roughness parameters are
+shared plan data, packed by the computed effect layout and exported per pass for
+Dawn. The source cube initially has one mip; PDF-based source LOD is clamped to
+available levels, so small bright emitters retain finite-sample aliasing. GPU
+tests cover constant HDR, directional analytic integrals and roughness 0/1.
+
+**S3-D material IBL landed (ADR 0063).** `append_filtered_bake` adds a complete
+box-filtered source chain through separate staging cubes. Explicit frame-resource
+declarations order forward and deferred lighting after every convolution writer,
+without changing pass-group bindings. Native cube sampling uses the world normal
+and reflection direction, trilinear roughness LOD and the existing BRDF LUT.
+The gallery's `ibl` loads a local Radiance HDR (the supplied lakeside sunrise by
+default) or `--ibl-source sky`; either source illuminates the actual material.
+Upload scaling preserves suns exceeding float16's range. Imported-view/effect
+replacement invalidates Once bakes; in-place changes have an explicit invalidation
+API. The cube's noise now follows interpolated object coordinates, not world space.
+The `ibl-mirror` gallery demo isolates the supplied HDR reflections on a white
+sphere with roughness = 0 and metallic = 1, without direct lamps.
+The `ibl-grid` and `ibl-grid-sky` demos compare stationary 5×5 uniform sweeps
+(roughness by column, metallic by depth row) on a matte grey floor. Sky baking
+now binds an extent-only input matching its output, independent of HDR size.
+Tests assert exact parameter values, time-invariant pictures and HDR↔sky swaps.
+The HDR grid exposed sparse-hit diffuse artifacts: deterministic solid-angle
+cube quadrature now handles diffuse and broad GGX lobes, while sharp lobes use
+4096 importance samples. A small bright polar emitter is checked against its
+analytic cosine integral, with the fixture shared by wgpu/Dawn. This hybrid
+strategy was compared with pinned three.js PMREM research, without copying code
+or changing the published linear roughness/mip convention.
+
+**S3 closed on 2026-10-10 (ADR 0064).** `pass.environment` authors the shared
+filtered bake directly in a pipeline document: source image, fixed cube/diffuse
+sizes, GGX mip count and restoration scale. Its radiance cube can feed the
+depth-aware camera background effect, composed in linear radiance before tonemap.
+The gallery's HDR and sky IBL demos now display that same environment behind
+opaque geometry. Dawn imports validated application-decoded RGB by resource
+label; its C++ demo decodes Radiance HDR with the existing stb dependency.
+Replacing an import invalidates the stable bakes. Authored forward/deferred
+documents, native HDR imports and camera/background composition have shared
+wgpu/Dawn probes, including live replacement and constant-environment parity.
+
+The delivered contract is single scattering plus Lambert/GGX split-sum IBL.
+Multiple scattering, a solar disc, Charlie and spectral prefiltering, and mirror
+or temporal antialiasing are not claimed. Charlie ambient remains explicitly
+analytic rather than sampling an incompatible GGX cube; distribution-specific
+extensions belong with the lighting models, not the completion gate of S3.
 
 ### S4 — The screen batch
 
@@ -640,11 +700,12 @@ chromatic aberration, as nodes and as shipped screen graphs) landed as
 described in the proposal sections above. From the guide's twelve
 tickets: ticket 2 (the fragment-only derivative contract) closed as
 plan5's D1 with its AA'd family and ticket 6 (full spectral
-iridescence) closed behind it — see the S2 note. Still open: the
-single-scattering sky and the IBL ADR (8–9), the pyramid synthesis ADR
+iridescence) closed behind it — see the S2 note. The single-scattering
+evaluator, HDR/sky environment bake, native imports in both hosts and camera
+background close S3 (ADRs 0060–0064; tickets 8–9). Still open: the pyramid synthesis ADR
 and DOF (11–12), and AgX (provenance chain still under audit). S2-D's
 iridescent and sheen surface channels landed in ADRs 0058–0059;
-compatible physical IBL remains with S3. The palette
+Charlie/spectral IBL extensions are separate lighting-model work. The palette
 is at 176 nodes; N9's palette reorganization trigger has fired.
 
 The B-series owns the critical path because the owner's priority is the

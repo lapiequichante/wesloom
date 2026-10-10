@@ -18,6 +18,23 @@ use wxsl::core::node::{NodeRegistry, ValueType};
 mod probe;
 use probe::{gpu, Harness};
 
+#[test]
+fn pbr_cube_detail_is_fragment_noise_over_interpolated_object_position() {
+    use wxsl::core::graph::StageConstraint;
+    let graph: Graph = serde_json::from_str(include_str!("../assets/pbr_cube.wxsl.json")).unwrap();
+    let registry = wxsl::stdlib::registry();
+    graph.validate(&registry).unwrap();
+    assert_eq!(graph.stage(NodeId(1)), StageConstraint::Vertex);
+    assert_eq!(graph.stage(NodeId(3)), StageConstraint::Fragment);
+    let material = wxsl::render::Material::from_graph(&graph, &registry).unwrap();
+    let source = material.wxsl(abi::MaterialStage::FORWARD_LIT);
+    assert!(source.contains("object_position"));
+    assert!(
+        source.contains("attrs.auto"),
+        "object coordinates must cross the stage boundary"
+    );
+}
+
 /// Declare `name` and write it from `source` in the vertex stage.
 fn write_varying(
     graph: &mut Graph,

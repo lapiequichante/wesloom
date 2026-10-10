@@ -1,0 +1,80 @@
+// Original IBL pass helpers. WebGPU cube order, with texture V downward.
+import package::wxsl::bindings::environment_lut_sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
+    let p = vec2f(f32(i32(index & 1u) * 4 - 1), f32(i32(index >> 1u) * 4 - 1));
+    return VertexOutput(vec4f(p, 0.0, 1.0), vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+fn face_direction(uv: vec2f, face: u32) -> vec3f {
+    let p = uv * 2.0 - 1.0;
+    var d = vec3f(1.0, -p.y, -p.x);
+    switch face {
+        case 1u: { d = vec3f(-1.0, -p.y, p.x); }
+        case 2u: { d = vec3f(p.x, 1.0, p.y); }
+        case 3u: { d = vec3f(p.x, -1.0, -p.y); }
+        case 4u: { d = vec3f(p.x, -p.y, 1.0); }
+        case 5u: { d = vec3f(-p.x, -p.y, -1.0); }
+        default: {}
+    }
+    return normalize(d);
+}
+fn tangent_frame(n: vec3f) -> mat3x3f {
+    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(n.y) > 0.99);
+    let t = normalize(cross(up, n));
+    return mat3x3f(t, cross(n, t), n);
+}
+fn hammersley(i: u32, count: u32) -> vec2f {
+    return vec2f(f32(i) / f32(count), f32(reverseBits(i)) * 2.3283064365386963e-10);
+}
+
+// Solid angle of a cube-face rectangle; the primitive is evaluated at its
+// four corners, so face-edge texels do not count as much as central texels.
+fn cube_area(x: f32, y: f32) -> f32 {
+    return atan2(x * y, sqrt(x * x + y * y + 1.0));
+}
+
+// Deterministic quadrature for broad hemispherical lobes. Every source texel
+// at the selected filtered level participates, including small HDR emitters.
+// A 32x32 grid per face bounds work; a one-level source remains approximate.
+fn integrate_cube_lobe(image: texture_cube<f32>, n: vec3f, roughness: f32, ggx: bool) -> vec3f {
+    let base_side = f32(textureDimensions(image, 0).x);
+    let lod = min(max(ceil(log2(base_side / 32.0)), 0.0), f32(textureNumLevels(image) - 1u));
+    let side = min(textureDimensions(image, u32(lod)).x, 32u);
+    let step = 2.0 / f32(side);
+    let alpha = max(roughness * roughness, 0.001);
+    let a2 = alpha * alpha;
+    var sum = vec3f(0.0);
+    var normalization = 0.0;
+    for (var face = 0u; face < 6u; face++) {
+        for (var y = 0u; y < side; y++) {
+            for (var x = 0u; x < side; x++) {
+                let uv = (vec2f(f32(x), f32(y)) + 0.5) / f32(side);
+                let l = face_direction(uv, face);
+                let nl = max(dot(n, l), 0.0);
+                if nl > 0.0 {
+                    let p0 = vec2f(f32(x), f32(y)) * step - 1.0;
+                    let p1 = p0 + step;
+                    let angle = cube_area(p1.x, p1.y) - cube_area(p0.x, p1.y)
+                        - cube_area(p1.x, p0.y) + cube_area(p0.x, p0.y);
+                    var weight = nl * angle;
+                    if ggx {
+                        // V=N: N.H^2=(1+N.L)/2 and PDF_L=D/4. Constants
+                        // cancel on normalization; this is the same kernel
+                        // as GGX half-vector importance sampling, not Lambert.
+                        let nh2 = (1.0 + nl) * 0.5;
+                        let denominator = nh2 * (a2 - 1.0) + 1.0;
+                        weight *= a2 / max(denominator * denominator, 1e-12);
+                    }
+                    sum += textureSampleLevel(image, environment_lut_sampler, l, lod).rgb * weight;
+                    normalization += weight;
+                }
+            }
+        }
+    }
+    // Normalized cosine quadrature stores E/PI and preserves a constant source.
+    return sum / max(normalization, 1e-8);
+}

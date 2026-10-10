@@ -17,6 +17,8 @@ int main(int argc, char **argv) {
     bool verify = false;
     std::filesystem::path compiler_library;
     std::string selected;
+    std::filesystem::path hdri;
+    std::string hdr_label = "source HDR";
     uint32_t frames = 1;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -37,6 +39,10 @@ int main(int argc, char **argv) {
         compiler_library = value();
       else if (arg == "--pipeline")
         selected = value();
+      else if (arg == "--hdri")
+        hdri = value();
+      else if (arg == "--hdr-label")
+        hdr_label = value();
       else if (arg == "--frames") {
         const auto input = value();
         size_t end = 0;
@@ -51,6 +57,16 @@ int main(int argc, char **argv) {
     if (!compiler_library.empty())
       compiler = std::make_unique<wxsl::Compiler>(compiler_library);
     wxsl::Renderer renderer(assets, compiler.get());
+    if (!hdri.empty()) {
+      if (!stbi_is_hdr(hdri.string().c_str()))
+        throw std::runtime_error("--hdri expects a Radiance HDR file");
+      int w, h, channels;
+      std::unique_ptr<float, decltype(&stbi_image_free)> pixels(
+          stbi_loadf(hdri.string().c_str(), &w, &h, &channels, 3), &stbi_image_free);
+      if (!pixels) throw std::runtime_error("cannot decode HDR: " + hdri.string());
+      const std::vector<float> rgb(pixels.get(), pixels.get() + size_t(w) * h * 3);
+      renderer.set_environment_scale(renderer.upload_environment_image(hdr_label, w, h, rgb));
+    }
     std::cout << renderer.capabilities().dump(2) << '\n';
     std::filesystem::create_directories(output);
     const std::vector<std::string> pipelines = selected.empty()

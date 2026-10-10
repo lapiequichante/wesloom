@@ -53,7 +53,46 @@ pub fn registry(registry: &NodeRegistry) -> Result<EffectRegistry, CodegenError>
         .with(fxaa(registry)?)
         .with(vignette(registry)?)
         .with(film_grain(registry)?)
+        .with(sky(registry)?)
         .with(chromatic_aberration(registry)?))
+}
+
+/// Equirectangular preview of the single-scattering sky in linear radiance.
+/// The existing image input supplies the extent, not the colour. This does
+/// not replace the scene background or illuminate materials (ADR 0060).
+pub fn sky(registry: &NodeRegistry) -> Result<Effect, CodegenError> {
+    Effect::from_graph(
+        "wxsl.sky",
+        "Single-scattering sky",
+        "Equirectangular Rayleigh/Mie sky preview; follow with a display transform.",
+        sky_graph(registry),
+        registry,
+    )
+}
+
+/// Editable sky preview: UV → direction → optical integration → radiance.
+/// Sun position, altitude and medium coefficients are sockets on the sky node;
+/// integration budgets are its macros, not runtime uniforms.
+pub fn sky_graph(registry: &NodeRegistry) -> Graph {
+    let mut graph = Graph::in_domain("single-scattering sky", GraphDomain::Screen);
+    let uv = graph.add_node(abi::context_node_id("uv"));
+    let direction = graph.add_node("space.equirect_to_direction");
+    let sky = graph.add_node("lighting.sky_single_scattering");
+    graph.set_param(
+        sky,
+        "sun_direction",
+        wxsl_core::node::Value::Vec3([0.0, 0.3, 1.0]),
+    );
+    let out = graph.add_node(abi::SCREEN_OUTPUT_ID);
+    wire(&mut graph, registry, (uv, "out"), (direction, "uv"));
+    wire(&mut graph, registry, (direction, "out"), (sky, "direction"));
+    wire(
+        &mut graph,
+        registry,
+        (sky, "out"),
+        (out, abi::SOCKET_SCREEN_COLOR),
+    );
+    graph
 }
 
 /// Edge darkening, as a graph: one call to the `filter.vignette` node over
@@ -307,8 +346,8 @@ mod tests {
         let graph = tonemap.graph().expect("authored as a graph");
         assert_eq!(graph.domain(), GraphDomain::Screen);
         // Replacing, not appending: the stock documents name `tonemap`, and
-        // what they get is this. The other four graph effects are additive.
-        assert_eq!(effects.len(), EffectRegistry::shipped().len() + 4);
+        // what they get is this. The other five graph effects are additive.
+        assert_eq!(effects.len(), EffectRegistry::shipped().len() + 5);
     }
 
     #[test]

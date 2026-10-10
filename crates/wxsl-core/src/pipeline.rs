@@ -111,6 +111,8 @@ pub const PASS_PEEL: &str = "pass.peel";
 pub const PASS_SHADOW: &str = "pass.shadow";
 /// Node id of `pass.screen`.
 pub const PASS_SCREEN: &str = "pass.screen";
+/// Expand a filtered environment bake and declare the frame's lighting cubes.
+pub const PASS_ENVIRONMENT: &str = "pass.environment";
 /// Prefix of the `pass.compute.<effect>` ids — one generated definition
 /// per registered compute effect, whose sockets are the effect's declared
 /// inputs and outputs. A compute effect's wiring cannot sit on a fixed
@@ -145,6 +147,7 @@ pub const NODE_IDS: &[&str] = &[
     PASS_PEEL,
     PASS_SHADOW,
     PASS_SCREEN,
+    PASS_ENVIRONMENT,
     PRESENT,
 ];
 
@@ -164,6 +167,15 @@ fn text_setting(name: &str, label: &str, doc: &str, default: &str) -> SettingDef
 /// rather than an enum.
 pub fn node_defs() -> Vec<NodeDefinition> {
     vec![
+        NodeDefinition::builder(PASS_ENVIRONMENT, "environment bake")
+            .doc("Equirectangular linear radiance to filtered lighting cubes; one environment per frame.")
+            .input(Socket::new("image", ValueType::ColorTarget))
+            .output(Socket::new("radiance", ValueType::ColorTarget))
+            .setting(text_setting(SETTING_SIZE, "Cube size", "Square cube face side in pixels.", "128"))
+            .setting(text_setting("diffuse_size", "Diffuse size", "Diffuse cube face side in pixels.", "16"))
+            .setting(text_setting("mips", "Specular mips", "GGX roughness levels, including zero.", "8"))
+            .setting(text_setting("radiance_scale", "Radiance scale", "Positive restoration factor for scaled HDR uploads.", "1"))
+            .document(),
         // -- sources -----------------------------------------------------
         NodeDefinition::builder(SOURCE_SCENE, "Scene")
             .doc("The frame's draw list, filtered by a tag expression.")
@@ -211,7 +223,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .setting(text_setting(
                 SETTING_PRECISION,
                 "Precision",
-                "standard (8-bit), hdr (half float), scalar (one channel) or pair (two).",
+                "standard (8-bit), hdr (half float), float (linear rgba32float import), scalar or pair.",
                 "standard",
             ))
             .setting(text_setting(

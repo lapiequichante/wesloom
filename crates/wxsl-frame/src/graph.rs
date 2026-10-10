@@ -24,6 +24,8 @@ pub struct RenderGraph {
     resources: Vec<ResourceDesc>,
     passes: Vec<PassDesc>,
     shadow_maps: Option<ResourceId>,
+    environment_maps: Option<[ResourceId; 2]>,
+    environment_scale: f32,
     /// The G-buffer layout this graph's `gbuffer`-stage passes are built
     /// for: what the scheduler checks a material pass's attachment count
     /// against. The base targets unless the graph says otherwise — see
@@ -43,6 +45,8 @@ impl RenderGraph {
             resources: vec![ResourceDesc::imported("target", format)],
             passes: Vec::new(),
             shadow_maps: None,
+            environment_maps: None,
+            environment_scale: 1.0,
             gbuffer_layout: abi::GBUFFER_BASE_TARGETS.to_vec(),
         }
     }
@@ -116,6 +120,11 @@ impl RenderGraph {
         &self.passes
     }
 
+    /// Edit a declared pass before rescheduling the graph.
+    pub fn pass_mut(&mut self, index: usize) -> Option<&mut PassDesc> {
+        self.passes.get_mut(index)
+    }
+
     /// Declare `desc` as the graph's shadow maps: the layered depth texture
     /// the renderer binds into the frame group.
     ///
@@ -137,6 +146,27 @@ impl RenderGraph {
         self.shadow_maps
     }
 
+    /// Bind Lambert-ready diffuse and GGX roughness-mip cubes in the frame
+    /// group. Scheduling accounts for these reads without pass-group bindings.
+    pub fn declare_environment_maps(&mut self, diffuse: ResourceId, specular: ResourceId) {
+        self.environment_maps = Some([diffuse, specular]);
+    }
+
+    /// Diffuse and specular resources, in frame binding order.
+    pub fn environment_maps(&self) -> Option<[ResourceId; 2]> {
+        self.environment_maps
+    }
+
+    /// Restore the HDR source's radiance scale after its float16 convolution.
+    pub fn set_environment_scale(&mut self, scale: f32) {
+        self.environment_scale = scale;
+    }
+
+    /// Linear multiplier applied to sampled environment radiance.
+    pub fn environment_scale(&self) -> f32 {
+        self.environment_scale
+    }
+
     /// Order the passes, validate them, and decide which physical texture
     /// serves each resource.
     ///
@@ -144,6 +174,49 @@ impl RenderGraph {
     /// that can be wrong with a pass list is wrong here rather than as a
     /// `wgpu` validation error three layers down.
     pub fn schedule(&self) -> Result<Schedule, GraphError> {
+        if let Some(maps) = self.environment_maps {
+            if !self.environment_scale.is_finite() || self.environment_scale <= 0.0 {
+                return Err(GraphError::InvalidTexture {
+                    resource: "environment scale".into(),
+                    reason: "must be finite and positive".into(),
+                });
+            }
+            for id in maps {
+                let Some(desc) = self.resource_desc(id) else {
+                    return Err(GraphError::InvalidTexture {
+                        resource: format!("environment {}", id.index()),
+                        reason: "unknown resource".into(),
+                    });
+                };
+                if desc.imported
+                    || !matches!(
+                        desc.shape,
+                        ResourceShape::Texture {
+                            dimension: Dimension::Cube,
+                            format: TextureFormat::Rgba16Float,
+                            ..
+                        }
+                    )
+                    || !matches!(desc.persistence, Persistence::Persistent { history: 0 })
+                {
+                    return Err(GraphError::InvalidTexture {
+                        resource: desc.label.clone(),
+                        reason: "environment maps require pooled stable rgba16float cubes".into(),
+                    });
+                }
+            }
+            let mut expanded = self.clone();
+            expanded.environment_maps = None;
+            for pass in &mut expanded.passes {
+                let shades = matches!(&pass.kind,
+                    PassKind::Geometry { stage, .. } if matches!(stage.output(), abi::StageOutput::Color | abi::StageOutput::PeelResolve))
+                    || matches!(&pass.kind, PassKind::Screen { effect } if effect == "wxsl.deferred_lighting");
+                if shades {
+                    pass.reads.extend(maps.map(crate::pass::Read::current));
+                }
+            }
+            return expanded.schedule();
+        }
         self.validate()?;
         let order = self.topological_order()?;
         Ok(self.allocate(order))
@@ -151,6 +224,51 @@ impl RenderGraph {
 
     /// Everything checkable about a pass list before a device sees it.
     fn validate(&self) -> Result<(), GraphError> {
+        for desc in &self.resources {
+            if let ResourceShape::Texture {
+                extent,
+                dimension,
+                layers,
+                mip_levels,
+                ..
+            } = desc.shape
+            {
+                let invalid = |reason: &str| GraphError::InvalidTexture {
+                    resource: desc.label.clone(),
+                    reason: reason.into(),
+                };
+                if layers == 0 || mip_levels == 0 {
+                    return Err(invalid("layer and mip counts must be nonzero"));
+                }
+                if dimension == Dimension::D2 && layers != 1
+                    || dimension == Dimension::Cube && layers != 6
+                {
+                    return Err(invalid("a 2D texture has one layer; a cube has six faces"));
+                }
+                if dimension == Dimension::Cube
+                    && !matches!(extent, Extent::Fixed { width, height } if width > 0 && width == height)
+                {
+                    return Err(invalid("cube textures require a fixed, square extent"));
+                }
+                if mip_levels > 1 {
+                    let Extent::Fixed { width, height } = extent else {
+                        return Err(invalid("multi-mip textures require a fixed extent"));
+                    };
+                    let depth = if dimension == Dimension::D3 {
+                        layers
+                    } else {
+                        1
+                    };
+                    let largest = width.max(height).max(depth).max(1);
+                    let maximum = u32::BITS - largest.leading_zeros();
+                    if mip_levels > maximum {
+                        return Err(invalid(&format!(
+                            "{mip_levels} mip levels exceed the extent's maximum {maximum}"
+                        )));
+                    }
+                }
+            }
+        }
         for pass in &self.passes {
             for id in pass
                 .written()
@@ -182,6 +300,73 @@ impl RenderGraph {
                     return Err(GraphError::AttachmentNotATexture {
                         pass: pass.label.clone(),
                         resource: self.resources[id.index()].label.clone(),
+                    });
+                }
+            }
+
+            // Attachment views select one layer and one mip. Imports are
+            // already-selected host views, never reinterpreted textures.
+            let mut fixed_attachment_extent = None;
+            for (id, layer, mip) in pass
+                .color
+                .iter()
+                .map(|a| (a.resource, a.layer, a.mip))
+                .chain(pass.depth.iter().map(|a| (a.resource, a.layer, a.mip)))
+            {
+                let desc = &self.resources[id.index()];
+                if let ResourceShape::Texture {
+                    dimension,
+                    extent,
+                    layers,
+                    mip_levels,
+                    ..
+                } = desc.shape
+                {
+                    let reason = if dimension == Dimension::D3 {
+                        Some("3D attachments need a depth-slice view, which is not supported")
+                    } else if layer >= layers || mip >= mip_levels {
+                        Some("attachment layer or mip is outside the allocated texture")
+                    } else if desc.imported && (layer != 0 || mip != 0) {
+                        Some("an imported view is already selected by the host; nonzero selectors are not supported")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
+                        return Err(GraphError::InvalidTextureUse {
+                            pass: pass.label.clone(),
+                            resource: desc.label.clone(),
+                            reason: reason.into(),
+                        });
+                    }
+                    // Fixed mip extents are known without a frame target.
+                    // Viewport/import sizes still belong to the host/device.
+                    if !desc.imported && matches!(extent, Extent::Fixed { .. }) {
+                        let size = extent.resolve_mip(1, 1, mip);
+                        if fixed_attachment_extent.is_some_and(|expected| expected != size) {
+                            return Err(GraphError::InvalidTextureUse {
+                                pass: pass.label.clone(), resource: desc.label.clone(),
+                                reason: "attachment mip extent differs from the pass's other attachments".into(),
+                            });
+                        }
+                        fixed_attachment_extent = Some(size);
+                    }
+                }
+            }
+            for id in &pass.writes {
+                let desc = &self.resources[id.index()];
+                if matches!(
+                    desc.shape,
+                    ResourceShape::Texture {
+                        dimension: Dimension::Cube,
+                        ..
+                    } | ResourceShape::Texture {
+                        mip_levels: 2..,
+                        ..
+                    }
+                ) {
+                    return Err(GraphError::InvalidTextureUse {
+                        pass: pass.label.clone(), resource: desc.label.clone(),
+                        reason: "storage writes require a single-mip, non-cube view; use render-face attachments instead".into(),
                     });
                 }
             }
@@ -502,12 +687,14 @@ impl RenderGraph {
                         extent,
                         dimension,
                         layers,
+                        mip_levels,
                         format,
                         usage: extra,
                     } => SlotShape::Texture {
                         extent,
                         dimension,
                         layers,
+                        mip_levels,
                         format,
                         usage: usage[index] | extra,
                     },
@@ -628,6 +815,8 @@ pub enum SlotShape {
         dimension: Dimension,
         /// Layers, faces or depth.
         layers: u32,
+        /// Number of allocated mip levels.
+        mip_levels: u32,
         /// Texel format.
         format: TextureFormat,
         /// Every usage any resource in this slot needs.
@@ -650,6 +839,7 @@ impl SlotDesc {
                     extent: a,
                     dimension: ad,
                     layers: al,
+                    mip_levels: am,
                     format: af,
                     ..
                 },
@@ -657,10 +847,11 @@ impl SlotDesc {
                     extent: b,
                     dimension: bd,
                     layers: bl,
+                    mip_levels: bm,
                     format: bf,
                     ..
                 },
-            ) => a == b && ad == bd && al == bl && af == bf,
+            ) => a == b && ad == bd && al == bl && am == bm && af == bf,
             _ => false,
         }
     }
@@ -719,6 +910,22 @@ impl Schedule {
 /// What is wrong with a pass list.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GraphError {
+    /// A texture descriptor cannot be allocated as described.
+    InvalidTexture {
+        /// Resource label.
+        resource: String,
+        /// Descriptor invariant that failed.
+        reason: String,
+    },
+    /// A pass asks for an unsupported or out-of-range texture view.
+    InvalidTextureUse {
+        /// Pass label.
+        pass: String,
+        /// Resource label.
+        resource: String,
+        /// View invariant that failed.
+        reason: String,
+    },
     /// Indirect arguments must be a buffer not written by the same pass.
     InvalidIndirectBuffer {
         /// Pass label.
@@ -814,6 +1021,14 @@ pub enum GraphError {
 impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            GraphError::InvalidTexture { resource, reason } => {
+                write!(f, "texture `{resource}` is invalid: {reason}")
+            }
+            GraphError::InvalidTextureUse {
+                pass,
+                resource,
+                reason,
+            } => write!(f, "pass `{pass}` cannot use texture `{resource}`: {reason}"),
             GraphError::InvalidIndirectBuffer {
                 pass,
                 resource,
@@ -908,6 +1123,176 @@ mod tests {
     use wxsl_core::scene::TagExpr;
 
     const COLOR: TextureFormat = TextureFormat::Rgba8Unorm;
+
+    fn mip_texture() -> ResourceDesc {
+        ResourceDesc::color("mip texture", COLOR)
+            .with_extent(Extent::Fixed {
+                width: 8,
+                height: 8,
+            })
+            .with_mip_levels(4)
+    }
+
+    #[test]
+    fn mip_counts_survive_allocation_and_prevent_incompatible_aliasing() {
+        let mut graph = RenderGraph::new(COLOR);
+        let base_desc = mip_texture().with_mip_levels(1);
+        assert!(!base_desc.aliasable_with(&mip_texture()));
+        let base = graph.resource(base_desc);
+        let mips = graph.resource(mip_texture());
+        graph.pass(
+            PassDesc::screen("base", "test.clear")
+                .with_color(Attachment::clear(base, Color::BLACK)),
+        );
+        graph.pass(
+            PassDesc::screen("mips", "test.clear")
+                .with_color(Attachment::clear(mips, Color::BLACK).with_mip(3)),
+        );
+        let schedule = graph.schedule().unwrap();
+        assert_ne!(
+            schedule.slot(base, 0, 0),
+            schedule.slot(mips, 0, 0),
+            "non-overlapping lifetimes still need different mip counts"
+        );
+        assert!(matches!(
+            schedule.slots()[schedule.slot(mips, 0, 0).unwrap()].shape,
+            SlotShape::Texture { mip_levels: 4, .. }
+        ));
+    }
+
+    #[test]
+    fn invalid_mip_and_cube_descriptors_are_named_before_allocation() {
+        for desc in [
+            mip_texture().with_mip_levels(0),
+            mip_texture().with_mip_levels(5),
+            mip_texture().with_extent(Extent::default()),
+            mip_texture().with_dimension(Dimension::Cube, 5),
+            mip_texture()
+                .with_dimension(Dimension::Cube, 6)
+                .with_extent(Extent::Fixed {
+                    width: 8,
+                    height: 4,
+                }),
+            mip_texture().with_dimension(Dimension::D2, 2),
+        ] {
+            let mut graph = RenderGraph::new(COLOR);
+            graph.resource(desc);
+            assert!(
+                matches!(graph.schedule(), Err(GraphError::InvalidTexture { resource, .. }) if resource == "mip texture")
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_and_unsupported_attachment_views_are_named() {
+        for (desc, layer, mip) in [
+            (mip_texture(), 0, 4),
+            (mip_texture(), 1, 0),
+            (mip_texture().with_dimension(Dimension::Cube, 6), 6, 0),
+            (mip_texture().with_dimension(Dimension::D3, 8), 0, 0),
+            (
+                ResourceDesc {
+                    imported: true,
+                    ..mip_texture()
+                },
+                0,
+                1,
+            ),
+        ] {
+            let mut graph = RenderGraph::new(COLOR);
+            let texture = graph.resource(desc);
+            graph.pass(
+                PassDesc::screen("invalid view", "test.clear").with_color(
+                    Attachment::clear(texture, Color::BLACK)
+                        .with_layer(layer)
+                        .with_mip(mip),
+                ),
+            );
+            assert!(
+                matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { pass, resource, .. })
+                if pass == "invalid view" && resource == "mip texture")
+            );
+        }
+    }
+
+    #[test]
+    fn depth_mips_are_validated_and_whole_resource_hazards_stay_conservative() {
+        let mut graph = RenderGraph::new(COLOR);
+        let depth = graph.resource(
+            ResourceDesc::color("depth mips", DEPTH_FORMAT)
+                .with_extent(Extent::Fixed {
+                    width: 8,
+                    height: 8,
+                })
+                .with_mip_levels(4),
+        );
+        graph.pass(
+            PassDesc::geometry(
+                "depth view",
+                DrawSource::Scene(TagExpr::Never),
+                MaterialStage::DEPTH_ONLY,
+            )
+            .with_depth(DepthAttachment::clear(depth, 1.0).with_mip(4)),
+        );
+        assert!(
+            matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { resource, .. }) if resource == "depth mips")
+        );
+        let mut graph = RenderGraph::new(COLOR);
+        let image = graph.resource(mip_texture());
+        graph.pass(
+            PassDesc::screen("same texture", "test.clear")
+                .with_reads([Read::current(image)])
+                .with_color(Attachment::clear(image, Color::BLACK).with_mip(1)),
+        );
+        assert!(matches!(
+            graph.schedule(),
+            Err(GraphError::ReadsWhatItWrites { .. })
+        ));
+    }
+
+    #[test]
+    fn storage_writes_do_not_silently_bind_whole_mip_chains_or_cube_views() {
+        for desc in [
+            mip_texture(),
+            mip_texture()
+                .with_dimension(Dimension::Cube, 6)
+                .with_mip_levels(1),
+        ] {
+            let mut graph = RenderGraph::new(COLOR);
+            let texture = graph.resource(desc);
+            graph.pass(PassDesc::compute("storage", "test.fill").with_write(texture));
+            assert!(
+                matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { pass, .. }) if pass == "storage")
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_colour_and_depth_mip_extents_are_named() {
+        let mut graph = RenderGraph::new(COLOR);
+        let colour = graph.resource(mip_texture());
+        let depth = graph.resource(
+            ResourceDesc::color("depth", DEPTH_FORMAT)
+                .with_extent(Extent::Fixed {
+                    width: 8,
+                    height: 8,
+                })
+                .with_mip_levels(4),
+        );
+        graph.pass(
+            PassDesc::geometry(
+                "mismatch",
+                DrawSource::Scene(TagExpr::Never),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_state(PassState::FULLSCREEN.with_depth_format(Some(DEPTH_FORMAT)))
+            .with_color(Attachment::clear(colour, Color::BLACK))
+            .with_depth(DepthAttachment::clear(depth, 1.0).with_mip(1)),
+        );
+        assert!(
+            matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { resource, .. }) if resource == "depth")
+        );
+    }
 
     #[test]
     fn indirect_arguments_order_their_writer_and_infer_buffer_usage() {

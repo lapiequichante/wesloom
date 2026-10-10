@@ -179,3 +179,25 @@ fn fxaa_softens_an_edge_and_leaves_a_flat_region_alone() {
         "a flat region is left exactly as it was"
     );
 }
+
+#[test]
+fn sky_screen_graph_clips_at_ground_and_lights_the_upper_hemisphere() {
+    let Some(gpu) = gpu() else { return };
+    let mut harness = Harness::new(gpu);
+    let sky = wxsl::effects::sky(&harness.registry).expect("sky graph generates");
+    harness.renderer.add_effect(sky);
+    present_through(&mut harness.renderer, &["sky", "tonemap"]);
+    let image = render(&mut harness, &emissive([0.9, 0.1, 0.1]));
+    let upper = pixel(&image, SIZE / 2, SIZE / 4);
+    let lower = pixel(&image, SIZE / 2, 3 * SIZE / 4);
+    assert!(upper[2] > 20, "scattered daylight: {upper:?}");
+    // Ten metres above ground leave a short scattering segment before the
+    // ray hits the planet, but no reflected ground light.
+    assert!(
+        lower[..3].iter().all(|v| *v <= 3),
+        "ground-clipped ray: {lower:?}"
+    );
+    // Preview does not leak the scene image into its radiance.
+    let other = render(&mut harness, &emissive([0.1, 0.9, 0.1]));
+    assert_eq!(image, other);
+}

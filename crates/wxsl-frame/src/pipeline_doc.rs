@@ -85,6 +85,13 @@ use crate::pipeline::{gbuffer_format, PipelineConfig};
 /// the string the canvas shows.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PipelineError {
+    /// An environment recipe cannot be resolved from the document.
+    Environment {
+        /// The authored node.
+        node: String,
+        /// The violated contract.
+        reason: String,
+    },
     /// The document did not validate as a graph: an unfed mandatory input,
     /// a cycle, a type mismatch.
     InvalidDocument(wxsl_core::GraphErrors),
@@ -326,6 +333,9 @@ pub enum PipelineError {
 impl core::fmt::Display for PipelineError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            PipelineError::Environment { node, reason } => {
+                write!(f, "environment `{node}`: {reason}")
+            }
             PipelineError::InvalidDocument(errors) => write!(f, "{errors}"),
             PipelineError::UnknownEffect {
                 node,
@@ -374,7 +384,7 @@ impl core::fmt::Display for PipelineError {
             PipelineError::UnknownPrecision { node, precision } => write!(
                 f,
                 "colour target `{node}` asks for precision `{precision}`, which is not \
-                 one — standard, hdr, scalar or pair"
+                 one — standard, hdr, float, scalar or pair"
             ),
             PipelineError::UnknownPolicy { node, policy } => write!(
                 f,
@@ -665,6 +675,11 @@ impl<'a> Compiler<'a> {
             }
         }
 
+        for node in &nodes {
+            if self.kind(*node) == Some(doc::PASS_ENVIRONMENT) {
+                self.environment_bake(*node)?;
+            }
+        }
         // Then passes, in document order — which is the order the author
         // built them in, and only a tie-break for the scheduler anyway.
         let mut presents: Vec<NodeId> = Vec::new();
@@ -696,6 +711,61 @@ impl<'a> Compiler<'a> {
     }
 
     // -- resources --------------------------------------------------------
+
+    fn environment_bake(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let invalid = |reason: &str| PipelineError::Environment {
+            node: name.clone(),
+            reason: reason.into(),
+        };
+        if self.graph.environment_maps().is_some() {
+            return Err(invalid("only one environment may be declared"));
+        }
+        let source = self.fed(node, "image").expect("validated mandatory image");
+        let source = *self.colors.get(&source).ok_or_else(|| {
+            invalid("image must name a resource.color (imported HDR or a sky pass's destination)")
+        })?;
+        let integer = |setting: &'static str| -> Result<u32, PipelineError> {
+            self.setting(node, setting)
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|v| *v > 0)
+                .ok_or_else(|| invalid(&format!("{setting} must be a positive integer")))
+        };
+        for effect in [
+            crate::effect::ibl::EQUIRECT_TO_CUBE,
+            crate::effect::ibl::DIFFUSE,
+            crate::effect::ibl::SPECULAR,
+            crate::effect::ibl::RESAMPLE,
+        ] {
+            if self.effects.get(effect.id).is_none() {
+                return Err(invalid(&format!("missing effect {}", effect.id)));
+            }
+        }
+        let (size, diffuse, mips) = (
+            integer(doc::SETTING_SIZE)?,
+            integer("diffuse_size")?,
+            integer("mips")?,
+        );
+        let scale = self.number(node, "radiance_scale")?;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(invalid("radiance_scale must be finite and positive"));
+        }
+        let maps = crate::effect::ibl::append_filtered_bake(
+            &mut self.graph,
+            source,
+            &name,
+            size,
+            diffuse,
+            mips,
+        );
+        self.graph
+            .declare_environment_maps(maps.diffuse, maps.specular);
+        self.graph.set_environment_scale(scale);
+        self.colors.insert(node, maps.radiance);
+        Ok(())
+    }
 
     fn declare_shadow_maps(&mut self, node: NodeId) -> Result<(), PipelineError> {
         if let Some((existing, _)) = self.shadow_source {
@@ -756,12 +826,18 @@ impl<'a> Compiler<'a> {
     fn declare_color(&mut self, node: NodeId) -> Result<(), PipelineError> {
         let name = self.label(node);
         let precision_text = self.setting(node, doc::SETTING_PRECISION);
-        let precision = abi::GBufferPrecision::parse(&precision_text).ok_or_else(|| {
-            PipelineError::UnknownPrecision {
-                node: name.clone(),
-                precision: precision_text,
-            }
-        })?;
+        let format = if precision_text.trim() == "float" {
+            TextureFormat::Rgba32Float
+        } else {
+            gbuffer_format(
+                abi::GBufferPrecision::parse(&precision_text).ok_or_else(|| {
+                    PipelineError::UnknownPrecision {
+                        node: name.clone(),
+                        precision: precision_text,
+                    }
+                })?,
+            )
+        };
 
         // An imported target is the host's: sized by whoever created it,
         // so the size settings have nothing to say and are refused rather
@@ -792,9 +868,7 @@ impl<'a> Compiler<'a> {
                     });
                 }
             }
-            let id = self
-                .graph
-                .resource(ResourceDesc::imported(name, gbuffer_format(precision)));
+            let id = self.graph.resource(ResourceDesc::imported(name, format));
             self.colors.insert(node, id);
             return Ok(());
         }
@@ -827,7 +901,7 @@ impl<'a> Compiler<'a> {
             Extent::Fixed { width, height }
         };
         let history = self.number(node, doc::SETTING_HISTORY)? as u32;
-        let mut desc = ResourceDesc::color(name, gbuffer_format(precision)).with_extent(extent);
+        let mut desc = ResourceDesc::color(name, format).with_extent(extent);
         desc.persistence = if history == 0 {
             Persistence::Transient
         } else {
@@ -1044,6 +1118,7 @@ impl<'a> Compiler<'a> {
                         clear: None,
                         store: true,
                         layer: 0,
+                        mip: 0,
                     },
                     true,
                 )))
@@ -1768,6 +1843,7 @@ impl<'a> Compiler<'a> {
             .map(|input| match input.kind {
                 EffectInputKind::GBuffer => "gbuffer",
                 EffectInputKind::Image => "image",
+                EffectInputKind::DepthImage => "depth",
                 EffectInputKind::Buffer => "buffer",
             })
             .collect();
@@ -1862,6 +1938,19 @@ impl<'a> Compiler<'a> {
             }
             socket_taken.push(socket);
             match input.kind {
+                EffectInputKind::DepthImage => {
+                    let source = self.fed(node, socket).ok_or_else(|| {
+                        PipelineError::EffectInputMismatch {
+                            node: name.clone(),
+                            effect: effect.id.into(),
+                            reason: format!("nothing is wired into `{socket}`"),
+                        }
+                    })?;
+                    reads.push(Read {
+                        resource: self.sampled_depth(source, &name)?,
+                        history: input.history,
+                    });
+                }
                 EffectInputKind::GBuffer => match self.fed(node, socket) {
                     Some(source) => {
                         let (targets, depth) = &self.gbuffers[&source];
@@ -1994,6 +2083,7 @@ impl<'a> Compiler<'a> {
                     continue;
                 }
                 EffectInputKind::Image => Read::current(self.image_source(source, node)?),
+                EffectInputKind::DepthImage => Read::current(self.sampled_depth(source, &name)?),
                 EffectInputKind::Buffer => Read::current(self.storage_source(source, &effect)?),
             });
         }
@@ -2048,7 +2138,7 @@ impl<'a> Compiler<'a> {
     /// un-compilable chain shape, and the error says what to wire instead.
     fn image_source(&self, source: NodeId, reader: NodeId) -> Result<ResourceId, PipelineError> {
         match self.kind(source) {
-            Some(doc::RESOURCE_COLOR) => Ok(self.colors[&source]),
+            Some(doc::RESOURCE_COLOR) | Some(doc::PASS_ENVIRONMENT) => Ok(self.colors[&source]),
             Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL) => {
                 match self.pass_colors.get(&source) {
                     Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
@@ -2223,6 +2313,50 @@ pub(crate) fn stock_document(stock: StockPipeline) -> Graph {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_settings_and_duplicate_declarations_are_named() {
+        use super::*;
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let mut graph = StockPipeline::Forward.document();
+        let hdr = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("test HDR")
+                .with_setting(doc::SETTING_IMPORTED, "true")
+                .with_setting(doc::SETTING_PRECISION, "float"),
+        );
+        let bake = graph.add(Node::new(doc::PASS_ENVIRONMENT).with_label("test environment"));
+        graph
+            .wire(&registry, (hdr, "color"), (bake, "image"))
+            .unwrap();
+        let cfg = config();
+        let plan = compile(&graph, &registry, &effects, &cfg).unwrap();
+        plan.schedule().unwrap();
+        for (setting, value) in [
+            (doc::SETTING_SIZE, "0"),
+            ("mips", "2.5"),
+            ("radiance_scale", "NaN"),
+        ] {
+            let mut invalid = graph.clone();
+            invalid.set_setting(bake, setting, value);
+            let error = compile(&invalid, &registry, &effects, &cfg)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("test environment") && error.contains(setting),
+                "{error}"
+            );
+        }
+        let duplicate =
+            graph.add(Node::new(doc::PASS_ENVIRONMENT).with_label("duplicate environment"));
+        graph
+            .wire(&registry, (hdr, "color"), (duplicate, "image"))
+            .unwrap();
+        assert!(compile(&graph, &registry, &effects, &cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate environment"));
+    }
     use super::*;
     use crate::effect::EffectRegistry;
     use crate::graph::RenderGraph;
@@ -2972,12 +3106,12 @@ mod tests {
         );
 
         let mut graph = wxsl_core::pipeline::document("bad precision");
-        let color =
-            graph.add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "float"));
+        let color = graph
+            .add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "unknown"));
         let _ = color;
         assert!(matches!(
             errors_of(&graph, &config()),
-            PipelineError::UnknownPrecision { precision, .. } if precision == "float"
+            PipelineError::UnknownPrecision { precision, .. } if precision == "unknown"
         ));
 
         let mut graph = wxsl_core::pipeline::document("bad scale");
@@ -3779,6 +3913,7 @@ mod tests {
                 },
                 dimension: Dimension::D2,
                 layers: 1,
+                mip_levels: 1,
                 format: TextureFormat::Rgba16Float,
                 usage: TextureUsages::empty(),
             }

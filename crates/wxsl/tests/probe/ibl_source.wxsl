@@ -1,0 +1,21 @@
+struct Output {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> Output {
+    let p = vec2f(f32(i32(index & 1u) * 4 - 1), f32(i32(index >> 1u) * 4 - 1));
+    return Output(vec4f(p, 0.0, 1.0), vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+@fragment
+fn fragment(input: Output) -> @location(0) vec4f {
+    if (params.directional == 0u) { return vec4f(2.0, 3.0, 4.0, 1.0); }
+    let longitude = (input.uv.x - 0.5) * 6.28318530718;
+    let latitude = (0.5 - input.uv.y) * 3.14159265359;
+    let d = vec3f(cos(latitude) * cos(longitude), sin(latitude), cos(latitude) * sin(longitude));
+    if params.directional == 2u {
+        // A narrow north-pole emitter with a closed-form cosine integral.
+        return vec4f(vec3f(0.1 + select(0.0, 2000.0, d.y > 0.9995)), 1.0);
+    }
+    return vec4f(vec3f(2.0) + d, 1.0);
+}

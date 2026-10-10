@@ -338,7 +338,7 @@ pub struct EffectRequest {
     /// The module path the shader is mounted at and compiled from.
     pub path: &'static str,
     /// The shader text: the effect's own with the generated parameter
-    /// block prepended when it declares any, or the lighting pass
+    /// block appended when it declares any, or the lighting pass
     /// generated for the enabled set — owned either way, so this can go
     /// to a worker thread.
     pub source: Cow<'static, str>,
@@ -470,8 +470,8 @@ mod tests {
 
     #[test]
     fn an_effects_request_carries_the_generated_parameter_block() {
-        // Prepended, not imported: one module, the struct sitting before
-        // the file's own text, and the var at the binding after the one
+        // Appended, not imported: one module, preserving leading imports,
+        // and the var at the binding after the one
         // input.
         let request = EffectRequest::new(
             crate::effect::BLOOM,
@@ -479,7 +479,10 @@ mod tests {
             &LightingSet::default(),
             &[],
         );
-        assert!(request.source.starts_with("struct wxsl_bloom_params {"),);
+        assert!(request.source.contains("struct wxsl_bloom_params {"));
+        assert!(request
+            .source
+            .ends_with(&crate::effect::BLOOM.params_header()));
         assert!(request
             .source
             .contains("@group(3) @binding(1) var<uniform> params:"));

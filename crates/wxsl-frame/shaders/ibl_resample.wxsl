@@ -1,0 +1,20 @@
+@group(3) @binding(0) var image: texture_cube<f32>;
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    if params.box_filter == 0u {
+        return vec4f(textureSampleLevel(image, environment_lut_sampler,
+            face_direction(input.uv, params.face), 0.0).rgb, 1.0);
+    }
+    // Four source texel centres per destination texel. Face-direction mapping
+    // lets the hardware handle adjacent cube faces at the border.
+    let offset = vec2f(0.5 / f32(textureDimensions(image).x));
+    var sum = vec3f(0.0);
+    for (var y = 0u; y < 2u; y++) {
+        for (var x = 0u; x < 2u; x++) {
+            let uv = input.uv + (vec2f(f32(x), f32(y)) * 2.0 - 1.0) * offset;
+            sum += textureSampleLevel(image, environment_lut_sampler,
+                face_direction(uv, params.face), 0.0).rgb;
+        }
+    }
+    return vec4f(sum * 0.25, 1.0);
+}

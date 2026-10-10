@@ -36,9 +36,35 @@ no Rust library. `--frames N` exercises multiple frames with fixed inputs.
 
 This host supplies procedural meshes, default instance/material
 values and a checker texture. File meshes, application uniform blocks,
-additional vertex streams and external imports are not implemented. Unknown
+additional vertex streams and general external imports are not implemented. Unknown
 descriptors fail explicitly. `--pipeline PATH` adds a document compiled by the
 shared compiler; window/editor integration is outside this headless backend.
+
+### HDR environments (S3)
+
+`pass.environment` in a pipeline document expands the shared Once prefilter
+recipe, declaring diffuse/GGX frame cubes. `resource.color` with `imported: true`,
+`precision: float` and label `source HDR` receives application-decoded linear RGB.
+`Renderer::upload_environment_image` validates pixels, returns a reversible
+float16 safety scale, and invalidates Once bakes on replacement. Pass that scale
+to `set_environment_scale`. No file decoder lives in the renderer library.
+
+The application uses its existing stb Radiance decoder; the exporter can produce
+matching Rust references for the same local, non-redistributed HDR:
+
+```sh
+cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/hdr \
+  --probes --reference --hdri resources/hdri/lakeside_sunrise_1k.hdr
+target/dawn-render/pbr_cube_cpp --assets target/dawn-assets/hdr \
+  --pipeline hdr_forward_probe --hdri resources/hdri/lakeside_sunrise_1k.hdr --verify
+```
+
+The bundle also exports `hdr.forward.pipeline.json` and
+`hdr.deferred.pipeline.json` as copyable documents. The background effect reads
+linear colour, opaque depth and radiance; it fills clear-depth pixels from camera
+rays before tonemap. Composite transparent layers after this opaque background.
+`--hdr-label NAME` selects another authored import label. The probes use a
+synthetic constant HDR when `--hdri` is absent, so CI needs no local asset.
 
 ## Runtime compilation (B4)
 

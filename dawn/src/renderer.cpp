@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
+#include <optional>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -215,12 +217,14 @@ struct Renderer::Impl {
   gpu::BindGroupLayout frame_layout, empty_layout;
   gpu::Buffer camera, scene, transforms, empty_attributes;
   gpu::Texture lut, checker, fallback;
-  gpu::TextureView lut_view, checker_view, fallback_view;
+  gpu::TextureView lut_view, checker_view, fallback_view, environment_placeholder;
   gpu::Sampler checker_sampler, lut_sampler, shadow_sampler;
   std::vector<MaterialGpu> materials;
   std::vector<gpu::Buffer> vertices, indices;
   std::vector<Resource> pool;
   Resource target;
+  std::map<std::string, Resource> imports;
+  std::optional<float> environment_scale;
   uint64_t frame = 0;
   uint32_t view_stride = 0;
   std::set<std::string> demanded, ran;
@@ -491,6 +495,7 @@ struct Renderer::Impl {
       descriptor.dimension =
           row.at("dimension") == "d3" ? gpu::TextureDimension::e3D : gpu::TextureDimension::e2D;
       descriptor.usage = texture_usage(row.at("usage"));
+      descriptor.mipLevelCount = row.value("mip_levels", 1u);
       result.texture = device.CreateTexture(&descriptor);
       gpu::TextureViewDescriptor view;
       view.dimension = dimension(row.at("dimension"));
@@ -503,6 +508,58 @@ struct Renderer::Impl {
       result.buffer = device.CreateBuffer(&descriptor);
     }
     return result;
+  }
+  float upload_environment_image(const std::string &label, uint32_t w, uint32_t h,
+                                 const std::vector<float> &rgb) {
+    if (w == 0 || h == 0 || w > limits.maxTextureDimension2D || h > limits.maxTextureDimension2D ||
+        uint64_t(w) * h * 3 != rgb.size())
+      throw std::runtime_error("HDR dimensions do not match pixels or device limits");
+    bool declared = false;
+    for (const auto &pipeline : data.at("pipelines"))
+      for (const auto &desc : pipeline.at("graph").at("resources"))
+        if (desc.at("label") == label && desc.at("imported") == true &&
+            desc.at("shape").contains("texture") &&
+            desc.at("shape").at("texture").at("format") == "rgba32float")
+          declared = true;
+    if (!declared)
+      throw std::runtime_error("no rgba32float HDR import declared: " + label);
+    float peak = 0.0f;
+    for (float v : rgb) {
+      if (!std::isfinite(v) || v < 0.0f)
+        throw std::runtime_error("HDR radiance must be finite and nonnegative");
+      peak = std::max(peak, v);
+    }
+    const float scale = std::max(peak / 16384.0f, 1.0f);
+    std::vector<float> rgba(size_t(w) * h * 4, 1.0f);
+    for (size_t i = 0; i < rgb.size() / 3; ++i)
+      for (size_t c = 0; c < 3; ++c)
+        rgba[i * 4 + c] = rgb[i * 3 + c] / scale;
+    auto value = resource({{"texture", {{"format", "rgba32float"}, {"dimension", "d2"},
+        {"usage", "TEXTURE_BINDING | COPY_DST"}, {"size", {w, h, 1}}}}});
+    gpu::TexelCopyTextureInfo to;
+    to.texture = value.texture;
+    gpu::TexelCopyBufferLayout layout;
+    layout.bytesPerRow = w * 16;
+    layout.rowsPerImage = h;
+    const gpu::Extent3D extent{w, h, 1};
+    queue.WriteTexture(&to, rgba.data(), rgba.size() * sizeof(float), &layout, &extent);
+    check();
+    imports.insert_or_assign(label, std::move(value));
+    ran.clear();
+    return scale;
+  }
+  void set_environment_scale(float scale) {
+    if (!std::isfinite(scale) || scale <= 0.0f)
+      throw std::runtime_error("environment scale must be finite and positive");
+    environment_scale = scale;
+    if (!current.is_null() && !current.empty()) {
+      const auto bytes = read(root, data.at("frame").at("scene"));
+      WxslSceneUniform uniform;
+      std::memcpy(&uniform, bytes.data(), sizeof(uniform));
+      uniform.environment_enabled = current.at("graph").value("environment_maps", Json(nullptr)).is_null() ? 0.0f : 1.0f;
+      uniform.environment_scale = scale;
+      queue.WriteBuffer(scene, 0, &uniform, sizeof(uniform));
+    }
   }
   void init() {
     empty_layout = layout({});
@@ -537,6 +594,11 @@ struct Renderer::Impl {
     entry.visibility = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
     entry.sampler.type = gpu::SamplerBindingType::Filtering;
     entries.push_back(entry);
+    for (const auto binding : {WXSL_BINDING_ENVIRONMENT_DIFFUSE, WXSL_BINDING_ENVIRONMENT_SPECULAR}) {
+      entry = layout_entry(binding, {{"kind", "texture"}, {"sample_type", "float"}, {"dimension", "cube"}});
+      entry.visibility = gpu::ShaderStage::Fragment;
+      entries.push_back(entry);
+    }
     frame_layout = layout(entries);
     const auto views = read(root, data.at("frame").at("views"));
     if (views.size() % sizeof(WxslCameraUniform) != 0)
@@ -577,6 +639,7 @@ struct Renderer::Impl {
     sampler.minFilter = sampler.magFilter = gpu::FilterMode::Linear;
     checker_sampler = device.CreateSampler(&sampler);
     sampler.addressModeU = sampler.addressModeV = gpu::AddressMode::ClampToEdge;
+    sampler.mipmapFilter = gpu::MipmapFilterMode::Linear;
     lut_sampler = device.CreateSampler(&sampler);
     sampler.compare = gpu::CompareFunction::Less;
     shadow_sampler = device.CreateSampler(&sampler);
@@ -595,6 +658,9 @@ struct Renderer::Impl {
                         {"size", {lut_size, lut_size, 1}}}}});
     lut = value.texture;
     lut_view = value.view;
+    value = resource({{"texture", {{"format", "rgba16float"}, {"dimension", "cube"},
+                        {"usage", "TEXTURE_BINDING"}, {"size", {1, 1, 6}}}}});
+    environment_placeholder = value.view;
     for (const auto &row : data.at("meshes")) {
       vertices.push_back(buffer(read(root, row.at("vertices")), gpu::BufferUsage::Vertex));
       indices.push_back(buffer(read(root, row.at("indices")), gpu::BufferUsage::Index));
@@ -687,16 +753,25 @@ struct Renderer::Impl {
   Resource &resolve(uint32_t resource, uint32_t history = 0) {
     const auto &allocation = current.at("schedule").at("allocations").at(resource);
     if (allocation == "imported") {
-      if (resource != 0)
-        throw std::runtime_error("offline bundle lacks imported resource " +
-                                 std::to_string(resource));
+      if (resource != 0) {
+        const auto &desc = current.at("graph").at("resources").at(resource);
+        const auto label = desc.at("label").get<std::string>();
+        const auto found = imports.find(label);
+        if (found == imports.end())
+          throw std::runtime_error("missing imported resource " + label);
+        const auto &shape = desc.at("shape").at("texture");
+        if (shape.at("format") != "rgba32float" || shape.at("dimension") != "d2" ||
+            shape.value("mip_levels", 1) != 1 || shape.at("layers") != 1)
+          throw std::runtime_error("HDR import shape mismatch: " + label);
+        return found->second;
+      }
       return target;
     }
     const auto base = allocation.at("ring").at("base").get<size_t>(),
                length = allocation.at("ring").at("length").get<size_t>();
     return pool.at(base + (frame % length + length - history % length) % length);
   }
-  gpu::TextureView attachment(uint32_t resource, uint32_t layer) {
+  gpu::TextureView attachment(uint32_t resource, uint32_t layer, uint32_t mip) {
     auto &value = resolve(resource);
     if (value.shape.at("texture").at("dimension") == "d3")
       throw std::runtime_error("3D render attachments require a depth-slice descriptor");
@@ -704,6 +779,8 @@ struct Renderer::Impl {
     view.dimension = gpu::TextureViewDimension::e2D;
     view.baseArrayLayer = layer;
     view.arrayLayerCount = 1;
+    view.baseMipLevel = mip;
+    view.mipLevelCount = 1;
     return value.texture.CreateView(&view);
   }
   gpu::BindGroup frame_group(size_t material, bool detached) {
@@ -740,6 +817,13 @@ struct Renderer::Impl {
     entry.binding = WXSL_BINDING_ENVIRONMENT_SAMPLER;
     entry.sampler = lut_sampler;
     entries.push_back(entry);
+    const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
+    for (size_t index = 0; index < 2; ++index) {
+      entry = {};
+      entry.binding = index == 0 ? WXSL_BINDING_ENVIRONMENT_DIFFUSE : WXSL_BINDING_ENVIRONMENT_SPECULAR;
+      entry.textureView = !detached && !maps.is_null() ? resolve(maps.at(index)).view : environment_placeholder;
+      entries.push_back(entry);
+    }
     return group(frame_layout, entries);
   }
   gpu::RenderPipeline render_pipeline(const Json &pass, gpu::BindGroupLayout pass_layout,
@@ -858,6 +942,12 @@ struct Renderer::Impl {
       throw std::runtime_error(name + " requires float32_blendable");
     if (current != next) {
       current = next;
+      const auto scene_bytes = read(root, data.at("frame").at("scene"));
+      WxslSceneUniform uniform;
+      std::memcpy(&uniform, scene_bytes.data(), sizeof(uniform));
+      uniform.environment_enabled = current.at("graph").value("environment_maps", Json(nullptr)).is_null() ? 0.0f : 1.0f;
+      uniform.environment_scale = environment_scale.value_or(current.at("graph").value("environment_scale", 1.0f));
+      queue.WriteBuffer(scene, 0, &uniform, sizeof(uniform));
       pool.clear();
       ran.clear();
       run_counts.clear();
@@ -921,7 +1011,8 @@ struct Renderer::Impl {
         if (!effect_id.empty()) {
           const auto &effect = data.at("effects").at(effect_id);
           if (effect.at("param_size").get<uint32_t>() != 0) {
-            const auto bytes = read(root, effect.at("params"));
+            const auto bytes = read(root, extra.contains("params") && !extra.at("params").is_null()
+                                              ? extra.at("params") : effect.at("params"));
             parameters = buffer(bytes, gpu::BufferUsage::Uniform);
             gpu::BindGroupEntry entry;
             entry.binding = static_cast<uint32_t>(entries.size());
@@ -955,7 +1046,7 @@ struct Renderer::Impl {
           std::vector<gpu::RenderPassColorAttachment> colors;
           for (const auto &color : pass.at("color")) {
             gpu::RenderPassColorAttachment entry;
-            entry.view = attachment(color.at("resource"), color.at("layer"));
+            entry.view = attachment(color.at("resource"), color.at("layer"), color.value("mip", 0u));
             entry.storeOp =
                 color.at("store").get<bool>() ? gpu::StoreOp::Store : gpu::StoreOp::Discard;
             const auto &load = color.at("load");
@@ -974,7 +1065,7 @@ struct Renderer::Impl {
           bool detached = false;
           if (!pass.at("depth").is_null()) {
             const auto &row = pass.at("depth");
-            depth.view = attachment(row.at("resource"), row.at("layer"));
+            depth.view = attachment(row.at("resource"), row.at("layer"), row.value("mip", 0u));
             depth.depthLoadOp = row.at("clear").is_null() ? gpu::LoadOp::Load : gpu::LoadOp::Clear;
             if (!row.at("clear").is_null())
               depth.depthClearValue = row.at("clear");
@@ -983,6 +1074,11 @@ struct Renderer::Impl {
             descriptor.depthStencilAttachment = &depth;
             detached = row.at("resource") == current.at("graph").at("shadow_maps");
           }
+          const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
+          if (!maps.is_null())
+            for (const auto &color : pass.at("color"))
+              for (const auto &map : maps)
+                detached = detached || color.at("resource") == map;
           auto render = encoder.BeginRenderPass(&descriptor);
           const auto offset = extra.at("view_slot").get<uint32_t>() * view_stride;
           if (pass.at("kind").contains("geometry")) {
@@ -1013,7 +1109,7 @@ struct Renderer::Impl {
             }
           } else {
             render.SetPipeline(render_pipeline(pass, pass_layout, 0));
-            render.SetBindGroup(WXSL_GROUP_FRAME, frame_group(materials.size(), false), 1, &offset);
+            render.SetBindGroup(WXSL_GROUP_FRAME, frame_group(materials.size(), detached), 1, &offset);
             render.SetBindGroup(WXSL_GROUP_PASS, pass_group);
             render.Draw(3);
           }
@@ -1082,6 +1178,11 @@ void Renderer::compile_material(Compiler &compiler, size_t index, const nlohmann
 void Renderer::upload_material_params(size_t index, const std::vector<uint8_t> &bytes) {
   impl_->upload_material_params(index, bytes);
 }
+float Renderer::upload_environment_image(const std::string &label, uint32_t width, uint32_t height,
+                                        const std::vector<float> &rgb) {
+  return impl_->upload_environment_image(label, width, height, rgb);
+}
+void Renderer::set_environment_scale(float scale) { impl_->set_environment_scale(scale); }
 size_t Renderer::pipeline_count() const { return impl_->render_pipelines.size(); }
 uint32_t Renderer::width() const { return impl_->width(); }
 uint32_t Renderer::height() const { return impl_->height(); }

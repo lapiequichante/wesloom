@@ -1,5 +1,10 @@
 //! Export validated documents, shared plans, WGSL and CPU upload data for an offline backend.
 
+#[path = "../../wxsl/tests/probe/cube_mips.rs"]
+mod cube_mips;
+#[path = "../../wxsl/tests/probe/ibl.rs"]
+mod ibl_probe;
+
 use glam::{Mat4, Vec3};
 use serde_json::{json, Value as Json};
 use std::{
@@ -258,6 +263,22 @@ fn device_probes(format: TextureFormat) -> Vec<(String, wxsl_frame::graph::Rende
         ("buffer_probe".into(), buffer),
         ("history_probe".into(), history),
         ("indirect_probe".into(), indirect),
+        (
+            "cube_mips_probe".into(),
+            cube_mips::plan(format.to_wgpu()).into(),
+        ),
+        (
+            "ibl_constant_probe".into(),
+            ibl_probe::plan(format.to_wgpu(), false).into(),
+        ),
+        (
+            "ibl_directional_probe".into(),
+            ibl_probe::plan(format.to_wgpu(), true).into(),
+        ),
+        (
+            "ibl_hotspot_probe".into(),
+            ibl_probe::hotspot_plan(format.to_wgpu()).into(),
+        ),
     ]
 }
 
@@ -334,6 +355,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut probes = false;
     let mut sample = None;
     let mut pipeline_path = None;
+    let mut hdri_path = None;
     let mut width = 800;
     let mut height = 600;
     let mut args = std::env::args().skip(1);
@@ -347,6 +369,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 graph_path = Some(PathBuf::from(args.next().ok_or("--graph needs a path")?))
             }
             "--reference" => reference = true,
+            "--hdri" => {
+                hdri_path = Some(PathBuf::from(
+                    args.next().ok_or("--hdri needs a Radiance HDR path")?,
+                ))
+            }
             "--probes" => probes = true,
             "--sample" => sample = Some(args.next().ok_or("--sample needs a category")?),
             "--pipeline" => {
@@ -362,6 +389,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     if width == 0 || height == 0 {
         return Err("target dimensions must be nonzero".into());
     }
+    let hdri = if let Some(path) = hdri_path {
+        let reader = image::ImageReader::open(path)?.with_guessed_format()?;
+        if reader.format() != Some(image::ImageFormat::Hdr) {
+            return Err("--hdri expects a Radiance HDR file".into());
+        }
+        let image = reader.decode()?.into_rgb32f();
+        Some((
+            image.width(),
+            image.height(),
+            image.pixels().map(|p| p.0).collect::<Vec<_>>(),
+        ))
+    } else {
+        None
+    };
     let scene: Scene = if let Some(path) = scene_path {
         serde_json::from_slice(&std::fs::read(path)?)?
     } else {
@@ -536,7 +577,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with(LUT_VIEW)
         .with(RAMP_FILL)
         .with(RAMP_VIEW)
-        .with(INDIRECT);
+        .with(INDIRECT)
+        .with(cube_mips::VIEW);
+    for effect in ibl_probe::effects() {
+        effects.add(effect);
+    }
     if sample.as_deref() == Some("filter") {
         effects.add(wxsl::effects::fxaa(&registry)?);
     }
@@ -567,6 +612,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("device probes require a first draw with at least 36 indices".into());
         }
         graphs.extend(device_probes(config.target.format));
+        for stock in StockPipeline::ALL {
+            let mut graph: wxsl_render::graph::RenderGraph = stock.graph(&config).into();
+            ibl_probe::append_lighting_bake(&mut graph, true);
+            graphs.push((format!("ibl_{}_probe", stock.name()), graph.into()));
+            let document = ibl_probe::hdr_document(*stock);
+            save(
+                &root,
+                &format!("hdr.{}.pipeline.json", stock.name()),
+                serde_json::to_vec_pretty(&document)?,
+            )?;
+            let request = json!({"pipeline": document, "config": wire_config});
+            let output = response(wxsl_ffi::api::pipeline(&serde_json::to_vec(&request)?))?;
+            let exported: Json = serde_json::from_slice(&output.json)?;
+            let mut exported = exported["data"].clone();
+            exported["request"] = request;
+            exported["check_request"] =
+                json!({"pipeline": document, "scene": scene, "config": wire_config});
+            response(wxsl_ffi::api::check(&serde_json::to_vec(
+                &exported["check_request"],
+            )?))?;
+            let graph = ibl_probe::hdr_plan(*stock, &config);
+            assert_eq!(exported["graph"], serde_json::to_value(&*graph)?);
+            let name = format!("hdr_{}_probe", stock.name());
+            pipelines.insert(name.clone(), exported);
+            graphs.push((name, graph.into()));
+        }
     }
     if let Some(path) = pipeline_path {
         let document: Graph = serde_json::from_slice(&std::fs::read(path)?)?;
@@ -676,7 +747,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } => vec![*draw],
                 _ => Vec::new(),
             };
-            passes.push(json!({"bindings": native.pass_binding_kinds(pass, params).into_iter().map(binding).collect::<Vec<_>>(), "view_slot": pass.view.slot(), "draws": draws}));
+            let parameter_file = effect
+                .map(|e| {
+                    let bytes = e.initial_parameters(&pass.parameters)?;
+                    save(
+                        &root,
+                        &format!("{name}.pass{}.params.bin", passes.len()),
+                        bytes,
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .transpose()?;
+            passes.push(json!({"bindings": native.pass_binding_kinds(pass, params).into_iter().map(binding).collect::<Vec<_>>(), "view_slot": pass.view.slot(), "draws": draws, "params": parameter_file}));
         }
         data["pass_data"] = json!(passes);
     }
@@ -699,6 +781,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &graphs,
             &effects,
             library,
+            hdri.as_ref(),
         )?;
     }
     println!(
@@ -762,6 +845,7 @@ fn render_reference(
     graphs: &[(String, wxsl_frame::graph::RenderGraph)],
     effects: &EffectRegistry,
     library: ShaderLibrary,
+    hdri: Option<&(u32, u32, Vec<[f32; 3]>)>,
 ) -> Result<(), Box<dyn Error>> {
     let gpu = pollster::block_on(GpuContext::headless())?;
     println!("reference adapter: {}", gpu.adapter.get_info().name);
@@ -854,7 +938,22 @@ fn render_reference(
         draw_list.push(draw);
     }
     for (name, graph) in graphs {
-        renderer.set_graph(graph.clone())?;
+        renderer.remove_import("source HDR");
+        let mut graph = graph.clone();
+        if graph.resource_by_label("source HDR").is_some() {
+            let default = (1, 1, vec![[2.0, 3.0, 4.0]]);
+            let (width, height, rgb) = hdri.unwrap_or(&default);
+            let image = wxsl_render::environment::upload_environment_image(
+                &gpu.device,
+                &gpu.queue,
+                *width,
+                *height,
+                rgb,
+            )?;
+            graph.set_environment_scale(image.scale);
+            renderer.import_resource("source HDR", image.view);
+        }
+        renderer.set_graph(graph)?;
         for _ in 0..if name.ends_with("_probe") { 3 } else { 1 } {
             renderer.render(
                 &gpu.device,

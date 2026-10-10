@@ -74,6 +74,11 @@ is signal, don't delete it.
 | [0057](0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md) | Transparency is tiered: sorted by default, peeled on request | Accepted, extends [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
 | [0058](0058-iridescence-is-authored-on-the-surface-and-carried-by-a-model-channel.md) | Iridescence is authored on the surface and carried by a model channel | Accepted, extends 0008 and 0028 |
 | [0059](0059-sheen-is-a-surface-layer-with-model-owned-ambient.md) | Sheen is a surface layer with model-owned ambient | Accepted, extends 0008 and 0028 |
+| [0060](0060-integrate-single-scattering-as-a-pure-sky-node.md) | Integrate single scattering as a pure sky node | Accepted |
+| [0061](0061-texture-mips-and-attachment-subresources-are-frame-data.md) | Texture mips and attachment subresources are frame data | Accepted |
+| [0062](0062-prefilter-environments-through-parameterized-face-passes.md) | Prefilter environments through parameterized face passes | Accepted |
+| [0063](0063-environment-cubes-are-explicit-frame-resources.md) | Environment cubes are explicit frame resources | Accepted |
+| [0064](0064-author-environment-bakes-and-depth-aware-backgrounds.md) | Author environment bakes and depth-aware backgrounds | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

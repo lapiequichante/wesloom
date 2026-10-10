@@ -1,0 +1,37 @@
+import package::wxsl::bindings::environment_lut_sampler;
+@group(3) @binding(0) var radiance: texture_cube<f32>;
+@group(3) @binding(1) var diffuse: texture_cube<f32>;
+@group(3) @binding(2) var specular: texture_cube<f32>;
+struct Output {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> Output {
+    let p = vec2f(f32(i32(index & 1u) * 4 - 1), f32(i32(index >> 1u) * 4 - 1));
+    return Output(vec4f(p, 0.0, 1.0), vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+@fragment
+fn fragment(input: Output) -> @location(0) vec4f {
+    let face = min(u32(input.uv.x * 6.0), 5u);
+    let row = min(u32(input.uv.y * 5.0), 4u);
+    let directions = array<vec3f, 6>(vec3f(1.0,0.0,0.0), vec3f(-1.0,0.0,0.0), vec3f(0.0,1.0,0.0), vec3f(0.0,-1.0,0.0), vec3f(0.0,0.0,1.0), vec3f(0.0,0.0,-1.0));
+    var d = directions[face];
+    if (params.directional_uv != 0u) {
+        let p = fract(input.uv * vec2f(6.0, 5.0)) * 2.0 - 1.0;
+        switch face {
+            case 0u: { d = vec3f(1.0, -p.y, -p.x); }
+            case 1u: { d = vec3f(-1.0, -p.y, p.x); }
+            case 2u: { d = vec3f(p.x, 1.0, p.y); }
+            case 3u: { d = vec3f(p.x, -1.0, -p.y); }
+            case 4u: { d = vec3f(p.x, -p.y, 1.0); }
+            default: { d = vec3f(-p.x, -p.y, -1.0); }
+        }
+        d = normalize(d);
+    }
+    var c = vec3f(0.0);
+    if (row == 0u) { c = textureSampleLevel(radiance, environment_lut_sampler, d, 0.0).rgb; }
+    else if (row == 1u) { c = textureSampleLevel(diffuse, environment_lut_sampler, d, 0.0).rgb; }
+    else { c = textureSampleLevel(specular, environment_lut_sampler, d, f32(row - 2u)).rgb; }
+    return vec4f(c * 0.125, 1.0);
+}

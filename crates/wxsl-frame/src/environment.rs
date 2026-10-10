@@ -359,9 +359,9 @@ impl Environment {
         SceneUniform {
             lights,
             ambient_sky: self.ambient_sky.to_array(),
-            _padding0: 0.0,
+            environment_enabled: 0.0,
             ambient_ground: self.ambient_ground.to_array(),
-            _padding1: 0.0,
+            environment_scale: 1.0,
             light_count: count as u32,
             time: self.time,
             exposure: self.exposure,

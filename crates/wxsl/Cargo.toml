@@ -19,7 +19,7 @@ wxsl-stdlib = { workspace = true, optional = true }
 serde_json = { workspace = true }
 pollster = { workspace = true }
 winit = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["hdr"] }
 wgpu = { workspace = true }
 glam = { workspace = true }
 
@@ -134,4 +134,16 @@ required-features = ["render", "stdlib"]
 
 [[test]]
 name = "peeling"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "sky"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "cube_mips"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "ibl"
 required-features = ["render", "stdlib"]

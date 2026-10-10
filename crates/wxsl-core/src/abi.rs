@@ -519,6 +519,11 @@ pub const BINDING_ENVIRONMENT_LUT: u32 = 6;
 /// banding a `textureLoad` would give a roughness sweep.
 pub const BINDING_ENVIRONMENT_SAMPLER: u32 = 7;
 
+/// Lambert-ready irradiance / PI cube (ADR 0063).
+pub const BINDING_ENVIRONMENT_DIFFUSE: u32 = 9;
+/// GGX radiance, with roughness selecting its mip level (ADR 0063).
+pub const BINDING_ENVIRONMENT_SPECULAR: u32 = 10;
+
 /// [`GROUP_FRAME`] binding of the instance transforms as they were *last
 /// frame* — the array the velocity stage's previous-frame transform reads,
 /// beside [`BINDING_INSTANCES`] and indexed by the same

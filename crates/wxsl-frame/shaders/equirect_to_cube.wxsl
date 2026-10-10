@@ -1,0 +1,16 @@
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+fn texel(p: vec2i) -> vec3f {
+    let size = vec2i(textureDimensions(image));
+    return textureLoad(image, vec2i((p.x % size.x + size.x) % size.x, clamp(p.y, 0, size.y - 1)), 0).rgb;
+}
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    let d = face_direction(input.uv, params.face);
+    let uv = vec2f(atan2(d.z, d.x) / 6.28318530718 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.14159265359);
+    let p = uv * vec2f(textureDimensions(image)) - 0.5;
+    let base = vec2i(floor(p));
+    let f = fract(p);
+    let rgb = mix(mix(texel(base), texel(base + vec2i(1, 0)), f.x), mix(texel(base + vec2i(0, 1)), texel(base + vec2i(1, 1)), f.x), f.y);
+    return vec4f(rgb, 1.0);
+}

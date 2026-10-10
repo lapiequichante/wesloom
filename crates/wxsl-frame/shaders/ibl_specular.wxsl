@@ -1,0 +1,43 @@
+
+@group(3) @binding(0) var image: texture_cube<f32>;
+const SAMPLE_COUNT: u32 = 4096u;
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    let n = face_direction(input.uv, params.face);
+    let r = clamp(params.roughness, 0.0, 1.0);
+    if (r == 0.0) {
+        return vec4f(textureSampleLevel(image, environment_lut_sampler, n, 0.0).rgb, 1.0);
+    }
+    if r >= 0.35 {
+        return vec4f(integrate_cube_lobe(image, n, r, true), 1.0);
+    }
+    let alpha = max(r * r, 0.001);
+    let a2 = alpha * alpha;
+    let basis = tangent_frame(n);
+    let side = f32(textureDimensions(image, 0).x);
+    let texel_angle = 12.56637061436 / (6.0 * side * side);
+    let max_lod = f32(textureNumLevels(image) - 1u);
+    var sum = vec3f(0.0);
+    var weight = 0.0;
+    for (var i = 0u; i < SAMPLE_COUNT; i++) {
+        let xi = hammersley(i, SAMPLE_COUNT);
+        let phi = 6.28318530718 * xi.x;
+        let cosine = sqrt((1.0 - xi.y) / max(1.0 + (a2 - 1.0) * xi.y, 1e-6));
+        let sine = sqrt(max(1.0 - cosine * cosine, 0.0));
+        let h = basis * vec3f(sine * cos(phi), sine * sin(phi), cosine);
+        // Split-sum prefilter assumption V = N = reflection direction.
+        let l = 2.0 * dot(n, h) * h - n;
+        let nl = max(dot(n, l), 0.0);
+        if (nl > 0.0) {
+            let nh = max(dot(n, h), 0.0);
+            let denom = nh * nh * (a2 - 1.0) + 1.0;
+            let distribution = a2 / max(3.14159265359 * denom * denom, 1e-12);
+            let pdf = distribution * nh / max(4.0 * dot(n, h), 1e-6);
+            let sample_angle = 1.0 / max(f32(SAMPLE_COUNT) * pdf, 1e-8);
+            let lod = clamp(0.5 * log2(sample_angle / texel_angle), 0.0, max_lod);
+            sum += textureSampleLevel(image, environment_lut_sampler, l, lod).rgb * nl;
+            weight += nl;
+        }
+    }
+    return vec4f(sum / max(weight, 1e-6), 1.0);
+}

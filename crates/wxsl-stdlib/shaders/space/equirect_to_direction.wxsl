@@ -1,0 +1,12 @@
+// Equirectangular uv to direction
+//
+// Unit direction for a y-up environment map with north at v=0 and seam on
+// -x. Inverse of direction_to_equirect, modulo the seam and pole longitude.
+fn equirect_to_direction(
+    uv: vec2f, // Equirectangular coordinate, u wraps and v clamps. @default 0.5, 0.5
+) -> vec3f {
+    let longitude = (fract(uv.x) - 0.5) * 6.283185307179586;
+    let latitude = (0.5 - clamp(uv.y, 0.0, 1.0)) * 3.141592653589793;
+    let ring = cos(latitude);
+    return vec3f(ring * cos(longitude), sin(latitude), ring * sin(longitude));
+}

@@ -1,0 +1,7 @@
+
+@group(3) @binding(0) var image: texture_cube<f32>;
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    let n = face_direction(input.uv, params.face);
+    return vec4f(integrate_cube_lobe(image, n, 1.0, false), 1.0);
+}

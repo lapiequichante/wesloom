@@ -1,0 +1,89 @@
+// Single-scattering sky
+//
+// Rayleigh and Mie in-scattered linear radiance in a spherical exponential
+// atmosphere, with RGB extinction and planet shadow. Origins are planet-centred,
+// distances kilometres, coefficients inverse kilometres. No sun disc, ground
+// reflection, ozone or multiple scattering; exposure belongs to the caller.
+//
+// Original midpoint integration of the single-scattering transport equation
+// (ADR 0060), not an engine shader port. The sun direction points TOWARD the sun.
+// View optical depth is evaluated at each segment midpoint, not at its end.
+// For a surface graph, pin the node to Fragment to avoid interpolating the
+// integrated radiance from sparse vertices. A screen graph already does so.
+import package::math::ray_sphere::ray_sphere;
+import package::lighting::rayleigh_phase::rayleigh_phase;
+import package::lighting::hg_phase::hg_phase;
+
+@macro const WXSL_SKY_VIEW_STEPS: i32 = 32; // View quadrature budget, clamped to 1..128.
+@macro const WXSL_SKY_SUN_STEPS: i32 = 8; // Solar quadrature budget, clamped to 1..64.
+
+fn sky_single_scattering(
+    origin: vec3f, // Planet-centred observer, in km. @default 0.0, 6360.01, 0.0
+    direction: vec3f, // Viewing ray, normalized internally. @default 0.0, 1.0, 0.0
+    sun_direction: vec3f, // Direction toward the sun. @default 0.0, 1.0, 0.0
+    sun_irradiance: vec3f, // Linear RGB incident irradiance. @default 20.0
+    planet_radius: f32, // Opaque ground radius, km. @default 6360.0
+    atmosphere_radius: f32, // Outer atmosphere radius, km. @default 6460.0
+    rayleigh_height: f32, // Rayleigh density scale height, km. @default 8.0
+    mie_height: f32, // Mie density scale height, km. @default 1.2
+    rayleigh_scattering: vec3f, // RGB scattering/extinction at ground, per km. @default 0.0058, 0.0135, 0.0331
+    mie_scattering: f32, // Achromatic Mie scattering at ground, per km. @default 0.0044
+    mie_absorption: f32, // Additional Mie absorption at ground, per km. @default 0.00044
+    mie_asymmetry: f32, // HG asymmetry, clamped to -0.99..0.99. @default 0.8
+) -> vec3f {
+    let view_norm2 = dot(direction, direction);
+    let sun_norm2 = dot(sun_direction, sun_direction);
+    let ground_radius = max(planet_radius, 0.0);
+    if view_norm2 < 1e-12 || sun_norm2 < 1e-12 ||
+        atmosphere_radius <= ground_radius || length(origin) < ground_radius {
+        return vec3f(0.0);
+    }
+    let view = direction * inverseSqrt(view_norm2);
+    let sun = sun_direction * inverseSqrt(sun_norm2);
+    let shell = ray_sphere(origin, view, atmosphere_radius);
+    let start = max(shell.x, 0.0);
+    var finish = shell.y;
+    let ground = ray_sphere(origin, view, ground_radius);
+    if ground.x >= 0.0 && ground.y > 0.0 {
+        finish = min(finish, ground.x);
+    }
+    if finish <= start {
+        return vec3f(0.0);
+    }
+    let heights = max(vec2f(rayleigh_height, mie_height), vec2f(0.001));
+    let beta_r = max(rayleigh_scattering, vec3f(0.0));
+    let beta_m = max(mie_scattering, 0.0);
+    let extinction_m = beta_m + max(mie_absorption, 0.0);
+    let view_steps = clamp(WXSL_SKY_VIEW_STEPS, 1, 128);
+    let sun_steps = clamp(WXSL_SKY_SUN_STEPS, 1, 64);
+    let step = (finish - start) / f32(view_steps);
+    var view_depth = vec2f(0.0);
+    var sum_r = vec3f(0.0);
+    var sum_m = vec3f(0.0);
+    for (var i = 0; i < view_steps; i += 1) {
+        let point = origin + view * (start + (f32(i) + 0.5) * step);
+        let altitude = max(length(point) - ground_radius, 0.0);
+        let segment_depth = exp(-vec2f(altitude) / heights) * step;
+        let midpoint_depth = view_depth + 0.5 * segment_depth;
+        view_depth += segment_depth;
+        let solar_ground = ray_sphere(point, sun, ground_radius);
+        if solar_ground.x >= 0.0 && solar_ground.y > 0.0 {
+            continue;
+        }
+        let solar_exit = ray_sphere(point, sun, atmosphere_radius).y;
+        let solar_step = max(solar_exit, 0.0) / f32(sun_steps);
+        var solar_depth = vec2f(0.0);
+        for (var j = 0; j < sun_steps; j += 1) {
+            let solar_point = point + sun * ((f32(j) + 0.5) * solar_step);
+            let solar_altitude = max(length(solar_point) - ground_radius, 0.0);
+            solar_depth += exp(-vec2f(solar_altitude) / heights) * solar_step;
+        }
+        let depth = midpoint_depth + solar_depth;
+        let transmittance = exp(-beta_r * depth.x - vec3f(extinction_m * depth.y));
+        sum_r += transmittance * segment_depth.x;
+        sum_m += transmittance * segment_depth.y;
+    }
+    let mu = dot(view, sun);
+    return max(sun_irradiance, vec3f(0.0)) *
+        (beta_r * rayleigh_phase(mu) * sum_r + beta_m * hg_phase(mu, mie_asymmetry) * sum_m);
+}

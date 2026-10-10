@@ -9,9 +9,9 @@
 //! the plan2 P10–P12 proofs: a compute effect baking the BRDF LUT under
 //! policy `once`, a storage buffer filled by compute and drawn as one
 //! value per column, and the deferred pipeline with the subsurface
-//! feature's channel in its G-buffer. The last, `ibl`, is ADR 0039's: no
-//! lamps at all, so what is in the image is `ambient_environment` reading
-//! the split-sum table the `brdf_lut` bake leaves in the frame group. The
+//! feature's channel in its G-buffer. `ibl` and `ibl-mirror` use a local
+//! HDR image (or `--ibl-source sky`), convolved into diffuse and GGX cubes
+//! and combined with the split-sum table, without direct lamps (ADR 0063). The
 //! tenth, `fxaa`, is ADR 0040's: the stock forward chain with an
 //! anti-aliasing pass appended, where *both* screen effects in it — the
 //! anti-aliaser and the display transform every other demo also presents
@@ -75,6 +75,7 @@ OPTIONS:
     --size <WIDTHxHEIGHT>  Render size (default: 1280x720 windowed, 800x600
                            screenshots)
     --start <NAME>         Which demo to show first
+    --ibl-source <PATH|sky> HDR environment for ibl (default: local resources/hdri HDR, otherwise sky)
     --list                 List the demos and exit
     --export-pipeline PATH Export the single-pass pipeline document without a device
     -h, --help             Print this help
@@ -122,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     match options.screenshot {
-        Some(dir) => run_screenshots(options.size, &demos, &dir),
+        Some(dir) => run_screenshots(options.size, &demos, &dir, &options.ibl_source),
         None => run_windowed(options, demos, start.unwrap_or(0)),
     }
 }
@@ -132,6 +133,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 // ---------------------------------------------------------------------------
 
 struct Options {
+    ibl_source: String,
     export_pipeline: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     size: Option<(u32, u32)>,
@@ -143,6 +145,15 @@ struct Options {
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut options = Options {
+            ibl_source: {
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../resources/hdri/lakeside_sunrise_1k.hdr");
+                if path.is_file() {
+                    path.to_string_lossy().into_owned()
+                } else {
+                    "sky".into()
+                }
+            },
             export_pipeline: None,
             screenshot: None,
             size: None,
@@ -154,6 +165,7 @@ impl Options {
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| format!("`{arg}` needs a value"));
             match arg.as_str() {
+                "--ibl-source" => options.ibl_source = value()?,
                 "--export-pipeline" => options.export_pipeline = Some(PathBuf::from(value()?)),
                 "-h" | "--help" => options.help = true,
                 "--list" => options.list = true,
@@ -422,16 +434,69 @@ fn demos() -> Vec<Demo> {
         },
         Demo {
             name: "ibl",
-            blurb: "no lamps at all: a sky, a bounce, and the split-sum BRDF table                     the `brdf_lut` bake leaves in the frame group",
+            blurb: "no lamps: HDR image or single-scattering sky, diffuse convolution and GGX roughness mips with split-sum BRDF",
             pipeline: Pipeline::Stock(StockPipeline::Forward),
             instances: 1,
             key_intensity: 0.0,
             features: &[],
             model: None,
-            // Bright enough to be the whole scene, and blue enough that the
-            // specular response is visibly the *sky* rather than the
-            // surface's own colour.
-            sky: Some((Vec3::new(0.55, 0.72, 1.05), Vec3::new(0.18, 0.14, 0.1))),
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "ibl-mirror",
+            blurb: "mirror sphere: roughness 0, metallic 1, white F0; lit only by the HDR environment",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 1,
+            key_intensity: 0.0,
+            features: &[],
+            model: None,
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "ibl-grid",
+            blurb: "5x5 stationary spheres: roughness 0→1 left to right, metallic 0→1 front to back; matte grey floor, HDR image IBL only",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 25,
+            key_intensity: 0.0,
+            features: &[],
+            model: None,
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "ibl-grid-sky",
+            blurb: "the same 5x5 roughness/metallic grid and matte grey floor, lit only by the Rayleigh/Mie sky",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 25,
+            key_intensity: 0.0,
+            features: &[],
+            model: None,
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "sky",
+            blurb: "equirectangular single-scattering sky: Rayleigh/Mie, optical depth and planet shadow; also available as the IBL source",
+            pipeline: Pipeline::Document(sky_document),
+            instances: 1,
+            key_intensity: 0.0,
+            features: &[],
+            model: None,
+            sky: None,
             params: &[],
             material: None,
             motion: None,
@@ -588,6 +653,55 @@ fn demos() -> Vec<Demo> {
             warmup: 0,
         },
     ]
+}
+
+/// Optical sky preview, replacing the scene image before the display transform.
+/// The rendered scene supplies an extent only, not background compositing or IBL.
+fn sky_document() -> Graph {
+    use wxsl::core::graph::{Node, SocketRef};
+    let registry = doc::registry();
+    let mut document = StockPipeline::Forward.document();
+    document.set_name("single-scattering sky preview");
+    let tonemap = document
+        .nodes()
+        .find(|(_, node)| {
+            node.settings
+                .get(doc::SETTING_EFFECT)
+                .is_some_and(|id| id == "wxsl.tonemap")
+        })
+        .map(|(id, _)| id)
+        .expect("stock tonemap");
+    let input = SocketRef::new(tonemap, "image");
+    let source = document
+        .edge_into(&input)
+        .expect("stock HDR image")
+        .from
+        .clone();
+    document.disconnect(&registry, &input);
+    let image = document.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("sky radiance")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let sky = document.add(
+        Node::new(doc::PASS_SCREEN)
+            .with_label("sky")
+            .with_setting(doc::SETTING_EFFECT, "wxsl.sky"),
+    );
+    document
+        .wire(
+            &registry,
+            (source.node, source.socket.as_str()),
+            (sky, "image"),
+        )
+        .expect("extent input");
+    document
+        .wire(&registry, (image, "color"), (sky, "into"))
+        .expect("linear radiance");
+    document
+        .wire(&registry, (image, "color"), (tonemap, "image"))
+        .expect("display transform last");
+    document
 }
 
 /// The stock forward document with one node appended: a `pass.screen`
@@ -1376,11 +1490,15 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
         .sky
         .unwrap_or((Vec3::new(0.14, 0.19, 0.28), Vec3::new(0.05, 0.04, 0.035)));
     Environment {
-        camera: Camera {
-            eye: Vec3::new(2.4, 1.9, 3.2),
-            target: Vec3::ZERO,
-            aspect,
-            ..Camera::default()
+        camera: if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
+            ibl_grid_camera(aspect)
+        } else {
+            Camera {
+                eye: Vec3::new(2.4, 1.9, 3.2),
+                target: Vec3::ZERO,
+                aspect,
+                ..Camera::default()
+            }
         },
         lights,
         ambient_sky,
@@ -1392,6 +1510,60 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
         // object motion only — and `None` says exactly that.
         previous_camera: None,
     }
+}
+
+/// Front row is dielectric; increasing depth increases metallic. Every row
+/// contains the exact roughness endpoints and three evenly spaced values.
+fn ibl_grid_samples() -> [(Vec3, f32, f32); 25] {
+    std::array::from_fn(|index| {
+        let column = index % 5;
+        let row = index / 5;
+        (
+            Vec3::new((column as f32 - 2.0) * 2.2, 0.85, (2.0 - row as f32) * 2.2),
+            column as f32 / 4.0,
+            row as f32 / 4.0,
+        )
+    })
+}
+
+fn ibl_grid_camera(aspect: f32) -> Camera {
+    Camera {
+        eye: Vec3::new(0.0, 12.0, 14.0),
+        target: Vec3::new(0.0, 0.5, 0.0),
+        aspect,
+        ..Camera::default()
+    }
+}
+
+/// One shader, independent uniform blocks: no 25 compile-time material variants.
+fn ibl_grid_material_graph() -> Graph {
+    let registry = wxsl::stdlib::registry();
+    let mut graph = Graph::new("IBL roughness/metallic grid");
+    let out = graph.add_node("output.surface");
+    graph.set_param(out, "base_color", Value::Vec3([0.65, 0.24, 0.08]));
+    for name in ["roughness", "metallic"] {
+        let parameter = graph.add(
+            Node::new("param.value")
+                .with_setting("name", name)
+                .with_param("value", Value::F32(0.0)),
+        );
+        graph
+            .set_generic(&registry, parameter, "T", ValueType::F32)
+            .expect("scalar parameter");
+        graph
+            .wire(&registry, (parameter, "out"), (out, name))
+            .expect("surface scalar");
+    }
+    graph
+}
+
+fn ibl_grid_floor_graph() -> Graph {
+    let mut graph = Graph::new("matte grey IBL floor");
+    let out = graph.add_node("output.surface");
+    graph.set_param(out, "base_color", Value::Vec3([0.3; 3]));
+    graph.set_param(out, "roughness", Value::F32(1.0));
+    graph.set_param(out, "metallic", Value::F32(0.0));
+    graph
 }
 
 /// A procedural 64x64 warm checker, in linear space, for whatever the
@@ -1756,6 +1928,11 @@ fn cube_draws<'a>(
 /// Everything a frame needs, shared by every demo: one renderer, one
 /// mesh, one material, one set of bindings.
 struct Stage {
+    ibl_source: wxsl::render::environment::EnvironmentImage,
+    ibl_sky: bool,
+    /// The screen graph normalizes UV by its input image's size. The sky
+    /// bake's extent input must match its output, independent of HDR dimensions.
+    sky_extent: wgpu::TextureView,
     gpu: GpuContext,
     renderer: Renderer,
     /// The scene's graph, recompiled when a demo's feature set differs
@@ -1798,6 +1975,12 @@ struct Stage {
     iridescent: DemoMaterial,
     /// Graph-authored sheen tint and roughness (ADR 0059).
     sheen: DemoMaterial,
+    /// White conductor, no procedural texture or direct lamps.
+    mirror: DemoMaterial,
+    grid_material: wxsl::render::Material,
+    grid_bindings: Vec<wxsl::render::MaterialBindings>,
+    grid_floor: DemoMaterial,
+    grid_floor_mesh: Mesh,
     /// The bake demo's own material and the table its bake pass writes
     /// through (ADR 0045): the graph is parsed once, the effect and the
     /// material are compiled from it, the texture is the *material's*
@@ -1847,13 +2030,72 @@ impl DemoMaterial {
 }
 
 impl Stage {
-    fn new(gpu: GpuContext, target: TargetConfig) -> Result<Self, Box<dyn Error>> {
+    fn new(
+        gpu: GpuContext,
+        target: TargetConfig,
+        ibl_source: &str,
+    ) -> Result<Self, Box<dyn Error>> {
         let registry = wxsl::stdlib::registry();
         let scene_graph: Graph =
             serde_json::from_str(include_str!("../assets/pbr_cube.wxsl.json"))?;
         scene_graph.validate(&registry)?;
         let material = wxsl::render::Material::from_graph(&scene_graph, &registry)?;
         let mut renderer = Renderer::new(&gpu.device, wxsl::stdlib_library(), target)?;
+        for effect in [
+            wxsl::render::effect::ibl::EQUIRECT_TO_CUBE,
+            wxsl::render::effect::ibl::DIFFUSE,
+            wxsl::render::effect::ibl::SPECULAR,
+            wxsl::render::effect::ibl::RESAMPLE,
+        ] {
+            renderer.add_effect(effect);
+        }
+        let ibl_sky = ibl_source == "sky";
+        let sky_extent = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("gallery sky extent"),
+                size: wgpu::Extent3d {
+                    width: 1024,
+                    height: 512,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let ibl_source = if ibl_sky {
+            wxsl::render::environment::upload_environment_image(
+                &gpu.device,
+                &gpu.queue,
+                1,
+                1,
+                &[[0.0; 3]],
+            )?
+        } else {
+            let reader = image::ImageReader::open(ibl_source)?.with_guessed_format()?;
+            if reader.format() != Some(image::ImageFormat::Hdr) {
+                return Err("--ibl-source expects a Radiance .hdr image or sky".into());
+            }
+            let image = reader.decode()?.to_rgb32f();
+            let pixels: Vec<[f32; 3]> = image.pixels().map(|pixel| pixel.0).collect();
+            println!(
+                "IBL HDR: {ibl_source} ({}x{}, max radiance {:.3})",
+                image.width(),
+                image.height(),
+                pixels.iter().flatten().copied().fold(0.0_f32, f32::max)
+            );
+            wxsl::render::environment::upload_environment_image(
+                &gpu.device,
+                &gpu.queue,
+                image.width(),
+                image.height(),
+                &pixels,
+            )?
+        };
         // The proof effects (ADRs 0035–0037) ship as descriptors; an
         // application registers them, which is the whole of "add a
         // compute pass" now.
@@ -1861,7 +2103,7 @@ impl Stage {
         renderer.add_effect(LUT_VIEW);
         renderer.add_effect(RAMP_FILL);
         renderer.add_effect(RAMP_VIEW);
-        // And the two effects that are *graphs* (ADR 0040). `tonemap`
+        // And the effects that are *graphs* (ADRs 0040, 0060). `tonemap`
         // registers under the id every stock document already names, so
         // every demo above presents through a generated module from here
         // on — which is the claim, and the fact that none of the images
@@ -1869,6 +2111,7 @@ impl Stage {
         let nodes = wxsl::stdlib::registry();
         renderer.add_effect(wxsl::effects::tonemap(&nodes)?);
         renderer.add_effect(wxsl::effects::fxaa(&nodes)?);
+        renderer.add_effect(wxsl::effects::sky(&nodes)?);
         // The bake effect is generated from the material subgraph (ADR
         // 0045) — registration is where generation happens, so a cone that
         // reads something a bake cannot evaluate is a failure here rather
@@ -2027,7 +2270,47 @@ impl Stage {
             material: sheen_material,
             bindings: sheen_bindings,
         };
+        let mut mirror_graph = Graph::new("mirror sphere");
+        let output = mirror_graph.add_node("output.surface");
+        mirror_graph.set_param(output, "base_color", Value::Vec3([1.0; 3]));
+        mirror_graph.set_param(output, "metallic", Value::F32(1.0));
+        mirror_graph.set_param(output, "roughness", Value::F32(0.0));
+        let mirror = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &mirror_graph,
+            &wxsl::render::material::MaterialConfig::default().with_shadows(false, false),
+        )?;
+        let grid_config =
+            wxsl::render::material::MaterialConfig::default().with_shadows(false, false);
+        let grid_material = wxsl::render::Material::with_config(
+            &ibl_grid_material_graph(),
+            &registry,
+            &grid_config,
+        )?;
+        let mut grid_bindings = Vec::new();
+        for (_, roughness, metallic) in ibl_grid_samples() {
+            let mut bindings = renderer.material_bindings(&gpu.device, &grid_material);
+            bindings.set("roughness", Value::F32(roughness))?;
+            bindings.set("metallic", Value::F32(metallic))?;
+            bindings.upload(&gpu.device, &gpu.queue)?;
+            grid_bindings.push(bindings);
+        }
+        let grid_floor = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &ibl_grid_floor_graph(),
+            &grid_config,
+        )?;
+        let grid_floor_mesh = Mesh::plane(&gpu.device, 14.0);
         Ok(Stage {
+            ibl_source,
+            ibl_sky,
+            sky_extent,
             gpu,
             renderer,
             scene_graph,
@@ -2051,6 +2334,11 @@ impl Stage {
             sdf_aa,
             iridescent,
             sheen,
+            mirror,
+            grid_material,
+            grid_bindings,
+            grid_floor,
+            grid_floor_mesh,
             bake: Some(bake),
         })
     }
@@ -2105,10 +2393,126 @@ impl Stage {
         time: f32,
         step: f32,
     ) -> Result<(), Box<dyn Error>> {
-        apply(demo, &mut self.renderer)?;
+        let uses_ibl = matches!(
+            demo.name,
+            "ibl" | "ibl-mirror" | "ibl-grid" | "ibl-grid-sky"
+        );
+        let use_sky = self.ibl_sky || demo.name == "ibl-grid-sky";
+        let source_changed = uses_ibl
+            && use_sky
+                != self
+                    .renderer
+                    .render_graph()
+                    .resource_by_label("gallery sky")
+                    .is_some();
+        if !uses_ibl || self.renderer.render_graph().environment_maps().is_none() || source_changed
+        {
+            self.renderer.remove_import("gallery HDR");
+            apply(demo, &mut self.renderer)?;
+            if uses_ibl {
+                use wxsl::render::pass::{
+                    Attachment, Extent, PassDesc, Policy, Read, ResourceDesc,
+                };
+                use wxsl::render::types::{Color, TextureFormat};
+                let mut graph = self.renderer.render_graph().clone();
+                let imported = graph.resource(ResourceDesc::imported(
+                    "gallery HDR",
+                    if use_sky {
+                        TextureFormat::Rgba8Unorm
+                    } else {
+                        TextureFormat::Rgba32Float
+                    },
+                ));
+                let source = if use_sky {
+                    let sky = graph.resource(
+                        ResourceDesc::color("gallery sky", TextureFormat::Rgba16Float)
+                            .with_extent(Extent::Fixed {
+                                width: 1024,
+                                height: 512,
+                            })
+                            .persistent(0),
+                    );
+                    graph.pass(
+                        PassDesc::screen("gallery sky", "wxsl.sky")
+                            .with_reads([Read::current(imported)])
+                            .with_color(Attachment::clear(sky, Color::BLACK))
+                            .with_policy(Policy::Once),
+                    );
+                    sky
+                } else {
+                    imported
+                };
+                let maps = wxsl::render::effect::ibl::append_filtered_bake(
+                    &mut graph,
+                    source,
+                    "gallery IBL",
+                    128,
+                    16,
+                    8,
+                );
+                graph.declare_environment_maps(maps.diffuse, maps.specular);
+                graph.set_environment_scale(if use_sky { 1.0 } else { self.ibl_source.scale });
+                let tonemap = graph
+                    .passes()
+                    .iter()
+                    .position(|pass| {
+                        matches!(&pass.kind,
+                    wxsl::render::pass::PassKind::Screen { effect } if effect == "wxsl.tonemap")
+                    })
+                    .ok_or("IBL chain needs tonemap")?;
+                let color = graph.passes()[tonemap].reads[0].resource;
+                let depth = graph
+                    .passes()
+                    .iter()
+                    .filter_map(|pass| pass.depth.as_ref().map(|a| a.resource))
+                    .next_back()
+                    .ok_or("IBL chain needs opaque depth")?;
+                let background = wxsl::render::effect::ibl::append_background(
+                    &mut graph,
+                    color,
+                    depth,
+                    maps.radiance,
+                    "gallery environment background",
+                );
+                graph.pass_mut(tonemap).unwrap().reads[0] = Read::current(background);
+                self.renderer.set_graph(graph)?;
+                self.renderer.import_resource(
+                    "gallery HDR",
+                    if use_sky {
+                        self.sky_extent.clone()
+                    } else {
+                        self.ibl_source.view.clone()
+                    },
+                );
+            }
+        }
         self.ensure_material(demo.features, demo.model)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
+        if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
+            let mut draws = DrawList::new();
+            draws.push(
+                DrawItem::new(&self.grid_floor_mesh, &self.grid_floor.material)
+                    .with_bindings(&self.grid_floor.bindings),
+            );
+            for ((position, _, _), bindings) in ibl_grid_samples().iter().zip(&self.grid_bindings) {
+                draws.push(
+                    DrawItem::new(&self.sphere, &self.grid_material)
+                        .with_transform(Mat4::from_translation(*position))
+                        .with_bindings(bindings),
+                );
+            }
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
         if demo.name == "peel" {
             let tint =
                 InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
@@ -2229,8 +2633,10 @@ impl Stage {
             )?;
             return Ok(());
         }
-        if matches!(demo.name, "iridescence" | "sheen") {
-            let layer = if demo.name == "sheen" {
+        if matches!(demo.name, "iridescence" | "sheen" | "ibl-mirror") {
+            let layer = if demo.name == "ibl-mirror" {
+                &self.mirror
+            } else if demo.name == "sheen" {
                 &self.sheen
             } else {
                 &self.iridescent
@@ -2309,12 +2715,17 @@ fn run_screenshots(
     size: Option<(u32, u32)>,
     demos: &[Demo],
     dir: &Path,
+    ibl_source: &str,
 ) -> Result<(), Box<dyn Error>> {
     let (width, height) = size.unwrap_or((800, 600));
     let gpu = pollster::block_on(GpuContext::headless())?;
     println!("adapter: {}", gpu.adapter.get_info().name);
     let target = OffscreenTarget::new(&gpu.device, width, height);
-    let mut stage = Stage::new(gpu, TargetConfig::new(width, height, target.format()))?;
+    let mut stage = Stage::new(
+        gpu,
+        TargetConfig::new(width, height, target.format()),
+        ibl_source,
+    )?;
 
     std::fs::create_dir_all(dir)?;
     let mut shots: Vec<Shot> = Vec::new();
@@ -2651,7 +3062,11 @@ impl App {
             });
 
         let size = window.inner_size();
-        let mut stage = Stage::new(gpu, TargetConfig::new(size.width, size.height, format))?;
+        let mut stage = Stage::new(
+            gpu,
+            TargetConfig::new(size.width, size.height, format),
+            &self.options.ibl_source,
+        )?;
         apply(&self.demos[self.current], &mut stage.renderer)?;
         let mut state = State {
             window,
@@ -2720,5 +3135,128 @@ fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), 
     match app.error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_has_exact_independent_ranges_and_a_matte_grey_floor() {
+        let samples = ibl_grid_samples();
+        for (index, (position, roughness, metallic)) in samples.iter().enumerate() {
+            assert_eq!(*roughness, (index % 5) as f32 / 4.0);
+            assert_eq!(*metallic, (index / 5) as f32 / 4.0);
+            assert_eq!(position.y, 0.85);
+        }
+        let registry = wxsl::stdlib::registry();
+        let material =
+            wxsl::render::Material::from_graph(&ibl_grid_material_graph(), &registry).unwrap();
+        assert_eq!(material.interface().params.fields().len(), 2);
+        assert!(
+            material.interface().resources.is_empty(),
+            "no texture aliasing in the diagnostic grid"
+        );
+        let floor = ibl_grid_floor_graph();
+        floor.validate(&registry).unwrap();
+        let output = floor
+            .node(floor.outputs(&registry).unwrap().surface)
+            .unwrap();
+        assert_eq!(output.params["roughness"], Value::F32(1.0));
+        assert_eq!(output.params["metallic"], Value::F32(0.0));
+        assert_eq!(output.params["base_color"], Value::Vec3([0.3; 3]));
+        let demo = demos()
+            .into_iter()
+            .find(|demo| demo.name == "ibl-grid")
+            .unwrap();
+        let environment = demo_environment(&demo, 4.0 / 3.0, 0.0);
+        assert!(environment.lights.is_empty());
+        assert_eq!(environment.ambient_sky, Vec3::ZERO);
+        assert_eq!(environment.ambient_ground, Vec3::ZERO);
+    }
+
+    #[test]
+    fn grid_is_stable_and_switching_sources_cannot_reuse_the_wrong_environment() {
+        let gpu = match pollster::block_on(GpuContext::headless()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping GPU test: {error}");
+                return;
+            }
+        };
+        let target = OffscreenTarget::new(&gpu.device, 192, 144);
+        let mut stage =
+            Stage::new(gpu, TargetConfig::new(192, 144, target.format()), "sky").unwrap();
+        let demos = demos();
+        let grid = demos.iter().find(|demo| demo.name == "ibl-grid").unwrap();
+        let sky_grid = demos
+            .iter()
+            .find(|demo| demo.name == "ibl-grid-sky")
+            .unwrap();
+        // A small valid upload checks source-independent sky UVs without
+        // depending on a user's local HDR file or its equirectangular extent.
+        stage.ibl_source = wxsl::render::environment::upload_environment_image(
+            &stage.gpu.device,
+            &stage.gpu.queue,
+            1,
+            1,
+            &[[1.5, 2.0, 3.0]],
+        )
+        .unwrap();
+        stage.ibl_sky = false;
+        let mut images = Vec::new();
+        for demo in [grid, sky_grid, grid] {
+            stage
+                .render(demo, target.view(), 192, 144, 0.0, 0.0)
+                .unwrap();
+            stage.gpu.wait();
+            let first = target.read_rgba8(&stage.gpu.device, &stage.gpu.queue);
+            assert_eq!(
+                stage
+                    .renderer
+                    .render_graph()
+                    .resource_by_label("gallery sky")
+                    .is_some(),
+                demo.name == "ibl-grid-sky"
+            );
+            assert_eq!(stage.renderer.render_graph().environment_scale(), 1.0);
+            for ((_, roughness, metallic), bindings) in
+                ibl_grid_samples().iter().zip(&stage.grid_bindings)
+            {
+                assert_eq!(bindings.get("roughness"), Some(Value::F32(*roughness)));
+                assert_eq!(bindings.get("metallic"), Some(Value::F32(*metallic)));
+            }
+            stage
+                .render(demo, target.view(), 192, 144, 30.0, 0.0)
+                .unwrap();
+            stage.gpu.wait();
+            let second = target.read_rgba8(&stage.gpu.device, &stage.gpu.queue);
+            assert_eq!(
+                first, second,
+                "time must change neither material values nor environment"
+            );
+            assert!(
+                mean_luminance(&first) > 0.02,
+                "{} must illuminate the grid",
+                demo.name
+            );
+            assert_eq!(
+                stage.renderer.pass_run_count("gallery IBL specular 5/7"),
+                Some(1)
+            );
+            if demo.name == "ibl-grid-sky" {
+                assert_eq!(stage.renderer.pass_run_count("gallery sky"), Some(1));
+            }
+            images.push(first);
+        }
+        assert_ne!(
+            images[0], images[1],
+            "changing the source must change the light"
+        );
+        assert_eq!(
+            images[0], images[2],
+            "returning to the HDR must restore the same light"
+        );
     }
 }

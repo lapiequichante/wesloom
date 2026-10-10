@@ -26,7 +26,7 @@
 //! name and default per knob, laid out by `wxsl-core`'s uniform-layout
 //! computer into one block the pass group binds after the inputs and the
 //! outputs. The struct the shader reads is *generated* from the
-//! declaration and prepended to the module when it compiles — the
+//! declaration and appended to the module when it compiles — the
 //! material parameters' one-spelling rule, pass-level — and the variant
 //! key folds the layout, never the values, so a slider is a buffer write.
 //!
@@ -59,6 +59,9 @@ use wxsl_core::node::{NodeDefinition, NodeRegistry, SettingDef, Socket, Value, V
 use wxsl_core::pipeline::{self as doc, SETTING_POLICY};
 use wxsl_core::resources::BufferLayout;
 use wxsl_core::wxsl::WxslIdent;
+
+/// Environment conversion and convolution recipes (ADR 0062).
+pub mod ibl;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -119,6 +122,8 @@ pub enum EffectInputKind {
     GBuffer,
     /// One colour image, one binding.
     Image,
+    /// One standard-depth image, typed as a depth target in documents.
+    DepthImage,
     /// One storage buffer, read as storage — one binding. The reader
     /// declares `var<storage>` in its shader, so it sees the data the
     /// writer's compute left there without a copy through a texture
@@ -301,6 +306,25 @@ pub struct Effect {
 }
 
 impl Effect {
+    /// Pack authored initial values over descriptor defaults, validating names/types.
+    pub fn initial_parameters(
+        &self,
+        values: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<Vec<u8>, String> {
+        let layout = self.param_layout();
+        let defaults = self
+            .parameters
+            .iter()
+            .map(|p| (p.name.to_string(), p.default))
+            .collect();
+        let mut bytes = layout.filled(&defaults);
+        for (name, value) in values {
+            layout
+                .write(&mut bytes, name, *value)
+                .map_err(|e| format!("{name}: {e}"))?;
+        }
+        Ok(bytes)
+    }
     /// The mounted shader with its computed parameter declarations, shared by backends.
     pub fn module_source(
         &self,
@@ -317,7 +341,9 @@ impl Effect {
         if header.is_empty() {
             (path, source)
         } else {
-            (path, Cow::Owned(format!("{header}{source}")))
+            // Imports must precede declarations in WXSL. Module-scope forward
+            // references allow the generated block to follow the owned source.
+            (path, Cow::Owned(format!("{source}\n{header}")))
         }
     }
 
@@ -480,7 +506,12 @@ impl Effect {
             .iter()
             .filter(|input| input.kind == EffectInputKind::Buffer)
             .count();
-        images <= 1 && buffers <= 1
+        images <= 1
+            && buffers <= 1
+            && !self
+                .inputs
+                .iter()
+                .any(|input| input.kind == EffectInputKind::DepthImage)
     }
 
     /// The parameters, laid out for the uniform block the pass group
@@ -1123,6 +1154,11 @@ impl EffectRegistry {
                 PEEL_COMPOSITE,
                 PEEL_UNDER,
                 PEEL_OVER,
+                ibl::EQUIRECT_TO_CUBE,
+                ibl::DIFFUSE,
+                ibl::SPECULAR,
+                ibl::RESAMPLE,
+                ibl::BACKGROUND,
             ],
         }
     }
@@ -1324,6 +1360,7 @@ fn input_socket_type(kind: EffectInputKind) -> ValueType {
     match kind {
         EffectInputKind::GBuffer => ValueType::GBuffer,
         EffectInputKind::Image => ValueType::ColorTarget,
+        EffectInputKind::DepthImage => ValueType::DepthTarget,
         EffectInputKind::Buffer => ValueType::StorageBuffer,
     }
 }
@@ -1381,10 +1418,10 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            12,
+            17,
             "lighting, tonemap, bloom, the separable bloom pair, the TAA \
              resolve, the motion blur, and the five peel passes `pass.peel` \
-             expands into"
+             expands into, plus the four environment bake effects and background"
         );
 
         let lighting = registry
@@ -1419,7 +1456,11 @@ mod tests {
             ..DEFERRED_LIGHTING
         };
         let registry = EffectRegistry::shipped().with(replacement);
-        assert_eq!(registry.len(), 12, "replacing, not appending");
+        assert_eq!(
+            registry.len(),
+            EffectRegistry::shipped().len(),
+            "replacing, not appending"
+        );
         assert_eq!(
             registry
                 .get("deferred_lighting")
