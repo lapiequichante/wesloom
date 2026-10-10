@@ -327,9 +327,10 @@ routing and invariants.
   (BRDF-LUT bake, buffer ramp, subsurface channels), the bake demo (ADR
   0045), the fxaa chain (ADR 0040), and the motion pair — the spinning
   cube under TAA and the swept cube under its blur (ADR 0046), and the
-  peel demo — a torus and a sphere through each other (ADR 0047) — one PNG
-  each plus a contact sheet, or all of them live in one window without
-  the flag. The
+  peel demo — a torus and a sphere through each other (ADR 0047) — and
+  the two one-node expansions, `pass.bloom` and `pass.dof` (ADR 0065) —
+  one PNG each plus a contact sheet, or all of them live in one window
+  without the flag. The
   fastest way to see whether a *pipeline* change (presets, effects, the
   compiler) still renders — and the working example of composing a
   pipeline as a document from an application.

@@ -99,6 +99,13 @@ pub enum PipelineError {
         /// The violated contract.
         reason: String,
     },
+    /// A `pass.dof` node's chain cannot be built from the document.
+    Dof {
+        /// The authored node.
+        node: String,
+        /// The violated contract.
+        reason: String,
+    },
     /// The document did not validate as a graph: an unfed mandatory input,
     /// a cycle, a type mismatch.
     InvalidDocument(wxsl_core::GraphErrors),
@@ -345,6 +352,9 @@ impl core::fmt::Display for PipelineError {
             }
             PipelineError::BloomPyramid { node, reason } => {
                 write!(f, "bloom pyramid `{node}`: {reason}")
+            }
+            PipelineError::Dof { node, reason } => {
+                write!(f, "depth of field `{node}`: {reason}")
             }
             PipelineError::InvalidDocument(errors) => write!(f, "{errors}"),
             PipelineError::UnknownEffect {
@@ -702,6 +712,7 @@ impl<'a> Compiler<'a> {
                 Some(doc::PASS_PEEL) => self.peel_passes(*node)?,
                 Some(doc::PASS_SHADOW) => self.shadow_passes(*node)?,
                 Some(doc::PASS_BLOOM) => self.bloom_pyramid(*node)?,
+                Some(doc::PASS_DOF) => self.depth_of_field(*node)?,
                 Some(doc::PASS_SCREEN) => self.screen_pass(*node)?,
                 Some(doc::PRESENT) => presents.push(*node),
                 Some(other) if other.starts_with(doc::PASS_COMPUTE_PREFIX) => {
@@ -900,6 +911,96 @@ impl<'a> Compiler<'a> {
                     "strength",
                     wxsl_core::node::Value::F32(self.number(node, "strength")?),
                 ),
+        );
+        self.pass_colors.insert(node, target);
+        Ok(())
+    }
+
+    /// A `pass.dof` node: the depth-of-field chain, expanded (ADR 0065,
+    /// the pyramid's pattern at its second consumer).
+    ///
+    /// Three screen passes: one turns opaque depth into signed circles of
+    /// confusion, one blurs the far field by them with the occlusion
+    /// fade, one dilates the near field and composites it over the far
+    /// result. The labels derive from the node's — `<label> circles`,
+    /// `<label> far blur`, `<label> near blur` — and are the contract the
+    /// host tunes through; the lens' numbers are the node's settings,
+    /// seeded into the passes' parameters. The two intermediates are the
+    /// expansion's own full-resolution HDR transients, invisible to the
+    /// document.
+    ///
+    /// The depth is sampled, never attached: a depth texture cannot be
+    /// both in one pass, and the chain has no depth test to make. Whatever
+    /// the document wires — a `resource.depth` or a material pass's
+    /// output, a depth prepass most of all — follows the same rule
+    /// `pass.peel` and the background effect already do.
+    fn depth_of_field(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let invalid = |reason: String| PipelineError::Dof {
+            node: name.clone(),
+            reason,
+        };
+        let source = self.fed(node, "image").expect("validated mandatory image");
+        let scene = *self.colors.get(&source).ok_or_else(|| {
+            invalid(
+                "image must name a resource.color — depth of field blurs linear radiance"
+                    .to_string(),
+            )
+        })?;
+        let depth = self.fed(node, "depth").expect("validated mandatory depth");
+        let depth = self.sampled_depth(depth, &name)?;
+        // The disc cap bounds every gather; nothing sensible comes of a
+        // non-positive one, and the name is better than a silent no-op.
+        let max_coc = self.number(node, "max_coc")?;
+        if max_coc <= 0.0 || !max_coc.is_finite() {
+            return Err(invalid("max_coc must be finite and positive".to_string()));
+        }
+
+        // Full-resolution transients: the discs are per-pixel data, and a
+        // half-res CoC would offset every gather's answer.
+        let hdr = gbuffer_format(abi::GBufferPrecision::HighDynamicRange);
+        let coc = self
+            .graph
+            .resource(ResourceDesc::color(format!("{name} coc"), hdr));
+        let far = self
+            .graph
+            .resource(ResourceDesc::color(format!("{name} far"), hdr));
+
+        let mut circles = PassDesc::screen(format!("{name} circles"), "wxsl.dof_coc")
+            .with_color(self.color_attachment(coc))
+            .with_reads(vec![Read::current(depth)]);
+        for (parameter, setting) in [
+            ("near", "near"),
+            ("far", "far"),
+            ("focus", "focus"),
+            ("f_number", "f_number"),
+            ("focal", "focal"),
+            ("sensor", "sensor"),
+        ] {
+            circles = circles.with_parameter(
+                parameter,
+                wxsl_core::node::Value::F32(self.number(node, setting)?),
+            );
+        }
+        self.graph.pass(circles);
+
+        self.graph.pass(
+            PassDesc::screen(format!("{name} far blur"), "wxsl.dof_far")
+                .with_color(self.color_attachment(far))
+                .with_reads(vec![Read::current(scene), Read::current(coc)])
+                .with_parameter("max_coc", wxsl_core::node::Value::F32(max_coc)),
+        );
+
+        let target = self.write_target(node)?;
+        self.graph.pass(
+            PassDesc::screen(format!("{name} near blur"), "wxsl.dof_near")
+                .with_color(self.color_attachment(target))
+                .with_reads(vec![
+                    Read::current(scene),
+                    Read::current(coc),
+                    Read::current(far),
+                ])
+                .with_parameter("max_coc", wxsl_core::node::Value::F32(max_coc)),
         );
         self.pass_colors.insert(node, target);
         Ok(())
@@ -2280,7 +2381,8 @@ impl<'a> Compiler<'a> {
             Some(doc::PASS_GEOMETRY)
             | Some(doc::PASS_SCREEN)
             | Some(doc::PASS_PEEL)
-            | Some(doc::PASS_BLOOM) => match self.pass_colors.get(&source) {
+            | Some(doc::PASS_BLOOM)
+            | Some(doc::PASS_DOF) => match self.pass_colors.get(&source) {
                 Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
                 _ => Err(PipelineError::ImageFromPass {
                     node: self.label(reader),
@@ -4514,6 +4616,175 @@ mod tests {
             .expect("combine");
         assert!(combine.reads.contains(&Read::current(level0)));
         compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn the_dof_chain_expands_to_circles_a_far_blur_and_a_near_composite() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let mut graph = StockPipeline::Forward.document();
+        let scene = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+            .map(|(id, _)| id)
+            .expect("forward has a colour target");
+        let depth = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_DEPTH)
+            .map(|(id, _)| id)
+            .expect("forward has a depth target");
+        let tonemap = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::PASS_SCREEN)
+            .map(|(id, _)| id)
+            .expect("forward ends in tonemap");
+        let dof = graph.add(Node::new(doc::PASS_DOF).with_label("dof"));
+        let post = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("post dof")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        graph
+            .disconnect(&registry, &SocketRef::new(tonemap, "image"))
+            .expect("tonemap was fed");
+        for (from, to) in [
+            ((scene, "color"), (dof, "image")),
+            ((depth, "depth"), (dof, "depth")),
+            ((post, "color"), (dof, "into")),
+            ((post, "color"), (tonemap, "image")),
+        ] {
+            graph.wire(&registry, from, to).expect("dof wiring");
+        }
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        compiled.schedule().expect("schedules");
+
+        // The shape: circles, far blur, near composite, in that order,
+        // with the lens' numbers seeded from the node's settings.
+        let index_of = |label: &str| {
+            compiled
+                .passes()
+                .iter()
+                .position(|pass| pass.label == label)
+                .unwrap_or_else(|| panic!("no pass labelled `{label}`"))
+        };
+        let circles_at = index_of("dof circles");
+        let far_at = index_of("dof far blur");
+        let near_at = index_of("dof near blur");
+        assert!(circles_at < far_at && far_at < near_at, "chain order");
+        let effect = |pass: &PassDesc| match &pass.kind {
+            PassKind::Screen { effect } => effect.clone(),
+            other => panic!("{other:?} is not a screen pass"),
+        };
+        let circles = &compiled.passes()[circles_at];
+        let near = &compiled.passes()[near_at];
+        assert_eq!(effect(circles), "wxsl.dof_coc");
+        assert_eq!(effect(&compiled.passes()[far_at]), "wxsl.dof_far");
+        assert_eq!(effect(near), "wxsl.dof_near");
+        assert_eq!(
+            circles.parameters.get("focus"),
+            Some(&wxsl_core::node::Value::F32(10.0))
+        );
+        assert_eq!(
+            circles.parameters.get("f_number"),
+            Some(&wxsl_core::node::Value::F32(2.8))
+        );
+        assert_eq!(
+            near.parameters.get("max_coc"),
+            Some(&wxsl_core::node::Value::F32(16.0))
+        );
+        assert_eq!(
+            compiled.passes()[far_at].parameters.get("max_coc"),
+            near.parameters.get("max_coc")
+        );
+
+        // The wiring: the discs measure the frame's own depth, and the
+        // composite writes what the document wired.
+        let forward_depth = compiled
+            .resource_by_label("forward depth")
+            .expect("forward's depth target");
+        assert_eq!(circles.reads, vec![Read::current(forward_depth)]);
+        let scene_id = compiled.resource_by_label("scene").expect("scene");
+        let coc = compiled
+            .resource_by_label("dof coc")
+            .expect("the CoC transient");
+        let far = compiled
+            .resource_by_label("dof far")
+            .expect("the far transient");
+        assert_eq!(
+            compiled.passes()[far_at].reads,
+            vec![Read::current(scene_id), Read::current(coc)]
+        );
+        let post = compiled
+            .resource_by_label("post dof")
+            .expect("the wired target");
+        assert_eq!(
+            near.reads,
+            vec![
+                Read::current(scene_id),
+                Read::current(coc),
+                Read::current(far)
+            ]
+        );
+        assert_eq!(near.color[0].resource, post);
+
+        // The intermediates are the expansion's own HDR transients — the
+        // discs are per-pixel data, so they are full resolution.
+        let hdr = gbuffer_format(abi::GBufferPrecision::HighDynamicRange);
+        for transient in ["dof coc", "dof far"] {
+            let id = compiled
+                .resource_by_label(transient)
+                .unwrap_or_else(|| panic!("no `{transient}`"));
+            let desc = compiled.resource_desc(id).unwrap();
+            let crate::pass::ResourceShape::Texture { extent, format, .. } = desc.shape else {
+                panic!("`{transient}` is not a texture");
+            };
+            assert_eq!(extent, Extent::Viewport { scale: 1.0 });
+            assert_eq!(format, hdr);
+            assert_eq!(desc.persistence, Persistence::Transient);
+        }
+    }
+
+    #[test]
+    fn a_bad_dof_disc_cap_is_a_named_error() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let mut graph = StockPipeline::Forward.document();
+        let scene = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+            .map(|(id, _)| id)
+            .expect("forward has a colour target");
+        let depth = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_DEPTH)
+            .map(|(id, _)| id)
+            .expect("forward has a depth target");
+        let dof = graph.add(Node::new(doc::PASS_DOF).with_label("dof"));
+        for (from, to) in [
+            ((scene, "color"), (dof, "image")),
+            ((depth, "depth"), (dof, "depth")),
+        ] {
+            graph.wire(&registry, from, to).expect("dof wiring");
+        }
+        for value in ["0", "-4"] {
+            let mut invalid = graph.clone();
+            invalid.set_setting(dof, "max_coc", value);
+            let error = compile(&invalid, &registry, &effects, &config())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("depth of field `dof`") && error.contains("max_coc"),
+                "`{value}`: {error}"
+            );
+        }
+        // A setting that is not a number is the shared BadNumber error,
+        // which names the setting rather than the recipe.
+        let mut invalid = graph.clone();
+        invalid.set_setting(dof, "max_coc", "wide");
+        let error = compile(&invalid, &registry, &effects, &config())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("`max_coc`"), "{error}");
     }
 
     #[test]

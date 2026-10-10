@@ -1,0 +1,59 @@
+//! dof_coc — the circle-of-confusion pass of a depth-of-field chain.
+//!
+//! Reads opaque depth and writes the signed blur disc each pixel's depth
+//! asks for, in pixels, in the `.x` of an HDR target: negative is the
+//! near field (in front of the focus plane), positive the far field. The
+//! two gathers downstream separate on that sign, which is why it is kept
+//! and not an absolute radius.
+//!
+//! The depth buffer's value is hyperbolic, not metres, so the pass
+//! linearizes first (`filter.linearize_depth` is the palette node of the
+//! same algebra) and then applies the thin-lens circle of confusion
+//! (`filter.circle_of_confusion`, likewise) — near, far and the lens'
+//! numbers are uniforms the effect descriptor declares (ADR 0042), and
+//! the `pass.dof` expansion seeds them from its node's settings. The
+//! host's camera is the source of truth for near and far: the document
+//! that names a depth also knows the camera it was rendered with.
+//!
+//! Depth 1.0 is the clear — the sky, no surface — and linearizes to the
+//! far plane, whose circle of confusion is the largest there is; the
+//! blur passes clamp radii, so the background blurs as hard as the
+//! effect allows and no harder.
+
+@group(3) @binding(0) var depth_image: texture_depth_2d;
+
+@vertex
+fn dof_coc_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+/// The depth buffer's value back into metres: standard perspective,
+/// NDC [0, 1], near at 0, far at 1, not reversed-Z.
+fn linearize(depth: f32) -> f32 {
+    let n = max(params.near, 0.000001);
+    let f = max(params.far, n + 0.000001);
+    return n * f / max(f - clamp(depth, 0.0, 1.0) * (f - n), 0.000001);
+}
+
+/// The thin-lens disc this depth makes, in pixels. Negative is in front
+/// of the focus plane; see `filter.circle_of_confusion` for the algebra.
+fn circle_of_confusion(depth_m: f32) -> f32 {
+    let focal = max(params.focal, 0.000001);
+    let focus = max(params.focus, focal + 0.000001);
+    let depth = max(depth_m, 0.000001);
+    let aperture = focal / max(params.f_number, 0.0001);
+    let sensor_coc = aperture * focal * (depth - focus) / (depth * (focus - focal));
+    let size = vec2f(textureDimensions(depth_image));
+    return sensor_coc * max(size.x, 1.0) / max(params.sensor, 0.000001);
+}
+
+@fragment
+fn dof_coc_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let depth = textureLoad(depth_image, pixel, 0);
+    return vec4f(circle_of_confusion(linearize(depth)), 0.0, 0.0, 1.0);
+}

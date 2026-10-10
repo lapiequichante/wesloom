@@ -121,6 +121,13 @@ pub const PASS_ENVIRONMENT: &str = "pass.environment";
 /// (ADR 0065); the document says *that* there is a pyramid and how many
 /// levels, not *which* passes.
 pub const PASS_BLOOM: &str = "pass.bloom";
+/// Expand a depth-of-field chain over one image and its opaque depth: a
+/// circle-of-confusion pass, a far-field blur with the occlusion fade,
+/// and the dilated near-field composite. The expansion's passes and
+/// stable labels are the compiler's business (ADR 0065) — `<label>
+/// circles`, `<label> far blur`, `<label> near blur` — and the lens'
+/// numbers are the node's settings, seeded into the passes' parameters.
+pub const PASS_DOF: &str = "pass.dof";
 /// Prefix of the `pass.compute.<effect>` ids — one generated definition
 /// per registered compute effect, whose sockets are the effect's declared
 /// inputs and outputs. A compute effect's wiring cannot sit on a fixed
@@ -157,6 +164,7 @@ pub const NODE_IDS: &[&str] = &[
     PASS_SCREEN,
     PASS_ENVIRONMENT,
     PASS_BLOOM,
+    PASS_DOF,
     PRESENT,
 ];
 
@@ -230,6 +238,54 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "Strength",
                 "How much of the assembled glow is added back.",
                 "0.85",
+            ))
+            .document(),
+        NodeDefinition::builder(PASS_DOF, "depth of field")
+            .doc(
+                "A depth-of-field chain over one image and its opaque depth: the signed \
+                 circle of confusion each pixel's depth asks for, a far-field blur with \
+                 the occlusion fade (a sharp foreground never smears into the background \
+                 it overlaps), and the dilated near-field composite (a foreground's blur \
+                 spills over the background exactly as far as its own discs reach). \
+                 Expands to three passes with stable labels (ADR 0065) — `<label> \
+                 circles`, `<label> far blur`, `<label> near blur` — which is what \
+                 `set_pass_param` tunes through. SI units: metres in, pixels of blur \
+                 out. The depth comes from a `resource.depth` or a material pass — \
+                 a depth prepass is the usual wire.",
+            )
+            .input(
+                Socket::new("image", ValueType::ColorTarget)
+                    .with_doc("The image to defocus, as linear radiance."),
+            )
+            .input(
+                Socket::new("depth", ValueType::DepthTarget)
+                    .with_doc("The opaque depth the discs measure against."),
+            )
+            .input(
+                Socket::new("into", ValueType::ColorTarget)
+                    .optional()
+                    .with_doc("Where to write. Unconnected means the frame's own target."),
+            )
+            .output(
+                Socket::new("color", ValueType::ColorTarget)
+                    .with_doc("What the near pass wrote — the frame's target when `into` is unconnected."),
+            )
+            .setting(text_setting(
+                "focus",
+                "Focus distance",
+                "Where the focus plane sits, in metres. Everything there is sharp.",
+                "10",
+            ))
+            .setting(text_setting("f_number", "F-number", "Aperture as focal ratio.", "2.8"))
+            .setting(text_setting("focal", "Focal length", "Metres.", "0.05"))
+            .setting(text_setting("sensor", "Sensor width", "Metres.", "0.035"))
+            .setting(text_setting("near", "Near plane", "Metres — the depth's linearization.", "0.1"))
+            .setting(text_setting("far", "Far plane", "Metres — the depth's linearization.", "400"))
+            .setting(text_setting(
+                "max_coc",
+                "Max blur",
+                "Largest disc the passes gather, in pixels.",
+                "16",
             ))
             .document(),
         // -- sources -----------------------------------------------------

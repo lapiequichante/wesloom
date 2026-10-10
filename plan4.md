@@ -652,10 +652,36 @@ shipped:
 * The gallery's `fxaa` demo already exercises the mechanism all three
   ride; they compile in the facade's tests the same way.
 
-Not yet: the pyramid (its sizes want the `Extent` vocabulary extended
-before the document can say per-level targets, and the synthesis is
-the ADR plan3 queued twice), and DOF's near/far passes. SSR stays
-queued behind N7/TAA exactly as written.
+**The pyramid and DOF landed on 2026-10-10 (ADR 0065).** `pass.bloom`
+and `pass.dof` are document nodes the compiler expands — the
+sub-document synthesis plan3 queued twice, resolved as scoped name
+allocation in the `pipeline_doc` compiler with no new serialization:
+`pass.environment` (ADR 0064) was the first instance, these are the
+second and third. The bloom pyramid expands to HDR per-level
+transients (half each — `Extent`'s viewport rule already rounds up and
+clamps to a texel, so no vocabulary extension was needed after all), a
+thresholding extract, a 2×2 box down per deeper level, a 3×3-tent fold
+per shallower one (a plain bilinear chain keeps the deepest level's
+texel blocks — the tent is what makes the ascent read as light), and
+the combine. DOF expands to the signed-circles pass, the occlusion-faded
+far blur, and the dilated near composite — the guide's S4.10–12 steps
+shipped as palette nodes (`filter.circle_of_confusion`,
+`filter.linearize_depth`, `filter.disk_sample`) beside the effects, the
+near/far split and dilation answering the "variable blur leaks through
+silhouettes" note. Every generated pass carries a stable
+`<label> …` name — the `set_pass_param` contract — seeded from the
+node's settings. Gallery: `bloom-pyramid`, `bloom-pyramid-tuned`, and
+`dof` (a three-copy row focused on the middle copy, 85 mm at f/1.4).
+SSR stays queued behind N7/TAA exactly as written.
+
+S4's done-when: *bloom's chain is a real pyramid authored as
+documents* — done, one document node. The second half — *one S4 effect
+in a shipped preset* — is still open on purpose: the stock presets end
+in tonemap, and adding a stock pass changes every chain's picture, a
+product decision rather than a code one. The candidates are the
+facade's screen-graph effects (`wxsl.vignette` most gently), which
+would need a parameterized source effect beside the graph (a screen
+graph cannot declare parameters, and a preset knob must be one).
 
 ## Suggested order
 
@@ -702,11 +728,17 @@ tickets: ticket 2 (the fragment-only derivative contract) closed as
 plan5's D1 with its AA'd family and ticket 6 (full spectral
 iridescence) closed behind it — see the S2 note. The single-scattering
 evaluator, HDR/sky environment bake, native imports in both hosts and camera
-background close S3 (ADRs 0060–0064; tickets 8–9). Still open: the pyramid synthesis ADR
-and DOF (11–12), and AgX (provenance chain still under audit). S2-D's
+background close S3 (ADRs 0060–0064; tickets 8–9). Tickets 11–12 closed
+with the pyramid and the DOF chain (ADR 0065; see the S4 note) — ticket
+11's "down/up/combine explicit then the public helper" landed as the
+hand-wireable effects plus the `pass.bloom` node in one shape, and the
+guide's S4.10–12 steps shipped as palette nodes beside DOF's effects.
+Still open from S4: the preset half of the done-when (a deliberate
+product decision, see the S4 note), and AgX (provenance chain still
+under audit). S2-D's
 iridescent and sheen surface channels landed in ADRs 0058–0059;
 Charlie/spectral IBL extensions are separate lighting-model work. The palette
-is at 176 nodes; N9's palette reorganization trigger has fired.
+is at 179 nodes; N9's palette reorganization trigger has fired.
 
 The B-series owns the critical path because the owner's priority is the
 backend; the S-series, being flat and unblocked, is what keeps every

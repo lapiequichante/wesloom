@@ -1,0 +1,21 @@
+// Linearize depth
+//
+// The depth buffer's value back into metres, for a standard perspective
+// projection: NDC depth in [0, 1], near plane mapping to 0, far plane to
+// 1, not reversed-Z, finite far. Hyperbolic depth distributes precision
+// near the camera, so the curve back is steep exactly where the near
+// field's blur is finest — a depth-of-field chain linearizes first and
+// measures its circles of confusion in metres after.
+//
+// For any other projection, rebuild from the camera's real inverse: what
+// this encodes is `n·f / (f − z·(f − n))`, the standard projection's own
+// algebra, and nothing else.
+fn linearize_depth(
+    depth: f32,  // Depth buffer value, 0 at the near plane, 1 at the far. @default 1.0
+    near_m: f32, // Near plane distance, metres. @default 0.1
+    far_m: f32,  // Far plane distance, metres. @default 1000.0
+) -> f32 {
+    let n = max(near_m, 0.000001);
+    let f = max(far_m, n + 0.000001);
+    return n * f / max(f - clamp(depth, 0.0, 1.0) * (f - n), 0.000001);
+}

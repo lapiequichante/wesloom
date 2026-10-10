@@ -93,9 +93,12 @@ modules! {
     "package::filter::blur_gaussian" => "filter/blur_gaussian.wxsl",
     "package::filter::blur_kawase" => "filter/blur_kawase.wxsl",
     "package::filter::chromatic_aberration" => "filter/chromatic_aberration.wxsl",
+    "package::filter::circle_of_confusion" => "filter/circle_of_confusion.wxsl",
     "package::filter::downsample2" => "filter/downsample2.wxsl",
+    "package::filter::disk_sample" => "filter/disk_sample.wxsl",
     "package::filter::fxaa" => "filter/fxaa.wxsl",
     "package::filter::film_grain" => "filter/film_grain.wxsl",
+    "package::filter::linearize_depth" => "filter/linearize_depth.wxsl",
     "package::filter::vignette" => "filter/vignette.wxsl",
 
     "package::generative::brick_mask" => "generative/brick_mask.wxsl",

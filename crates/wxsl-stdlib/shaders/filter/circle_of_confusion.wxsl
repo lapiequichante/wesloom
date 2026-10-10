@@ -1,0 +1,29 @@
+// Circle of confusion
+//
+// The thin-lens blur disc a point at `depth_m` makes on the sensor, in
+// pixels: the aperture, the focal length and the distance to the focus
+// plane decide how far out of focus a depth is, and the sensor width and
+// viewport width convert the physical disc into screen texels. SI units
+// throughout — metres in, pixels out.
+//
+// `depth_m` is a *linearized camera depth* — the distance along the view
+// axis, not the depth buffer's value; `filter.linearize_depth` is the
+// step that produces one. The sign carries the side: negative is in
+// front of the focus plane (the near field), positive behind it (the far
+// field) — a depth-of-field pass separates its two gathers on it, which
+// is why this does not return an absolute radius.
+fn circle_of_confusion(
+    depth_m: f32,           // Linear camera depth of the surface, metres. @default 10.0
+    focus_m: f32,           // Distance to the focus plane, metres. @default 10.0
+    focal_m: f32,           // Focal length, metres. @default 0.05
+    f_number: f32,          // Aperture as focal ratio. @default 2.8
+    sensor_width_m: f32,    // Sensor width, metres. @default 0.035
+    viewport_width_px: f32, // Viewport width, pixels. @default 1920.0
+) -> f32 {
+    let focal = max(focal_m, 0.000001);
+    let focus = max(focus_m, focal + 0.000001);
+    let depth = max(depth_m, 0.000001);
+    let aperture = focal / max(f_number, 0.0001);
+    let sensor_coc = aperture * focal * (depth - focus) / (depth * (focus - focal));
+    return sensor_coc * max(viewport_width_px, 1.0) / max(sensor_width_m, 0.000001);
+}

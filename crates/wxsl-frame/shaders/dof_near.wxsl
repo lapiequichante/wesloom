@@ -1,0 +1,94 @@
+//! dof_near — the near-field half of a depth-of-field chain, and the
+//! composite.
+//!
+//! The foreground poses a problem the far field does not: a blurred
+//! foreground object covers pixels it does not occupy — its blur spills
+//! over the background around its silhouette — so gathering by the
+//! pixel's *own* circle of confusion would leave a sharp seam where the
+//! object ends and its blur begins. This pass therefore dilates first:
+//! the largest near-field disc within the gather neighbourhood, not this
+//! pixel's own, decides the radius. Then it gathers only near samples —
+//! weighted by how near, so the disc's rim fades — and composites that
+//! foreground blur over the far pass's result by how much of the gather
+//! they cover.
+//!
+//! Together with `dof_far.wxsl`'s faded near samples this is the
+//! occlusion control the guide demands: the background never bleeds
+//! through the foreground, and the foreground's blur bleeds over the
+//! background exactly as far as its own circles of confusion reach.
+//!
+//! The dilation costs one gather of the CoC buffer and the composite one
+//! of colour, both the same deterministic disc `dof_far.wxsl` taps; a
+//! variable blur with neither dilation nor coverage leaks through
+//! silhouettes, which is the failure this pass exists to refuse.
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var coc_image: texture_2d<f32>;
+@group(3) @binding(2) var far_image: texture_2d<f32>;
+
+/// How many points the disc gathers — the dilation's neighbourhood and
+/// the composite's kernel are the same disc. The sequence is
+/// deterministic, so the count is the kernel's structure, not a tuning
+/// surface.
+const TAPS: u32 = 24;
+
+/// The `index`-th point of a `count`-point sunflower disc, area-uniform —
+/// the same sequence `filter.disk_sample` packages for graphs; this file
+/// is a standalone effect module and carries its own copy, as bloom's
+/// kernel carries its taps.
+fn disk_sample(index: u32, count: u32) -> vec2f {
+    let radius = sqrt((f32(index) + 0.5) / f32(max(count, 1u)));
+    let angle = f32(index) * 2.39996322973;
+    return vec2f(cos(angle), sin(angle)) * radius;
+}
+
+@vertex
+fn dof_near_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn dof_near_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let background = textureLoad(far_image, pixel, 0).rgb;
+
+    // Dilation: the neighbourhood's widest near-field disc, in front of
+    // focus only — the sign convention is the CoC pass's, so near is the
+    // negation.
+    let own = -textureLoad(coc_image, pixel, 0).x;
+    var near_max = own;
+    for (var tap = 0u; tap < TAPS; tap += 1) {
+        let offset = disk_sample(tap, TAPS) * params.max_coc;
+        let sample = pixel + vec2i(round(offset));
+        near_max = max(near_max, -textureLoad(coc_image, sample, 0).x);
+    }
+    let radius = min(near_max, params.max_coc);
+    if radius < 0.5 {
+        return vec4f(background, 1.0);
+    }
+
+    // The foreground gather: near samples only, weighted by how near, so
+    // a disc's rim contributes softly.
+    var sum = vec3f(0.0);
+    var weight_sum = 0.0;
+    for (var tap = 0u; tap < TAPS; tap += 1) {
+        let offset = disk_sample(tap, TAPS) * radius;
+        let sample = pixel + vec2i(round(offset));
+        let near = -textureLoad(coc_image, sample, 0).x;
+        let weight = smoothstep(0.0, 1.0, near);
+        sum += textureLoad(color_image, sample, 0).rgb * weight;
+        weight_sum += weight;
+    }
+    if weight_sum <= 0.0 {
+        return vec4f(background, 1.0);
+    }
+    // Coverage: half the neighbourhood near is a foreground pixel —
+    // saturation there keeps solid regions solid and leaves the seam a
+    // ramp rather than a line.
+    let coverage = clamp(weight_sum * 2.0 / f32(TAPS), 0.0, 1.0);
+    return vec4f(mix(background, sum / weight_sum, coverage), 1.0);
+}

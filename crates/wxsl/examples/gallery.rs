@@ -407,6 +407,33 @@ fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "dof",
+            blurb: "`pass.dof` over a row of copies, focused on the middle one — signed \
+                    circles of confusion, an occlusion-faded far blur, a dilated near \
+                    composite (ADR 0065)",
+            pipeline: Pipeline::Document(dof_document),
+            instances: 3,
+            key_intensity: 90.0,
+            features: &[],
+            model: None,
+            sky: None,
+            // The camera sits ~4.4 m from the origin; the row spreads
+            // copies at roughly 3.7 and 6.0 m, so f/1.4 on an 85 mm puts
+            // the outer copies visibly out of focus and the middle one
+            // not at all.
+            params: &[
+                ("dof circles", "focus", 4.4),
+                ("dof circles", "focal", 0.085),
+                ("dof circles", "f_number", 1.4),
+                ("dof circles", "near", 0.1),
+                ("dof circles", "far", 100.0),
+                ("dof near blur", "max_coc", 14.0),
+            ],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "brdf-lut",
             blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
                     and a per-frame view displays it — the execution-policy proof, \
@@ -1304,6 +1331,52 @@ fn deferred_pyramid_document() -> Graph {
     wire((scene_color, "color"), (lighting, "into"));
     wire((scene_color, "color"), (pyramid, "image"));
     present_through_tonemap(&mut graph, pyramid, present);
+    graph
+}
+
+/// The shipped forward preset with [`doc::PASS_DOF`] composed onto it —
+/// depth of field, focused on the middle copy of the row (ADR 0065's
+/// second expansion). The prepass's depth is what the circles of
+/// confusion measure; the chain writes an HDR target the tonemap reads.
+/// The lens' numbers ride the node's settings; the expansion's stable
+/// labels — `dof circles`, `dof far blur`, `dof near blur` — are what
+/// `set_pass_param` would tune through.
+fn dof_document() -> Graph {
+    use wxsl::core::graph::SocketRef;
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let mut graph = StockPipeline::Forward.document();
+    let scene = graph
+        .nodes()
+        .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+        .map(|(id, _)| id)
+        .expect("forward has a colour target");
+    let depth = graph
+        .nodes()
+        .find(|(_, node)| node.def == doc::RESOURCE_DEPTH)
+        .map(|(id, _)| id)
+        .expect("forward has a depth target");
+    let tonemap = graph
+        .nodes()
+        .find(|(_, node)| node.def == doc::PASS_SCREEN)
+        .map(|(id, _)| id)
+        .expect("forward ends in tonemap");
+    let dof = graph.add(wxsl::core::graph::Node::new(doc::PASS_DOF).with_label("dof"));
+    let post = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("post dof")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    graph
+        .disconnect(&registry, &SocketRef::new(tonemap, "image"))
+        .expect("tonemap was fed");
+    for (from, to) in [
+        ((scene, "color"), (dof, "image")),
+        ((depth, "depth"), (dof, "depth")),
+        ((post, "color"), (dof, "into")),
+        ((post, "color"), (tonemap, "image")),
+    ] {
+        graph.wire(&registry, from, to).expect("dof wiring");
+    }
     graph
 }
 

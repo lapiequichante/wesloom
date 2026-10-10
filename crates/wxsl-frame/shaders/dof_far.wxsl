@@ -1,0 +1,75 @@
+//! dof_far — the far-field half of a depth-of-field chain.
+//!
+//! Blurs everything behind the focus plane by its own circle of
+//! confusion: a deterministic sunflower-disc gather (`filter.disk_sample`
+//! is the palette node of the same sequence), radius clamped to
+//! `max_coc` so the far plane blurs as hard as the effect allows and no
+//! harder.
+//!
+//! The gather weights its samples, and the weighting is the occlusion
+//! control: a sample whose own circle of confusion is *near* — negative,
+//! an object in front of the focus plane sitting between this pixel and
+//! the camera — is faded out, because a sharp foreground must not smear
+//! into the blurred background it overlaps. A variable blur with no such
+//! test leaks through silhouettes; this is the far half of the answer.
+//! The near half is `dof_near.wxsl`, which composites the foreground
+//! over this pass's result.
+//!
+//! Pixels at or in front of focus pass through untouched — their gather
+//! belongs to the near pass, and blurring a focused pixel by a zero
+//! radius is a no-op spent thirty times.
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var coc_image: texture_2d<f32>;
+
+/// How many points the disc gathers. The sequence is deterministic, so
+/// the count is the kernel's structure, not a tuning surface — the same
+/// rule bloom's taps follow.
+const TAPS: u32 = 24;
+
+/// The `index`-th point of a `count`-point sunflower disc, area-uniform —
+/// the same sequence `filter.disk_sample` packages for graphs; this file
+/// is a standalone effect module and carries its own copy, as bloom's
+/// kernel carries its taps.
+fn disk_sample(index: u32, count: u32) -> vec2f {
+    let radius = sqrt((f32(index) + 0.5) / f32(max(count, 1u)));
+    let angle = f32(index) * 2.39996322973;
+    return vec2f(cos(angle), sin(angle)) * radius;
+}
+
+@vertex
+fn dof_far_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn dof_far_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let own = textureLoad(coc_image, pixel, 0).x;
+    let base = textureLoad(color_image, pixel, 0).rgb;
+    // Behind focus only: the near field is the other pass's problem.
+    let radius = min(max(own, 0.0), params.max_coc);
+    if radius < 0.5 {
+        return vec4f(base, 1.0);
+    }
+    var sum = vec3f(0.0);
+    var weight_sum = 0.0;
+    for (var tap = 0u; tap < TAPS; tap += 1) {
+        let offset = disk_sample(tap, TAPS) * radius;
+        let sample = pixel + vec2i(round(offset));
+        let sample_coc = textureLoad(coc_image, sample, 0).x;
+        // A near sample is a foreground object in front of this
+        // background: fade it out rather than smearing it in.
+        let weight = smoothstep(-2.0, 0.0, sample_coc);
+        sum += textureLoad(color_image, sample, 0).rgb * weight;
+        weight_sum += weight;
+    }
+    if weight_sum <= 0.0 {
+        return vec4f(base, 1.0);
+    }
+    return vec4f(sum / weight_sum, 1.0);
+}

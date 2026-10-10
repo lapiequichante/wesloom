@@ -1,0 +1,22 @@
+// Disk sample
+//
+// The `index`-th point of a deterministic `count`-point disc: the golden
+// angle turns the index sequence into a sunflower spiral, and the square
+// root of the index's centre-radius makes the points *area*-uniform —
+// no clump at the centre, no ring at the rim. Same indices, same points,
+// every backend and every run: a gather that must match a fixture or a
+// second implementation samples this and not a clock-seeded random.
+//
+// `index` is a contract: it must be below `count`. The points spread a
+// unit disc — scale by the gather radius, add the pixel's centre. The
+// distribution decides *where* a kernel taps, never what occlusion does
+// to the taps; a blur that must not bleed through silhouettes weights
+// its samples, it does not rearrange them.
+fn disk_sample(
+    index: u32, // Which point, 0..count. @default 0
+    count: u32, // How many the kernel gathers. @default 16
+) -> vec2f {
+    let radius = sqrt((f32(index) + 0.5) / f32(max(count, 1u)));
+    let angle = f32(index) * 2.39996322973;
+    return vec2f(cos(angle), sin(angle)) * radius;
+}

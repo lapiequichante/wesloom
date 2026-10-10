@@ -77,6 +77,12 @@ pub const BLOOM_DOWN_MODULE: &str = "package::wxsl::bloom_down";
 pub const BLOOM_UP_MODULE: &str = "package::wxsl::bloom_up";
 /// Module path the bloom pyramid's composite is mounted under.
 pub const BLOOM_COMBINE_MODULE: &str = "package::wxsl::bloom_combine";
+/// Module path the depth-of-field circle-of-confusion pass is mounted under.
+pub const DOF_COC_MODULE: &str = "package::wxsl::dof_coc";
+/// Module path the depth-of-field far-field blur is mounted under.
+pub const DOF_FAR_MODULE: &str = "package::wxsl::dof_far";
+/// Module path the depth-of-field near-field composite is mounted under.
+pub const DOF_NEAR_MODULE: &str = "package::wxsl::dof_near";
 /// Module path the shipped tonemap effect's shader is mounted under.
 pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 /// Module path the BRDF-LUT bake's shader is mounted under.
@@ -878,6 +884,146 @@ pub const BLOOM_COMBINE: Effect = Effect {
     },
 };
 
+// The depth-of-field chain's three passes — a `pass.dof` document node
+// expands to them (ADR 0065's pattern, the pyramid's second consumer):
+// one pass writes the signed circle of confusion from opaque depth, one
+// blurs the far field by it with the occlusion fade, one dilates the
+// near field and composites it over. Each is wireable by hand, as the
+// bloom pyramid's are.
+
+/// The depth-of-field circle-of-confusion pass: opaque depth in, the
+/// signed blur disc out, in pixels — negative in front of the focus
+/// plane, positive behind. Linearization and the thin-lens algebra live
+/// here, driven by the descriptor's parameters; the palette nodes
+/// `filter.linearize_depth` and `filter.circle_of_confusion` package the
+/// same steps for graphs.
+pub const DOF_COC: Effect = Effect {
+    id: "wxsl.dof_coc",
+    label: "dof circles of confusion",
+    description: "Write the signed blur disc each pixel's depth asks for, in pixels.",
+    kind: EffectKind::Screen {
+        vertex_entry: "dof_coc_vs",
+        fragment_entry: "dof_coc_fs",
+    },
+    inputs: &[EffectInput {
+        name: "depth",
+        kind: EffectInputKind::DepthImage,
+        description: "The opaque depth the discs measure against.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "near",
+            default: Value::F32(0.1),
+        },
+        EffectParameter {
+            name: "far",
+            default: Value::F32(400.0),
+        },
+        EffectParameter {
+            name: "focus",
+            default: Value::F32(10.0),
+        },
+        EffectParameter {
+            name: "f_number",
+            default: Value::F32(2.8),
+        },
+        EffectParameter {
+            name: "focal",
+            default: Value::F32(0.05),
+        },
+        EffectParameter {
+            name: "sensor",
+            default: Value::F32(0.035),
+        },
+    ],
+    shader: EffectShader::Source {
+        path: DOF_COC_MODULE,
+        wxsl: include_str!("../shaders/dof_coc.wxsl"),
+    },
+};
+
+/// The depth-of-field far-field blur: behind the focus plane, blur by the
+/// pixel's own circle of confusion, fading out samples that belong to the
+/// near field — the occlusion half that keeps a sharp foreground from
+/// smearing into the background it overlaps.
+pub const DOF_FAR: Effect = Effect {
+    id: "wxsl.dof_far",
+    label: "dof far field",
+    description: "Blur the far field by its circle of confusion, occlusion-faded.",
+    kind: EffectKind::Screen {
+        vertex_entry: "dof_far_vs",
+        fragment_entry: "dof_far_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The image, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "coc",
+            kind: EffectInputKind::Image,
+            description: "The signed circles of confusion, from the CoC pass.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "max_coc",
+        default: Value::F32(16.0),
+    }],
+    shader: EffectShader::Source {
+        path: DOF_FAR_MODULE,
+        wxsl: include_str!("../shaders/dof_far.wxsl"),
+    },
+};
+
+/// The depth-of-field near-field composite: dilate the near field's discs
+/// over the gather neighbourhood, gather the foreground, and composite it
+/// over the far pass's result — the half that lets a foreground's blur
+/// spill over the background without a seam.
+pub const DOF_NEAR: Effect = Effect {
+    id: "wxsl.dof_near",
+    label: "dof near field",
+    description: "Composite the dilated, blurred foreground over the far result.",
+    kind: EffectKind::Screen {
+        vertex_entry: "dof_near_vs",
+        fragment_entry: "dof_near_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The image, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "coc",
+            kind: EffectInputKind::Image,
+            description: "The signed circles of confusion, from the CoC pass.",
+            history: 0,
+        },
+        EffectInput {
+            name: "far",
+            kind: EffectInputKind::Image,
+            description: "The far pass's blurred background.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "max_coc",
+        default: Value::F32(16.0),
+    }],
+    shader: EffectShader::Source {
+        path: DOF_NEAR_MODULE,
+        wxsl: include_str!("../shaders/dof_near.wxsl"),
+    },
+};
+
 /// Tonemap: the display transform, as the last pass of every stock
 /// chain — the filmic curve and the sRGB encode that used to sit inside
 /// the generated `shade_surface` under a macro
@@ -1304,6 +1450,9 @@ impl EffectRegistry {
                 BLOOM_DOWN,
                 BLOOM_UP,
                 BLOOM_COMBINE,
+                DOF_COC,
+                DOF_FAR,
+                DOF_NEAR,
                 TAA,
                 MOTION_BLUR,
                 PEEL_BOUNDS,
@@ -1575,11 +1724,12 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            21,
+            24,
             "lighting, tonemap, bloom, the separable bloom pair, the bloom \
-             pyramid's four passes, the TAA resolve, the motion blur, and \
-             the five peel passes `pass.peel` expands into, plus the four \
-             environment bake effects and background"
+             pyramid's four passes, the depth-of-field chain's three, the \
+             TAA resolve, the motion blur, and the five peel passes \
+             `pass.peel` expands into, plus the four environment bake \
+             effects and background"
         );
 
         let lighting = registry
