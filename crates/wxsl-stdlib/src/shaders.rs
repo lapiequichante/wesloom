@@ -150,6 +150,7 @@ modules! {
     "package::lighting::models::preshaded" => "lighting/models/preshaded.wxsl",
     "package::lighting::models::iridescent" => "lighting/models/iridescent.wxsl",
     "package::lighting::models::sheen" => "lighting/models/sheen.wxsl",
+    "package::lighting::models::subsurface" => "lighting/models/subsurface.wxsl",
 
     "package::math::ray_sphere" => "math/ray_sphere.wxsl",
     "package::math::safe_normalize" => "math/safe_normalize.wxsl",

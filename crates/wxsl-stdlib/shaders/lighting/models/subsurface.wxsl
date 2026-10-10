@@ -1,0 +1,64 @@
+// The subsurface lighting model
+//
+// The first feature-aware model (plan3 N6): the PBR model plus the two
+// terms a non-zero `subsurface` channel buys — a wrapped diffuse
+// terminator and a transmission lobe for light bleeding through a thin
+// body. The channel is owned by the `wxsl_subsurface` material feature
+// (ADR 0037), which packs `(strength, radius)` per fragment; this entry is
+// the consumer that justifies it. It reaches the model as the same
+// `extra: vec4f` every model receives — the dispatch hands a
+// feature-owned channel over exactly as it hands a model's own.
+//
+// With the feature off — a material that does not pin the macro, or a
+// plan that does not carry the channel — the extra reads as zeros and the
+// model is pixel-identical to the PBR model, which is what makes it safe
+// to ship in the wide set.
+//
+// The radius half of the channel stays a convention for a later model:
+// this one derives its wrap width and transmission from the strength
+// alone.
+//
+// Not a node: it is one of the entries of `wxsl_core::lighting::
+// DEFAULT_MODELS`, shaded through the lighting-model registry rather than
+// placed on a canvas.
+
+import package::lighting::models::pbr::lighting_pbr;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_subsurface(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f, // the `subsurface` feature's channel: x = strength
+) -> vec3f {
+    let base = lighting_pbr(surface, ctx, light, extra);
+    let strength = saturate(extra.x);
+    // Nothing packed: exactly the PBR model.
+    if strength <= 0.0 {
+        return base;
+    }
+
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+    // Light does not bleed through metal; both terms are dielectric-only.
+    let dielectric = 1.0 - saturate(surface.metallic);
+    let albedo = surface.base_color;
+
+    // Wrapped diffuse: lift the terminator toward the light by the
+    // strength. Added as a *difference* against Lambert's own clamp, so
+    // the term is the wrap and not a second diffuse stacked on the PBR
+    // one.
+    let wrap = 0.4 * strength * dielectric;
+    let n_dot_l = dot(normal, light.direction);
+    let wrapped = saturate((n_dot_l + wrap) / (1.0 + wrap));
+    let fill = max(wrapped - saturate(n_dot_l), 0.0);
+
+    // Transmission: light bleeding through, strongest where the eye
+    // looks toward the light past the body.
+    let through = strength
+        * dielectric
+        * pow(saturate(dot(view_direction, -light.direction)), 2.0);
+
+    return base + albedo * light.radiance * (fill + 0.3 * through);
+}

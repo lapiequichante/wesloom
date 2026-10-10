@@ -348,6 +348,13 @@ pub struct LightingModel {
     pub ambient: Option<&'static str>,
     /// The G-buffer target this model asks for, if any.
     pub extra: Option<ModelExtra>,
+    /// The material feature whose channel this model consumes, if any —
+    /// the name of a [`FEATURES`] entry that owns the channel (ADR 0037).
+    /// When the surrounding plan carries it, the dispatch hands it to the
+    /// model as `extra` under the feature's own macro; when it does not,
+    /// the arm reads zeros and the model shades without it. A model may
+    /// not own its feature's channel as `extra` — the feature owns it.
+    pub feature: Option<&'static str>,
     /// What the model is, for editors and diagnostics.
     pub doc: &'static str,
 }
@@ -708,6 +715,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_lambert",
         ambient: None,
         extra: None,
+        feature: None,
         doc: "Diffuse-only Lambertian: radiance * albedo * max(dot(n, l), 0).",
     },
     LightingModel {
@@ -717,6 +725,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_phong",
         ambient: None,
         extra: None,
+        feature: None,
         doc: "Lambertian diffuse plus a Phong specular lobe from the roughness.",
     },
     LightingModel {
@@ -726,6 +735,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_pbr",
         ambient: None,
         extra: None,
+        feature: None,
         doc: "The Cook-Torrance GGX model the library has always shaded with.",
     },
     LightingModel {
@@ -742,6 +752,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
             },
             pack: "pack_clearcoat",
         }),
+        feature: None,
         doc: "PBR plus a second clear-coat lobe, asking for a G-buffer target.",
     },
     LightingModel {
@@ -751,6 +762,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_cloth",
         ambient: None,
         extra: None,
+        feature: None,
         doc: "Fabric: a roughness-wrapped diffuse with a Charlie sheen layer.",
     },
     LightingModel {
@@ -760,6 +772,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_preshaded",
         ambient: None,
         extra: None,
+        feature: None,
         doc: "Passthrough: returns the radiance a forward-shaded material \
               computed in the geometry pass, stored where the G-buffer keeps \
               emissive radiance.",
@@ -778,6 +791,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
             },
             pack: "pack_iridescence",
         }),
+        feature: None,
         doc: "GGX with graph-authored spectral thin-film direct lighting.",
     },
     LightingModel {
@@ -794,7 +808,20 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
             },
             pack: "pack_sheen",
         }),
+        feature: None,
         doc: "PBR under a graph-authored Charlie sheen layer with fitted analytic ambient.",
+    },
+    LightingModel {
+        id: 8,
+        name: "wxsl.subsurface",
+        module: "package::lighting::models::subsurface",
+        function: "lighting_subsurface",
+        ambient: None,
+        extra: None,
+        feature: Some("subsurface"),
+        doc: "PBR plus wrapped diffuse and transmission, fed by the subsurface \
+              feature's channel — the model a plan without the feature shades \
+              as plain PBR.",
     },
 ];
 
@@ -810,7 +837,9 @@ pub fn default_single_set() -> LightingSet {
     LightingSet::single(model)
 }
 
-/// The historical portable demo set (30 bytes per sample).
+/// The historical portable demo set (30 bytes per sample), plus the
+/// subsurface model — it asks for no channel of its own, so the layout is
+/// unchanged until a plan carries the feature.
 ///
 /// Iridescent and sheen models are selected explicitly from [`DEFAULT_MODELS`]:
 /// their single-model layouts fill the 32-byte floor (ADRs 0058/0059).
@@ -981,9 +1010,9 @@ const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lightin
 /// same module is a redefinition. The lighting pass, compiled as a root of
 /// its own, has nobody else to declare them and needs them. The `features`
 /// are the pipeline's second source of channels (plan2 P12): their targets
-/// join the `ModelExtras` struct so a feature-aware model can read them,
-/// though no dispatch arm is generated for a feature — models opt into
-/// features from their own modules.
+/// join the `ModelExtras` struct, and a model whose registry entry names
+/// the feature reads it as `extra` under the feature's own macro —
+/// zeros, and never a named field, when the plan does not carry it.
 pub fn shade_surface_with(
     dispatch: &Dispatch,
     features: &[ChannelRequest],
@@ -1031,6 +1060,31 @@ fn shade_surface_from(
     }
 
     out.push_str(AMBIENT_DEFAULT_TEMPLATE);
+    // A model consuming a feature's channel reads it under the feature's
+    // own macro, so the feature module joins the imports wherever the
+    // guarded read does — the same rule the pack generates by. And a root
+    // module has nobody else to declare its knobs: the feature's macro
+    // joins the declared set at the default, exactly as codegen puts a
+    // plan's feature macros into a material module's set (plan2 P12).
+    // Conditional translation and the zero default keep both arms honest.
+    let consumed: Vec<(&'static MaterialFeature, ChannelRequest)> = match &dispatch {
+        Dispatch::Direct(model) => consumed_feature(model, features).into_iter().collect(),
+        Dispatch::Switch(set) => set
+            .models()
+            .iter()
+            .filter_map(|model| consumed_feature(model, features))
+            .collect(),
+    };
+    for (feature, _) in &consumed {
+        imports.push((feature.module, feature.pack));
+        if declare_macros {
+            let _ = writeln!(out, "@macro const {}: bool = false;", feature.macro_name);
+        }
+    }
+    let direct_consumed = match (&dispatch, consumed.first()) {
+        (Dispatch::Direct(_), Some((feature, request))) => Some((*feature, *request)),
+        _ => None,
+    };
     let (shading_params, dispatch_args, extra_decl, ambient_call) = match dispatch {
         Dispatch::Direct(model) => {
             imports.push((model.module, model.function));
@@ -1048,6 +1102,7 @@ fn shade_surface_from(
                     imports.push((model.module, extra.pack));
                     format!("{}(surface)", extra.pack)
                 }
+                None if direct_consumed.is_some() => String::new(),
                 None => "vec4f(0.0)".to_string(),
             };
             out.push_str(&crate::template::fill(
@@ -1059,15 +1114,30 @@ fn shade_surface_from(
                     ("FUNCTION", model.function),
                 ],
             ));
+            let passes_extra = model.extra.is_some() || direct_consumed.is_some();
             (
-                if stored_extra && model.extra.is_some() {
+                if stored_extra && passes_extra {
                     ", model_extra: vec4f".to_string()
                 } else {
                     String::new()
                 },
                 ", model_extra".to_string(),
-                if stored_extra && model.extra.is_some() {
+                if stored_extra && passes_extra {
                     String::new()
+                } else if let Some((feature, request)) = direct_consumed {
+                    // The feature's channel, read under its own macro: the
+                    // pack when the material turns the feature on, zeros
+                    // when it does not. Conditional translation keeps the
+                    // taken arm, so a plan without the channel never names
+                    // it (the same shape the pack generates by).
+                    format!(
+                        "    var model_extra = vec4f(0.0);\n    @if({macro})\n    model_extra = {};\n",
+                        widen(
+                            format!("{}()", feature.pack),
+                            request.target.precision.channels(),
+                        ),
+                        macro = feature.macro_name,
+                    )
                 } else {
                     format!("    let model_extra = {extra};\n")
                 },
@@ -1121,6 +1191,25 @@ fn shade_surface_from(
                     },
                     None => "vec4f(0.0)".to_string(),
                 };
+                // A feature-consuming model reads the channel under the
+                // feature's own macro, widened from the local the arm
+                // starts from — so a plan without the channel never names
+                // it, and a material that has not pinned it reads zeros.
+                if let Some((feature, request)) = consumed_feature(model, features) {
+                    imports.push((feature.module, feature.pack));
+                    let _ = writeln!(
+                        arms,
+                        "        case {id}u: {{\n            var model_extra = vec4f(0.0);\n            @if({macro})\n            model_extra = {value};\n            return {function}(surface, ctx, light, model_extra);\n        }}",
+                        id = model.id,
+                        function = model.function,
+                        macro = feature.macro_name,
+                        value = widen(
+                            format!("extras.{}", request.target.field),
+                            request.target.precision.channels(),
+                        ),
+                    );
+                    continue;
+                }
                 let _ = writeln!(
                     arms,
                     "        case {id}u: {{ return {function}(surface, ctx, light, {extra}); }}",
@@ -1510,6 +1599,10 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         })
         .collect::<Vec<_>>()
         .join(", ");
+    // A stored dispatch with a feature-consuming model reads the channel
+    // under the feature's own macro; the guarded local is what the call
+    // passes. Statements before the return, indented for the template.
+    let mut extra_preamble = String::new();
     let shade_args = if switch_shape {
         let extras = requests
             .iter()
@@ -1530,6 +1623,16 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
             _ => format!("unpacked.{}", extra.target.field),
         };
         format!("unpacked.surface, ctx, {value}")
+    } else if let Some((feature, request)) = consumed_feature(&set.models()[0], features) {
+        extra_preamble = format!(
+            "var model_extra = vec4f(0.0);\n    @if({macro})\n    model_extra = {value};\n    ",
+            macro = feature.macro_name,
+            value = widen(
+                format!("unpacked.{}", request.target.field),
+                request.target.precision.channels(),
+            ),
+        );
+        "unpacked.surface, ctx, model_extra".to_string()
     } else {
         "unpacked.surface, ctx".to_string()
     };
@@ -1538,7 +1641,11 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
     let final_return = if passthrough {
         "return vec4f(unpacked.surface.emissive, 1.0);".to_string()
     } else {
-        let shaded = format!("return {}({});", abi::SHADE_SURFACE_FN, shade_args);
+        let shaded = format!(
+            "{extra_preamble}return {}({});",
+            abi::SHADE_SURFACE_FN,
+            shade_args
+        );
         match preshaded {
             // Route first, shade the rest: a preshaded pixel's radiance is
             // already in the G-buffer, and the loop would add it once per
@@ -1585,6 +1692,33 @@ fn dedup(imports: Vec<(&'static str, &'static str)>) -> Vec<(&'static str, &'sta
     seen
 }
 
+/// The feature channel `model` consumes, when the plan carries it: the
+/// shipped feature and the request, for the guarded read the dispatch
+/// generates. A model naming an unknown feature, or a plan without the
+/// channel, is `None` — the model shades without it, which is the
+/// feature-off contract.
+fn consumed_feature(
+    model: &LightingModel,
+    features: &[ChannelRequest],
+) -> Option<(&'static MaterialFeature, ChannelRequest)> {
+    let name = model.feature?;
+    let request = features.iter().copied().find(|request| {
+        matches!(request.source, ChannelSource::Feature { .. }) && request.source.name() == name
+    })?;
+    let feature = FEATURES.iter().find(|feature| feature.name == name)?;
+    Some((feature, request))
+}
+
+/// Widen a channel expression back to the `vec4f` the model contract
+/// hands over.
+fn widen(expr: String, channels: usize) -> String {
+    match channels {
+        1 => format!("vec4f({expr}, 0.0, 0.0, 0.0)"),
+        2 => format!("vec4f({expr}, 0.0, 0.0)"),
+        _ => expr,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1597,6 +1731,7 @@ mod tests {
             function: "test_model",
             ambient: None,
             extra: None,
+            feature: None,
             doc: "",
         }
     }
@@ -2089,5 +2224,62 @@ mod tests {
         // feature-aware model reads it.
         assert!(source.contains("subsurface: vec2f,"));
         assert!(source.contains("ModelExtras(unpacked.clearcoat, unpacked.subsurface)"));
+    }
+
+    fn shipped_model(name: &str) -> LightingModel {
+        *DEFAULT_MODELS
+            .iter()
+            .find(|model| model.name == name)
+            .unwrap_or_else(|| panic!("{name} ships"))
+    }
+
+    /// The feature-consuming model reads the channel under the feature's
+    /// own macro, widened, with the feature module imported and its macro
+    /// declared for the root module (plan3 N6).
+    #[test]
+    fn a_feature_consuming_model_reads_its_channel_under_the_feature_macro() {
+        let set = LightingSet::new([shipped_model("wxsl.pbr"), shipped_model("wxsl.subsurface")])
+            .unwrap();
+        let features = feature_requests(&["subsurface"]).unwrap();
+        let source = lighting_pass_source(&set, &features);
+        assert!(
+            source.contains(
+                "case 8u: {\n            var model_extra = vec4f(0.0);\n            \
+                 @if(wxsl_subsurface)\n            model_extra = vec4f(extras.subsurface, 0.0, 0.0);\n            \
+                 return lighting_subsurface(surface, ctx, light, model_extra);\n        }"
+            ),
+            "{source}"
+        );
+        assert!(source.contains("import package::wxsl::features::subsurface::pack_subsurface;"));
+        assert!(source.contains("@macro const wxsl_subsurface: bool = false;"));
+    }
+
+    /// Without the feature in the plan, the same arm never names the
+    /// channel: it shades zeros, which is the feature-off contract.
+    #[test]
+    fn without_the_feature_a_consuming_model_reads_zeros() {
+        let set = LightingSet::new([shipped_model("wxsl.pbr"), shipped_model("wxsl.subsurface")])
+            .unwrap();
+        let source = lighting_pass_source(&set, &[]);
+        assert!(!source.contains("extras.subsurface"), "{source}");
+        assert!(source.contains("return lighting_subsurface(surface, ctx, light, vec4f(0.0));"));
+        assert!(!source.contains("@macro const wxsl_subsurface"));
+    }
+
+    /// A set of one feature-consuming model has no dispatch; the stored
+    /// read is the guarded local the pass passes straight through.
+    #[test]
+    fn a_direct_feature_model_reads_the_stored_channel() {
+        let set = LightingSet::single(shipped_model("wxsl.subsurface"));
+        let features = feature_requests(&["subsurface"]).unwrap();
+        let source = lighting_pass_source(&set, &features);
+        assert!(
+            source.contains(
+                "var model_extra = vec4f(0.0);\n    @if(wxsl_subsurface)\n    \
+                 model_extra = vec4f(unpacked.subsurface, 0.0, 0.0);\n    "
+            ),
+            "{source}"
+        );
+        assert!(source.contains("return shade_surface(unpacked.surface, ctx, model_extra);"));
     }
 }

@@ -536,6 +536,22 @@ lighting model is the feature's consumer:
 * ADR: the model lands as a registry entry; the schema change (if taken)
   amends ADR 0037.
 
+Landed as the registry entry — no `Surface` schema change was needed: the
+macro constant carries the strength, and the radius half of the channel
+stays a convention for a later model. The mechanism is one `feature` field
+on `LightingModel`: when the plan carries the named feature, the dispatch
+hands the channel over as `extra` under the feature's own macro — the
+switch arm reads it from the extras struct, the direct dispatch from the
+stored texel, forward from the pack — and when the plan does not carry it,
+the arm never names the field and shades zeros. PBR plus a wrapped
+diffuse terminator and a transmission lobe, both dielectric-only; with
+the channel zero the model is pixel-identical to `wxsl.pbr`, which the
+device test asserts exactly. The done-when holds: the gallery demo pins
+the macro at strength 0.8 and its image differs from stock (the feature
+channel pushes a dispatching set past the portable 32-byte budget, so
+the demo runs the single-model set — the shape the budget allows).
+`cargo test -p wxsl --test lighting_models` is the acceptance test.
+
 ### N7 — Lighting at scale
 
 The cluster of debts plan.md carried under M5's "still owed" and its
@@ -766,8 +782,10 @@ none of it knows or cares which backend is underneath.
    the resolve that turns a history ring into antialiasing.
 8. ~~**M8**~~ — *landed (ADR 0047)*: dual depth peeling of the
    `transparent` tag, eight geometry passes at most, the count a macro.
-9. **N6** (the subsurface model), **N7** (lighting scale) — feature work
-   on top of a finished frame.
+9. ~~**N6**~~ — *landed (no ADR owed; the model is a registry entry, the
+   dispatch plumbing is codegen)*: the subsurface model over the feature
+   channel. **N7** (lighting scale) — feature work on top of a finished
+   frame.
 10. **M11**, **M10**, **N9** — the editor's code editor, the precision
     host work, and the editor catching up; all unblocked at any time, so
     they slot in wherever a pause wants filling. N9's panels are the

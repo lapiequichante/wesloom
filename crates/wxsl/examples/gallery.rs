@@ -237,6 +237,9 @@ struct Demo {
     /// leaving restores the stock one — the recompile that costs is the
     /// demo switch itself.
     model: Option<&'static str>,
+    /// The macro pins the demo's material resolves with — the subsurface
+    /// demo's strength, pinned like any graph macro (plan3 N6).
+    macros: &'static [(&'static str, wxsl::core::macros::MacroValue)],
     /// A sky to light the demo by instead of the lights: sky above,
     /// bounce below, with the lamps switched off. What is left is
     /// `ambient_environment` alone, and therefore the environment-BRDF
@@ -283,6 +286,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -297,6 +301,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -311,6 +316,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -327,6 +333,7 @@ fn demos() -> Vec<Demo> {
             // A highlight bright enough to cross bloom's threshold.
             key_intensity: 160.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -341,6 +348,7 @@ fn demos() -> Vec<Demo> {
             instances: 6,
             key_intensity: 160.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -357,6 +365,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 160.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             // The threshold below the lit surface's radiance, so the whole
@@ -379,6 +388,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 160.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -395,6 +405,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 160.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[
@@ -415,6 +426,7 @@ fn demos() -> Vec<Demo> {
             instances: 3,
             key_intensity: 90.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             // The camera sits ~4.4 m from the origin; the row spreads
@@ -442,6 +454,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -458,6 +471,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -467,14 +481,22 @@ fn demos() -> Vec<Demo> {
         },
         Demo {
             name: "subsurface",
-            blurb: "the deferred pipeline with the subsurface feature: the G-buffer \
-                    plan grows a channel the material packs (pixels unchanged until \
-                    a model reads it — the seam is the point)",
+            blurb: "the subsurface model over the subsurface feature: the G-buffer \
+                    channel feeds wrapped diffuse and transmission through the \
+                    dispatch under the feature's macro — with the feature off, \
+                    the same arm shades plain PBR",
             pipeline: Pipeline::Stock(StockPipeline::Deferred),
             instances: 1,
             key_intensity: 42.0,
             features: &["subsurface"],
-            model: None,
+            macros: &[
+                ("wxsl_subsurface", wxsl::core::macros::MacroValue::Flag(true)),
+                (
+                    "wxsl_subsurface_strength",
+                    wxsl::core::macros::MacroValue::Float(0.8),
+                ),
+            ],
+            model: Some("wxsl.subsurface"),
             sky: None,
             params: &[],
             material: None,
@@ -488,6 +510,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: Some("wxsl.cloth"),
             sky: None,
             params: &[],
@@ -502,6 +525,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 0.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: Some((Vec3::ZERO, Vec3::ZERO)),
             params: &[],
@@ -516,6 +540,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 0.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: Some((Vec3::ZERO, Vec3::ZERO)),
             params: &[],
@@ -530,6 +555,7 @@ fn demos() -> Vec<Demo> {
             instances: 25,
             key_intensity: 0.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: Some((Vec3::ZERO, Vec3::ZERO)),
             params: &[],
@@ -544,6 +570,7 @@ fn demos() -> Vec<Demo> {
             instances: 25,
             key_intensity: 0.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: Some((Vec3::ZERO, Vec3::ZERO)),
             params: &[],
@@ -558,6 +585,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 0.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -574,6 +602,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -588,6 +617,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -604,6 +634,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 22.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -626,6 +657,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 22.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -644,6 +676,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -662,6 +695,7 @@ fn demos() -> Vec<Demo> {
             // is the composite, so light the sheet up.
             key_intensity: 90.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -678,6 +712,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: None,
             sky: None,
             params: &[],
@@ -693,6 +728,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: Some("wxsl.iridescent"),
             sky: None,
             params: &[],
@@ -708,6 +744,7 @@ fn demos() -> Vec<Demo> {
             instances: 1,
             key_intensity: 42.0,
             features: &[],
+            macros: &[],
             model: Some("wxsl.sheen"),
             sky: None,
             params: &[],
@@ -1445,10 +1482,12 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     if renderer.features() != demo.features {
         renderer.set_features(demo.features)?;
     }
-    // Layer models fill the portable budget alone; other demos share the
-    // historical wide set. Compare sets before rebuilding the renderer.
+    // Layer models fill the portable budget alone; the subsurface model
+    // joins them because the feature's channel pushes a dispatching set
+    // past the portable byte budget. Other demos share the historical
+    // wide set. Compare sets before rebuilding the renderer.
     let set = match demo.model {
-        Some(name @ ("wxsl.iridescent" | "wxsl.sheen")) => {
+        Some(name @ ("wxsl.iridescent" | "wxsl.sheen" | "wxsl.subsurface")) => {
             wxsl::core::lighting::LightingSet::single(
                 *wxsl::core::lighting::DEFAULT_MODELS
                     .iter()
@@ -2104,6 +2143,7 @@ struct Stage {
     /// The feature set the current material was resolved against.
     material_features: &'static [&'static str],
     material_model: Option<&'static str>,
+    material_macros: &'static [(&'static str, wxsl::core::macros::MacroValue)],
     /// The peel demo's surfaces: the cube graph with the alpha uniform,
     /// on a torus and a sphere that occupy the same space.
     peel_material: wxsl::render::Material,
@@ -2477,6 +2517,7 @@ impl Stage {
             sampler,
             material_features: &[],
             material_model: None,
+            material_macros: &[],
             peel_material,
             peel_bindings,
             plate_material,
@@ -2506,9 +2547,17 @@ impl Stage {
         &mut self,
         features: &'static [&'static str],
         model: Option<&'static str>,
+        macros: &'static [(&'static str, wxsl::core::macros::MacroValue)],
     ) -> Result<(), Box<dyn Error>> {
-        if self.material_features == features && self.material_model == model {
+        if self.material_features == features
+            && self.material_model == model
+            && self.material_macros == macros
+        {
             return Ok(());
+        }
+        let mut pins = wxsl::core::macros::MacroSet::new();
+        for (name, value) in macros {
+            pins.set(*name, *value);
         }
         let registry = wxsl::stdlib::registry();
         let material = wxsl::render::Material::with_lighting(
@@ -2517,6 +2566,7 @@ impl Stage {
             &wxsl::render::material::MaterialConfig {
                 features: wxsl::core::lighting::feature_requests(features)?,
                 model: model.map(str::to_string),
+                macros: pins,
                 ..wxsl::render::material::MaterialConfig::default()
             },
             self.renderer.lighting(),
@@ -2532,6 +2582,7 @@ impl Stage {
         self.material = material;
         self.material_features = features;
         self.material_model = model;
+        self.material_macros = macros;
         Ok(())
     }
 
@@ -2641,7 +2692,7 @@ impl Stage {
                 );
             }
         }
-        self.ensure_material(demo.features, demo.model)?;
+        self.ensure_material(demo.features, demo.model, demo.macros)?;
         self.tints = instance_tints(demo.instances);
         let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
         if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {

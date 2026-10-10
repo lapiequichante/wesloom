@@ -272,6 +272,86 @@ fn iridescence_transports_fragment_thickness_and_has_an_exact_zero_film_fallback
     assert_eq!(without, scene.render(&[&pbr, &pbr, &pbr]));
 }
 
+/// The subsurface model (plan3 N6): the first consumer of the
+/// feature-owned channel. The term only reaches the shader when the
+/// material pins the feature's macro — and the model without it shades
+/// exactly the PBR model, which is what makes it safe in the wide set.
+#[test]
+fn subsurface_lights_only_when_the_feature_is_on_and_agrees_across_paths() {
+    use wxsl::core::lighting::feature_requests;
+    use wxsl::core::macros::MacroValue;
+
+    let Some(scene_gpu) = gpu() else { return };
+    // The subsurface feature's channel pushes a dispatching set past the
+    // portable byte budget, so the single-model set is the shape the
+    // budget allows — and the direct dispatch reads the stored channel.
+    let subsurface = *DEFAULT_MODELS
+        .iter()
+        .find(|m| m.name == "wxsl.subsurface")
+        .expect("the model ships");
+    let mut scene = Scene::with_lighting(scene_gpu, LightingSet::single(subsurface));
+    scene
+        .renderer
+        .set_features(&["subsurface"])
+        .expect("the channel joins the plan");
+    let features = feature_requests(&["subsurface"]).expect("subsurface ships");
+
+    // The model with the feature pinned on: wrapped diffuse and
+    // transmission reach the light loop through the stored channel.
+    let mut on_config = named("wxsl.subsurface");
+    on_config.features = features.clone();
+    on_config
+        .macros
+        .set("wxsl_subsurface", MacroValue::Flag(true));
+    on_config
+        .macros
+        .set("wxsl_subsurface_strength", MacroValue::Float(0.8));
+    let on = scene.material(&glossy(&scene.registry, "subsurface on", 0.4), &on_config);
+    let deferred = scene.render(&[&on, &on, &on]);
+    scene.renderer.set_pipeline(StockPipeline::Forward);
+    let forward = scene.render(&[&on, &on, &on]);
+    for x in SLOTS {
+        let point = Vec3::new(x, 0.0, 0.0);
+        assert!(
+            probe::patch_gap(&deferred, &forward, camera(), point, 6) <= 4.0,
+            "the subsurface channel disagrees across paths at {x}"
+        );
+    }
+    scene.renderer.set_pipeline(StockPipeline::Deferred);
+
+    // The same model under the same plan, macro unpinned: zeros, and
+    // the picture is the PBR model's to the pixel.
+    let mut off_config = named("wxsl.subsurface");
+    off_config.features = features.clone();
+    let off = scene.material(&glossy(&scene.registry, "subsurface off", 0.4), &off_config);
+    let off_image = scene.render(&[&off, &off, &off]);
+    assert!(
+        probe::patch_gap(&deferred, &off_image, camera(), Vec3::ZERO, 6) > 8.0,
+        "pinning the feature changed nothing"
+    );
+    let mut pbr_config = named("wxsl.pbr");
+    pbr_config.features = features;
+    // A PBR material under the same plan — a second scene, because the
+    // set is single-model and a material naming another model is a named
+    // error. Same camera, same lights, same quad: the images must be
+    // identical.
+    let Some(pbr_gpu) = gpu() else { return };
+    let mut pbr_scene = Scene::with_lighting(
+        pbr_gpu,
+        LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]),
+    );
+    pbr_scene
+        .renderer
+        .set_features(&["subsurface"])
+        .expect("the channel joins the plan");
+    let pbr = pbr_scene.material(&glossy(&pbr_scene.registry, "plain pbr", 0.4), &pbr_config);
+    assert_eq!(
+        off_image,
+        pbr_scene.render(&[&pbr, &pbr, &pbr]),
+        "the model without the feature is not pixel-identical to PBR"
+    );
+}
+
 fn glossy_film_base(registry: &NodeRegistry) -> Graph {
     let mut graph = glossy(registry, "base without film", 0.4);
     let output = graph
