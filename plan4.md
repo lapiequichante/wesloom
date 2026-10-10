@@ -97,7 +97,7 @@ Carried from plan3 (all still open there):
 | Item | What it is | Interplay with this plan |
 |---|---|---|
 | N6 | the subsurface lighting model | stdlib-adjacent; S2's BRDF batch feeds it the separation approximations it will want |
-| N7 | lighting at scale (atlas, cascades, point shadows, light lists) | reshapes frame-group bindings — the C ABI must carry *computed* layouts, never struct mirrors, so N7 can land after B2 without an ABI break (design rule under B2) |
+| N7 | lighting at scale — atlas landed (ADR 0066); cascades, point shadows, light lists remain | reshapes frame-group bindings — the C ABI must carry *computed* layouts, never struct mirrors, so N7 can land after B2 without an ABI break (design rule under B2) |
 | M10 | relative-to-eye, host half | must land in both backends eventually; it is pure host math, so it lives in the shared half once the split exists |
 | M11 | the code editor | wgpu-only, unaffected |
 | N9 | the editor catches up | wgpu-only, unaffected; its palette work absorbs the stdlib's growth |

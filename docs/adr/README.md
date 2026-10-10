@@ -80,6 +80,7 @@ is signal, don't delete it.
 | [0063](0063-environment-cubes-are-explicit-frame-resources.md) | Environment cubes are explicit frame resources | Accepted |
 | [0064](0064-author-environment-bakes-and-depth-aware-backgrounds.md) | Author environment bakes and depth-aware backgrounds | Accepted |
 | [0065](0065-a-pyramid-is-one-document-node-with-scoped-names.md) | A multi-pass recipe is one document node with scoped names | Accepted |
+| [0066](0066-pack-shadow-slots-into-a-depth-atlas.md) | Pack shadow slots into a depth atlas | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

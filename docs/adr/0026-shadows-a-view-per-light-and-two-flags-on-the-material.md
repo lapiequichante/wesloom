@@ -143,6 +143,10 @@ has to reach codegen, which a tag cannot.
 
 ## Consequences
 
+ADR [0066](0066-pack-shadow-slots-into-a-depth-atlas.md) replaces the array
+with a depth atlas and normalized rectangles. Views and material flags remain
+unchanged; cascades, point shadows and larger light lists remain N7 follow-ups.
+
 Both stock pipelines are four passes longer. `forward_graph` is now four
 shadow passes, a depth prepass and a shading pass; the tests that assert
 their shape say so in terms of `abi::MAX_LIGHTS` rather than a literal.

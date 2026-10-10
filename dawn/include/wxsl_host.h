@@ -31,19 +31,20 @@ typedef struct WxslLightUniform {
     float color[3];
     float intensity;
     float shadow_view_proj[4][4];
-    int32_t shadow_slice;
     float shadow_normal_bias;
+    uint8_t _host_padding6[4];
     float _padding[2];
+    float shadow_rect[4];
 } WxslLightUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslLightUniform) == 112, "LightUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslLightUniform) == 128, "LightUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, position_or_direction) == 0, "LightUniform.position_or_direction offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, kind) == 12, "LightUniform.kind offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, color) == 16, "LightUniform.color offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, intensity) == 28, "LightUniform.intensity offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_view_proj) == 32, "LightUniform.shadow_view_proj offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_slice) == 96, "LightUniform.shadow_slice offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_normal_bias) == 100, "LightUniform.shadow_normal_bias offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_normal_bias) == 96, "LightUniform.shadow_normal_bias offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding) == 104, "LightUniform._padding offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_rect) == 112, "LightUniform.shadow_rect offset");
 typedef struct WxslSceneUniform {
     WxslLightUniform lights[4];
     float ambient_sky[3];
@@ -55,16 +56,16 @@ typedef struct WxslSceneUniform {
     float exposure;
     float previous_time;
 } WxslSceneUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 496, "SceneUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 560, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 448, "SceneUniform.ambient_sky offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_enabled) == 460, "SceneUniform.environment_enabled offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_ground) == 464, "SceneUniform.ambient_ground offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_scale) == 476, "SceneUniform.environment_scale offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 480, "SceneUniform.light_count offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 484, "SceneUniform.time offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 488, "SceneUniform.exposure offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 492, "SceneUniform.previous_time offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 512, "SceneUniform.ambient_sky offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_enabled) == 524, "SceneUniform.environment_enabled offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_ground) == 528, "SceneUniform.ambient_ground offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_scale) == 540, "SceneUniform.environment_scale offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 544, "SceneUniform.light_count offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 548, "SceneUniform.time offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 552, "SceneUniform.exposure offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 556, "SceneUniform.previous_time offset");
 typedef struct WxslInstanceTransform {
     float model[4][4];
     float normal_matrix[4][4];
@@ -159,6 +160,6 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "2540132131132367969"
+#define WXSL_HOST_LAYOUT_ID "3740913208811954050"
 #undef WXSL_LAYOUT_ASSERT
 #endif

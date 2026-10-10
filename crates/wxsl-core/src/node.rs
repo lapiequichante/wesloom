@@ -82,7 +82,7 @@ pub enum ValueType {
     /// *thing a pass consumes* rather than a value a shader computes, and
     /// like the shader resources it is kept out of [`Self::ALL`].
     DrawQueue,
-    /// A pipeline's shadow-map array, declared by `source.lights` and filled
+    /// A pipeline's shadow atlas, declared by `source.lights` and filled
     /// by shadow passes. A render-graph resource, see [`Self::DrawQueue`].
     ShadowMaps,
     /// A pipeline's G-buffer: every target the enabled lighting set

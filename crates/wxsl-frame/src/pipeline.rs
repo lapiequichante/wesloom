@@ -29,8 +29,8 @@ use wxsl_core::scene::TagExpr;
 
 use crate::graph::RenderGraph;
 use crate::pass::{
-    Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
+    Attachment, DepthAttachment, DrawSource, Extent, PassDesc, PassState, PassView, Read,
+    ResourceDesc, ResourceId, ViewportRect, DEPTH_FORMAT,
 };
 use crate::types::{Color, CompareFunction, TextureFormat, TextureUsages};
 
@@ -313,7 +313,7 @@ fn everything() -> DrawSource {
     DrawSource::Scene(TagExpr::Always)
 }
 
-/// Declare the shadow maps and the passes that fill them.
+/// Declare the shadow atlas and the passes that fill it.
 ///
 /// One pass per light slot, always — not one per light that happens to be
 /// casting this frame. A pass list is built once and scheduled against
@@ -322,6 +322,12 @@ fn everything() -> DrawSource {
 /// So the shape is fixed at [`abi::MAX_LIGHTS`] and a slot whose light
 /// casts nothing is cleared and left alone, which reads as "fully lit" —
 /// the same answer, for the cost of a clear.
+///
+/// The atlas is one depth texture with a tile per slot
+/// ([`abi::shadow_tile`]). The first pass clears the whole of it and
+/// every pass draws into its own tile's rect — the scheduler keeps
+/// same-resource writers in declared order, so "clear it, then draw into
+/// it" is exactly what runs.
 ///
 /// Front faces are *not* culled, which is the usual trick for hiding
 /// self-shadowing acne. It only works on closed geometry, and this
@@ -332,10 +338,9 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
     let maps = graph.declare_shadow_maps(
         ResourceDesc::color("shadow maps", DEPTH_FORMAT)
             .with_extent(Extent::Fixed {
-                width: abi::SHADOW_MAP_RESOLUTION,
-                height: abi::SHADOW_MAP_RESOLUTION,
+                width: abi::SHADOW_ATLAS_SIZE,
+                height: abi::SHADOW_ATLAS_SIZE,
             })
-            .with_dimension(Dimension::D2Array, abi::MAX_LIGHTS as u32)
             // Both because nothing in the pass list reads this resource:
             // it is sampled through the frame group, so the graph infers
             // neither the usage nor the lifetime and is told both.
@@ -343,6 +348,15 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
             .persistent(0),
     );
     for light in 0..abi::MAX_LIGHTS as u32 {
+        let tile = abi::shadow_tile(light);
+        // The first pass clears the whole atlas on its way in; the rest
+        // load, because their tile is the only part they may touch and
+        // the earlier passes' tiles must survive them.
+        let depth = if light == 0 {
+            DepthAttachment::clear(maps, 1.0)
+        } else {
+            DepthAttachment::load(maps)
+        };
         graph.pass(
             PassDesc::geometry(
                 format!("shadow {light}"),
@@ -350,7 +364,8 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
                 MaterialStage::SHADOW,
             )
             .with_view(PassView::Light { index: light })
-            .with_depth(DepthAttachment::clear(maps, 1.0).with_layer(light))
+            .with_depth(depth)
+            .with_viewport(ViewportRect::square(tile.x, tile.y, tile.edge))
             .with_state(PassState::OPAQUE.with_cull_mode(None)),
         );
     }
@@ -576,14 +591,13 @@ mod tests {
     }
 
     #[test]
-    fn every_pipeline_fills_one_shadow_slice_per_light_from_that_lights_view() {
+    fn every_pipeline_fills_one_shadow_tile_per_light_from_that_lights_view() {
         for pipeline in StockPipeline::ALL {
             let graph = pipeline.graph(&default_config(config()));
             let maps = graph.shadow_maps().expect("shadow maps are declared");
             let desc = graph.resource_desc(maps).expect("declared resource");
             let crate::pass::ResourceShape::Texture {
-                dimension,
-                layers,
+                extent,
                 format,
                 usage,
                 ..
@@ -591,8 +605,14 @@ mod tests {
             else {
                 panic!("shadow maps are a texture");
             };
-            assert_eq!(dimension, Dimension::D2Array);
-            assert_eq!(layers, abi::MAX_LIGHTS as u32);
+            // One atlas, one tile per light slot.
+            let crate::pass::Extent::Fixed { width, height } = extent else {
+                panic!("the atlas has a fixed extent");
+            };
+            assert_eq!(
+                (width, height),
+                (abi::SHADOW_ATLAS_SIZE, abi::SHADOW_ATLAS_SIZE)
+            );
             assert_eq!(format, DEPTH_FORMAT);
             // Nothing in the pass list reads it — the frame group does —
             // so both of these have to be spelled out.
@@ -618,7 +638,15 @@ mod tests {
                 assert_eq!(pass.view, PassView::Light { index });
                 let depth = pass.depth.expect("a shadow pass writes depth");
                 assert_eq!(depth.resource, maps);
-                assert_eq!(depth.layer, index, "one slice per light");
+                assert_eq!(depth.layer, 0, "the atlas is one 2D texture");
+                // Each pass rasterizes only its own tile; the first pass
+                // clears the whole atlas on its way in, the rest load.
+                let tile = abi::shadow_tile(index);
+                assert_eq!(
+                    pass.viewport,
+                    Some(crate::pass::ViewportRect::square(tile.x, tile.y, tile.edge))
+                );
+                assert_eq!(depth.clear.is_some(), index == 0, "clear vs load");
                 assert!(pass.color.is_empty());
                 // Two-sided: the milestone's cases are an alpha-tested
                 // leaf and a displaced surface, neither of them closed.

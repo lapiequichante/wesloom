@@ -552,14 +552,51 @@ pub const ENVIRONMENT_LUT_SIZE: u32 = 64;
 /// `WXSL_MAX_LIGHTS` in `shaders/wxsl/bindings.wxsl`.
 pub const MAX_LIGHTS: usize = 4;
 
-/// Edge length in texels of one shadow map slice.
+/// Edge length in texels of the shadow atlas.
 ///
-/// One fixed resolution for every light, and no packing code. An atlas
-/// with a rect per light is the eventual answer — a shadow needs more
-/// texels the closer the light is to what it falls on — and it is a
-/// contained change when it comes: one [`BINDING_SHADOW_MAPS`] of a
-/// different shape, plus a rect in the light.
-pub const SHADOW_MAP_RESOLUTION: u32 = 1024;
+/// One depth texture for every light's shadow map ([`BINDING_SHADOW_MAPS`]),
+/// one tile per light slot, packed by [`shadow_tile`]. The tile a slot gets
+/// scales down with the index — the first lights in the list are the ones
+/// an application lights most — which is the per-light resolution: a
+/// shadow wants more texels the more important its light is.
+pub const SHADOW_ATLAS_SIZE: u32 = 2048;
+
+/// Where light `index`'s shadow map lives in the atlas.
+///
+/// A tile is square, its edge a power of two at most [`SHADOW_ATLAS_SIZE`].
+/// The table is ABI — the pipeline's shadow passes render into the rect,
+/// the light uniform carries it normalized, and `shadow.wxsl` samples
+/// inside it — so a re-packing is a breaking layout change, exactly like
+/// any other edit to the frame group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowTile {
+    /// Texel offset of the tile's top-left corner in the atlas.
+    pub x: u32,
+    /// Texel offset of the tile's top-left corner in the atlas.
+    pub y: u32,
+    /// Edge length of the tile in texels.
+    pub edge: u32,
+}
+
+/// The atlas tile for light slot `index`.
+///
+/// Three shelves: the two key slots at 1024², the next four at 512², the
+/// remaining ten at 256² — all of it inside one [`SHADOW_ATLAS_SIZE`]²
+/// texture, the same memory the old fixed-resolution array spent on four
+/// slots. A slot below [`MAX_LIGHTS`] always has a tile; a light that
+/// casts no shadow leaves it unused.
+pub const fn shadow_tile(index: u32) -> ShadowTile {
+    // Row 0: the two 1024² tiles. Row 1: four 512². Rows 2 and 3: the
+    // remaining ten 256², eight across and two over.
+    let (x, y, edge) = match index {
+        0 => (0, 0, 1024),
+        1 => (1024, 0, 1024),
+        2..=5 => ((index - 2) * 512, 1024, 512),
+        6..=13 => ((index - 6) * 256, 1536, 256),
+        _ => ((index - 14) * 256, 1792, 256),
+    };
+    ShadowTile { x, y, edge }
+}
 
 /// How much precision a G-buffer target needs, and how many channels it
 /// occupies.
@@ -1994,6 +2031,32 @@ mod tests {
         for (def, field) in defs.iter().zip(CONTEXT_FIELDS) {
             assert_eq!(def.id, context_node_id(field.name));
             assert_eq!(def.outputs[0].ty, field.ty);
+        }
+    }
+
+    #[test]
+    fn every_light_slot_has_a_tile_inside_the_atlas_and_no_two_share_one() {
+        let mut claimed = vec![false; (SHADOW_ATLAS_SIZE * SHADOW_ATLAS_SIZE) as usize];
+        for index in 0..MAX_LIGHTS as u32 {
+            let tile = shadow_tile(index);
+            assert!(tile.edge.is_power_of_two(), "tile {index}: {tile:?}");
+            assert!(tile.edge <= SHADOW_ATLAS_SIZE);
+            assert!(
+                tile.x + tile.edge <= SHADOW_ATLAS_SIZE && tile.y + tile.edge <= SHADOW_ATLAS_SIZE,
+                "tile {index} leaves the atlas: {tile:?}"
+            );
+            // Edge resolution falls as the slot rises: the key lights get
+            // the most texels, which is the point of the ladder.
+            if index > 0 {
+                assert!(shadow_tile(index - 1).edge >= tile.edge);
+            }
+            for y in tile.y..tile.y + tile.edge {
+                let row = y as usize * SHADOW_ATLAS_SIZE as usize;
+                for x in tile.x..tile.x + tile.edge {
+                    assert!(!claimed[row + x as usize], "tile {index} overlaps");
+                    claimed[row + x as usize] = true;
+                }
+            }
         }
     }
 }

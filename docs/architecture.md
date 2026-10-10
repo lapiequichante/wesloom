@@ -696,7 +696,7 @@ See [ADR 0060](adr/0060-integrate-single-scattering-as-a-pure-sky-node.md).
 
 ## How a shadow gets there
 
-One depth 2D texture array, one slice per light, in the **frame group**
+One depth 2D atlas, one resolution-ranked tile per light, in the **frame group**
 beside the lights themselves — so the generated shading function has one
 `shadow_factor` and the forward stage and the deferred lighting pass both
 inherit it.
@@ -706,8 +706,15 @@ light, and the frame group's camera binding is addressed by a dynamic
 offset, so `camera.view_proj` in a shadow pass is the light's and
 `transform_vertex` never learns that shadows exist. Both stock pipelines
 declare one shadow pass per light slot up front; a slot whose light is
-not casting is cleared and drawn into by nothing, which reads as fully
-lit.
+not casting is drawn into by nothing. The first pass clears the whole atlas,
+and the others load it and restrict viewport/scissor to their own tiles.
+PCF taps clamp to tile texel centres (ADR 0066). Four lights remain the current
+budget; cascades, point-light faces and light lists are separate N7 work.
+
+The gallery's live cameras orbit with left drag, pan with right/middle drag,
+zoom with the wheel and reset with R. Each demo retains its own view; moving
+cameras supply previous-frame camera data to temporal passes. Screenshots
+retain their authored fixed cameras.
 
 The lookup is PCF over a comparison sampler, biased by **normal offset**
 rather than depth bias — the sample point moves along the surface normal

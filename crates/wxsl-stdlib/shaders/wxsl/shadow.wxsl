@@ -2,13 +2,15 @@
 //
 // The two bindings below are part of the frame group (`abi::GROUP_FRAME`),
 // beside the camera and the lights: a shadow map is frame-global in exactly
-// the way the light it comes from is. Putting them here rather than in the
+// the way the light it comes from. Putting them here rather than in the
 // pass group is what lets the forward stage and the deferred lighting pass
 // share `shadow_factor` instead of each growing a lookup of its own.
 //
-// One slice per light, at a fixed resolution — `abi::SHADOW_MAP_RESOLUTION`
-// — and a light that casts no shadow has `shadow_slice < 0` and is skipped
-// before anything is sampled.
+// One depth atlas for every light (`abi::SHADOW_ATLAS_SIZE`), one tile per
+// light slot (`abi::shadow_tile`) — the key lights get the most texels,
+// which is the per-light resolution. The light carries its tile as a
+// normalized rect; a light that casts no shadow has a zero rect and is
+// skipped before anything is sampled.
 
 import package::wxsl::bindings::{scene, world_origin};
 
@@ -17,7 +19,7 @@ import package::wxsl::bindings::{scene, world_origin};
 // looks like a 4x4 box because each fetch is already bilinear.
 const WXSL_SHADOW_PCF_RADIUS: i32 = 1;
 
-@group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
+@group(0) @binding(4) var shadow_maps: texture_depth_2d;
 @group(0) @binding(5) var shadow_sampler: sampler_comparison;
 
 // How much of light `index` reaches `world_position`: 1.0 fully lit, 0.0
@@ -45,9 +47,10 @@ fn shadow_factor(
     n_dot_l: f32,
 ) -> f32 {
     let light = scene.lights[index];
-    // No slice, or a surface facing away from the light — which contributes
+    let rect = light.shadow_rect;
+    // No tile, or a surface facing away from the light — which contributes
     // nothing whether or not it is shadowed.
-    if light.shadow_slice < 0 || n_dot_l <= 0.0 {
+    if rect.z <= 0.0 || n_dot_l <= 0.0 {
         return 1.0;
     }
 
@@ -66,29 +69,27 @@ fn shadow_factor(
     if ndc.z <= 0.0 || ndc.z >= 1.0 {
         return 1.0;
     }
-    let uv = vec2f(ndc.x, -ndc.y) * 0.5 + vec2f(0.5);
-    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+    // Inside the light's own tile: the atlas is shared, and a projection
+    // that leaves the frustum must not read the neighbour's texels.
+    let local = vec2f(ndc.x, -ndc.y) * 0.5 + vec2f(0.5);
+    if local.x < 0.0 || local.x > 1.0 || local.y < 0.0 || local.y > 1.0 {
         return 1.0;
     }
+    let uv = rect.xy + local * rect.zw;
 
+    // Atlas UVs advance by one atlas texel, regardless of tile size.
     let texel = 1.0 / vec2f(textureDimensions(shadow_maps));
     var sum = 0.0;
     var taps = 0.0;
     for (var y = -WXSL_SHADOW_PCF_RADIUS; y <= WXSL_SHADOW_PCF_RADIUS; y = y + 1) {
         for (var x = -WXSL_SHADOW_PCF_RADIUS; x <= WXSL_SHADOW_PCF_RADIUS; x = x + 1) {
-            let tap = uv + vec2f(f32(x), f32(y)) * texel;
+            let tap = clamp(uv + vec2f(f32(x), f32(y)) * texel,
+                rect.xy + texel * 0.5, rect.xy + rect.zw - texel * 0.5);
             // `...Level` rather than `textureSampleCompare`, which needs
             // uniform control flow: this is called from inside a light loop
             // after an early return, and a shadow map has no mip chain to
             // pick a level from anyway.
-            sum = sum
-                + textureSampleCompareLevel(
-                    shadow_maps,
-                    shadow_sampler,
-                    tap,
-                    light.shadow_slice,
-                    ndc.z,
-                );
+            sum = sum + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, ndc.z);
             taps = taps + 1.0;
         }
     }

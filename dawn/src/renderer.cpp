@@ -306,7 +306,8 @@ struct Renderer::Impl {
     request.SetUncapturedErrorCallback(
         [](const gpu::Device &, gpu::ErrorType, gpu::StringView message, ErrorState *errors) {
           std::lock_guard<std::mutex> lock(errors->mutex);
-          errors->message = text(message);
+          if (errors->message.empty())
+            errors->message = text(message);
         },
         &errors);
     struct DeviceReply {
@@ -577,7 +578,7 @@ struct Renderer::Impl {
     }
     auto entry =
         layout_entry(WXSL_BINDING_SHADOW_MAPS,
-                     {{"kind", "texture"}, {"sample_type", "depth"}, {"dimension", "d2_array"}});
+                     {{"kind", "texture"}, {"sample_type", "depth"}, {"dimension", "d2"}});
     entry.visibility = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
     entries.push_back(entry);
     entry = {};
@@ -645,9 +646,9 @@ struct Renderer::Impl {
     shadow_sampler = device.CreateSampler(&sampler);
     value = resource({{"texture",
                        {{"format", "depth32float"},
-                        {"dimension", "d2_array"},
+                        {"dimension", "d2"},
                         {"usage", "RENDER_ATTACHMENT | TEXTURE_BINDING"},
-                        {"size", {1, 1, data.at("frame").at("light_count")}}}}});
+                        {"size", {1, 1, 1}}}}});
     fallback = value.texture;
     fallback_view = value.view;
     const auto lut_size = data.at("frame").at("lut_size");
@@ -707,10 +708,10 @@ struct Renderer::Impl {
       materials.push_back(std::move(material));
     }
     auto encoder = device.CreateCommandEncoder();
-    for (uint32_t i = 0; i < data.at("frame").at("light_count"); ++i) {
+    {
       gpu::TextureViewDescriptor view;
       view.dimension = gpu::TextureViewDimension::e2D;
-      view.baseArrayLayer = i;
+      view.baseArrayLayer = 0;
       view.arrayLayerCount = 1;
       gpu::RenderPassDepthStencilAttachment depth;
       depth.view = fallback.CreateView(&view);
@@ -1080,6 +1081,14 @@ struct Renderer::Impl {
               for (const auto &map : maps)
                 detached = detached || color.at("resource") == map;
           auto render = encoder.BeginRenderPass(&descriptor);
+          const auto rect = pass.value("viewport", Json(nullptr));
+          if (!rect.is_null()) {
+            render.SetViewport(rect.at("x").get<float>(), rect.at("y").get<float>(),
+                               rect.at("width").get<float>(), rect.at("height").get<float>(),
+                               0.0f, 1.0f);
+            render.SetScissorRect(rect.at("x").get<uint32_t>(), rect.at("y").get<uint32_t>(),
+                                  rect.at("width").get<uint32_t>(), rect.at("height").get<uint32_t>());
+          }
           const auto offset = extra.at("view_slot").get<uint32_t>() * view_stride;
           if (pass.at("kind").contains("geometry")) {
             const auto &source = pass.at("kind").at("geometry").at("source");

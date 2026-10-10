@@ -24,7 +24,7 @@
 //! | Node | Carries | Compiles to |
 //! |---|---|---|
 //! | `source.scene` | a draw list, filtered by tags | the frame's draws |
-//! | `source.lights` | the shadow-map array | its `ResourceDesc` |
+//! | `source.lights` | the shadow atlas | its `ResourceDesc` |
 //! | `resource.gbuffer` | the enabled set's G-buffer, depth included | one resource per target, plus depth |
 //! | `resource.color` | a colour target: precision, size, history | one `ResourceDesc` |
 //! | `resource.depth` | a depth target | one `ResourceDesc` |
@@ -36,8 +36,9 @@
 //! | `present` | what reaches the frame's target | the imported target |
 //!
 //! The fixed shape of the frame is deliberately *not* a knob here: the
-//! shadow array is `abi::MAX_LIGHTS` layers at `abi::SHADOW_MAP_RESOLUTION`
-//! because the frame group binds it by that shape, and the G-buffer is
+//! shadow atlas is `abi::SHADOW_ATLAS_SIZE`² with a tile per light slot
+//! (`abi::shadow_tile`) because the frame group binds it by that shape, and
+//! the G-buffer is
 //! whatever the enabled lighting set requests because the generated
 //! lighting pass reads it by that shape. A document that wants a different
 //! frame group is asking for a different ABI, not a different graph.
@@ -304,13 +305,13 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .document(),
         NodeDefinition::builder(SOURCE_LIGHTS, "shadow maps")
             .doc(
-                "The frame's shadow-map array: one slice per light slot, at the ABI's \
-                 fixed resolution. Its shape is the frame group's, not a setting — the \
+                "The frame's shadow atlas: one tile per light slot, packed by the \
+                 ABI's tile table. Its shape is the frame group's, not a setting — the \
                  lighting pass reads it by that shape.",
             )
             .output(
                 Socket::new("shadows", ValueType::ShadowMaps)
-                    .with_doc("The array the shadow passes fill, one layer per light."),
+                    .with_doc("The atlas the shadow passes fill, one tile per light."),
             )
             .document(),
         // -- resources ---------------------------------------------------
@@ -517,9 +518,10 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .document(),
         NodeDefinition::builder(PASS_SHADOW, "shadow")
             .doc(
-                "One shadow pass per light slot, filling one layer each of the shadow-map \
-                 array. A slot whose light casts nothing this frame is cleared and left \
-                 alone — the pass list is built once and scheduled against every frame.",
+                "One shadow pass per light slot, rasterizing into its own tile of the \
+                 shadow atlas; the first pass clears the whole atlas on its way in. A \
+                 slot whose light casts nothing this frame is cleared and left alone — \
+                 the pass list is built once and scheduled against every frame.",
             )
             .input(
                 Socket::new("draws", ValueType::DrawQueue).with_doc("What to draw."),

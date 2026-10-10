@@ -46,7 +46,7 @@ use std::time::Instant;
 
 use glam::{Mat4, Vec3};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -84,6 +84,10 @@ KEYS (windowed):
     Left / Right, [ / ]    previous / next demo
     1 .. 9                 jump to demo N
     Space                  pause the clock
+    Left drag              orbit the camera
+    Right / middle drag    pan the camera target
+    Wheel                  zoom
+    R                      reset this demo's camera
     Esc or Q               quit
 ";
 
@@ -441,6 +445,23 @@ fn demos() -> Vec<Demo> {
                 ("dof circles", "far", 100.0),
                 ("dof near blur", "max_coc", 14.0),
             ],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "shadow",
+            blurb: "a cube over a ground plane, lit by a sun that casts: the shadow \
+                    atlas — one depth texture, a tile per light slot, the key slots \
+                    the largest (ADR 0066)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
             material: None,
             motion: None,
             warmup: 0,
@@ -1674,6 +1695,16 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
     // response it gets out of the baked table is the whole picture.
     let lights = match demo.sky {
         Some(_) => Vec::new(),
+        None if demo.name == "shadow" => vec![
+            // The sun: directional, casting into the atlas's key tile —
+            // the 1024² one — over a 12 m box around the origin. Low
+            // enough in the sky that a floating cube's shadow falls in
+            // front of it, where the camera can see it.
+            Light::directional(Vec3::new(0.8, 0.6, 0.5), Vec3::new(1.0, 0.93, 0.8), 2.6)
+                .casting_shadow(6.0),
+            // A cool fill so the shadow side reads as shadowed, not black.
+            Light::point(Vec3::new(-3.0, 1.6, -1.6), Vec3::new(0.4, 0.5, 0.8), 8.0),
+        ],
         None => vec![
             // Key: warm and close. The bloom demos turn this up far enough
             // that the specular highlight crosses the effect's threshold.
@@ -2181,7 +2212,9 @@ struct Stage {
     grid_material: wxsl::render::Material,
     grid_bindings: Vec<wxsl::render::MaterialBindings>,
     grid_floor: DemoMaterial,
+    shadow_floor: DemoMaterial,
     grid_floor_mesh: Mesh,
+    camera_override: Option<(Camera, Option<Camera>)>,
     /// The bake demo's own material and the table its bake pass writes
     /// through (ADR 0045): the graph is parsed once, the effect and the
     /// material are compiled from it, the texture is the *material's*
@@ -2508,6 +2541,14 @@ impl Stage {
             &grid_config,
         )?;
         let grid_floor_mesh = Mesh::plane(&gpu.device, 14.0);
+        let shadow_floor = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &ibl_grid_floor_graph(),
+            &wxsl::render::material::MaterialConfig::default(),
+        )?;
         Ok(Stage {
             ibl_source,
             ibl_sky,
@@ -2540,7 +2581,9 @@ impl Stage {
             grid_material,
             grid_bindings,
             grid_floor,
+            shadow_floor,
             grid_floor_mesh,
+            camera_override: None,
             bake: Some(bake),
         })
     }
@@ -2700,7 +2743,11 @@ impl Stage {
         }
         self.ensure_material(demo.features, demo.model, demo.macros)?;
         self.tints = instance_tints(demo.instances);
-        let environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
+        let mut environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
+        if let Some((camera, previous)) = self.camera_override {
+            environment.camera = camera;
+            environment.previous_camera = previous;
+        }
         if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
             let mut draws = DrawList::new();
             draws.push(
@@ -2714,6 +2761,36 @@ impl Stage {
                         .with_bindings(bindings),
                 );
             }
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "shadow" {
+            // The atlas proof: a sun with a shadow map, a cube to cast it,
+            // and a ground plane far enough below to catch it as more than
+            // a contact line.
+            let tint =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 0.85, 0.6]));
+            let draws: DrawList = [
+                DrawItem::new(&self.grid_floor_mesh, &self.shadow_floor.material)
+                    .with_bindings(&self.shadow_floor.bindings)
+                    .with_transform(Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0))),
+                DrawItem::new(&self.mesh, &self.material)
+                    .with_transform(
+                        Mat4::from_translation(Vec3::new(0.0, 0.4, 0.0)) * cube_transform(time),
+                    )
+                    .with_bindings(&self.bindings)
+                    .with_attributes(&tint),
+            ]
+            .into_iter()
+            .collect();
             self.renderer.render(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -3058,6 +3135,56 @@ struct State {
     format: wgpu::TextureFormat,
 }
 
+/// Example-local arc-rotate camera, initialized from each demo's authored view.
+#[derive(Clone, Copy)]
+struct OrbitCamera {
+    camera: Camera,
+    yaw: f32,
+    pitch: f32,
+    radius: f32,
+}
+
+impl OrbitCamera {
+    fn new(camera: Camera) -> Self {
+        let offset = camera.eye - camera.target;
+        let radius = offset.length().max(0.05);
+        Self {
+            camera,
+            yaw: offset.x.atan2(offset.z),
+            pitch: (offset.y / radius).clamp(-1.0, 1.0).asin(),
+            radius,
+        }
+    }
+
+    fn view(&self, aspect: f32) -> Camera {
+        let (sy, cy) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        Camera {
+            eye: self.camera.target + Vec3::new(sy * cp, sp, cy * cp) * self.radius,
+            aspect,
+            ..self.camera
+        }
+    }
+
+    fn orbit(&mut self, dx: f32, dy: f32) {
+        self.yaw -= dx * 0.005;
+        self.pitch = (self.pitch + dy * 0.005).clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
+    }
+
+    fn zoom(&mut self, lines: f32) {
+        self.radius = (self.radius * (-lines * 0.12).exp()).clamp(0.05, 90.0);
+    }
+
+    fn pan(&mut self, dx: f32, dy: f32, height: f32) {
+        let camera = self.view(1.0);
+        let forward = (camera.target - camera.eye).normalize();
+        let right = forward.cross(camera.up).normalize();
+        let up = right.cross(forward);
+        let scale = 2.0 * self.radius * (camera.fov_y * 0.5).tan() / height.max(1.0);
+        self.camera.target += (-right * dx + up * dy) * scale;
+    }
+}
+
 struct App {
     options: Options,
     demos: Vec<Demo>,
@@ -3069,6 +3196,10 @@ struct App {
     /// When the previous frame rendered, so a temporal demo's velocity
     /// answers for the *measured* frame time rather than an assumed one.
     last_frame: Option<Instant>,
+    cameras: Vec<Option<OrbitCamera>>,
+    previous_camera: Option<Camera>,
+    cursor: Option<(f64, f64)>,
+    drag: Option<MouseButton>,
 }
 
 impl App {
@@ -3112,6 +3243,8 @@ impl App {
             return;
         }
         self.current = index;
+        self.previous_camera = None;
+        self.drag = None;
         if let Some(state) = self.state.as_mut() {
             if let Err(error) = apply(&self.demos[index], &mut state.stage.renderer) {
                 eprintln!("cannot switch to `{}`: {error}", self.demos[index].name);
@@ -3154,6 +3287,10 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = state.window.inner_size();
         let demo = &self.demos[self.current];
+        let orbit = self.cameras[self.current]
+            .get_or_insert_with(|| OrbitCamera::new(demo_environment(demo, 1.0, time).camera));
+        let camera = orbit.view(size.width.max(1) as f32 / size.height.max(1) as f32);
+        state.stage.camera_override = Some((camera, self.previous_camera));
         if let Err(error) = state.stage.render(
             demo,
             &view,
@@ -3163,6 +3300,8 @@ impl App {
             step,
         ) {
             eprintln!("cannot render: {error}");
+        } else {
+            self.previous_camera = Some(camera);
         }
         state.stage.gpu.queue.present(frame);
     }
@@ -3223,6 +3362,52 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => self.render(),
+            WindowEvent::MouseInput { state, button, .. }
+                if matches!(
+                    button,
+                    MouseButton::Left | MouseButton::Right | MouseButton::Middle
+                ) =>
+            {
+                if state == ElementState::Pressed {
+                    self.drag = Some(button);
+                } else if self.drag == Some(button) {
+                    self.drag = None;
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some((x, y)) = self.cursor {
+                    if let Some(camera) = self.cameras[self.current].as_mut() {
+                        let dx = (position.x - x) as f32;
+                        let dy = (position.y - y) as f32;
+                        match self.drag {
+                            Some(MouseButton::Left) => camera.orbit(dx, dy),
+                            Some(MouseButton::Right | MouseButton::Middle) => {
+                                let height = self
+                                    .state
+                                    .as_ref()
+                                    .map_or(1, |state| state.window.inner_size().height);
+                                camera.pan(dx, dy, height as f32);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                self.cursor = Some((position.x, position.y));
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(camera) = self.cameras[self.current].as_mut() {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(position) => position.y as f32 / 80.0,
+                    };
+                    camera.zoom(lines);
+                }
+            }
+            WindowEvent::Focused(false) => {
+                self.drag = None;
+                self.cursor = None;
+            }
+            WindowEvent::CursorLeft { .. } => self.cursor = None,
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -3293,6 +3478,10 @@ impl App {
     fn on_key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
         match code {
             KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
+            KeyCode::KeyR => {
+                self.cameras[self.current] = None;
+                self.previous_camera = None;
+            }
             KeyCode::ArrowRight | KeyCode::BracketRight => self.show(self.current + 1),
             KeyCode::ArrowLeft | KeyCode::BracketLeft => {
                 self.show(self.current + self.demos.len() - 1);
@@ -3334,6 +3523,10 @@ fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
+        cameras: vec![None; demos.len()],
+        previous_camera: None,
+        cursor: None,
+        drag: None,
         options,
         demos,
         current: start,
@@ -3353,6 +3546,83 @@ fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orbit_preserves_authored_views_and_stays_finite_at_the_poles() {
+        for demo in demos() {
+            let authored = demo_environment(&demo, 1.7, 0.0).camera;
+            let mut orbit = OrbitCamera::new(authored);
+            let initial = orbit.view(1.7);
+            assert!(
+                (initial.eye - authored.eye).length() < 1e-5,
+                "{}",
+                demo.name
+            );
+            assert_eq!(initial.target, authored.target);
+            orbit.orbit(200.0, 100000.0);
+            orbit.zoom(100000.0);
+            orbit.pan(20.0, -10.0, 720.0);
+            assert!(orbit.view(1.7).view_proj().is_finite());
+            assert_eq!(orbit.radius, 0.05);
+            orbit.zoom(-100000.0);
+            assert_eq!(orbit.radius, 90.0);
+            assert!(orbit.view(1.7).view_proj().is_finite());
+        }
+    }
+
+    #[test]
+    fn gallery_ground_receives_a_visible_shadow_on_both_paths() {
+        let gpu = match pollster::block_on(GpuContext::headless()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping GPU test: {error}");
+                return;
+            }
+        };
+        let target = OffscreenTarget::new(&gpu.device, 192, 144);
+        let mut stage =
+            Stage::new(gpu, TargetConfig::new(192, 144, target.format()), "sky").unwrap();
+        let registry = wxsl::stdlib::registry();
+        let mut demo = demos()
+            .into_iter()
+            .find(|demo| demo.name == "shadow")
+            .unwrap();
+        let mut shadowed = Vec::new();
+        for stock in [StockPipeline::Forward, StockPipeline::Deferred] {
+            demo.pipeline = Pipeline::Stock(stock);
+            let mut images = Vec::new();
+            for receives in [true, false] {
+                stage.shadow_floor.material = wxsl::render::Material::with_config(
+                    &ibl_grid_floor_graph(),
+                    &registry,
+                    &wxsl::render::material::MaterialConfig::default().with_shadows(true, receives),
+                )
+                .unwrap();
+                stage
+                    .render(&demo, target.view(), 192, 144, 0.0, 0.0)
+                    .unwrap();
+                stage.gpu.wait();
+                images.push(target.read_rgba8(&stage.gpu.device, &stage.gpu.queue));
+            }
+            let darker = images[0]
+                .chunks_exact(4)
+                .zip(images[1].chunks_exact(4))
+                .filter(|(shadow, lit)| lit[1] as i16 - shadow[1] as i16 > 15)
+                .count();
+            assert!(
+                darker > 100,
+                "{}: only {darker} shadow pixels",
+                stock.name()
+            );
+            shadowed.push(images.remove(0));
+        }
+        let difference = shadowed[0]
+            .iter()
+            .zip(&shadowed[1])
+            .map(|(a, b)| a.abs_diff(*b) as u64)
+            .sum::<u64>();
+        assert!(difference as f64 / (shadowed[0].len() as f64) < 1.0);
+    }
 
     #[test]
     fn grid_has_exact_independent_ranges_and_a_matte_grey_floor() {

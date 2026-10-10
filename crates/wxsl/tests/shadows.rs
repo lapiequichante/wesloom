@@ -1,6 +1,5 @@
-//! Shadows, on real hardware: a caster fills a slice of the shadow map
-//! array from its light's point of view, and a receiver reads it back
-//! (ADR 0026).
+//! Shadows, on real hardware: a caster fills its light's atlas tile and
+//! a receiver reads it back (ADRs 0026, 0066).
 //!
 //! The two tests that close M5 are the last two here, and they are the
 //! ones that only pass if the *partitioning* of ADR 0025 is right: a
@@ -227,6 +226,36 @@ impl Scene {
 /// long way down; anything close to the reference is the shadow having
 /// missed entirely rather than a filtering difference.
 const SHADOW_DROP: u8 = 40;
+
+#[test]
+fn every_atlas_slot_shadows_and_clears_after_its_light_stops_casting() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "atlas receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        for slot in 0..abi::MAX_LIGHTS {
+            let mut environment = lit(true);
+            let light = environment.lights.remove(0);
+            environment.lights = vec![Light::directional(Vec3::Y, Vec3::ONE, 0.0); abi::MAX_LIGHTS];
+            environment.lights[slot] = light;
+            let shadow = scene.render(&environment, &ground, Some(&caster));
+            environment.lights[slot].casts_shadow = false;
+            let clear = scene.render(&environment, &ground, Some(&caster));
+            assert!(
+                brightness(&shadow, Vec3::ZERO) + SHADOW_DROP < brightness(&clear, Vec3::ZERO),
+                "{} slot {slot} must shadow",
+                pipeline.name()
+            );
+            assert_eq!(
+                brightness(&shadow, Vec3::new(0.0, 0.0, 2.0)),
+                brightness(&clear, Vec3::new(0.0, 0.0, 2.0))
+            );
+        }
+    }
+}
 
 #[test]
 fn a_caster_darkens_the_ground_beneath_it_and_nowhere_else() {

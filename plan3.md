@@ -554,6 +554,13 @@ the demo runs the single-model set — the shape the budget allows).
 
 ### N7 — Lighting at scale
 
+**In progress (2026-10-10):** the depth atlas and variable slot resolutions
+landed in both wgpu and Dawn (ADR 0066), with scheduler rectangle checks,
+tile-isolated PCF and a gallery ground-shadow regression on both paths.
+The gallery has per-demo orbit/pan/zoom/reset controls and temporal camera
+history. Camera-following cascades, six-face point shadows and compute light
+lists remain open; the current light budget is still four.
+
 The cluster of debts plan.md carried under M5's "still owed" and its
 hard-parts table, one item because they share the frame group's tightest
 corner:

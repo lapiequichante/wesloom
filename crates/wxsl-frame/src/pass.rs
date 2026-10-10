@@ -658,6 +658,40 @@ pub struct PassDesc {
     /// existed; `pass.peel`'s expansion builds the `Peeled` filters, and
     /// a document's sorted-tier pass asks for [`LayerFilter::Sorted`].
     pub layers: LayerFilter,
+    /// The rasterization rect, in texels of the depth/colour target:
+    /// viewport and scissor together, so a pass writing one region of a
+    /// shared target leaves its neighbours alone. `None` — the whole
+    /// attachment — is the default and every pass list's behaviour before
+    /// this field existed. The shadow atlas's tiles are what use it: one
+    /// pass per light, each to its own rect.
+    #[serde(default)]
+    pub viewport: Option<ViewportRect>,
+}
+
+/// A rasterization rect, in texels of the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ViewportRect {
+    /// Left edge.
+    pub x: u32,
+    /// Top edge.
+    pub y: u32,
+    /// Width.
+    pub width: u32,
+    /// Height.
+    pub height: u32,
+}
+
+impl ViewportRect {
+    /// A rect from a tile: the atlas position [`abi::shadow_tile`] names,
+    /// in texels.
+    pub fn square(x: u32, y: u32, edge: u32) -> Self {
+        ViewportRect {
+            x,
+            y,
+            width: edge,
+            height: edge,
+        }
+    }
 }
 
 /// How a pass sorts its draws (plan5 D3). Opt-in per pass: submission
@@ -779,6 +813,7 @@ impl PassDesc {
             policy: Policy::PerFrame,
             sort: SortOrder::None,
             layers: LayerFilter::All,
+            viewport: None,
         }
     }
 
@@ -799,6 +834,7 @@ impl PassDesc {
             policy: Policy::PerFrame,
             sort: SortOrder::None,
             layers: LayerFilter::All,
+            viewport: None,
         }
     }
 
@@ -819,6 +855,7 @@ impl PassDesc {
             policy: Policy::PerFrame,
             sort: SortOrder::None,
             layers: LayerFilter::All,
+            viewport: None,
         }
     }
 
@@ -865,6 +902,12 @@ impl PassDesc {
     /// Render from `view` instead of the camera.
     pub fn with_view(mut self, view: PassView) -> Self {
         self.view = view;
+        self
+    }
+
+    /// Restrict rasterization to `rect`, in texels of the target.
+    pub fn with_viewport(mut self, rect: ViewportRect) -> Self {
+        self.viewport = Some(rect);
         self
     }
 
@@ -935,9 +978,18 @@ impl PassDesc {
     /// Every resource this pass reads *this frame*, which is what orders it
     /// after the pass that wrote them.
     ///
-    /// A `Load` attachment counts: drawing on top of something is a read of
-    /// what is already there.
+    /// A `Load` colour attachment counts: drawing on top of something is a
+    /// read of what is already there. A *depth* attachment loaded is one
+    /// only when the pass does not also keep the result — the write chain
+    /// already orders a loading writer against the resource's other
+    /// writers in declared order, and counting the load as a read too made
+    /// mutually-loaded depth passes a cycle where a frame had none (the
+    /// shadow atlas: every pass rasterizes only its own tile).
     pub fn read_this_frame(&self) -> impl Iterator<Item = ResourceId> + '_ {
+        let depth_read = match self.depth {
+            Some(depth) => depth.clear.is_none() && !self.state.depth_write,
+            None => false,
+        };
         self.indirect_buffer()
             .into_iter()
             .chain(
@@ -955,7 +1007,7 @@ impl PassDesc {
             .chain(
                 self.depth
                     .iter()
-                    .filter(|depth| depth.clear.is_none())
+                    .filter(move |_| depth_read)
                     .map(|depth| depth.resource),
             )
     }
@@ -984,7 +1036,10 @@ mod tests {
     #[test]
     fn loading_an_attachment_counts_as_reading_it() {
         // Otherwise a pass that draws on top of another's output could be
-        // scheduled before it.
+        // scheduled before it. A colour load is a read; a *depth* load is
+        // one only when the pass tests without keeping the result — a
+        // loading writer orders through the write chain instead, which is
+        // what lets the shadow atlas's tiles share one texture.
         let first = ResourceId(1);
         let second = ResourceId(2);
         let pass = PassDesc::geometry(
@@ -994,8 +1049,12 @@ mod tests {
         )
         .with_color(Attachment::load(first))
         .with_depth(DepthAttachment::load(second));
+        assert_eq!(pass.read_this_frame().collect::<Vec<_>>(), vec![first]);
+        let testing = pass
+            .clone()
+            .with_state(PassState::OPAQUE.with_depth_test(CompareFunction::Less, false));
         assert_eq!(
-            pass.read_this_frame().collect::<Vec<_>>(),
+            testing.read_this_frame().collect::<Vec<_>>(),
             vec![first, second]
         );
         assert_eq!(pass.written().collect::<Vec<_>>(), vec![first, second]);

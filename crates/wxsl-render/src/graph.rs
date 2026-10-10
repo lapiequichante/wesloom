@@ -492,6 +492,21 @@ impl RenderGraph {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
+                    // A rasterization rect is viewport and scissor together:
+                    // the viewport maps the view's clip space into it, the
+                    // scissor keeps any draw that straggles outside from
+                    // touching a neighbour. The shadow atlas's tiles.
+                    if let Some(rect) = pass.viewport {
+                        render.set_viewport(
+                            rect.x as f32,
+                            rect.y as f32,
+                            rect.width as f32,
+                            rect.height as f32,
+                            0.0,
+                            1.0,
+                        );
+                        render.set_scissor_rect(rect.x, rect.y, rect.width, rect.height);
+                    }
                     body(&recorded, PassEncoder::Render(&mut render))?;
                 }
             }

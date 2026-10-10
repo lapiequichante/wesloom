@@ -353,6 +353,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut graph_path = None;
     let mut reference = false;
     let mut probes = false;
+    let mut shadow_atlas = false;
     let mut sample = None;
     let mut pipeline_path = None;
     let mut hdri_path = None;
@@ -375,6 +376,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ))
             }
             "--probes" => probes = true,
+            "--shadow-atlas" => shadow_atlas = true,
             "--sample" => sample = Some(args.next().ok_or("--sample needs a category")?),
             "--pipeline" => {
                 pipeline_path = Some(PathBuf::from(
@@ -388,6 +390,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if width == 0 || height == 0 {
         return Err("target dimensions must be nonzero".into());
+    }
+    if shadow_atlas && (scene_path.is_some() || graph_path.is_some() || sample.is_some()) {
+        return Err("--shadow-atlas supplies its own scene and material".into());
     }
     let hdri = if let Some(path) = hdri_path {
         let reader = image::ImageReader::open(path)?.with_guessed_format()?;
@@ -403,7 +408,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    let scene: Scene = if let Some(path) = scene_path {
+    let scene: Scene = if shadow_atlas {
+        let mut scene = Scene::new("shadow atlas ground");
+        scene.add_mesh(MeshEntry {
+            name: "caster".into(),
+            source: MeshSource::Cube { size: 1.6 },
+        });
+        scene.add_mesh(MeshEntry {
+            name: "ground".into(),
+            source: MeshSource::Plane { size: 14.0 },
+        });
+        let mut surface = Graph::new("matte receiver");
+        let output = surface.add_node(abi::SURFACE_OUTPUT_ID);
+        surface.set_param(output, "base_color", wxsl_core::node::Value::Vec3([0.3; 3]));
+        surface.set_param(output, "roughness", wxsl_core::node::Value::F32(1.0));
+        scene.add_material(MaterialEntry::new("matte receiver", surface));
+        scene.add_instance(Instance::new(0, 0));
+        scene.add_instance(
+            Instance::new(1, 0)
+                .with_transform(Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0)).to_cols_array()),
+        );
+        scene
+    } else if let Some(path) = scene_path {
         serde_json::from_slice(&std::fs::read(path)?)?
     } else {
         let graph: Graph = if let Some(category) = &sample {
@@ -479,7 +505,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         "scene.source.json",
         serde_json::to_vec_pretty(&scene)?,
     )?;
-    let env = environment(width as f32 / height as f32);
+    let mut env = environment(width as f32 / height as f32);
+    if shadow_atlas {
+        // Exercise every resolution tier supported by the current light budget.
+        env.lights = (0..abi::MAX_LIGHTS)
+            .map(|slot| {
+                Light::directional(Vec3::new(0.8 - slot as f32 * 0.5, 0.6, 0.5), Vec3::ONE, 0.8)
+                    .casting_shadow(6.0)
+            })
+            .collect();
+    }
     let transforms = scene
         .instances
         .iter()

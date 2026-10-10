@@ -28,6 +28,11 @@ target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/pbr --ver
 target/dawn-render/renderer_smoke target/dawn-assets/pbr
 ```
 
+The renderer smoke script also exports `bake_docs --shadow-atlas --reference`:
+a matte ground plane and cube under four shadow-casting directional lights.
+It compares both paths against wgpu, exercising the atlas's 1024²/512² tiles,
+viewport/scissor recording and generated light rectangles (ADR 0066).
+
 Omit `--reference` to export without a device. `--scene`, `--graph`, `--width`
 and `--height` customize export input; the two stock pipeline documents stay
 shared. Mesh generation, draw selection, scheduling, layouts and shader

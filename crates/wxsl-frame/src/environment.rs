@@ -1,6 +1,6 @@
 //! Camera, lights and frame values, without a device (ADR 0048).
 //! Fixed host layouts are generated from `wxsl-core::host` (ADR 0050):
-//! matrices are column-major, shadow slice -1 means no shadow, and the
+//! matrices are column-major, a zero shadow rectangle means no shadow, and the
 //! previous camera/time defaults mean no motion.
 
 use std::collections::BTreeMap;
@@ -15,7 +15,7 @@ use crate::pass::PassView;
 /// Maximum lights the scene uniform carries.
 ///
 /// The ABI owns the number, because it is the length of an array in a
-/// host-shared buffer *and* the layer count of the shadow map array.
+/// host-shared buffer and the number of supported shadow atlas slots.
 pub const MAX_LIGHTS: usize = abi::MAX_LIGHTS;
 
 /// Where the camera is and what it can see.
@@ -141,7 +141,7 @@ pub struct Light {
     pub intensity: f32,
     /// Whether this light renders a shadow map.
     ///
-    /// Only a [`LightKind::Directional`] light can: one slice is one point
+    /// Only a [`LightKind::Directional`] light can: one tile is one point
     /// of view, and a point light needs six. A point light asking for a
     /// shadow gets none rather than a wrong one, and
     /// [`Light::shadow_view`] is where that is decided.
@@ -253,7 +253,7 @@ impl Light {
         })
     }
 
-    fn uniform(&self, shadow_slice: i32, shadow_view_proj: Mat4) -> LightUniform {
+    fn uniform(&self, shadow_rect: [f32; 4], shadow_view_proj: Mat4) -> LightUniform {
         LightUniform {
             position_or_direction: self.position_or_direction.to_array(),
             kind: match self.kind {
@@ -263,9 +263,10 @@ impl Light {
             color: self.color.to_array(),
             intensity: self.intensity,
             shadow_view_proj: shadow_view_proj.to_cols_array_2d(),
-            shadow_slice,
             shadow_normal_bias: self.shadow_normal_bias,
             _padding: [0.0; 2],
+            _host_padding6: [0; 4],
+            shadow_rect,
         }
     }
 }
@@ -347,14 +348,28 @@ impl Environment {
         let mut lights = [LightUniform::zeroed(); MAX_LIGHTS];
         let count = self.lights.len().min(MAX_LIGHTS);
         for (index, (slot, light)) in lights.iter_mut().zip(&self.lights[..count]).enumerate() {
-            // A light's shadow slice is its own index, so turning shadows
+            // A light's shadow tile is its own slot's, so turning shadows
             // off for one does not renumber the others — and the pass that
-            // fills slice `i` is the one that was built for light `i`.
-            let (shadow_slice, view_proj) = match light.shadow_view() {
-                Some(view) => (index as i32, view.view_proj),
-                None => (-1, Mat4::IDENTITY),
+            // fills tile `i` is the one that was built for light `i`. The
+            // rect is the tile in atlas UV, which `shadow.wxsl` samples
+            // inside; a zero rect says "casts nothing".
+            let (shadow_rect, view_proj) = match light.shadow_view() {
+                Some(view) => {
+                    let tile = abi::shadow_tile(index as u32);
+                    let atlas = abi::SHADOW_ATLAS_SIZE as f32;
+                    (
+                        [
+                            tile.x as f32 / atlas,
+                            tile.y as f32 / atlas,
+                            tile.edge as f32 / atlas,
+                            tile.edge as f32 / atlas,
+                        ],
+                        view.view_proj,
+                    )
+                }
+                None => ([0.0; 4], Mat4::IDENTITY),
             };
-            *slot = light.uniform(shadow_slice, view_proj);
+            *slot = light.uniform(shadow_rect, view_proj);
         }
         SceneUniform {
             lights,
@@ -619,11 +634,12 @@ mod tests {
         // of 16 bytes and each vec3 is padded to its own 16.
         assert_eq!(size_of::<CameraUniform>(), 64 + 64 + 16 + 64 + 16);
         // Two vec3+scalar pairs, then a mat4x4f (aligned to 16, so it
-        // starts at 32), then the slice, the bias and their padding.
-        assert_eq!(size_of::<LightUniform>(), 16 + 16 + 64 + 16);
+        // starts at 32), then the bias with its padding and the atlas
+        // rect.
+        assert_eq!(size_of::<LightUniform>(), 16 + 16 + 64 + 32);
         assert_eq!(
             size_of::<SceneUniform>(),
-            MAX_LIGHTS * 112 + 16 + 16 + 16,
+            MAX_LIGHTS * 128 + 16 + 16 + 16,
             "scene uniform layout drifted from bindings.wxsl"
         );
         assert_eq!(size_of::<InstanceTransform>(), 128);
@@ -670,7 +686,7 @@ mod tests {
         let light = Light::directional(Vec3::new(0.0, 3.0, 4.0), Vec3::ONE, 2.0);
         let length = light.position_or_direction.length();
         assert!((length - 1.0).abs() < 1e-6);
-        assert_eq!(light.uniform(-1, Mat4::IDENTITY).kind, 1.0);
+        assert_eq!(light.uniform([0.0; 4], Mat4::IDENTITY).kind, 1.0);
     }
 
     #[test]

@@ -125,7 +125,7 @@ impl RenderGraph {
         self.passes.get_mut(index)
     }
 
-    /// Declare `desc` as the graph's shadow maps: the layered depth texture
+    /// Declare `desc` as the graph's shadow maps: the depth atlas
     /// the renderer binds into the frame group.
     ///
     /// Named rather than inferred, because this is the one resource read
@@ -133,8 +133,8 @@ impl RenderGraph {
     /// [`crate::pass::Read`] and therefore an ordering edge and a usage
     /// flag; this one is bound beside the camera and the lights, where a
     /// pass list has no say (`abi::BINDING_SHADOW_MAPS`). The shadow passes
-    /// still order correctly because nothing else writes the resource and
-    /// declaration order is the tie-break.
+    /// order through their write chain; scheduling adds implicit reads to
+    /// shading passes without changing their pass-group bindings.
     pub fn declare_shadow_maps(&mut self, desc: ResourceDesc) -> ResourceId {
         let id = self.resource(desc);
         self.shadow_maps = Some(id);
@@ -174,6 +174,19 @@ impl RenderGraph {
     /// that can be wrong with a pass list is wrong here rather than as a
     /// `wgpu` validation error three layers down.
     pub fn schedule(&self) -> Result<Schedule, GraphError> {
+        if let Some(maps) = self.shadow_maps {
+            let mut expanded = self.clone();
+            expanded.shadow_maps = None;
+            for pass in &mut expanded.passes {
+                let shades = matches!(&pass.kind,
+                    PassKind::Geometry { stage, .. } if matches!(stage.output(), abi::StageOutput::Color | abi::StageOutput::PeelResolve))
+                    || matches!(&pass.kind, PassKind::Screen { effect } if effect == "wxsl.deferred_lighting");
+                if shades {
+                    pass.reads.push(crate::pass::Read::current(maps));
+                }
+            }
+            return expanded.schedule();
+        }
         if let Some(maps) = self.environment_maps {
             if !self.environment_scale.is_finite() || self.environment_scale <= 0.0 {
                 return Err(GraphError::InvalidTexture {
@@ -270,6 +283,13 @@ impl RenderGraph {
             }
         }
         for pass in &self.passes {
+            if pass.viewport.is_some() && pass.color.is_empty() && pass.depth.is_none() {
+                return Err(GraphError::InvalidTextureUse {
+                    pass: pass.label.clone(),
+                    resource: "raster rectangle".into(),
+                    reason: "requires a render attachment".into(),
+                });
+            }
             for id in pass
                 .written()
                 .chain(pass.reads.iter().map(|r| r.resource))
@@ -314,6 +334,33 @@ impl RenderGraph {
                 .chain(pass.depth.iter().map(|a| (a.resource, a.layer, a.mip)))
             {
                 let desc = &self.resources[id.index()];
+                if let Some(rect) = pass.viewport {
+                    let valid = match desc.shape {
+                        ResourceShape::Texture {
+                            extent: extent @ Extent::Fixed { .. },
+                            ..
+                        } => {
+                            let (width, height) = extent.resolve_mip(1, 1, mip);
+                            rect.width > 0
+                                && rect.height > 0
+                                && rect
+                                    .x
+                                    .checked_add(rect.width)
+                                    .is_some_and(|end| end <= width)
+                                && rect
+                                    .y
+                                    .checked_add(rect.height)
+                                    .is_some_and(|end| end <= height)
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(GraphError::InvalidTextureUse {
+                            pass: pass.label.clone(), resource: desc.label.clone(),
+                            reason: "raster rectangle requires a fixed attachment extent and must be nonempty and inside it".into(),
+                        });
+                    }
+                }
                 if let ResourceShape::Texture {
                     dimension,
                     extent,
@@ -1118,6 +1165,52 @@ impl std::error::Error for GraphError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raster_rectangles_validate_mip_bounds_and_loading_writers_keep_order() {
+        use crate::pass::{ViewportRect, DEPTH_FORMAT};
+        let mut graph = RenderGraph::new(TextureFormat::Rgba8Unorm);
+        let depth = graph.declare_shadow_maps(
+            ResourceDesc::color("atlas", DEPTH_FORMAT)
+                .with_extent(Extent::Fixed {
+                    width: 64,
+                    height: 64,
+                })
+                .with_mip_levels(2),
+        );
+        for index in 0..2 {
+            graph.pass(
+                PassDesc::geometry(
+                    format!("tile {index}"),
+                    DrawSource::Scene(TagExpr::Always),
+                    abi::MaterialStage::SHADOW,
+                )
+                .with_depth(
+                    if index == 0 {
+                        DepthAttachment::clear(depth, 1.0)
+                    } else {
+                        DepthAttachment::load(depth)
+                    }
+                    .with_mip(1),
+                )
+                .with_viewport(ViewportRect::square(index * 16, 0, 16)),
+            );
+        }
+        assert!(
+            graph.schedule().is_ok(),
+            "loaded depth tiles form a write chain, not a cycle"
+        );
+        for rect in [
+            ViewportRect::square(0, 0, 0),
+            ViewportRect::square(17, 0, 16),
+            ViewportRect::square(u32::MAX, 0, 16),
+        ] {
+            graph.pass_mut(1).unwrap().viewport = Some(rect);
+            let error = graph.schedule().unwrap_err();
+            assert!(matches!(error, GraphError::InvalidTextureUse { .. }));
+            assert!(error.to_string().contains("tile 1"));
+        }
+    }
     use crate::pass::{Attachment, DrawSource, PassState, Policy, Read, DEPTH_FORMAT};
     use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::scene::TagExpr;

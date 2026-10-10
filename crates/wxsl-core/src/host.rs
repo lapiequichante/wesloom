@@ -100,9 +100,11 @@ pub fn structures() -> Vec<Structure> {
                 field("color", "color", Vector(3)),
                 field("intensity", "intensity", F32),
                 field("shadow_view_proj", "shadow_view_proj", Matrix),
-                field("shadow_slice", "shadow_slice", I32),
                 field("shadow_normal_bias", "shadow_normal_bias", F32),
+                // The bias rides the vec4's alignment gap, so the rect is
+                // 16-aligned and the light stays 128 bytes.
                 field("_padding", "_pad0", Vector(2)),
+                field("shadow_rect", "shadow_rect", Vector(4)),
             ],
         },
         Structure {
@@ -545,8 +547,8 @@ mod tests {
         let all = structures();
         for (name, size) in [
             ("CameraUniform", 224),
-            ("LightUniform", 112),
-            ("SceneUniform", 496),
+            ("LightUniform", 128),
+            ("SceneUniform", 560),
             ("InstanceTransform", 128),
             ("Vertex", 48),
             ("UiInstance", 68),

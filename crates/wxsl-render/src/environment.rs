@@ -200,16 +200,16 @@ impl FrameBindings {
             capacity,
         );
 
-        // A one-texel slice per light, cleared to nothing and never
-        // rendered into: a pipeline with no shadow passes still declares
-        // the bindings, and an unfilled binding is a validation error
-        // rather than a black frame.
+        // A one-texel atlas, cleared to nothing and never rendered into:
+        // a pipeline with no shadow passes still declares the bindings, and
+        // an unfilled binding is a validation error rather than a black
+        // frame.
         let shadow_fallback = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("wxsl shadow fallback"),
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
-                depth_or_array_layers: abi::MAX_LIGHTS as u32,
+                depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -218,10 +218,8 @@ impl FrameBindings {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let shadow_placeholder = shadow_fallback.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
+        let shadow_placeholder =
+            shadow_fallback.create_view(&wgpu::TextureViewDescriptor::default());
         // Until a pipeline with shadow passes hands its texture over, the
         // placeholder is what everything reads: an empty depth map is a
         // fully lit scene.
@@ -333,7 +331,7 @@ impl FrameBindings {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,

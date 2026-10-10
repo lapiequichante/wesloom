@@ -71,8 +71,8 @@ use crate::effect::{
 };
 use crate::graph::RenderGraph;
 use crate::pass::{
-    Attachment, DepthAttachment, Dimension, DrawSource, Extent, LayerFilter, PassDesc, PassState,
-    PassView, Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ALPHA_OVER,
+    Attachment, DepthAttachment, DrawSource, Extent, LayerFilter, PassDesc, PassState, PassView,
+    Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ViewportRect, ALPHA_OVER,
     DEPTH_FORMAT, MAX_BLEND, PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
 };
 #[cfg(test)]
@@ -298,7 +298,7 @@ pub enum PipelineError {
         /// The second writer's label.
         second: String,
     },
-    /// Two `source.lights` nodes — two shadow-map arrays, and the frame
+    /// Two `source.lights` nodes — two shadow atlases, and the frame
     /// group binds exactly one.
     TwoShadowSources {
         /// Both nodes' labels.
@@ -393,7 +393,7 @@ impl core::fmt::Display for PipelineError {
                 write!(
                     f,
                     "material pass `{node}` draws stage `{stage}`; the shadow passes come \
-                     from a `pass.shadow` node, which fills one slice per light"
+                     from a `pass.shadow` node, which fills one tile per light"
                 )
             }
             PipelineError::UnknownStage { node, stage } => write!(
@@ -1018,10 +1018,9 @@ impl<'a> Compiler<'a> {
         let maps = self.graph.declare_shadow_maps(
             ResourceDesc::color("shadow maps", DEPTH_FORMAT)
                 .with_extent(Extent::Fixed {
-                    width: abi::SHADOW_MAP_RESOLUTION,
-                    height: abi::SHADOW_MAP_RESOLUTION,
+                    width: abi::SHADOW_ATLAS_SIZE,
+                    height: abi::SHADOW_ATLAS_SIZE,
                 })
-                .with_dimension(Dimension::D2Array, abi::MAX_LIGHTS as u32)
                 // Both because nothing in the pass list reads this resource:
                 // it is sampled through the frame group, so the graph infers
                 // neither the usage nor the lifetime and is told both.
@@ -2024,8 +2023,16 @@ impl<'a> Compiler<'a> {
         let name = self.label(node);
         // One pass per light slot, always — not one per light that happens
         // to be casting this frame. Which lights cast is the environment's
-        // business and changes whenever the application says so.
+        // business and changes whenever the application says so. The first
+        // pass clears the whole atlas on its way in; the rest load, because
+        // the tile is the only part of the shared target they may touch.
         for light in 0..abi::MAX_LIGHTS as u32 {
+            let tile = abi::shadow_tile(light);
+            let depth = if light == 0 {
+                DepthAttachment::clear(maps, 1.0)
+            } else {
+                DepthAttachment::load(maps)
+            };
             self.graph.pass(
                 PassDesc::geometry(
                     format!("{name} {light}"),
@@ -2033,7 +2040,8 @@ impl<'a> Compiler<'a> {
                     MaterialStage::SHADOW,
                 )
                 .with_view(PassView::Light { index: light })
-                .with_depth(DepthAttachment::clear(maps, 1.0).with_layer(light))
+                .with_depth(depth)
+                .with_viewport(ViewportRect::square(tile.x, tile.y, tile.edge))
                 // Two-sided: the usual cases are an alpha-tested leaf and a
                 // displaced surface, neither of them closed.
                 .with_state(PassState::OPAQUE.with_cull_mode(None)),
@@ -2601,7 +2609,7 @@ mod tests {
     use super::*;
     use crate::effect::EffectRegistry;
     use crate::graph::RenderGraph;
-    use crate::pass::PassKind;
+    use crate::pass::{Dimension, PassKind};
     use crate::pipeline::{deferred_graph, forward_graph, PipelineConfig, TargetConfig};
     use wxsl_core::abi::{self, MaterialStage};
     use wxsl_core::lighting::LightingSet;
