@@ -69,6 +69,14 @@ pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
 pub const BLOOM_X_MODULE: &str = "package::wxsl::bloom_x";
 /// Module path the vertical half of the separable bloom is mounted under.
 pub const BLOOM_Y_MODULE: &str = "package::wxsl::bloom_y";
+/// Module path the bloom pyramid's thresholding extract is mounted under.
+pub const BLOOM_EXTRACT_MODULE: &str = "package::wxsl::bloom_extract";
+/// Module path one level of the bloom pyramid's descent is mounted under.
+pub const BLOOM_DOWN_MODULE: &str = "package::wxsl::bloom_down";
+/// Module path one level of the bloom pyramid's ascent is mounted under.
+pub const BLOOM_UP_MODULE: &str = "package::wxsl::bloom_up";
+/// Module path the bloom pyramid's composite is mounted under.
+pub const BLOOM_COMBINE_MODULE: &str = "package::wxsl::bloom_combine";
 /// Module path the shipped tonemap effect's shader is mounted under.
 pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 /// Module path the BRDF-LUT bake's shader is mounted under.
@@ -725,6 +733,151 @@ pub const BLOOM_Y: Effect = Effect {
     },
 };
 
+// The bloom pyramid's four passes. They are the *shape* a `pass.bloom`
+// document node expands to (ADR 0065); a document can also wire them by
+// hand, the way BLOOM_X and BLOOM_Y are wired, but the pyramid's
+// level resources and folds are exactly the repetition the node exists
+// to synthesize.
+//
+// The extract thresholds once, at the pyramid's half-resolution head;
+// the down levels are a plain 2×2 box; each up level folds the gathered
+// energy of everything below back onto its own level's signal; and the
+// combine adds the assembled glow onto the image. Between the ends the
+// chain carries no knobs — a pyramid is tuned at its extract and its
+// combine, where the glow is cut and where it is weighted.
+
+/// The head of a bloom pyramid: threshold linear radiance and downsample
+/// the bright part 2×2 into the pyramid's half-resolution first level.
+/// The same knee [`BLOOM_X`] uses; the deeper levels take over with
+/// [`BLOOM_DOWN`], which is this pass without the threshold.
+pub const BLOOM_EXTRACT: Effect = Effect {
+    id: "wxsl.bloom_extract",
+    label: "bloom extract",
+    description: "Threshold an image and downsample the bright part 2x — \
+                  the head of a bloom pyramid.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_extract_vs",
+        fragment_entry: "bloom_extract_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The image to extract highlights from, as linear radiance.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "threshold",
+            default: Value::F32(1.0),
+        },
+        EffectParameter {
+            name: "knee",
+            default: Value::F32(0.6),
+        },
+    ],
+    shader: EffectShader::Source {
+        path: BLOOM_EXTRACT_MODULE,
+        wxsl: include_str!("../shaders/bloom_extract.wxsl"),
+    },
+};
+
+/// One level of a bloom pyramid's descent: the plain 2×2 box mean that
+/// takes level *k* down to level *k + 1*. No threshold — the bright
+/// signal was cut once at the extract, and cutting again would discard
+/// the glow the deeper levels exist to widen.
+pub const BLOOM_DOWN: Effect = Effect {
+    id: "wxsl.bloom_down",
+    label: "bloom down",
+    description: "Box-downsample an image 2x — one level of a bloom pyramid.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_down_vs",
+        fragment_entry: "bloom_down_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The level above, as linear radiance.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: BLOOM_DOWN_MODULE,
+        wxsl: include_str!("../shaders/bloom_down.wxsl"),
+    },
+};
+
+/// One level of a bloom pyramid's ascent: bilinear the level below back
+/// up and add this level's own signal onto it. Two images — the level
+/// below and this level — so it does not fit the fixed `pass.screen`
+/// socket set; the expansion places `pass.screen.wxsl.bloom_up`.
+pub const BLOOM_UP: Effect = Effect {
+    id: "wxsl.bloom_up",
+    label: "bloom up",
+    description: "Bilinear-upsample the level below and add this level onto it.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_up_vs",
+        fragment_entry: "bloom_up_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "low",
+            kind: EffectInputKind::Image,
+            description: "The level below, at half this pass's resolution.",
+            history: 0,
+        },
+        EffectInput {
+            name: "high",
+            kind: EffectInputKind::Image,
+            description: "This level's own signal, from the descent.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: BLOOM_UP_MODULE,
+        wxsl: include_str!("../shaders/bloom_up.wxsl"),
+    },
+};
+
+/// The foot of a bloom pyramid, and the composite: add the assembled glow
+/// back onto the image. The input is linear radiance — the glow is light,
+/// and the display transform is somebody else's pass (ADR 0039).
+pub const BLOOM_COMBINE: Effect = Effect {
+    id: "wxsl.bloom_combine",
+    label: "bloom combine",
+    description: "Add a bloom pyramid's assembled glow back onto the image.",
+    kind: EffectKind::Screen {
+        vertex_entry: "bloom_combine_vs",
+        fragment_entry: "bloom_combine_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The unblurred image, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "glow",
+            kind: EffectInputKind::Image,
+            description: "The pyramid's assembled glow, at half this pass's resolution.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        default: Value::F32(0.85),
+    }],
+    shader: EffectShader::Source {
+        path: BLOOM_COMBINE_MODULE,
+        wxsl: include_str!("../shaders/bloom_combine.wxsl"),
+    },
+};
+
 /// Tonemap: the display transform, as the last pass of every stock
 /// chain — the filmic curve and the sRGB encode that used to sit inside
 /// the generated `shade_surface` under a macro
@@ -1147,6 +1300,10 @@ impl EffectRegistry {
                 BLOOM,
                 BLOOM_X,
                 BLOOM_Y,
+                BLOOM_EXTRACT,
+                BLOOM_DOWN,
+                BLOOM_UP,
+                BLOOM_COMBINE,
                 TAA,
                 MOTION_BLUR,
                 PEEL_BOUNDS,
@@ -1418,10 +1575,11 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            17,
-            "lighting, tonemap, bloom, the separable bloom pair, the TAA \
-             resolve, the motion blur, and the five peel passes `pass.peel` \
-             expands into, plus the four environment bake effects and background"
+            21,
+            "lighting, tonemap, bloom, the separable bloom pair, the bloom \
+             pyramid's four passes, the TAA resolve, the motion blur, and \
+             the five peel passes `pass.peel` expands into, plus the four \
+             environment bake effects and background"
         );
 
         let lighting = registry

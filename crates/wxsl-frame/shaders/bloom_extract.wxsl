@@ -1,0 +1,55 @@
+//! bloom_extract — the head of a bloom pyramid.
+//!
+//! Thresholds linear radiance with the same knee the separable bloom uses,
+//! and downsamples the bright signal 2×2 on the way into the pyramid's
+//! half-resolution first level — the bright part of the image is low
+//! frequency by definition, so thresholding at half resolution throws
+//! nothing away and the whole pyramid runs at half the cost of a
+//! full-res extract. The deeper levels take over with `bloom_down.wxsl`,
+//! which is this file without the threshold.
+//!
+//! One fullscreen pass over what an earlier pass wrote; the input is
+//! *linear radiance*, read before the display transform, which is the
+//! physically correct place to threshold (ADR 0039). The pass group binds
+//! textures and no sampler, so the loads are whole texels clamped to the
+//! edge — the same rule every shipped effect here follows. `threshold`
+//! and `knee` are uniforms declared by the effect descriptor (ADR 0042);
+//! the `pass.bloom` document node seeds them from its own settings, and
+//! the host re-tunes them live through `set_pass_param` on the pass
+//! label it generated.
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+/// The part of `color` that glows: everything at or under the threshold
+/// contributes nothing, and the knee eases it in so a highlight crossing
+/// the line brightens the glow instead of popping it. The threshold is
+/// linear radiance — diffuse white is the line.
+fn bright_pass(color: vec3f) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    let kept = smoothstep(params.threshold, params.threshold + params.knee, luminance);
+    return color * kept;
+}
+
+@vertex
+fn bloom_extract_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn bloom_extract_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    // This fragment is one half-resolution texel; the four texels it
+    // covers in the full-resolution input sit at twice its coordinates.
+    // Odd sizes clamp the last row and column onto the edge texel, which
+    // weights it — the same honest cheap answer `downsample2` gives.
+    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    let base = clamp(vec2i(position.xy) * 2, vec2i(0, 0), size);
+    let sum = bright_pass(textureLoad(image, base, 0).rgb)
+        + bright_pass(textureLoad(image, clamp(base + vec2i(1, 0), vec2i(0, 0), size), 0).rgb)
+        + bright_pass(textureLoad(image, clamp(base + vec2i(0, 1), vec2i(0, 0), size), 0).rgb)
+        + bright_pass(textureLoad(image, clamp(base + vec2i(1, 1), vec2i(0, 0), size), 0).rgb);
+    return vec4f(sum * 0.25, 1.0);
+}

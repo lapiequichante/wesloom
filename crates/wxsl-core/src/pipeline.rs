@@ -113,6 +113,14 @@ pub const PASS_SHADOW: &str = "pass.shadow";
 pub const PASS_SCREEN: &str = "pass.screen";
 /// Expand a filtered environment bake and declare the frame's lighting cubes.
 pub const PASS_ENVIRONMENT: &str = "pass.environment";
+/// Expand a bloom pyramid: one HDR resource per level, a thresholding
+/// extract, a box down per deeper level, a fold per shallower one, and
+/// the combine that adds the assembled glow back onto the image. The
+/// passes the expansion generates — and their stable labels, which is
+/// what `set_pass_param` tunes through — are the compiler's business
+/// (ADR 0065); the document says *that* there is a pyramid and how many
+/// levels, not *which* passes.
+pub const PASS_BLOOM: &str = "pass.bloom";
 /// Prefix of the `pass.compute.<effect>` ids — one generated definition
 /// per registered compute effect, whose sockets are the effect's declared
 /// inputs and outputs. A compute effect's wiring cannot sit on a fixed
@@ -148,6 +156,7 @@ pub const NODE_IDS: &[&str] = &[
     PASS_SHADOW,
     PASS_SCREEN,
     PASS_ENVIRONMENT,
+    PASS_BLOOM,
     PRESENT,
 ];
 
@@ -175,6 +184,53 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .setting(text_setting("diffuse_size", "Diffuse size", "Diffuse cube face side in pixels.", "16"))
             .setting(text_setting("mips", "Specular mips", "GGX roughness levels, including zero.", "8"))
             .setting(text_setting("radiance_scale", "Radiance scale", "Positive restoration factor for scaled HDR uploads.", "1"))
+            .document(),
+        NodeDefinition::builder(PASS_BLOOM, "bloom pyramid")
+            .doc(
+                "A bloom pyramid over one HDR image: a thresholding extract into a \
+                 half-resolution first level, a 2x box down per deeper level, a fold \
+                 per shallower one, and the combine that adds the assembled glow back \
+                 onto the image. Expands to the pyramid's level resources and passes \
+                 (ADR 0065) with stable labels — `<label> extract`, `<label> down 1`, \
+                 `<label> up 0`, `<label> combine` — which is what `set_pass_param` \
+                 tunes through: `threshold` and `knee` on the extract, `strength` on \
+                 the combine. The glow resources are HDR transients; thresholding is \
+                 linear radiance, so an 8-bit intermediate would clamp the highlight \
+                 the pyramid is for.",
+            )
+            .input(
+                Socket::new("image", ValueType::ColorTarget)
+                    .with_doc("The image to glow from, as linear radiance."),
+            )
+            .input(
+                Socket::new("into", ValueType::ColorTarget)
+                    .optional()
+                    .with_doc("Where to write. Unconnected means the frame's own target."),
+            )
+            .output(
+                Socket::new("color", ValueType::ColorTarget)
+                    .with_doc("What the combine wrote — the frame's target when `into` is unconnected."),
+            )
+            .setting(text_setting(
+                "levels",
+                "Levels",
+                "How many pyramid levels, including the first: each is half the one \
+                 before, starting at half resolution.",
+                "4",
+            ))
+            .setting(text_setting(
+                "threshold",
+                "Threshold",
+                "Linear radiance where the glow begins; the knee eases it in.",
+                "1",
+            ))
+            .setting(text_setting("knee", "Knee", "Width of the soft threshold knee.", "0.6"))
+            .setting(text_setting(
+                "strength",
+                "Strength",
+                "How much of the assembled glow is added back.",
+                "0.85",
+            ))
             .document(),
         // -- sources -----------------------------------------------------
         NodeDefinition::builder(SOURCE_SCENE, "Scene")

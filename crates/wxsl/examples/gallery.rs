@@ -371,6 +371,42 @@ fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "bloom-pyramid",
+            blurb: "deferred lighting into a colour target, then `pass.bloom` — the \
+                    whole pyramid, extract to combine, expanded from one document node \
+                    (ADR 0065)",
+            pipeline: Pipeline::Document(deferred_pyramid_document),
+            instances: 1,
+            key_intensity: 160.0,
+            features: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "bloom-pyramid-tuned",
+            blurb: "the pyramid with its parameters tuned live — the expansion's stable \
+                    labels are the contract: threshold and knee on `bloom extract`, \
+                    strength on `bloom combine`",
+            pipeline: Pipeline::Document(deferred_pyramid_document),
+            instances: 1,
+            key_intensity: 160.0,
+            features: &[],
+            model: None,
+            sky: None,
+            params: &[
+                ("bloom extract", "threshold", 0.35),
+                ("bloom extract", "knee", 0.3),
+                ("bloom combine", "strength", 1.6),
+            ],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "brdf-lut",
             blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
                     and a per-frame view displays it — the execution-policy proof, \
@@ -1223,6 +1259,52 @@ fn separable_bloom(graph: &mut Graph, source: NodeId) -> NodeId {
         graph.wire(&registry, from, to).expect("gallery wiring");
     }
     bloom_y
+}
+
+/// The shipped deferred preset with a bloom pyramid composed onto it —
+/// [`doc::PASS_BLOOM`], the whole pyramid in one document node (ADR 0065)
+/// where [`deferred_bloom_document`] wires the separable pair by hand.
+/// Lighting writes an HDR target; the node's expansion thresholds it into
+/// a half-resolution first level, boxes it down three more, folds the
+/// gathered energy back up, and the combine adds it onto the image. The
+/// generated passes tune like any other: `threshold` on `bloom extract`,
+/// `strength` on `bloom combine`.
+fn deferred_pyramid_document() -> Graph {
+    let registry = wxsl::render::document_registry(&EffectRegistry::shipped());
+    let mut graph = wxsl::core::pipeline::document("deferred bloom pyramid");
+    let scene = graph.add_node(doc::SOURCE_SCENE);
+    let lights = graph.add_node(doc::SOURCE_LIGHTS);
+    let shadows = graph.add_node(doc::PASS_SHADOW);
+    let gbuffer = graph.add_node(doc::RESOURCE_GBUFFER);
+    let material = graph.add(
+        wxsl::core::graph::Node::new(doc::PASS_GEOMETRY)
+            .with_label("deferred material")
+            .with_setting(doc::SETTING_STAGE, "gbuffer"),
+    );
+    // HDR on purpose, as in [`deferred_bloom_document`]: the pyramid's
+    // threshold reads linear radiance, and an 8-bit intermediate would
+    // clamp the highlight the glow is for.
+    let scene_color = graph.add(
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label("scene")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let lighting =
+        graph.add(wxsl::core::graph::Node::new(doc::PASS_SCREEN).with_label("deferred lighting"));
+    let pyramid = graph.add(wxsl::core::graph::Node::new(doc::PASS_BLOOM).with_label("bloom"));
+    let present = graph.add_node(doc::PRESENT);
+    let mut wire = |from: (NodeId, &str), to: (NodeId, &str)| {
+        graph.wire(&registry, from, to).expect("gallery wiring");
+    };
+    wire((scene, "draws"), (shadows, "draws"));
+    wire((lights, "shadows"), (shadows, "into"));
+    wire((scene, "draws"), (material, "draws"));
+    wire((gbuffer, "gbuffer"), (material, "gbuffer"));
+    wire((gbuffer, "gbuffer"), (lighting, "gbuffer"));
+    wire((scene_color, "color"), (lighting, "into"));
+    wire((scene_color, "color"), (pyramid, "image"));
+    present_through_tonemap(&mut graph, pyramid, present);
+    graph
 }
 
 /// The deferred bloom pipeline with FXAA inserted before the separable

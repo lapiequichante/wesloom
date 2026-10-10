@@ -92,6 +92,13 @@ pub enum PipelineError {
         /// The violated contract.
         reason: String,
     },
+    /// A `pass.bloom` node's pyramid cannot be built from the document.
+    BloomPyramid {
+        /// The authored node.
+        node: String,
+        /// The violated contract.
+        reason: String,
+    },
     /// The document did not validate as a graph: an unfed mandatory input,
     /// a cycle, a type mismatch.
     InvalidDocument(wxsl_core::GraphErrors),
@@ -335,6 +342,9 @@ impl core::fmt::Display for PipelineError {
         match self {
             PipelineError::Environment { node, reason } => {
                 write!(f, "environment `{node}`: {reason}")
+            }
+            PipelineError::BloomPyramid { node, reason } => {
+                write!(f, "bloom pyramid `{node}`: {reason}")
             }
             PipelineError::InvalidDocument(errors) => write!(f, "{errors}"),
             PipelineError::UnknownEffect {
@@ -691,6 +701,7 @@ impl<'a> Compiler<'a> {
                 Some(doc::PASS_GEOMETRY) => self.geometry_pass(*node)?,
                 Some(doc::PASS_PEEL) => self.peel_passes(*node)?,
                 Some(doc::PASS_SHADOW) => self.shadow_passes(*node)?,
+                Some(doc::PASS_BLOOM) => self.bloom_pyramid(*node)?,
                 Some(doc::PASS_SCREEN) => self.screen_pass(*node)?,
                 Some(doc::PRESENT) => presents.push(*node),
                 Some(other) if other.starts_with(doc::PASS_COMPUTE_PREFIX) => {
@@ -764,6 +775,133 @@ impl<'a> Compiler<'a> {
             .declare_environment_maps(maps.diffuse, maps.specular);
         self.graph.set_environment_scale(scale);
         self.colors.insert(node, maps.radiance);
+        Ok(())
+    }
+
+    /// A `pass.bloom` node: the bloom pyramid, expanded (ADR 0065).
+    ///
+    /// The repetition a document should not have to author — one HDR
+    /// resource per level, a thresholding extract, a 2×2 box down per
+    /// deeper level, a fold per shallower one, and the combine — is
+    /// synthesized here into the same pass list the scheduler always saw:
+    /// no new serialization, only scoped name allocation, exactly the
+    /// shape `pass.environment` set. The generated labels are derived
+    /// from the node's own and are the contract the host tunes through —
+    /// `<label> extract` carries `threshold` and `knee`, `<label>
+    /// combine` carries `strength`, both seeded from the node's settings
+    /// and re-tunable live through `set_pass_param`.
+    ///
+    /// The level resources are the expansion's own — no document socket
+    /// names them, and no pass outside the pyramid may write one. Each
+    /// fold writes a resource of its own because reading a level while
+    /// writing it is the read-write hazard the scheduler refuses; the
+    /// folds' targets are transients and alias away like any other.
+    fn bloom_pyramid(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        const MAX_LEVELS: u32 = 12;
+        let name = self.label(node);
+        let invalid = |reason: String| PipelineError::BloomPyramid {
+            node: name.clone(),
+            reason,
+        };
+        let source = self.fed(node, "image").expect("validated mandatory image");
+        let scene = *self.colors.get(&source).ok_or_else(|| {
+            invalid(
+                "image must name a resource.color — the pyramid thresholds linear radiance"
+                    .to_string(),
+            )
+        })?;
+        let levels = self
+            .setting(node, "levels")
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|levels| (1..=MAX_LEVELS).contains(levels))
+            .ok_or_else(|| invalid(format!("levels must be 1..{MAX_LEVELS}")))?;
+        // The glow is linear radiance between the levels — an 8-bit
+        // intermediate would clamp the highlight the pyramid is for, the
+        // same honesty the HDR scene target in the bloom demos has.
+        let hdr = gbuffer_format(abi::GBufferPrecision::HighDynamicRange);
+
+        // One transient per level, half the one before: `Extent`'s
+        // viewport rule — scale by a power of two, rounded up, never
+        // smaller than a texel — is a pyramid's shape already.
+        let mut level = Vec::with_capacity(levels as usize);
+        for index in 0..levels {
+            let id = self.graph.resource(
+                ResourceDesc::color(format!("{name} level {index}"), hdr).with_extent(
+                    Extent::Viewport {
+                        scale: 0.5f32.powi(index as i32 + 1),
+                    },
+                ),
+            );
+            level.push(id);
+        }
+
+        // The extract thresholds once, at the head, at half resolution —
+        // the bright part of the image is low-frequency by definition.
+        let extract = PassDesc::screen(format!("{name} extract"), "wxsl.bloom_extract")
+            .with_color(self.color_attachment(level[0]))
+            .with_reads(vec![Read::current(scene)])
+            .with_parameter(
+                "threshold",
+                wxsl_core::node::Value::F32(self.number(node, "threshold")?),
+            )
+            .with_parameter(
+                "knee",
+                wxsl_core::node::Value::F32(self.number(node, "knee")?),
+            );
+        self.graph.pass(extract);
+
+        // The descent: one plain box down per deeper level.
+        for index in 1..levels {
+            let (above, below) = (level[index as usize - 1], level[index as usize]);
+            self.graph.pass(
+                PassDesc::screen(format!("{name} down {index}"), "wxsl.bloom_down")
+                    .with_color(self.color_attachment(below))
+                    .with_reads(vec![Read::current(above)]),
+            );
+        }
+
+        // The ascent, deepest first: each fold takes the level below back
+        // up and adds this level's own signal onto it, into a target of
+        // its own — folding in place would read a level while writing it.
+        // The deepest level is its own fold, so there are levels − 1.
+        let mut folds: Vec<ResourceId> = Vec::with_capacity(levels.saturating_sub(1) as usize);
+        for index in (0..levels.saturating_sub(1)).rev() {
+            let target = self.graph.resource(
+                ResourceDesc::color(format!("{name} up {index}"), hdr).with_extent(
+                    Extent::Viewport {
+                        scale: 0.5f32.powi(index as i32 + 1),
+                    },
+                ),
+            );
+            let below = folds.last().copied().unwrap_or(level[levels as usize - 1]);
+            self.graph.pass(
+                PassDesc::screen(format!("{name} up {index}"), "wxsl.bloom_up")
+                    .with_color(self.color_attachment(target))
+                    .with_reads(vec![
+                        Read::current(below),
+                        Read::current(level[index as usize]),
+                    ]),
+            );
+            folds.push(target);
+        }
+        // `folds` is deepest first, so its last entry is the topmost.
+        let glow = folds.last().copied().unwrap_or(level[0]);
+
+        // The composite: the assembled glow onto the image, into the
+        // wired resource or the frame's own target.
+        let target = self.write_target(node)?;
+        self.graph.pass(
+            PassDesc::screen(format!("{name} combine"), "wxsl.bloom_combine")
+                .with_color(self.color_attachment(target))
+                .with_reads(vec![Read::current(scene), Read::current(glow)])
+                .with_parameter(
+                    "strength",
+                    wxsl_core::node::Value::F32(self.number(node, "strength")?),
+                ),
+        );
+        self.pass_colors.insert(node, target);
         Ok(())
     }
 
@@ -2139,15 +2277,16 @@ impl<'a> Compiler<'a> {
     fn image_source(&self, source: NodeId, reader: NodeId) -> Result<ResourceId, PipelineError> {
         match self.kind(source) {
             Some(doc::RESOURCE_COLOR) | Some(doc::PASS_ENVIRONMENT) => Ok(self.colors[&source]),
-            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL) => {
-                match self.pass_colors.get(&source) {
-                    Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
-                    _ => Err(PipelineError::ImageFromPass {
-                        node: self.label(reader),
-                        fed_by: label(self.document, self.registry, source),
-                    }),
-                }
-            }
+            Some(doc::PASS_GEOMETRY)
+            | Some(doc::PASS_SCREEN)
+            | Some(doc::PASS_PEEL)
+            | Some(doc::PASS_BLOOM) => match self.pass_colors.get(&source) {
+                Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                _ => Err(PipelineError::ImageFromPass {
+                    node: self.label(reader),
+                    fed_by: label(self.document, self.registry, source),
+                }),
+            },
             other => unreachable!(
                 "typing only lets a `resource.color` or a material pass produce a \
                  colour target, not {other:?}"
@@ -4176,6 +4315,243 @@ mod tests {
             Err(PipelineError::Peel { node, .. }) => assert_eq!(node, "shade"),
             other => panic!("expected a peel error, got {other:?}"),
         }
+    }
+
+    /// A forward document with the pyramid between the material pass and
+    /// the tonemap: material → `scene` → bloom → `post bloom` → tonemap —
+    /// the gallery demo's shape, so the tests and the demo cannot drift.
+    fn bloom_document() -> (Graph, NodeId, NodeId) {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let mut graph = StockPipeline::Forward.document();
+        let scene = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::RESOURCE_COLOR)
+            .map(|(id, _)| id)
+            .expect("forward has a colour target");
+        let tonemap = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::PASS_SCREEN)
+            .map(|(id, _)| id)
+            .expect("forward ends in tonemap");
+        let bloom = graph.add(Node::new(doc::PASS_BLOOM).with_label("bloom"));
+        let post = graph.add(
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label("post bloom")
+                .with_setting(doc::SETTING_PRECISION, "hdr"),
+        );
+        graph
+            .disconnect(&registry, &SocketRef::new(tonemap, "image"))
+            .expect("tonemap was fed");
+        for (from, to) in [
+            ((scene, "color"), (bloom, "image")),
+            ((post, "color"), (bloom, "into")),
+            ((post, "color"), (tonemap, "image")),
+        ] {
+            graph.wire(&registry, from, to).expect("bloom wiring");
+        }
+        (graph, bloom, tonemap)
+    }
+
+    #[test]
+    fn the_pyramid_expands_to_levels_a_descent_an_ascent_and_a_combine() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let (graph, _, _) = bloom_document();
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        compiled.schedule().expect("schedules");
+
+        // The shape: extract, one down per deeper level, one up per
+        // shallower one (deepest first), and the combine.
+        fn effect(pass: &PassDesc) -> &str {
+            match &pass.kind {
+                PassKind::Screen { effect } => effect.as_str(),
+                other => panic!("{other:?} is not a screen pass"),
+            }
+        }
+        let index_of = |label: &str| {
+            compiled
+                .passes()
+                .iter()
+                .position(|pass| pass.label == label)
+                .unwrap_or_else(|| panic!("no pass labelled `{label}`"))
+        };
+        let order: [(&str, &str); 8] = [
+            ("bloom extract", "wxsl.bloom_extract"),
+            ("bloom down 1", "wxsl.bloom_down"),
+            ("bloom down 2", "wxsl.bloom_down"),
+            ("bloom down 3", "wxsl.bloom_down"),
+            ("bloom up 2", "wxsl.bloom_up"),
+            ("bloom up 1", "wxsl.bloom_up"),
+            ("bloom up 0", "wxsl.bloom_up"),
+            ("bloom combine", "wxsl.bloom_combine"),
+        ];
+        let mut last = 0;
+        for (label, id) in order {
+            let at = index_of(label);
+            assert!(at > last, "`{label}` is out of order");
+            last = at;
+            assert_eq!(effect(&compiled.passes()[at]), id, "`{label}` effect");
+        }
+
+        // The generated passes carry the node's settings as seeded
+        // parameters, under their stable labels.
+        let extract = &compiled.passes()[index_of("bloom extract")];
+        assert_eq!(
+            extract.parameters.get("threshold"),
+            Some(&wxsl_core::node::Value::F32(1.0))
+        );
+        assert_eq!(
+            extract.parameters.get("knee"),
+            Some(&wxsl_core::node::Value::F32(0.6))
+        );
+        let combine = &compiled.passes()[index_of("bloom combine")];
+        assert_eq!(
+            combine.parameters.get("strength"),
+            Some(&wxsl_core::node::Value::F32(0.85))
+        );
+
+        // The glow chain: HDR transients, each half its parent, none of
+        // them document-visible. The extract reads the scene and writes
+        // level 0; the combine reads the scene and the topmost fold and
+        // writes what the document wired.
+        let hdr = gbuffer_format(abi::GBufferPrecision::HighDynamicRange);
+        let resource = |label: &str| {
+            let id = compiled
+                .resource_by_label(label)
+                .unwrap_or_else(|| panic!("no resource labelled `{label}`"));
+            compiled.resource_desc(id).unwrap()
+        };
+        for (label, scale) in [
+            ("bloom level 0", 0.5),
+            ("bloom level 1", 0.25),
+            ("bloom level 2", 0.125),
+            ("bloom level 3", 0.0625),
+            ("bloom up 0", 0.5),
+            ("bloom up 1", 0.25),
+            ("bloom up 2", 0.125),
+        ] {
+            let desc = resource(label);
+            let crate::pass::ResourceShape::Texture { extent, format, .. } = desc.shape else {
+                panic!("`{label}` is not a texture");
+            };
+            assert_eq!(extent, Extent::Viewport { scale }, "`{label}` extent");
+            assert_eq!(format, hdr, "`{label}` carries linear radiance");
+            assert_eq!(
+                desc.persistence,
+                Persistence::Transient,
+                "`{label}` is a transient"
+            );
+        }
+        let scene = compiled
+            .resource_by_label("scene")
+            .expect("forward's colour target");
+        let level0 = compiled
+            .resource_by_label("bloom level 0")
+            .expect("level 0");
+        let top = compiled.resource_by_label("bloom up 0").expect("top fold");
+        let post = compiled
+            .resource_by_label("post bloom")
+            .expect("the wired target");
+        assert_eq!(extract.reads, vec![Read::current(scene)]);
+        assert_eq!(extract.color[0].resource, level0);
+        assert_eq!(
+            combine.reads,
+            vec![Read::current(scene), Read::current(top)]
+        );
+        assert_eq!(combine.color[0].resource, post);
+
+        // And the scheduler orders the pyramid before the tonemap that
+        // reads what it wrote, whatever the document order said.
+        let scheduled = compiled.schedule().expect("schedules");
+        let scheduled = scheduled.order();
+        let (combine_at, tonemap_at) = (
+            index_of("bloom combine"),
+            compiled
+                .passes()
+                .iter()
+                .position(|pass| pass.label == "tonemap")
+                .expect("tonemap"),
+        );
+        let combine_run = scheduled[combine_at];
+        let tonemap_run = scheduled[tonemap_at];
+        assert!(
+            combine_run < tonemap_run,
+            "the combine must precede the tonemap that reads its target"
+        );
+    }
+
+    #[test]
+    fn one_level_is_an_extract_and_a_combine() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let (mut graph, bloom, _) = bloom_document();
+        graph.set_setting(bloom, "levels", "1");
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let labels: Vec<&str> = compiled
+            .passes()
+            .iter()
+            .filter_map(|pass| match &pass.kind {
+                PassKind::Screen { effect } if effect.starts_with("wxsl.bloom_") => {
+                    Some(match effect.as_str() {
+                        "wxsl.bloom_extract" => "extract",
+                        "wxsl.bloom_combine" => "combine",
+                        other => panic!("pyramid of one level grew a {other}"),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, ["extract", "combine"]);
+        // With no folds, the combine reads the extract's own level.
+        let level0 = compiled
+            .resource_by_label("bloom level 0")
+            .expect("level 0");
+        let combine = compiled
+            .passes()
+            .iter()
+            .find(|pass| pass.label == "bloom combine")
+            .expect("combine");
+        assert!(combine.reads.contains(&Read::current(level0)));
+        compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn a_bad_level_count_is_a_named_error() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        for value in ["0", "13", "many"] {
+            let (mut graph, bloom, _) = bloom_document();
+            graph.set_setting(bloom, "levels", value);
+            let error = compile(&graph, &registry, &effects, &config())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("bloom pyramid `bloom`") && error.contains("levels"),
+                "`{value}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unwired_pyramid_output_is_nobody_target_to_sample() {
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+        let (mut graph, bloom, tonemap) = bloom_document();
+        // `into` unconnected: the combine writes the frame's own target,
+        // and reading the pyramid's output is the un-compilable chain
+        // shape every other pass names.
+        graph
+            .disconnect(&registry, &SocketRef::new(tonemap, "image"))
+            .expect("tonemap was fed");
+        graph
+            .wire(&registry, (bloom, "color"), (tonemap, "image"))
+            .expect("wire");
+        let error = compile(&graph, &registry, &effects, &config()).unwrap_err();
+        assert!(
+            matches!(error, PipelineError::ImageFromPass { .. }),
+            "{error}"
+        );
     }
 }
 

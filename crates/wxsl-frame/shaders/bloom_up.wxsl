@@ -1,0 +1,66 @@
+//! bloom_up — one level of a bloom pyramid's ascent, and the fold.
+//!
+//! Takes the level below (`low`, half this pass's resolution) back up with
+//! a 3×3 tent filter and *adds* this level's own signal (`high`) onto it —
+//! each fold returns the energy the descent gathered, which is why the
+//! composite at the top is a sum and not a replacement. The deepest level
+//! needs no fold: it is its own upsample, which is why a pyramid of *n*
+//! levels has *n − 1* up passes and *n − 1* fold targets.
+//!
+//! The tent, not a plain bilinear, is the point: a pyramid folds through
+//! bilinear steps several factors of two wide, and bilinear alone
+//! interpolates *within* the deepest level's texels without ever mixing
+//! across their edges — the glow keeps the block structure of the bottom
+//! of the pyramid. A tent of radius one texel mixes the neighbourhood and
+//! flattens those edges away; stacked folds widen the reach without
+//! letting any one level's texels show. And a 3×3 tent is exactly the
+//! average of four bilinear taps at ±½-texel offsets, so the pass group's
+//! no-sampler rule costs sixteen whole-texel loads and no samplers.
+//! Off-edge loads clamp, the rule every effect here follows.
+//!
+//! This file takes no threshold and no strength — the cut lived on the
+//! extract, and the strength lives on the combine (`bloom_combine.wxsl`)
+//! that adds the assembled glow back onto the image, so a pyramid is
+//! tuned at its ends and nowhere in between.
+
+@group(3) @binding(0) var low_image: texture_2d<f32>;
+@group(3) @binding(1) var high_image: texture_2d<f32>;
+
+@vertex
+fn bloom_up_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+/// One bilinear tap of `low` at `at`, in low texels — the four
+/// surrounding texels, weighted by how far the point falls between them.
+fn bilinear_low(at: vec2f, top: vec2i) -> vec3f {
+    let whole = floor(at);
+    let fraction = at - whole;
+    let lo = clamp(vec2i(whole), vec2i(0, 0), top);
+    let hi = clamp(lo + vec2i(1, 1), vec2i(0, 0), top);
+    let a = textureLoad(low_image, vec2i(lo.x, lo.y), 0).rgb;
+    let b = textureLoad(low_image, vec2i(hi.x, lo.y), 0).rgb;
+    let c = textureLoad(low_image, vec2i(lo.x, hi.y), 0).rgb;
+    let d = textureLoad(low_image, vec2i(hi.x, hi.y), 0).rgb;
+    return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
+}
+
+@fragment
+fn bloom_up_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let top = max(vec2i(textureDimensions(low_image)) - vec2i(1, 1), vec2i(0, 0));
+    // This pixel's centre, in `low` texels: two of these pixels span one
+    // of the level below, so the source coordinate halves and then steps
+    // back half a texel to land between texels rather than on one.
+    let source = (position.xy + vec2f(0.5)) * 0.5 - vec2f(0.5);
+    // The 3×3 tent, as the average of four bilinear taps at ±½ texel.
+    let tent = bilinear_low(source + vec2f(-0.5, -0.5), top)
+        + bilinear_low(source + vec2f(0.5, -0.5), top)
+        + bilinear_low(source + vec2f(-0.5, 0.5), top)
+        + bilinear_low(source + vec2f(0.5, 0.5), top);
+    let own = textureLoad(high_image, vec2i(position.xy), 0).rgb;
+    return vec4f(tent * 0.25 + own, 1.0);
+}
