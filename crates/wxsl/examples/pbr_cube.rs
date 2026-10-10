@@ -77,8 +77,12 @@ OPTIONS:
     --size <WIDTHxHEIGHT>      Render size (default: 1280x720, or 800x600 headless)
     --instances <N>            Draw N copies of the cube in a row (default: 1)
     --models <A,B,...>         Lighting models the deferred path enables, from:
-                               lambert, phong, pbr, clearcoat (default: pbr)
+                               lambert, phong, pbr, clearcoat, cloth, preshaded
+                               (default: pbr)
     --model <NAME>             Which model shades this material (default: pbr)
+    --forward-shaded           Shade the material in the geometry pass under
+                               either pipeline (plan5 D2); adds `preshaded` to
+                               the set and gives up received shadows
     --dump-wxsl                Print the WXSL generated from the graph and exit
     --dump-wgsl                Print the WGSL the active pipeline's shading
                                stage compiles to and exit
@@ -122,16 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let lighting = options.lighting_set()?;
-    let material = Material::with_lighting(
-        &graph,
-        &registry,
-        &MaterialConfig {
-            macros: options.macros.clone(),
-            model: options.model.clone(),
-            ..MaterialConfig::default()
-        },
-        &lighting,
-    )?;
+    let material =
+        Material::with_lighting(&graph, &registry, &options.material_config(), &lighting)?;
 
     if options.list_macros {
         list_macros(&graph, &registry, &material);
@@ -177,6 +173,10 @@ struct Options {
     models: Option<Vec<String>>,
     /// Which model shades this material, by name.
     model: Option<String>,
+    /// Shade the material in the geometry pass under either pipeline
+    /// (plan5 D2), and enable the preshaded route the deferred lighting
+    /// pass routes it by.
+    forward_shaded: bool,
 }
 
 impl Default for Options {
@@ -198,6 +198,7 @@ impl Default for Options {
             help: false,
             models: None,
             model: None,
+            forward_shaded: false,
         }
     }
 }
@@ -206,12 +207,23 @@ impl Options {
     /// The lighting models the deferred path enables, resolved against the
     /// shipped registry. The default is just `pbr`, which needs no id
     /// channel and generates no dispatch; `--models lambert,phong,pbr` is
-    /// the three-model demo.
+    /// the three-model demo. A forward-shaded material always adds
+    /// `wxsl.preshaded` — the route its pixels travel (plan5 D2).
     fn lighting_set(&self) -> Result<wxsl::core::lighting::LightingSet, String> {
         let Some(names) = &self.models else {
-            return Ok(wxsl::core::lighting::LightingSet::default());
+            if !self.forward_shaded {
+                return Ok(wxsl::core::lighting::LightingSet::default());
+            }
+            return Options {
+                models: Some(vec![
+                    "pbr".to_string(),
+                    wxsl::core::lighting::PRESHADED_MODEL.to_string(),
+                ]),
+                ..Options::default()
+            }
+            .lighting_set();
         };
-        let chosen: Vec<_> = names
+        let mut chosen: Vec<_> = names
             .iter()
             .map(|name| {
                 wxsl::core::lighting::DEFAULT_MODELS
@@ -233,7 +245,33 @@ impl Options {
                     })
             })
             .collect::<Result<_, _>>()?;
+        if self.forward_shaded
+            && !chosen
+                .iter()
+                .any(|model| model.name == wxsl::core::lighting::PRESHADED_MODEL)
+        {
+            chosen.push(
+                wxsl::core::lighting::DEFAULT_MODELS
+                    .iter()
+                    .copied()
+                    .find(|model| model.name == wxsl::core::lighting::PRESHADED_MODEL)
+                    .expect("the shipped registry carries the route"),
+            );
+        }
         wxsl::core::lighting::LightingSet::new(chosen).map_err(|error| error.to_string())
+    }
+
+    /// The material configuration the demo compiles, flags included.
+    fn material_config(&self) -> MaterialConfig {
+        MaterialConfig {
+            macros: self.macros.clone(),
+            model: self.model.clone(),
+            forward_shaded: self.forward_shaded,
+            // A forward-shaded surface is shaded before any shadow map
+            // exists; resolution refuses the combination (plan5 D2).
+            receive_shadow: !self.forward_shaded,
+            ..MaterialConfig::default()
+        }
     }
 
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
@@ -274,6 +312,7 @@ impl Options {
                     options.models = Some(names);
                 }
                 "--model" => options.model = Some(value()?.trim().to_string()),
+                "--forward-shaded" => options.forward_shaded = true,
                 "--instances" => {
                     let text = value()?;
                     options.instances = text
@@ -874,11 +913,7 @@ impl App {
         match Material::with_lighting(
             &self.graph,
             &self.registry,
-            &MaterialConfig {
-                macros: self.options.macros.clone(),
-                model: self.options.model.clone(),
-                ..MaterialConfig::default()
-            },
+            &self.options.material_config(),
             &self.lighting,
         ) {
             Ok(material) => self.material = material,

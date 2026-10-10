@@ -44,6 +44,17 @@ Original symbol: snoise
 Adapted file: shaders/generative/simplex2.wxsl
 Changes: the same translation rules as simplex3.
 
+glTF-Sample-Renderer — Apache-2.0
+Source: https://github.com/KhronosGroup/glTF-Sample-Renderer
+Revision: 0686eb22dc86ecfdd1e0fc93a141b50edac4a706
+Source file: source/Renderer/shaders/iridescence.glsl
+Original symbol: evalIridescence
+Adapted file: shaders/lighting/iridescence.wxsl
+Changes: GLSL to WXSL, Fresnel0ToIor/IorToFresnel0/evalSensitivity
+inlined (a node source is one function), the outside IOR fixed at the
+air interface upstream assumes, Schlick's reflectance written in F0
+form, socket metadata. Apache-2.0 NOTICE file carried below.
+
 The MIT License
 
 Copyright © 2010-2026 three.js authors
@@ -67,3 +78,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+Apache License 2.0 notice for the glTF-Sample-Renderer port
+(shaders/lighting/iridescence.wxsl)
+
+Copyright 2019 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.

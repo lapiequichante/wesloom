@@ -575,6 +575,13 @@ pub fn generate_bake(
             NodeBody::Param => "a material parameter".to_string(),
             NodeBody::UserRead => "the application block".to_string(),
             NodeBody::Resource => "a bound texture".to_string(),
+            _ if def.fragment_only => {
+                return Err(invalid(format!(
+                    "the baked subgraph computes a screen-space derivative at \
+                     node {member}; a bake is a compute pass over the bake \
+                     domain, and no derivative exists there (plan5 D1)"
+                )))
+            }
             _ => continue,
         };
         return Err(invalid(format!(
@@ -1228,11 +1235,32 @@ impl Emitter<'_> {
                     // requests plus any feature channels — so the pack is
                     // generated beside it instead of imported from a fixed
                     // module.
-                    let generated = crate::lighting::pack_gbuffer(
+                    let forward_shaded = self.options.material.forward_shaded;
+                    let mut generated = crate::lighting::pack_gbuffer(
                         self.options.material.lighting.model(),
                         self.options.material.lighting.set(),
                         self.options.material.lighting.features(),
+                        forward_shaded,
                     );
+                    if forward_shaded {
+                        // The same shading function a forward module gets:
+                        // a forward-shaded material runs its own model in
+                        // this stage, and the pack stores its output
+                        // (plan5 D2). The macro set the material resolved
+                        // with has already dropped the shadow lookup.
+                        let shaded = crate::lighting::shade_surface_with(
+                            &crate::lighting::Dispatch::Direct(
+                                *self.options.material.lighting.model(),
+                            ),
+                            self.options.material.lighting.features(),
+                            false,
+                        );
+                        for (module, item) in &shaded.imports {
+                            self.request_import(module, item);
+                        }
+                        generated.source.push('\n');
+                        generated.source.push_str(&shaded.source);
+                    }
                     for (module, item) in &generated.imports {
                         self.request_import(module, item);
                     }
@@ -2448,6 +2476,34 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             shade = abi::SHADE_SURFACE_FN,
             material = options.material_fn,
         ),
+        abi::StageOutput::GBuffer if options.material.forward_shaded => {
+            // The owner's "l'albedo est l'output" (plan5 D2): shade here,
+            // in the geometry pass, and let the pack store the radiance
+            // where the lighting pass looks for it. The id written is the
+            // preshaded route's, so the lighting pass returns the stored
+            // radiance instead of shading again.
+            let route = options
+                .material
+                .lighting
+                .set()
+                .preshaded()
+                .expect("resolution required the preshaded route in the set");
+            format!(
+                "-> {gbuffer} {{\n{prologue}    \
+                 let surface = {material}({ctx}{args});\n    \
+                 return {pack}(surface, {shade}(surface, {ctx}){id});\n}}\n",
+                ctx = abi::CONTEXT_VAR,
+                gbuffer = abi::GBUFFER_STRUCT,
+                material = options.material_fn,
+                pack = abi::PACK_GBUFFER_FN,
+                shade = abi::SHADE_SURFACE_FN,
+                id = if options.material.lighting.set().dispatches() {
+                    format!(", {}u", route.id)
+                } else {
+                    String::new()
+                },
+            )
+        }
         abi::StageOutput::GBuffer => format!(
             "-> {gbuffer} {{\n{prologue}    \
              return {pack}({material}({ctx}{args}){id});\n}}\n",

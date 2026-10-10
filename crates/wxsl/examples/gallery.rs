@@ -39,6 +39,7 @@
 //! and the console name the demo and what it runs.
 
 use std::error::Error;
+use std::f32::consts::FRAC_PI_2;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -51,7 +52,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::core::abi;
 use wxsl::core::graph::Graph;
-use wxsl::core::graph::{Node, NodeId};
+use wxsl::core::graph::{AttributeDecl, Node, NodeId};
 use wxsl::core::node::{Value, ValueType};
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::{Tags, TAG_OPAQUE, TAG_TRANSPARENT};
@@ -512,6 +513,56 @@ fn demos() -> Vec<Demo> {
             blurb: "a torus and a blue sphere through each other, the PBR cube shader \
                     with its alpha uniform at 0.3, composited by dual depth peeling",
             pipeline: Pipeline::Document(peel_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "render-order",
+            blurb: "three cards in one blended pass — an order -1 underlay, a sheet, \
+                    and an order-1 hologram *behind it in depth* yet drawn after it: \
+                    the group order is the draws' data (plan5 D4)",
+            pipeline: Pipeline::Document(order_document),
+            instances: 1,
+            // The cards face away from the key light's angle; the point
+            // is the composite, so light the sheet up.
+            key_intensity: 90.0,
+            features: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "sdf-aa",
+            blurb: "an AA'd checker and an SDF disc whose edge is one screen-space \
+                    pixel wide — checker_aa and sdf_coverage fed by screen_width, \
+                    the fragment-only family (plan5 D6)",
+            pipeline: Pipeline::Document(alpha_over_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "iridescence",
+            blurb: "a thin-film sphere: the spectral Khronos evaluation over a \
+                    noise-swept thickness, the view term an honest dot(N, V) — \
+                    plan4's ticket 6, unblocked by the derivative contract",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
             instances: 1,
             key_intensity: 42.0,
             features: &[],
@@ -1179,18 +1230,24 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
 }
 
 // ---------------------------------------------------------------------------
-/// Opaque colour and depth, then dual depth peeling of the `transparent`
-/// tag, then the same tonemap every other demo presents through.
+/// Opaque colour and depth, then dual depth peeling of the peeled tier,
+/// then the sorted tier over the composite, then the same tonemap every
+/// other demo presents through.
 ///
 /// The layer count is the default of `wxsl_peel_layers`, four: a ray
 /// through the torus and the sphere meets four surfaces, and four is also
-/// what the baseline path can peel inside the eight-pass budget.
+/// what the baseline path can peel inside the eight-pass budget. The
+/// plate behind the pair asks for no layers at all (plan5 D5), so no peel
+/// pass reads it: a sorted-tier pass composites it over the peel
+/// composite after them, alpha-over, and the tonemap reads what it left.
 fn peel_document() -> Graph {
     let registry = wxsl::core::pipeline::registry();
     let mut graph = wxsl::core::pipeline::document("dual depth peel");
     // The opaque pass draws this source. The peel ignores it and draws
     // `transparent` itself, so the two passes never draw the same instance.
     let scene = graph.add(Node::new(doc::SOURCE_SCENE).with_setting(doc::SETTING_TAGS, TAG_OPAQUE));
+    let transparents =
+        graph.add(Node::new(doc::SOURCE_SCENE).with_setting(doc::SETTING_TAGS, TAG_TRANSPARENT));
     let depth = graph.add_node(doc::RESOURCE_DEPTH);
     let color = graph.add(
         Node::new(doc::RESOURCE_COLOR)
@@ -1203,6 +1260,17 @@ fn peel_document() -> Graph {
         Node::new(doc::RESOURCE_COLOR)
             .with_label("peeled")
             .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    // The sorted tier: the plate, and only the plate (`layers = sorted`
+    // is the tier no peel reads). It loads the peel composite rather than
+    // clearing it, and its declaration after the peel is what puts it in
+    // front of what the pair left.
+    let sorted = graph.add(
+        Node::new(doc::PASS_GEOMETRY)
+            .with_label("sorted transparents")
+            .with_setting(doc::SETTING_LAYERS, "sorted")
+            .with_setting(doc::SETTING_SORT, "back to front")
+            .with_setting(doc::SETTING_BLEND, "alpha over"),
     );
     let tonemap = graph.add(
         Node::new(doc::PASS_SCREEN)
@@ -1217,6 +1285,9 @@ fn peel_document() -> Graph {
         ((shade, "depth"), (peel, "depth")),
         ((shade, "color"), (peel, "scene")),
         ((peeled, "color"), (peel, "into")),
+        ((shade, "depth"), (sorted, "depth")),
+        ((transparents, "draws"), (sorted, "draws")),
+        ((peeled, "color"), (sorted, "into")),
         ((peeled, "color"), (tonemap, "image")),
         ((tonemap, "color"), (present, "surface")),
     ] {
@@ -1225,6 +1296,45 @@ fn peel_document() -> Graph {
             .expect("the peel document wires");
     }
     graph
+}
+
+/// One blended pass over the frame (plan5 D3/D4): everything tagged
+/// `transparent`, straight-alpha over, and — with `sorted` — the pass's
+/// own back-to-front sort, the order the draws' `render_order` groups
+/// ride. The pass writes the frame target as its first writer, so the
+/// clear colour is the background the composite sits on.
+fn blended_document(name: &str, sorted: bool) -> Graph {
+    let registry = wxsl::core::pipeline::registry();
+    let mut graph = wxsl::core::pipeline::document(name);
+    let scene =
+        graph.add(Node::new(doc::SOURCE_SCENE).with_setting(doc::SETTING_TAGS, TAG_TRANSPARENT));
+    let depth = graph.add_node(doc::RESOURCE_DEPTH);
+    let mut pass = Node::new(doc::PASS_GEOMETRY)
+        .with_label("blended")
+        .with_setting(doc::SETTING_BLEND, "alpha over");
+    if sorted {
+        pass = pass.with_setting(doc::SETTING_SORT, "back to front");
+    }
+    let blended = graph.add(pass);
+    let present = graph.add_node(doc::PRESENT);
+    for (from, to) in [
+        ((scene, "draws"), (blended, "draws")),
+        ((depth, "depth"), (blended, "depth")),
+        ((blended, "color"), (present, "surface")),
+    ] {
+        graph
+            .wire(&registry, from, to)
+            .expect("the blended document wires");
+    }
+    graph
+}
+
+fn order_document() -> Graph {
+    blended_document("render order", true)
+}
+
+fn alpha_over_document() -> Graph {
+    blended_document("alpha over", false)
 }
 
 // The scene — one PBR cube, the pbr_cube demo's, lit per demo
@@ -1470,6 +1580,140 @@ fn cube_transform(time: f32) -> Mat4 {
     Mat4::from_rotation_y(time * 0.45) * Mat4::from_rotation_x(time * 0.21)
 }
 
+/// The fragment-only family as one surface (plan5 D6): `checker_aa`
+/// carries the pattern, and an SDF disc's alpha takes its width from
+/// `screen_width` — the exact caller-side recipe `sdf_coverage`'s doc
+/// describes. Blended by the demo's document, so the disc's edge is real
+/// coverage, not a hard step.
+fn sdf_aa_material_graph() -> Result<Graph, Box<dyn Error>> {
+    let registry = wxsl::stdlib::registry();
+    let mut graph = Graph::new("sdf aa");
+    let uv = graph.add_node("input.uv");
+    let checker = graph
+        .add(Node::new("generative.checker_aa").with_param("cells", Value::Vec2([24.0, 24.0])));
+    let pattern = graph.add_node("convert.splat");
+    let centre = graph.add(Node::new("const.value").with_param("value", Value::Vec2([0.5, 0.5])));
+    let p = graph.add_node("math.subtract");
+    let circle = graph.add(Node::new("sdf.circle").with_param("radius", Value::F32(0.36)));
+    let width = graph.add_node("math.screen_width");
+    let coverage = graph.add_node("sdf.coverage");
+    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    graph
+        .set_generic(&registry, pattern, "T", ValueType::Vec3)
+        .map_err(|error| format!("the splat does not resolve: {error}"))?;
+    for side in ["A", "B"] {
+        graph
+            .set_generic(&registry, p, side, ValueType::Vec2)
+            .map_err(|error| format!("the subtract does not resolve: {error}"))?;
+    }
+    for (from, to) in [
+        ((uv, "out"), (checker, "uv")),
+        ((checker, "out"), (pattern, "value")),
+        ((uv, "out"), (p, "a")),
+        ((centre, "out"), (p, "b")),
+        ((p, "out"), (circle, "p")),
+        ((circle, "out"), (width, "value")),
+        ((circle, "out"), (coverage, "distance")),
+        ((width, "out"), (coverage, "width")),
+        ((pattern, "out"), (output, "base_color")),
+        ((coverage, "out"), (output, "alpha")),
+    ] {
+        graph
+            .wire(&registry, from, to)
+            .map_err(|error| format!("the sdf-aa graph does not wire: {error}"))?;
+    }
+    graph
+        .validate(&registry)
+        .map_err(|error| format!("the sdf-aa material does not validate: {error}"))?;
+    Ok(graph)
+}
+
+/// A thin-film sphere (plan4's ticket 6): the film's thickness sweeps
+/// with simplex noise over the surface, the view term is the honest
+/// dot(N, V), and the spectral Khronos evaluation tints the base colour.
+/// Until a model carries the film as a channel (the guide's S2-D), the
+/// response is a surface term — this graph is the honest spelling of
+/// that: it modulates colour it owns, it does not fake a BRDF.
+fn iridescent_material_graph() -> Result<Graph, Box<dyn Error>> {
+    let registry = wxsl::stdlib::registry();
+    let mut graph = Graph::new("iridescence");
+    let normal = graph.add_node("input.world_normal");
+    let view = graph.add_node("input.view_direction");
+    let facing = graph.add_node("vector.dot");
+    // The thickness field lives in *object* space — sampled from the
+    // world position it would stay put while the sphere turns underneath
+    // it, and the film would appear to swim across the surface instead of
+    // rotating with it — and only the vertex stage has object space, so
+    // the field crosses through a declared interpolant (ADR 0027).
+    let position = graph.add_node("input.object_position");
+    let scale = graph.add(Node::new("math.multiply").with_param("b", Value::Vec3([1.1, 1.1, 1.1])));
+    let noise = graph.add_node("generative.simplex3");
+    let thickness = graph.add(
+        Node::new("math.remap")
+            .with_param("in_min", Value::F32(-1.0))
+            .with_param("in_max", Value::F32(1.0))
+            .with_param("out_min", Value::F32(240.0))
+            .with_param("out_max", Value::F32(880.0)),
+    );
+    graph.declare_attribute(AttributeDecl::computed("film_thickness", ValueType::F32));
+    let varying =
+        graph.add(Node::new(abi::VARYING_OUTPUT_ID).with_setting("name", "film_thickness"));
+    let thickness_in =
+        graph.add(Node::new("input.attribute").with_setting("name", "film_thickness"));
+    let f0 = graph.add(Node::new("const.value").with_param("value", Value::F32(0.04)));
+    let f0_vec = graph.add_node("convert.splat");
+    let film = graph.add(Node::new("lighting.iridescence").with_param("film_ior", Value::F32(1.3)));
+    let base =
+        graph.add(Node::new("const.value").with_param("value", Value::Vec3([0.42, 0.38, 0.36])));
+    let colour = graph.add_node("math.multiply");
+    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    graph
+        .set_generic(&registry, facing, "T", ValueType::Vec3)
+        .map_err(|error| format!("the dot does not resolve: {error}"))?;
+    for side in ["A", "B"] {
+        graph
+            .set_generic(&registry, scale, side, ValueType::Vec3)
+            .map_err(|error| format!("the scale does not resolve: {error}"))?;
+        graph
+            .set_generic(&registry, colour, side, ValueType::Vec3)
+            .map_err(|error| format!("the multiply does not resolve: {error}"))?;
+    }
+    graph
+        .set_generic(&registry, thickness, "T", ValueType::F32)
+        .map_err(|error| format!("the remap does not resolve: {error}"))?;
+    for interpolant in [&varying, &thickness_in] {
+        graph
+            .set_generic(&registry, *interpolant, "T", ValueType::F32)
+            .map_err(|error| format!("the interpolant does not resolve: {error}"))?;
+    }
+    graph
+        .set_generic(&registry, f0_vec, "T", ValueType::Vec3)
+        .map_err(|error| format!("the splat does not resolve: {error}"))?;
+    for (from, to) in [
+        ((normal, "out"), (facing, "a")),
+        ((view, "out"), (facing, "b")),
+        ((position, "out"), (scale, "a")),
+        ((scale, "out"), (noise, "p")),
+        ((noise, "out"), (thickness, "value")),
+        ((thickness, "out"), (varying, abi::SOCKET_VARYING)),
+        ((thickness_in, "out"), (film, "thickness_nm")),
+        ((f0, "out"), (f0_vec, "value")),
+        ((f0_vec, "out"), (film, "base_f0")),
+        ((facing, "out"), (film, "cos_theta")),
+        ((film, "out"), (colour, "a")),
+        ((base, "out"), (colour, "b")),
+        ((colour, "out"), (output, "base_color")),
+    ] {
+        graph
+            .wire(&registry, from, to)
+            .map_err(|error| format!("the iridescence graph does not wire: {error}"))?;
+    }
+    graph
+        .validate(&registry)
+        .map_err(|error| format!("the iridescent material does not validate: {error}"))?;
+    Ok(graph)
+}
+
 /// The motion-blur demo's path: a sweep across the frame, fast enough
 /// that one frame's motion is a visible smear, and slow enough to stay
 /// on screen.
@@ -1522,35 +1766,6 @@ fn cube_draws<'a>(
         .collect()
 }
 
-/// The torus and the sphere, sharing the peel material. The sphere sits
-/// in the torus's tube so a ray through the pair meets both surfaces.
-/// `sphere_bindings` is the same material with its `tint` uniform blue.
-fn peel_draws<'a>(
-    torus: &'a Mesh,
-    sphere: &'a Mesh,
-    material: &'a wxsl::render::Material,
-    torus_bindings: &'a wxsl::render::MaterialBindings,
-    sphere_bindings: &'a wxsl::render::MaterialBindings,
-    tint: &'a InstanceAttributes,
-    time: f32,
-) -> DrawList<'a> {
-    let spin = Mat4::from_rotation_y(time * 0.35);
-    let torus_place = spin * Mat4::from_rotation_x(0.7);
-    let sphere_place = spin * Mat4::from_translation(Vec3::new(0.72, 0.08, 0.12));
-    [
-        (torus, torus_place, torus_bindings),
-        (sphere, sphere_place, sphere_bindings),
-    ]
-    .into_iter()
-    .map(|(mesh, place, bindings)| {
-        DrawItem::new(mesh, material)
-            .with_transform(place)
-            .with_bindings(bindings)
-            .with_attributes(tint)
-    })
-    .collect()
-}
-
 /// Everything a frame needs, shared by every demo: one renderer, one
 /// mesh, one material, one set of bindings.
 struct Stage {
@@ -1577,7 +1792,23 @@ struct Stage {
     /// Same material, with the `tint` uniform set blue.
     sphere_bindings: wxsl::render::MaterialBindings,
     sphere: Mesh,
+    /// The sorted tier (plan5 D5): the same peel surface with no layer
+    /// budget, so no peel pass reads it; the tiered document composites
+    /// it over the pair through the sorted-tier pass.
+    plate_material: wxsl::render::Material,
+    plate_bindings: wxsl::render::MaterialBindings,
+    plate: Mesh,
     torus: Mesh,
+    /// The render-order demo's three cards: the order `-1` underlay, the
+    /// order-0 sheet, and the order-1 hologram behind it in depth yet
+    /// drawn after it — the group order is data (plan5 D4).
+    order: [DemoMaterial; 3],
+    /// The sdf-aa demo's blended pattern surface (plan5 D6): an AA'd
+    /// checker and an SDF disc whose edge is `screen_width`-wide
+    /// coverage.
+    sdf_aa: DemoMaterial,
+    /// The iridescence demo's thin-film sphere (plan4's ticket 6).
+    iridescent: DemoMaterial,
     /// The bake demo's own material and the table its bake pass writes
     /// through (ADR 0045): the graph is parsed once, the effect and the
     /// material are compiled from it, the texture is the *material's*
@@ -1594,6 +1825,36 @@ struct BakeStage {
     material: wxsl::render::Material,
     bindings: wxsl::render::MaterialBindings,
     view: wgpu::TextureView,
+}
+
+/// One demo's own material and its bindings — the bake stage's shape,
+/// for the demos that need a material of their own but no bake table.
+struct DemoMaterial {
+    material: wxsl::render::Material,
+    bindings: wxsl::render::MaterialBindings,
+}
+
+impl DemoMaterial {
+    fn new(
+        gpu: &GpuContext,
+        renderer: &mut Renderer,
+        texture: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        graph: &Graph,
+        config: &wxsl::render::material::MaterialConfig,
+    ) -> Result<Self, Box<dyn Error>> {
+        let material =
+            wxsl::render::Material::with_config(graph, &wxsl::stdlib::registry(), config)?;
+        let bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            renderer,
+            &material,
+            texture,
+            sampler,
+        )?;
+        Ok(DemoMaterial { material, bindings })
+    }
 }
 
 impl Stage {
@@ -1636,7 +1897,18 @@ impl Stage {
         )?;
         let bake = BakeStage::new(&gpu, &mut renderer)?;
         let peel_graph = peel_material_graph(&scene_graph)?;
+        // The peeled pair asks for the demo's whole layer budget (plan5
+        // D5): transparency is tiered now, and a transparent with no
+        // budget is nobody the peel reads.
         let peel_material = wxsl::render::Material::with_config(
+            &peel_graph,
+            &registry,
+            &wxsl::render::material::MaterialConfig::default()
+                .with_tags(Tags::from_iter([TAG_TRANSPARENT]))
+                .with_shadows(false, false)
+                .with_max_layers(4),
+        )?;
+        let plate_material = wxsl::render::Material::with_config(
             &peel_graph,
             &registry,
             &wxsl::render::material::MaterialConfig::default()
@@ -1661,8 +1933,68 @@ impl Stage {
         )?;
         sphere_bindings.set("tint", Value::Vec3([0.05, 0.22, 1.0]))?;
         sphere_bindings.upload(&gpu.device, &gpu.queue)?;
+        let mut plate_bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            &mut renderer,
+            &plate_material,
+            &texture,
+            &sampler,
+        )?;
+        // Green, so the tier reads as itself in the picture.
+        plate_bindings.set("tint", Value::Vec3([0.1, 0.9, 0.2]))?;
+        plate_bindings.upload(&gpu.device, &gpu.queue)?;
         let sphere = Mesh::sphere(&gpu.device, 0.85);
         let torus = Mesh::torus(&gpu.device, 1.15, 0.38);
+        let plate = Mesh::plane(&gpu.device, 3.4);
+        // The render-order demo's cards, from the peel graph so the tint
+        // and alpha uniforms drive them: underlay, sheet, hologram.
+        let mut cards: Vec<DemoMaterial> = Vec::new();
+        for (order, tint, alpha) in [
+            (-1, [0.2, 0.2, 0.2], 1.0),
+            (0, [0.1, 0.9, 0.2], 0.5),
+            (1, [1.0, 0.15, 0.1], 0.9),
+        ] {
+            let config = wxsl::render::material::MaterialConfig::default()
+                .with_tags(Tags::from_iter([TAG_TRANSPARENT]))
+                .with_shadows(false, false)
+                .with_render_order(order);
+            let mut card = DemoMaterial::new(
+                &gpu,
+                &mut renderer,
+                &texture,
+                &sampler,
+                &peel_graph,
+                &config,
+            )?;
+            card.bindings.set("tint", Value::Vec3(tint))?;
+            card.bindings.set("alpha", Value::F32(alpha))?;
+            card.bindings.upload(&gpu.device, &gpu.queue)?;
+            cards.push(card);
+        }
+        let order: [DemoMaterial; 3] = cards
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("exactly three cards were pushed"));
+        let sdf_graph = sdf_aa_material_graph()?;
+        let sdf_aa = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &sdf_graph,
+            &wxsl::render::material::MaterialConfig::default()
+                .with_tags(Tags::from_iter([TAG_TRANSPARENT]))
+                .with_shadows(false, false),
+        )?;
+        let iridescent_graph = iridescent_material_graph()?;
+        let iridescent = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &iridescent_graph,
+            &wxsl::render::material::MaterialConfig::default(),
+        )?;
         Ok(Stage {
             gpu,
             renderer,
@@ -1677,9 +2009,15 @@ impl Stage {
             material_model: None,
             peel_material,
             peel_bindings,
+            plate_material,
+            plate_bindings,
+            plate,
             sphere_bindings,
             sphere,
             torus,
+            order,
+            sdf_aa,
+            iridescent,
             bake: Some(bake),
         })
     }
@@ -1741,15 +2079,131 @@ impl Stage {
         if demo.name == "peel" {
             let tint =
                 InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
-            let draws = peel_draws(
-                &self.torus,
-                &self.sphere,
-                &self.peel_material,
-                &self.peel_bindings,
-                &self.sphere_bindings,
-                &tint,
-                time,
-            );
+            // The torus, the sphere, and the sorted tier's plate. The
+            // sphere sits in the torus's tube so a ray through the pair
+            // meets both surfaces, and the plate hangs behind and below
+            // them — the working case for the tiers (plan5 D5): a sorted
+            // transparent the peel composite does not cover. It is
+            // submitted *first*, so only the sorted pass's own
+            // back-to-front sort and the peel's depth windows decide what
+            // lands in front.
+            let spin = Mat4::from_rotation_y(time * 0.35);
+            let surfaces = [
+                (
+                    &self.plate,
+                    &self.plate_material,
+                    &self.plate_bindings,
+                    spin * Mat4::from_translation(Vec3::new(-0.9, -1.15, -1.9))
+                        * Mat4::from_rotation_x(1.2),
+                ),
+                (
+                    &self.torus,
+                    &self.peel_material,
+                    &self.peel_bindings,
+                    spin * Mat4::from_rotation_x(0.7),
+                ),
+                (
+                    &self.sphere,
+                    &self.peel_material,
+                    &self.sphere_bindings,
+                    spin * Mat4::from_translation(Vec3::new(0.72, 0.08, 0.12)),
+                ),
+            ];
+            let draws: DrawList = surfaces
+                .into_iter()
+                .map(|(mesh, material, bindings, place)| {
+                    DrawItem::new(mesh, material)
+                        .with_transform(place)
+                        .with_bindings(bindings)
+                        .with_attributes(&tint)
+                })
+                .collect();
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "render-order" {
+            // Three draws, one blended pass: the underlay at order -1,
+            // the sheet at order 0, the hologram at order 1 *behind the
+            // sheet in depth* — drawn after it anyway, because the group
+            // order is the draws' data, not the submission's (plan5 D4).
+            // The pass sorts back to front, so the composite is the
+            // groups in ascending order whatever order they arrive in.
+            // The hologram is a *sphere* on purpose: the tier's assumption
+            // is no self-overlap, and a convex draw honours it (a torus
+            // folds against itself — that is what `pass.peel` is for).
+            let [underlay, sheet, hologram] = &self.order;
+            // The tint uniform is the graph's colour here; the per-instance
+            // attribute it declares is the peel block's white identity.
+            let tint =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
+            let stand = Mat4::from_rotation_x(FRAC_PI_2);
+            let items = [
+                DrawItem::new(&self.plate, &underlay.material)
+                    .with_transform(Mat4::from_translation(Vec3::new(0.0, 0.0, -1.8)) * stand)
+                    .with_bindings(&underlay.bindings)
+                    .with_attributes(&tint),
+                DrawItem::new(&self.plate, &sheet.material)
+                    .with_transform(Mat4::from_translation(Vec3::new(0.0, 0.0, 0.5)) * stand)
+                    .with_bindings(&sheet.bindings)
+                    .with_attributes(&tint),
+                DrawItem::new(&self.sphere, &hologram.material)
+                    .with_transform(
+                        Mat4::from_translation(Vec3::new(0.0, 0.0, -0.6))
+                            * Mat4::from_rotation_y(time * 0.6),
+                    )
+                    .with_bindings(&hologram.bindings)
+                    .with_attributes(&tint),
+            ];
+            let draws: DrawList = items.into_iter().collect();
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "sdf-aa" {
+            // One card, blended: the AA'd checker and the SDF disc whose
+            // edge is one screen-space pixel wide (plan5 D6).
+            let draws: DrawList = [DrawItem::new(&self.plate, &self.sdf_aa.material)
+                .with_transform(
+                    Mat4::from_translation(Vec3::new(0.0, 0.0, 0.4))
+                        * Mat4::from_rotation_x(FRAC_PI_2),
+                )
+                .with_bindings(&self.sdf_aa.bindings)]
+            .into_iter()
+            .collect();
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "iridescence" {
+            // The thin-film sphere: the spectral response sweeping with
+            // the noise over the surface (plan4's ticket 6).
+            let draws: DrawList = [DrawItem::new(&self.sphere, &self.iridescent.material)
+                .with_transform(cube_transform(time * 0.5))
+                .with_bindings(&self.iridescent.bindings)]
+            .into_iter()
+            .collect();
             self.renderer.render(
                 &self.gpu.device,
                 &self.gpu.queue,

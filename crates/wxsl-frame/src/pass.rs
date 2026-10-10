@@ -354,6 +354,23 @@ pub const MAX_BLEND: BlendState = BlendState {
     },
 };
 
+/// Straight-alpha back-to-front: `src * src.a + dst * (1 - src.a)`. The
+/// sorted transparency tier's blend (plan5 D5) — a `pass.geometry` whose
+/// material writes straight alpha composites the painter's way with it,
+/// where the peel accumulators work premultiplied.
+pub const ALPHA_OVER: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::SrcAlpha,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+};
+
 /// The depth-stencil attachment of a render pass.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DepthAttachment {
@@ -589,6 +606,120 @@ pub struct PassDesc {
     /// existed; the rest are honoured by the renderer's frame loop
     /// (plan2 P10).
     pub policy: Policy,
+    /// How the pass orders its draws, on top of each draw's own
+    /// [`RENDER_ORDER_NONE`] (plan5 D3/D4). [`SortOrder::None`] —
+    /// submission order — is the default and every pass list's behaviour
+    /// before this field existed. Sorting reorders the draws *inside*
+    /// this pass; the pass order itself stays the scheduler's.
+    pub sort: SortOrder,
+    /// Which of the source's draws the pass takes, by the material's
+    /// `max_layers` (plan5 D5). [`LayerFilter::All`] — every draw — is
+    /// the default and every pass list's behaviour before this field
+    /// existed; `pass.peel`'s expansion builds the `Peeled` filters, and
+    /// a document's sorted-tier pass asks for [`LayerFilter::Sorted`].
+    pub layers: LayerFilter,
+}
+
+/// How a pass sorts its draws (plan5 D3). Opt-in per pass: submission
+/// order is the default, and every document that ever compiled compiles
+/// and draws identically under it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// The application's submission order — today's behaviour.
+    #[default]
+    None,
+    /// Nearest first: early-z wins, the opaque pass's sort.
+    FrontToBack,
+    /// Farthest first: the painter's algorithm, the transparent pass's
+    /// sort — sound exactly as long as the draws do not interpenetrate,
+    /// which is what the peel stages and a material's `max_layers`
+    /// (plan5 D5) are the honest answer for.
+    BackToFront,
+}
+
+impl SortOrder {
+    /// The name used in serialized documents and on a command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            SortOrder::None => "none",
+            SortOrder::FrontToBack => "front to back",
+            SortOrder::BackToFront => "back to front",
+        }
+    }
+
+    /// Parse the name, with the leniency [`Policy::parse`] shows.
+    pub fn parse(text: &str) -> Option<Self> {
+        let folded = text.trim().replace('_', " ");
+        let candidate = folded.to_ascii_lowercase();
+        [
+            SortOrder::None,
+            SortOrder::FrontToBack,
+            SortOrder::BackToFront,
+        ]
+        .into_iter()
+        .find(|order| order.name() == candidate)
+    }
+}
+
+/// Which draws of a geometry pass's source the pass takes, by the
+/// material's `max_layers` (plan5 D5). Transparency is tiered: a draw with
+/// the default budget of zero is plain sorted alpha blending, and no peel
+/// pass reads it; a draw that asks for layers goes through `pass.peel`,
+/// which spends its budget one iteration at a time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerFilter {
+    /// Every draw the source selects — today's behaviour, and the
+    /// default.
+    #[default]
+    All,
+    /// Only draws whose `max_layers` is zero: the sorted tier, which no
+    /// peel pass touches.
+    Sorted,
+    /// Only draws whose `max_layers` is still unspent at `layer`: peel
+    /// iteration `layer` skips an object whose budget ran out. The
+    /// pipeline's `wxsl_peel_layers` cap bounds which iterations are
+    /// generated at all, so a budget beyond the cap is clamped by
+    /// construction — a draw asking for more than the pipeline peels is
+    /// never an error.
+    Peeled {
+        /// The iteration's layer index, counting from 0.
+        layer: u32,
+    },
+}
+
+impl LayerFilter {
+    /// The document spelling, as [`Self::parse`] reads it. Only the two
+    /// authorable shapes parse: a `Peeled` filter is what `pass.peel`'s
+    /// expansion builds, one per iteration, never something a document
+    /// writes by hand.
+    pub fn name(self) -> &'static str {
+        match self {
+            LayerFilter::All => "all",
+            LayerFilter::Sorted => "sorted",
+            LayerFilter::Peeled { .. } => "peeled",
+        }
+    }
+
+    /// Parse the authorable names, with the leniency [`Policy::parse`]
+    /// shows.
+    pub fn parse(text: &str) -> Option<Self> {
+        let folded = text.trim().replace('_', " ");
+        let candidate = folded.to_ascii_lowercase();
+        [LayerFilter::All, LayerFilter::Sorted]
+            .into_iter()
+            .find(|filter| filter.name() == candidate)
+    }
+
+    /// Whether a draw with this material's `max_layers` enters the pass.
+    pub fn admits(self, max_layers: i32) -> bool {
+        match self {
+            LayerFilter::All => true,
+            LayerFilter::Sorted => max_layers == 0,
+            LayerFilter::Peeled { layer } => max_layers > layer as i32,
+        }
+    }
 }
 
 impl PassDesc {
@@ -605,6 +736,8 @@ impl PassDesc {
             reads: Vec::new(),
             writes: Vec::new(),
             policy: Policy::PerFrame,
+            sort: SortOrder::None,
+            layers: LayerFilter::All,
         }
     }
 
@@ -622,6 +755,8 @@ impl PassDesc {
             reads: Vec::new(),
             writes: Vec::new(),
             policy: Policy::PerFrame,
+            sort: SortOrder::None,
+            layers: LayerFilter::All,
         }
     }
 
@@ -639,12 +774,20 @@ impl PassDesc {
             reads: Vec::new(),
             writes: Vec::new(),
             policy: Policy::PerFrame,
+            sort: SortOrder::None,
+            layers: LayerFilter::All,
         }
     }
 
     /// Add a colour attachment.
     pub fn with_color(mut self, attachment: Attachment) -> Self {
         self.color.push(attachment);
+        self
+    }
+
+    /// Restrict which of the source's draws this pass takes (plan5 D5).
+    pub fn with_layers(mut self, layers: LayerFilter) -> Self {
+        self.layers = layers;
         self
     }
 
@@ -687,6 +830,12 @@ impl PassDesc {
     /// Set how often the pass runs.
     pub fn with_policy(mut self, policy: Policy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Set how the pass orders its draws (plan5 D3/D4).
+    pub fn with_sort(mut self, sort: SortOrder) -> Self {
+        self.sort = sort;
         self
     }
 

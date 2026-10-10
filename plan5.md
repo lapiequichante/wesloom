@@ -115,6 +115,22 @@ three layers downstream.
   graph compiles unchanged.
 * ADR: "Fragment-only is a node constraint the stage analysis checks."
 
+**Landed on 2026-10-09** ([ADR
+0054](docs/adr/0054-fragment-only-is-a-node-constraint-the-stage-analysis-checks.md)),
+as written. The constraint is a `fragment_only` flag on the
+`NodeDefinition`, set by the derivation's word-shaped scan of the body
+(`dpdx`, `dpdy`, `dpdCoarse`, `dpdFine`, `fwidth`; comments excluded)
+or by an author through the builder; build.rs's generated table emits
+it, so a derived node and its registered definition cannot disagree.
+`Auto` places fragment-only nodes in the fragment stage; a vertex pin
+and a vertex consumer are each `GraphError::WrongStage` naming the
+derivative — and the shared-node case that once answered "compute
+twice" is an error, because computing a derivative twice means
+computing it once where it does not exist. `generate_bake`'s purity
+loop refuses one in a bake cone. Four negative tests in the stage
+analysis, three detection tests in `wxsl-lang`, and `roughness_aa`
+shipped with them — D6's first consumer closed the same day.
+
 ### D2 — Forward-shaded materials
 
 The escape hatch, in the owner's spelling: a material marked
@@ -163,6 +179,37 @@ where "forward pass bolted onto deferred" was not.
 * ADR: "A material may shade forward under either pipeline" — amends
   ADR 0022's stage contract and records the model-spelling decision.
 
+**Landed on 2026-10-10**
+([ADR 0056](docs/adr/0056-a-material-may-shade-forward-under-either-pipeline.md)),
+with two decisions the design phase settled against the written sketch:
+
+* **The radiance travels in the emissive target, not the albedo** — the
+  owner's "l'albedo est l'output" taken literally fails on arithmetic
+  (albedo is `rgba8unorm`; radiance is not), and a fresh model-extra
+  target pushes the shipped full set past the attachment budget (30 + 8
+  > 32). Emissive is HDR, already in the base layout, and a preshaded
+  pixel's lighting pass reads nothing else. The pack stores
+  `shade_surface(...)`'s output there.
+* **The lighting pass routes, it does not dispatch**: a pixel whose id
+  names `wxsl.preshaded` is answered from the stored texel *before* the
+  light loop — inside the loop the stored radiance would be added once
+  per light on top of ambient it never asked for. A set of only the
+  route is pure passthrough, generating no shading function at all.
+  Finding that set also exposed the latent empty-`ModelExtras` bug (a
+  two-model set with no requested channels generated a struct WGSL
+  refuses), fixed in the same change.
+
+`wxsl.preshaded` (id 5) in `DEFAULT_MODELS`; `MaterialConfig.forward_shaded`
+through resolution — the set must carry the route, `receive_shadow` must
+be false, the route may not be the material's own model, each by name —
+and the G-buffer codegen arm that shades before it packs. The acceptance
+test is the exactness the plan asked for: `--forward-shaded pbr_cube`
+measures `mean |forward - deferred| = 0.0000`, and the GPU suite's
+forward-shaded case (a `roughness_aa` surface under the deferred preset)
+asserts the parity and that the gbuffer module shades. The roughness-AA'd
+under-deferred demo of the done-when is `cargo run -p wxsl --example
+pbr_cube -- --headless --forward-shaded`.
+
 ### D3 — Draw order as data
 
 Opaque front-to-back (early-z), transparent back-to-front (the painter's
@@ -201,6 +248,19 @@ camera — a pure function over data, which is what makes it testable in
   `FrontToBack`, and the motion tests stay green with sorting on.
 * ADR: "Sorting is opt-in per pass, and it sorts rows, not draws" —
   amends ADR 0005's application-owns-order note.
+
+**Landed on 2026-10-10** ([ADR
+0055](docs/adr/0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md)),
+with one simplification the design phase found: sorting never touches
+the rows at all, because each recorded draw already carries its own
+instance index — a sorted pass draws row *k* whenever it likes, and the
+previous-frame rows line up by construction, which retires the velocity
+risk without a test-sized guard (the `motion` suite runs green over the
+change regardless). `PassDesc.sort` with the three orders, the `sort`
+setting on `pass.geometry` (unknown names refused by name), the stock
+presets unchanged at `None`, and `view_depth` — the one shared key —
+pure in `wxsl-frame` with its ordering test. The gallery demo of the
+done-when rides D4's demo.
 
 ### D4 — Render order: the per-object group control
 
@@ -253,6 +313,20 @@ ahead of or behind the rest *without* authoring a pass per level.
 * ADR: "Render order sorts draws inside a pass; passes order passes." —
   recorded alongside D3's amendment of ADR 0005.
 
+**Landed on 2026-10-10** (ADR 0055), as written: `render_order` on
+`MaterialConfig` through resolution to the draw, the sort key
+lexicographic with the depth term flipped for `BackToFront` and the
+order term never, negative orders legal, and the document-side `sort`
+setting landing in the same change so a document can pin both halves of
+its pass's order in one place. The done-when's proof landed the same
+day as D5's close-out: the `sorting` GPU test renders the order-1
+hologram in front of the nearer sheet with the submission order
+reversed between two runs, and the unsorted document lands a different
+composite per submission order; the gallery's `render-order` demo is
+the same scene as a picture (the hologram a sphere on purpose — the
+tier's assumption is no self-overlap, and a convex draw honours it;
+a torus folds against itself, which is what `pass.peel` is for).
+
 ### D5 — `max_layers`: tiered transparency
 
 The peel pipeline (ADR 0047) is the right mechanism for *interpenetrating*
@@ -301,6 +375,48 @@ have settled. The proposal splits the `transparent` tag into two tiers:
   counts).
 * ADR: "Transparency is tiered: sorted by default, peeled on request."
 
+**Landed on 2026-10-10**
+([ADR 0057](docs/adr/0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md)),
+with the plumbing one piece simpler than the sketch feared and one
+document rule amended:
+
+* **The per-draw property is one filter, as data.** `PassDesc.layers` —
+  `LayerFilter::All` (the default), `Sorted`, or `Peeled { layer }`. The
+  document vocabulary gains the `layers` setting on `pass.geometry`
+  (`all`/`sorted`; the `Peeled` filters are `pass.peel`'s own expansion,
+  never hand-authored), and the renderer's frame compile retains only
+  the draws whose `max_layers` the filter admits — which is the whole
+  per-iteration budget mechanism, and where the clamp by construction
+  lives. `LayerFilter::admits` is pure and unit-tested.
+* **The sorted tier needed a blend**, which no document spelling
+  provided: `blend = alpha over` is the second new `pass.geometry`
+  setting, and a sorted-tier pass *loads* its target — compositing onto
+  the peel composite is its point. That forced the one rule amendment:
+  "one unconnected `into`" is now "one *clearing* writer, first" —
+  several passes may write the frame target in sequence, everything
+  after the head must load, and a later clearing writer is refused by
+  name.
+* **It is a migration, not a default**: a transparent that never asks
+  for layers silently leaves every existing peel pipeline. The peeling
+  GPU test's surfaces now set `max_layers = PEEL_LAYERS_MAX`, and its
+  new case is the done-when's working scene — two interpenetrating
+  peeled quads, a `max_layers = 0` plate behind them submitted first,
+  compositing over the pair through a sorted-tier pass, on both the
+  baseline and native paths. The gallery's `peel` demo gained the same
+  plate (green, hanging behind and below the pair, submitted first).
+* **The done-when's second half landed with a new instrument** (same
+  day): the renderer counts draws per pass (`Renderer::pass_draw_count`,
+  reset each frame), and the peeling test asserts the budget with it —
+  ten `max_layers = 0` transparents ride the sorted tier, a pair asks
+  two layers, the peel passes carry the pair for exactly those two
+  iterations and draw nobody for the rest, while the run counts show the
+  emptied iterations still running. The count, not the run count, is
+  where the per-object cost went. One amendment came with the first
+  multi-draw tier: a pass whose `blend` is set tests depth and does not
+  write it — a blended draw that wrote depth would let each draw's z
+  reject every farther draw after it, and the painter's tier would
+  silently become "nearest wins" (recorded in ADR 0057).
+
 ### D6 — The derivative nodes this unblocks
 
 The consumer ticket, last because everything above feeds it:
@@ -319,6 +435,18 @@ The consumer ticket, last because everything above feeds it:
 * Done when: the guide's ticket 2 closes and its derivative family is
   in the palette, compiled on every legal stage.
 * ADR: none beyond D1's.
+
+**First consumer landed on 2026-10-09** with D1: `roughness_aa` is in
+the palette, corpus-gated, and the guide's ticket 2 is closed. **The
+family completed on 2026-10-10**: `checker_aa` (the analytic filtered
+checker, Quilez's technique re-expressed), `grid_mask_aa`, and
+`math.screen_width` — the graph-facing `fwidth` that turns
+`sdf_coverage`'s documented caller-side recipe (`width =
+max(fwidth(distance), epsilon)`) into two wireable nodes. All
+fragment-only by derivation, corpus-gated; the gallery's `sdf-aa` demo
+is the picture of the family. D6 also unblocked plan4's full spectral
+iridescence (`lighting.iridescence`, the Khronos port, Apache-2.0) —
+see plan4's note.
 
 ## Suggested order
 

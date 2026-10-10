@@ -1,0 +1,26 @@
+// Anti-aliased grid mask
+//
+// `grid_mask` with the line edges settled by the pixel's footprint
+// instead of a `step`: a one-pixel ramp across each edge, so thin lines
+// and distant cells fade out rather than crawling as the camera moves.
+// The width is still a fraction of a cell; the ramp is whatever one
+// pixel of that cell is.
+//
+// Fragment-only by construction: the derivative *is* the footprint.
+fn grid_mask_aa(
+    uv: vec2f,       // Texture coordinates, 0..1 per repeat. @default 0.0, 0.0
+    cells: vec2f,    // Cells across the uv. @default 8.0, 8.0
+    line_width: f32, // Line width as a fraction of a cell, 0..0.5. @default 0.05
+) -> f32 {
+    let scaled = uv * max(cells, vec2f(1.0));
+    // One pixel, in cell units, on the coarser axis — the conservative
+    // ramp for both edges of both line directions.
+    let pixel = max(fwidth(scaled).x, fwidth(scaled).y);
+    let local = fract(scaled);
+    let border = min(local, vec2f(1.0) - local);
+    // Distance to the nearest line, in cell units; the line covers
+    // everything within `line_width` of a border, edge to edge.
+    let distance = min(border.x, border.y);
+    let w = clamp(line_width, 0.0, 0.5);
+    return 1.0 - smoothstep(w - 0.5 * pixel, w + 0.5 * pixel, distance);
+}

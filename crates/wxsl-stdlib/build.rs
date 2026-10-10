@@ -156,6 +156,9 @@ fn definition_expr(definition: &NodeDefinition) -> String {
     for declaration in &definition.macros {
         let _ = write!(out, "\n            .macro_var({})", macro_expr(declaration));
     }
+    if definition.fragment_only {
+        let _ = write!(out, "\n            .fragment_only()");
+    }
     let params = call
         .params
         .iter()

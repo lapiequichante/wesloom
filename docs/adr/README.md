@@ -68,6 +68,10 @@ is signal, don't delete it.
 | [0051](0051-dawn-implements-only-the-device-half.md) | Dawn implements only the device half, offline first | Accepted |
 | [0052](0052-runtime-compilation-stays-behind-the-data-abi.md) | Runtime compilation stays behind the data ABI | Accepted |
 | [0053](0053-permissive-shader-ports-retain-their-provenance.md) | Permissive shader ports retain their provenance | Accepted |
+| [0054](0054-fragment-only-is-a-node-constraint-the-stage-analysis-checks.md) | Fragment-only is a node constraint the stage analysis checks | Accepted |
+| [0055](0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md) | Sorting is opt-in per pass, and it sorts draws, not passes | Accepted |
+| [0056](0056-a-material-may-shade-forward-under-either-pipeline.md) | A material may shade forward under either pipeline, routed by the preshaded model | Accepted, amends [0022](0022-material-stages-replace-the-render-path-enum.md), [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) |
+| [0057](0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md) | Transparency is tiered: sorted by default, peeled on request | Accepted, extends [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

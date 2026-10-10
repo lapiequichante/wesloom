@@ -446,6 +446,33 @@ would be the dishonest thing the guide warns about), roughness AA
 the forward-shaded escape hatch as D2), and the surface-schema half
 of S2-D (per-fragment sheen tint/thickness as real channels).
 
+**The plan5-blocked remainder landed on 2026-10-10**, once plan5's
+fragment-only contract opened the door:
+
+* **The geometry-AA family** — `checker_aa` (the analytic filtered
+  checker), `grid_mask_aa`, and `math.screen_width`, the graph-facing
+  `fwidth` that turns `sdf_coverage`'s documented width recipe into two
+  wireable nodes. S2's done-when "an SDF blob anti-aliases" is the
+  gallery's `sdf-aa` demo: an AA'd checker and an SDF disc whose edge is
+  one screen-space pixel wide, blended by a one-pass document.
+* **Full spectral iridescence** — `lighting.iridescence`, the Khronos
+  glTF-Sample-Renderer port (Apache-2.0, NOTICE entries at both levels):
+  Snell into the film, Fresnel amplitudes at both interfaces, phase
+  inversions, and the two harmonic terms of the Fourier-space XYZ
+  integration, with `Fresnel0ToIor`/`IorToFresnel0`/`evalSensitivity`
+  inlined into the one function a node may declare. The view term is an
+  honest dot(N, V); the gallery's `iridescence` demo sweeps the
+  thickness with simplex noise over a sphere. A model-level channel
+  (S2-D) remains the queue's honest next step; the node is the surface
+  term, not a fake BRDF.
+
+Finding the first iridescence compile also exposed a latent
+`simplex3` bug the device-free corpus could never see: `h` was typed
+`vec3f` where Ashima's original is a `vec4`, and its `.w` accessor is
+a naga parse error — fixed (the corpus gate compiles with the in-tree
+compiler, which does not run naga; only module creation on a device
+validates that far).
+
 ### S3 — The world batch
 
 What surrounds the surface:
@@ -578,19 +605,18 @@ forward/deferred difference remains 0.0002.
    **N10** (cheaper now — B1's vocabulary is its first half), **N8**'s
    remainder.
 
-**S2/S3/S4 status, 2026-10-09**: S1 landed earlier (ADR 0053); the
+**S2/S3/S4 status, 2026-10-10**: S1 landed earlier (ADR 0053); the
 node-and-effect bulk of S2 (SDF, colour, BRDFs, the cloth model —
 S2-D's first increment), S3 (noise, procedural textures, fog, phases,
 the ray/equirect primitives) and S4 (the blur family, vignette, grain,
 chromatic aberration, as nodes and as shipped screen graphs) landed as
-described in the proposal sections above. Still open from the guide's
-twelve tickets: the fragment-only derivative contract (ticket 2),
-full iridescence (6), the single-scattering sky and the IBL ADR
-(8–9), the pyramid synthesis ADR and DOF (11–12). The palette is at
-171 nodes; N9's palette reorganization trigger has fired.
-The derivative contract and its consequences moved to their own plan —
-**plan5** (forward-shaded materials, ordered transparency,
-`max_layers`) owns ticket 2 from here.
+described in the proposal sections above. From the guide's twelve
+tickets: ticket 2 (the fragment-only derivative contract) closed as
+plan5's D1 with its AA'd family and ticket 6 (full spectral
+iridescence) closed behind it — see the S2 note. Still open: the
+single-scattering sky and the IBL ADR (8–9), the pyramid synthesis ADR
+and DOF (11–12), AgX, and the surface-schema half of S2-D. The palette
+is at 176 nodes; N9's palette reorganization trigger has fired.
 
 The B-series owns the critical path because the owner's priority is the
 backend; the S-series, being flat and unblocked, is what keeps every

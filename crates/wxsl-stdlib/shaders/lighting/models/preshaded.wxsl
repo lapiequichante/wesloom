@@ -1,0 +1,29 @@
+// The preshaded passthrough lighting model
+//
+// Returns the shaded radiance a forward-shaded material already computed
+// in the geometry pass, verbatim: no lights, no shadow attenuation, no
+// re-shading (plan5 D2). The radiance travels where the G-buffer keeps
+// emissive, which is why the function reads `surface.emissive`.
+//
+// A material never shades *with* this model — it is the route by which
+// the generated lighting pass recognizes a pixel whose answer is already
+// in the G-buffer: the pass returns the stored radiance before its light
+// loop runs, so the light loop's version of this function is never
+// reached. Resolution refuses a material that marks itself forward-shaded
+// and names this model at once — the route, not a shading function.
+//
+// Not a node: one of the entries of `wxsl_core::lighting::DEFAULT_MODELS`,
+// shaded through the lighting-model registry rather than placed on a
+// canvas, so the node derivation skips this directory on purpose.
+
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn lighting_preshaded(
+    surface: Surface,
+    ctx: SurfaceContext,    // unused: the radiance is already computed
+    light: LightSample,     // unused: no per-light term survives the route
+    extra: vec4f,           // unused: this model requests no G-buffer data
+) -> vec3f {
+    return surface.emissive;
+}

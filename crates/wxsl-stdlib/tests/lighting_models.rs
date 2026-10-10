@@ -86,12 +86,15 @@ fn model(name: &str) -> lighting::LightingModel {
 ///
 /// * single `pbr` — one model, no dispatch, no id channel: the shape every
 ///   pipeline had before models existed;
-/// * the full shipped set — a switch, and the clearcoat model's extra
-///   target;
+/// * the full shipped set — a switch, the clearcoat model's extra target,
+///   and the preshaded route's early return (plan5 D2);
 /// * `lambert` + `clearcoat` — a switch and an extra target, without the
 ///   default model, so nothing can hide behind it;
 /// * `pbr` + `phong` — a switch whose layout carries the id channel and
-///   nothing else.
+///   nothing else;
+/// * single `preshaded` — the passthrough pass, no shading function at
+///   all;
+/// * `pbr` + `preshaded` — the early return riding a real switch.
 fn telling_sets() -> Vec<(&'static str, LightingSet)> {
     vec![
         ("single pbr", LightingSet::single(model("pbr"))),
@@ -103,6 +106,11 @@ fn telling_sets() -> Vec<(&'static str, LightingSet)> {
         (
             "pbr + phong",
             LightingSet::new([model("pbr"), model("phong")]).unwrap(),
+        ),
+        ("single preshaded", LightingSet::single(model("preshaded"))),
+        (
+            "pbr + preshaded",
+            LightingSet::new([model("pbr"), model("preshaded")]).unwrap(),
         ),
     ]
 }
@@ -280,6 +288,7 @@ fn the_generated_lighting_pass_compiles_with_a_feature_channel() {
             .expect("the default model"),
         &lighting::LightingSet::default(),
         &features,
+        false,
     );
     assert!(packed.source.contains("@if(wxsl_subsurface)"));
 
@@ -315,6 +324,66 @@ fn the_generated_lighting_pass_compiles_with_a_feature_channel() {
 fn the_feature_module_compiles_standalone() {
     for feature in lighting::FEATURES {
         compile(feature.module, &[]).unwrap_or_else(|error| panic!("{}: {error}", feature.module));
+    }
+}
+
+/// The forward-shaded material module (plan5 D2): under the gbuffer stage
+/// it carries *both* generated halves — the pack that stores the
+/// fragment's radiance and the shading function that produced it — and the
+/// fragment shades before it packs. Compiled for every stage of a set
+/// that carries the route alongside a real model — the shape a
+/// forward-shaded material resolves under. (A set of only the route is
+/// the passthrough pass, covered by the telling sets above; a material in
+/// it names the route or nothing, so it has no forward-shaded materials.)
+#[test]
+fn the_forward_shaded_material_module_compiles_for_every_stage() {
+    let registry = wxsl_stdlib::registry();
+    let graph = gate_graph();
+    for (set_name, set) in [(
+        "pbr + preshaded",
+        LightingSet::new([model("pbr"), model("preshaded")]).unwrap(),
+    )] {
+        let resolved = wxsl_core::material::MaterialConfig::default()
+            .with_model("pbr")
+            .forward_shaded(true)
+            .with_shadows(true, false)
+            .resolve(&set)
+            .unwrap_or_else(|error| {
+                panic!("{set_name}: a forward-shaded material refuses to resolve: {error}")
+            });
+        for stage in MaterialStage::ALL {
+            let options = CodegenOptions {
+                stage: *stage,
+                material: resolved.clone(),
+                ..CodegenOptions::default()
+            };
+            let generated = codegen::generate(&graph, &registry, &options)
+                .unwrap_or_else(|error| panic!("{set_name} codegen failed: {error}"));
+            if *stage == abi::MaterialStage::GBUFFER {
+                assert!(
+                    generated
+                        .source
+                        .contains("pack_gbuffer(surface, shade_surface(surface, ctx)"),
+                    "{set_name}: the gbuffer fragment does not shade before it packs:\n{}",
+                    generated.source
+                );
+            }
+            let mut modules = library();
+            modules.insert(codegen::MATERIAL_MODULE, generated.source.clone());
+            let mut bindings = wxsl_lang::Bindings::new();
+            for (name, value) in generated.macros.flags() {
+                bindings.insert(name.to_string(), wxsl_lang::Value::Bool(value));
+            }
+            wxsl_lang::compile(&modules, codegen::MATERIAL_MODULE, &bindings).unwrap_or_else(
+                |diagnostics| {
+                    panic!(
+                        "{set_name} forward-shaded at stage {} does not compile:\n{}",
+                        stage.name(),
+                        diagnostics.render(&|path| modules.get(path).map(str::to_string))
+                    )
+                },
+            );
+        }
     }
 }
 

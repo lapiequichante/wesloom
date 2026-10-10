@@ -78,6 +78,18 @@ pub const SETTING_IMPORTED: &str = "imported";
 /// any non-default policy must write only targets that keep no history
 /// but do survive frames, which the engine's scheduler checks.
 pub const SETTING_POLICY: &str = "policy";
+/// The `sort` setting of a `pass.geometry` node: how the pass orders its
+/// draws, on top of each draw's own render order (plan5 D3/D4).
+pub const SETTING_SORT: &str = "sort";
+/// The `layers` setting of a `pass.geometry` node: which of its source's
+/// draws the pass takes, by the material's `max_layers` (plan5 D5).
+/// `all` is every draw; `sorted` is the tier no peel pass reads. The
+/// peeled tier is `pass.peel`'s own expansion, never hand-authored.
+pub const SETTING_LAYERS: &str = "layers";
+/// The `blend` setting of a `pass.geometry` node: how the pass's fragments
+/// land in its colour target. `opaque` — the default, no blending — or
+/// `alpha over`, the straight-alpha over a sorted transparent pass needs.
+pub const SETTING_BLEND: &str = "blend";
 
 /// Node id of `source.scene`.
 pub const SOURCE_SCENE: &str = "source.scene";
@@ -321,6 +333,29 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "How often the pass runs: per frame, once, on resize or on demand. Only a \
                  pass whose target survives frames may skip.",
                 "per frame",
+            ))
+            .setting(text_setting(
+                SETTING_SORT,
+                "Sort",
+                "How the pass orders its draws: none (submission order), front to back, \
+                 or back to front. Sorting reorders the draws inside this pass only.",
+                "none",
+            ))
+            .setting(text_setting(
+                SETTING_LAYERS,
+                "Layers",
+                "Which draws the pass takes, by each material's max layers: all \
+                 of them, or only the sorted tier (max layers zero) that no \
+                 peel pass reads. Peeling itself is a `pass.peel` node.",
+                "all",
+            ))
+            .setting(text_setting(
+                SETTING_BLEND,
+                "Blend",
+                "How fragments land in the target: opaque (no blending) or alpha \
+                 over (straight-alpha source over the target), which a sorted \
+                 transparent pass composites with.",
+                "opaque",
             ))
             .document(),
         NodeDefinition::builder(PASS_PEEL, "depth peel")

@@ -54,13 +54,13 @@ fn simplex3(
     let y_ = floor(j - 7.0 * x_);
     let x = x_ * ns.x + ns.y;
     let y = y_ * ns.x + ns.y;
-    let h = vec3f(1.0) - abs(x) - abs(y);
+    let h = vec4f(1.0) - abs(x) - abs(y);
 
     let b0 = vec4f(x.xy, y.xy);
     let b1 = vec4f(x.zw, y.zw);
     let s0 = floor(b0) * 2.0 + 1.0;
     let s1 = floor(b1) * 2.0 + 1.0;
-    let sh = -step(vec4f(h.x, h.y, h.z, h.w), vec4f(0.0));
+    let sh = -step(h, vec4f(0.0));
 
     let a0 = vec4f(b0.x, b0.z, b0.y, b0.w) + vec4f(s0.x, s0.z, s0.y, s0.w) * vec4f(sh.x, sh.x, sh.y, sh.y);
     let a1 = vec4f(b1.x, b1.z, b1.y, b1.w) + vec4f(s1.x, s1.z, s1.y, s1.w) * vec4f(sh.z, sh.z, sh.w, sh.w);

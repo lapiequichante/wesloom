@@ -1,0 +1,28 @@
+// Roughness anti-aliasing
+//
+// Roughness widened by the screen-space variance of the normal: where a
+// surface foreshortens or a curved edge packs many normals into few
+// pixels, specular lobes alias into sparkle. This folds that variance
+// into the roughness the GGX alpha squares, so the highlight calms
+// exactly where the detail ran out — the standard pre-filtering move
+// (the Kaplanyan–Dachsbacher / Akenine-Möller fitting, re-derived).
+//
+// Fragment-only by construction: the derivatives *are* the measurement.
+// The stage analysis refuses a graph that feeds the vertex stage with
+// this node (plan5 D1) — and so is every caller that would rather have
+// fwidth-computed coverage widths; see `sdf_coverage` for the distance
+// counterpart whose width this pattern computes.
+//
+// `strength` scales how much of the measured variance the roughness
+// absorbs; 0 returns the roughness unchanged, 1 is the usual default.
+fn roughness_aa(
+    normal: vec3f,    // Shading normal, world space. @default 0.0, 0.0, 1.0
+    roughness: f32,   // Perceptual roughness, 0..1. @default 0.5
+    strength: f32,    // How much variance to absorb, 0..1. @default 1.0
+) -> f32 {
+    let dx = dpdx(normal);
+    let dy = dpdy(normal);
+    let variance = max(dot(dx, dx) + dot(dy, dy), 0.0) * clamp(strength, 0.0, 1.0);
+    let r = clamp(roughness, 0.0, 1.0);
+    return sqrt(clamp(r * r + variance, 0.0, 1.0));
+}

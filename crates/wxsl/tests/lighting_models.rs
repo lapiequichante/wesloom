@@ -143,6 +143,90 @@ fn named(name: &str) -> MaterialConfig {
     }
 }
 
+/// A roughness-AA'd surface (plan5 D1): a hard checker pattern folded
+/// into a normal, whose screen-space variance the `roughness_aa` node
+/// absorbs into the roughness. The derivatives are the measurement, so
+/// the node is fragment-only — which is exactly what makes this material
+/// the forward-shading test case (plan5 D2): under deferred it shades in
+/// the G-buffer pass, derivatives and all.
+fn aa_shaded(registry: &NodeRegistry, name: &str) -> Graph {
+    let mut graph = Graph::new(name);
+    let uv = graph.add_node("input.uv");
+    let checker =
+        graph.add(Node::new("generative.checker").with_param("cells", Value::Vec2([4.0, 4.0])));
+    let combine = graph.add_node("convert.combine.vec3f");
+    let normalize = graph.add_node("math.safe_normalize");
+    let aa = graph.add(Node::new("lighting.roughness_aa").with_param("roughness", Value::F32(0.2)));
+    let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    graph
+        .set_generic(registry, normalize, "T", wxsl::core::node::ValueType::Vec3)
+        .expect("vec3f is an allowed type");
+    graph
+        .wire(registry, (uv, "out"), (checker, "uv"))
+        .expect("a vec2f");
+    graph
+        .wire(registry, (checker, "out"), (combine, "x"))
+        .expect("a scalar");
+    graph
+        .wire(registry, (combine, "out"), (normalize, "v"))
+        .expect("a vec3f");
+    graph
+        .wire(registry, (normalize, "out"), (aa, "normal"))
+        .expect("a vec3f");
+    graph
+        .wire(registry, (aa, "out"), (output, "roughness"))
+        .expect("a scalar");
+    graph
+}
+
+/// The acceptance test of the escape hatch (plan5 D2): a forward-shaded
+/// material under the *deferred* preset shades in the G-buffer pass — the
+/// roughness-AA'd graph above, derivatives and all — and the lighting pass
+/// returns the radiance it stored, so the two pipelines agree almost
+/// exactly: the same fragment output travels both paths, with one float16
+/// round trip between them, where the ordinary models' agreement is a
+/// tolerance over two different shading sites.
+#[test]
+fn a_forward_shaded_material_shades_identically_under_both_pipelines() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = aa_shaded(&scene.registry, "forward shaded");
+    let config = MaterialConfig {
+        model: Some("pbr".to_string()),
+        receive_shadow: false,
+        forward_shaded: true,
+        ..MaterialConfig::default()
+    };
+    let material = scene.material(&graph, &config);
+
+    // The mechanism is visible before anything renders: the gbuffer
+    // module shades and then packs, and the forward module never packs.
+    let gbuffer = material.shader(abi::MaterialStage::GBUFFER).source.clone();
+    assert!(
+        gbuffer.contains("pack_gbuffer(surface, shade_surface(surface, ctx)"),
+        "the gbuffer fragment does not shade: {gbuffer}"
+    );
+    assert!(!material
+        .shader(abi::MaterialStage::FORWARD_LIT)
+        .source
+        .contains("pack_gbuffer"));
+
+    let deferred = scene.render(&[&material, &material, &material]);
+    scene.renderer.set_pipeline(StockPipeline::Forward);
+    let forward = scene.render(&[&material, &material, &material]);
+
+    for x in SLOTS {
+        let d = probe::color_at(&deferred, camera(), Vec3::new(x, 0.0, 0.0));
+        let f = probe::color_at(&forward, camera(), Vec3::new(x, 0.0, 0.0));
+        println!("x = {x}: deferred {d:?} forward {f:?}");
+        assert!(
+            probe::gap(d, f) <= 4.0,
+            "the forward-shaded material disagrees across the pipelines at x = {x}: \
+             {f:?} vs {d:?}"
+        );
+    }
+}
+
 /// The acceptance test: three objects shaded by three different models
 /// through one deferred lighting pass — and the same three through the
 /// forward path, agreeing.

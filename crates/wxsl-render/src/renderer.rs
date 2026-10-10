@@ -50,7 +50,7 @@ use crate::graph::{PassBinding, PassEncoder, RecordedPass, RenderGraph, Resource
 use crate::library::ShaderLibrary;
 use crate::material::Material;
 use crate::pass::ResourceId;
-use crate::pass::{DrawSource, PassKind, PassView, Policy};
+use crate::pass::{DrawSource, LayerFilter, PassKind, PassView, Policy, SortOrder};
 use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::variants::{CacheStats, EffectRequest, MaterialRequest, ShaderVariant, ShaderVariants};
@@ -99,6 +99,11 @@ pub struct Renderer {
     /// declaration index: how many times each pass has actually run since
     /// the current pass list was set.
     runs: Vec<u32>,
+    /// How many draws each pass issued *last frame*, per pass by
+    /// declaration index — the per-frame half of `runs`: a pass can run
+    /// and draw nothing, which is what a layer filter admitting no draw
+    /// looks like (plan5 D5). Reset at the start of every frame.
+    drawn: Vec<u32>,
     /// The pool generation and target size at which each pass last ran.
     /// A pass of policy `once` is due when its generation is not the
     /// pool's — a reallocation destroyed every slot's contents, so the
@@ -168,6 +173,7 @@ impl Renderer {
             swap: None,
             effects: EffectRegistry::shipped(),
             runs: vec![0; pass_count],
+            drawn: vec![0; pass_count],
             last_run: vec![(u64::MAX, (0, 0)); pass_count],
             demanded: HashSet::new(),
             pass_params: HashMap::new(),
@@ -348,6 +354,17 @@ impl Renderer {
     pub fn pass_run_count(&self, label: &str) -> Option<u32> {
         let index = self.graph.passes().iter().position(|p| p.label == label)?;
         self.runs.get(index).copied()
+    }
+
+    /// How many draws the pass labelled `label` issued last frame — the
+    /// picture-side half of [`Self::pass_run_count`]. A pass whose layer
+    /// filter admitted nothing, or whose light casts no shadow, runs and
+    /// draws nothing; the peel's per-object budget (plan5 D5) is visible
+    /// here rather than in the run counts, because the peel passes still
+    /// run — they just carry the draws that asked for layers.
+    pub fn pass_draw_count(&self, label: &str) -> Option<u32> {
+        let index = self.graph.passes().iter().position(|p| p.label == label)?;
+        self.drawn.get(index).copied()
     }
 
     /// Fresh run bookkeeping for a new pass list: nothing has run, every
@@ -961,6 +978,9 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         self.poll_swap(device)?;
         self.bake_environment_lut(device, queue)?;
+        // Last frame's draw counts are last frame's; this frame's are
+        // what the compile below selects.
+        self.drawn = vec![0; self.graph.passes().len()];
         let plan = self.compile_frame(device, request.environment, request.draws)?;
 
         // One row per draw, in every shape the frame's materials asked
@@ -1139,12 +1159,61 @@ impl Renderer {
                             continue;
                         }
                     }
-                    let selected: Vec<u32> = match source {
+                    let mut selected: Vec<u32> = match source {
                         DrawSource::Scene(selector) => {
                             draws.select(selector).map(|(index, _)| index).collect()
                         }
                         DrawSource::Indirect { draw, .. } => vec![*draw as u32],
                     };
+                    // The transparency tier (plan5 D5): a pass takes only
+                    // the draws its layer filter admits. The sorted tier
+                    // (max_layers = 0) never enters a peel pass, and a
+                    // peel iteration skips a draw whose budget it has
+                    // spent — the per-object half of `wxsl_peel_layers`,
+                    // clamped by it.
+                    if pass.layers != LayerFilter::All {
+                        selected.retain(|index| {
+                            let material = &draws.items()[*index as usize].material;
+                            pass.layers.admits(material.max_layers())
+                        });
+                    }
+                    // The pass's draw order (plan5 D3/D4): each draw sorts
+                    // by (its material's render order, camera depth). The
+                    // instance rows are untouched — every recorded draw
+                    // carries its own row index below — so the
+                    // previous-frame rows line up however this pass orders
+                    // its draws, which is what keeps ADR 0046's velocity
+                    // chain sound under sorting.
+                    if pass.sort != SortOrder::None {
+                        let eye = environment.camera.eye;
+                        let forward = (environment.camera.target - eye).normalize_or_zero();
+                        // Back to front flips the depth term, not the render
+                        // order: groups still draw in ascending order, far
+                        // before near within each group.
+                        let depth_sign = match pass.sort {
+                            SortOrder::BackToFront => -1.0,
+                            _ => 1.0,
+                        };
+                        let key = |index: u32| {
+                            let item = &draws.items()[index as usize];
+                            (
+                                item.material.render_order(),
+                                depth_sign
+                                    * wxsl_frame::environment::view_depth(
+                                        item.transform.w_axis.truncate(),
+                                        eye,
+                                        forward,
+                                    ),
+                            )
+                        };
+                        selected.sort_by(|a, b| {
+                            let (order_a, depth_a) = key(*a);
+                            let (order_b, depth_b) = key(*b);
+                            (order_a, depth_a)
+                                .partial_cmp(&(order_b, depth_b))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
                     let mut variants = Vec::with_capacity(selected.len());
                     for instance in selected {
                         let item = &draws.items()[instance as usize];
@@ -1217,6 +1286,7 @@ impl Renderer {
                                 .material(device, &self.library, item.material, *stage)?;
                         variants.push((instance, variant));
                     }
+                    self.drawn[index] = variants.len() as u32;
                     plan.geometry.insert(index, variants);
                 }
                 PassKind::Screen { effect } | PassKind::Compute { effect } => {

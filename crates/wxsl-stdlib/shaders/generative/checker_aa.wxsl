@@ -1,0 +1,31 @@
+// Anti-aliased checker
+//
+// The checker pattern integrated over each pixel's footprint instead of
+// sampled: where a cell is small on screen the value slides toward the
+// 0.5 average rather than flickering between 0 and 1, and where a cell
+// is large the answer is the hard pattern. The closed form evaluates the
+// triangle wave's average across the pixel box analytically — no sample
+// loop, no `smoothstep` hack at a hand-tuned width.
+//
+// Fragment-only by construction: the derivatives *are* the footprint.
+// For the hard pattern, see `checker`.
+//
+// Technique from Inigo Quilez's filterable-checker article, re-expressed;
+// `refs/` is research material, not a source this file ports text from.
+fn checker_aa(
+    uv: vec2f,    // Texture coordinates, 0..1 per repeat. @default 0.0, 0.0
+    cells: vec2f, // Cells across the uv. @default 8.0, 8.0
+) -> f32 {
+    let scaled = uv * max(cells, vec2f(1.0));
+    // The pixel's footprint on the scaled pattern, in cells — clamped
+    // away from zero so a degenerate gradient cannot divide by it.
+    let w = max(abs(dpdx(scaled)), abs(dpdy(scaled))) + vec2f(1.0e-4);
+    // The average of the triangle wave over the box, per axis, as the
+    // difference of two offset samples of its own integral.
+    let lo = fract((scaled - 0.5 * w) * 0.5);
+    let hi = fract((scaled + 0.5 * w) * 0.5);
+    let filtered = 2.0 * (abs(lo - vec2f(0.5)) - abs(hi - vec2f(0.5))) / w;
+    // The product is the checker's average; fully averaged cells land on
+    // 0.5, and rounding at the two extremes stays inside 0..1.
+    return clamp(0.5 - 0.5 * filtered.x * filtered.y, 0.0, 1.0);
+}

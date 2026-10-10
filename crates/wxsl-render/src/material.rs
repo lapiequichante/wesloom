@@ -183,6 +183,17 @@ impl Material {
         self.config.cast_shadow
     }
 
+    /// Which group of a pass draws this material, ascending (plan5 D4).
+    pub fn render_order(&self) -> i32 {
+        self.config.render_order
+    }
+
+    /// How many peel layers this transparent may consume (plan5 D5): zero
+    /// is the sorted tier, one or more is the draw's peel budget.
+    pub fn max_layers(&self) -> i32 {
+        self.config.max_layers
+    }
+
     /// Whether this material's shading is attenuated by the shadow maps.
     pub fn receive_shadow(&self) -> bool {
         self.config.receive_shadow()

@@ -35,5 +35,17 @@ Adapted files:
   from src/noise2D.glsl, symbol snoise; the same translation rules.
 Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
 
+glTF-Sample-Renderer — Apache-2.0 — Copyright © 2019-2026 The Khronos
+Group Inc.
+Source: https://github.com/KhronosGroup/glTF-Sample-Renderer
+Revision: 0686eb22dc86ecfdd1e0fc93a141b50edac4a706
+Adapted files:
+- crates/wxsl-stdlib/shaders/lighting/iridescence.wxsl
+  from source/Renderer/shaders/iridescence.glsl, symbol evalIridescence
+  (Fresnel0ToIor, IorToFresnel0 and evalSensitivity inlined); WXSL
+  translation, the outside IOR fixed at the air interface, Schlick's
+  reflectance written in F0 form, socket metadata.
+Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
+
 Research checkouts under refs/ are not distributed components. Their presence
 does not approve every file, asset or dependency for incorporation.

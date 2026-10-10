@@ -104,7 +104,43 @@ impl Derivation<'_> {
         for declaration in self.macro_defs(module)? {
             builder = builder.macro_var(declaration);
         }
+        if self.names_derivative(function) {
+            builder = builder.fragment_only();
+        }
         Ok(builder.call(call))
+    }
+
+    // -----------------------------------------------------------------
+    // Fragment-only bodies
+    // -----------------------------------------------------------------
+
+    /// Whether the function's body names a fragment-stage-only builtin —
+    /// the derivative family (`dpdx`, `dpdy`, `dpdCoarse`, `dpdFine`,
+    /// `fwidth`). Such a node carries the fragment-only constraint
+    /// (plan5 D1): the stage analysis refuses it outside the fragment
+    /// stage, because a derivative is a function of the pixel grid and
+    /// no interpolant can carry one.
+    ///
+    /// The scan is textual over the declaration's span on purpose: a
+    /// word-shape match cannot misread a string that merely mentions the
+    /// builtin in a comment, because a comment *inside* the body would
+    /// trip it — so the check excludes comment lines, which is cheaper
+    /// and more honest than a name-resolution pass for five builtins.
+    fn names_derivative(&self, function: &Function) -> bool {
+        let text = &self.source[function.span.start as usize..function.span.end as usize];
+        let mut derivative = false;
+        for line in text.lines() {
+            // A `//` outside a string literal is always a comment in
+            // WXSL, and node sources do not put derivatives in strings.
+            let code = line.split("//").next().unwrap_or("");
+            if ["dpdx", "dpdy", "dpdCoarse", "dpdFine", "fwidth"]
+                .iter()
+                .any(|builtin| contains_word(code, builtin))
+            {
+                derivative = true;
+            }
+        }
+        derivative
     }
 
     // -----------------------------------------------------------------
@@ -625,6 +661,25 @@ fn struct_named<'m>(module: &'m Module, name: &str) -> Option<&'m StructDecl> {
         })
 }
 
+/// Whether `text` names `word` as a whole identifier — `fwidth` yes,
+/// `fwidthish` no.
+fn contains_word(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut start = 0;
+    while let Some(found) = text[start..].find(word) {
+        let at = start + found;
+        let end = at + word.len();
+        let left_ok = at == 0 || !is_word(bytes[at - 1]);
+        let right_ok = end == bytes.len() || !is_word(bytes[end]);
+        if left_ok && right_ok {
+            return true;
+        }
+        start = end;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,5 +940,56 @@ mod tests {
     fn a_missing_label_block_is_reported() {
         let message = failure("fn thing() -> f32 { return 1.0; }\n");
         assert!(message.contains("label"), "unexpected: {message}");
+    }
+
+    // -----------------------------------------------------------------
+    // Fragment-only derivation (plan5 D1)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_derivative_body_is_fragment_only() {
+        let derived = derive(
+            "// Thing\n\
+             //\n\
+             // Screen-space width of a value.\n\
+             fn thing(\n\
+                 x: f32, // @default 0.0\n\
+             ) -> f32 {\n\
+                 return fwidth(x);\n\
+             }\n",
+        );
+        assert!(derived.fragment_only, "fwidth is a derivative");
+    }
+
+    #[test]
+    fn dpdx_is_recognized_and_a_comment_is_not() {
+        let derived = derive(
+            "// Thing\n\
+             //\n\
+             // The width a coverage ramp wants is max(fwidth(d), eps).\n\
+             fn thing(\n\
+                 x: vec3f, // @default 0.0, 0.0, 1.0\n\
+             ) -> vec3f {\n\
+                 let d = dpdx(x);\n\
+                 return x + d;\n\
+             }\n",
+        );
+        assert!(derived.fragment_only, "dpdx in the body is a derivative");
+    }
+
+    #[test]
+    fn a_body_without_derivatives_is_not_fragment_only() {
+        let derived = derive(
+            "// Thing\n\
+             //\n\
+             // The width a coverage ramp wants is max(fwidth(d), eps) — \
+             but only in the doc, which is not code.\n\
+             fn thing(\n\
+                 x: f32, // @default 0.0\n\
+             ) -> f32 {\n\
+                 return x * 2.0;\n\
+             }\n",
+        );
+        assert!(!derived.fragment_only, "a mention is not a call");
     }
 }

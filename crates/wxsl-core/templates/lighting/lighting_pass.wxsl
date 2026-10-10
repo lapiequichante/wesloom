@@ -54,5 +54,5 @@ fn ${FRAGMENT_ENTRY}(@builtin(position) position: vec4f) -> @location(0) vec4f {
     ctx.uv = uv;
     ctx.time = scene.time;
 
-    return ${SHADE_FN}(${SHADE_ARGS});
+    ${FINAL_RETURN}
 }

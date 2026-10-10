@@ -242,7 +242,17 @@ routing and invariants.
   four overlapping transparent surfaces, submitted out of depth order,
   composite to the same front-to-back colour on the baseline path and,
   when the device can blend `rg32float`, on the native path. A transparent
-  surface behind the opaque plane does not appear. Skips with no adapter.
+  surface behind the opaque plane does not appear. And the tiered shape
+  (ADR 0057): a `max_layers = 0` plate composites over the peeled pair,
+  and the per-object budget is the *draw* count — the peel passes carry
+  the pair for its two layers and nobody for the rest, while still
+  running (`pass_draw_count`, not the run count, is where that shows).
+  Skips with no adapter.
+- `cargo test -p wxsl --test sorting` — draw order as data (ADR 0055):
+  a `render_order` group draws in front of a nearer transparent sheet
+  whichever way the draw list submitted them, and with the pass's sort
+  off the submission order composites — the pass reads depth, never
+  writes it. Skips with no adapter.
 - The geometry tests share `crates/wxsl/tests/probe/mod.rs`, and that is
   the point:
   the computed uniform layout and the computed instance row are the only
@@ -404,9 +414,11 @@ routing and invariants.
   extra clip varyings (the builtin arrives in a fragment as framebuffer
   coordinates), and its target clears to *zero motion*, not the frame's
   radiance. The peel stages (ADR 0047) are the other exception:
-  `pass.peel` draws only the `transparent` tag, `wxsl_peel_layers` caps
-  the geometry passes at eight, and a `pass.geometry` that names a peel
-  stage is a document error. `RenderPath` is gone: which pass list
+  `pass.peel` draws only the `transparent` tag's peeled tier — a
+  material's `max_layers` (plan5 D5, ADR 0057) is its per-object peel
+  budget, zero meaning the sorted tier no peel reads — and
+  `wxsl_peel_layers` caps the geometry passes at eight; a
+  `pass.geometry` that names a peel stage is a document error. `RenderPath` is gone: which pass list
   is `StockPipeline`, which variant is `MaterialStage`.
   Anything the scheduler can check — attachment counts, depth formats, a
   resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,

@@ -1374,6 +1374,14 @@ pub struct NodeDefinition {
     /// handful that neither reveals — a context field two domains share is
     /// in both, one only one of them has is in one.
     pub domains: Domains,
+    /// Whether the body needs fragment-stage-only builtins — derivatives
+    /// (`dpdx`, `fwidth`, …) chief among them (plan5 D1). The stage
+    /// analysis refuses such a node outside the fragment stage: `Auto`
+    /// places it there, an explicit vertex pin is a named error, and a
+    /// vertex consumer of its output is one too — a derivative cannot
+    /// ride an interpolant, because the value it computes *is* a function
+    /// of the pixel grid.
+    pub fragment_only: bool,
     /// How the node emits WXSL.
     pub body: NodeBody,
 }
@@ -1396,6 +1404,7 @@ impl NodeDefinition {
                 imports: Vec::new(),
                 settings: Vec::new(),
                 domains: Domains::ALL,
+                fragment_only: false,
                 body: NodeBody::Expr(Vec::new()),
             },
         }
@@ -1568,6 +1577,15 @@ impl NodeDefinitionBuilder {
     /// adding a domain-bound body cannot leave a definition behind.
     pub fn domains(mut self, domains: Domains) -> Self {
         self.def.domains = domains;
+        self
+    }
+
+    /// Mark the body as needing the fragment stage — derivatives today
+    /// (plan5 D1). The derivation sets this itself when the body names a
+    /// derivative builtin; this is for the definitions that carry the
+    /// constraint without the body revealing it.
+    pub fn fragment_only(mut self) -> Self {
+        self.def.fragment_only = true;
         self
     }
 

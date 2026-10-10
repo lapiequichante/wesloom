@@ -119,6 +119,11 @@ pub fn analyze(
         if def.is_vertex_only() {
             return (true, false);
         }
+        // A derivative is a function of the pixel grid: no interpolant
+        // can carry it, and no vertex stage can compute it (plan5 D1).
+        if def.fragment_only {
+            return (false, true);
+        }
         if let Some(name) = graph.attribute_read_name(registry, node) {
             if let Some(decl) = graph.attribute(name.as_str()) {
                 if decl.frequency == AttributeFrequency::Computed {
@@ -154,7 +159,7 @@ pub fn analyze(
                 None => {}
             }
         }
-        let (can_vertex, _) = can_run_in(graph, registry, node);
+        let (can_vertex, can_fragment) = can_run_in(graph, registry, node);
         let stage = match graph.stage(node) {
             StageConstraint::Vertex => ShaderStage::Vertex,
             StageConstraint::Fragment => ShaderStage::Fragment,
@@ -164,7 +169,7 @@ pub fn analyze(
                     // stage reads it too; the cut below hands the value
                     // over when it can, and duplicates it when it cannot.
                     ShaderStage::Vertex
-                } else if fragment_need {
+                } else if fragment_need || !can_fragment {
                     // Whether or not the fragment stage can run it — an
                     // impossible placement is named below, not silently
                     // re-chosen here.
@@ -174,8 +179,55 @@ pub fn analyze(
                 }
             }
         };
+        // A fragment-only node (a derivative) can be computed exactly
+        // once, in the fragment stage: it cannot ride an interpolant and
+        // it cannot be duplicated into the vertex stage. A vertex
+        // consumer of its output is therefore never servable, and is the
+        // named error below rather than a shader the WGSL compiler
+        // rejects three layers downstream (plan5 D1).
+        let fragment_only = graph
+            .node(node)
+            .and_then(|instance| registry.get(&instance.def))
+            .is_some_and(|def| def.fragment_only);
         if vertex_need && fragment_need {
             shared.insert(node);
+        }
+        if fragment_only && vertex_need {
+            errors.push(wrong_stage(
+                graph,
+                node,
+                vertex_roots.first().copied(),
+                format!(
+                    "`{}` computes a screen-space derivative, which only the \
+                     fragment stage can run and no interpolant can carry; the \
+                     vertex stage consumes its output",
+                    graph
+                        .node(node)
+                        .map(|instance| instance.def.clone())
+                        .unwrap_or_default()
+                ),
+            ));
+        }
+        if fragment_only && stage == ShaderStage::Vertex {
+            errors.push(wrong_stage(
+                graph,
+                node,
+                fragment_roots.first().copied(),
+                "this node is pinned to the vertex stage, and computes a \
+                 screen-space derivative"
+                    .to_string(),
+            ));
+        }
+        if fragment_only && !can_fragment {
+            // Unreachable today — fragment_only implies can_fragment —
+            // but kept as the shape of the check, so a future constraint
+            // cannot silently lose the refusal.
+            errors.push(wrong_stage(
+                graph,
+                node,
+                None,
+                "this node has no stage that can run it".to_string(),
+            ));
         }
         stage_of.insert(node, stage);
     }
@@ -475,6 +527,119 @@ mod tests {
         assert_eq!(plan.stage_of.get(&value), Some(&ShaderStage::Vertex));
         assert_eq!(plan.cuts.len(), 1, "the value rides an interpolant down");
         assert!(plan.duplicated.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Fragment-only nodes (plan5 D1)
+    // -----------------------------------------------------------------
+
+    fn register_fragment_only(registry: &mut NodeRegistry) {
+        registry.register(
+            NodeDefinition::builder("test.derivative", "Derivative")
+                .input(Socket::new("a", ValueType::Vec3).with_splat_default(0.0))
+                .output(Socket::new("out", ValueType::Vec3))
+                .fragment_only()
+                .expr("vec3f(fwidth({a}.x))"),
+        );
+    }
+
+    fn derivative_graph(registry: &NodeRegistry) -> (Graph, NodeId) {
+        let mut graph = Graph::new("derivative");
+        let value = graph.add(Node::new("test.derivative"));
+        let surface = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        graph
+            .wire(registry, (value, "out"), (surface, "base_color"))
+            .expect("vec3 into base_color");
+        (graph, value)
+    }
+
+    #[test]
+    fn a_fragment_only_node_runs_in_the_fragment_stage() {
+        let mut registry = registry();
+        register_fragment_only(&mut registry);
+        let (graph, value) = derivative_graph(&registry);
+        let outputs = graph.outputs(&registry).expect("complete");
+        let plan = analyze(&graph, &registry, &outputs).expect("the plan");
+        assert_eq!(plan.stage_of.get(&value), Some(&ShaderStage::Fragment));
+    }
+
+    #[test]
+    fn a_vertex_consumer_of_a_derivative_is_named() {
+        let mut registry = registry();
+        register_fragment_only(&mut registry);
+        let mut graph = Graph::new("derivative to vertex");
+        let value = graph.add(Node::new("test.derivative"));
+        let surface = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        let vertex = graph.add(Node::new(abi::VERTEX_OUTPUT_ID));
+        graph
+            .wire(&registry, (value, "out"), (surface, "base_color"))
+            .expect("vec3 into base_color");
+        graph
+            .wire(
+                &registry,
+                (value, "out"),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .expect("the wire is typeable; the placement is not");
+        let outputs = graph.outputs(&registry).expect("complete");
+        let errors = analyze(&graph, &registry, &outputs).expect_err("unservable");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::WrongStage { .. })
+                    && error.to_string().contains("derivative")),
+            "the error names the derivative: {errors}"
+        );
+    }
+
+    #[test]
+    fn a_derivative_pinned_to_the_vertex_stage_is_named() {
+        let mut registry = registry();
+        register_fragment_only(&mut registry);
+        let (mut graph, value) = derivative_graph(&registry);
+        graph.set_stage(value, StageConstraint::Vertex);
+        let outputs = graph.outputs(&registry).expect("complete");
+        let errors = analyze(&graph, &registry, &outputs).expect_err("wrong pin");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::WrongStage { .. })),
+            "{errors}"
+        );
+    }
+
+    #[test]
+    fn a_shared_derivative_is_an_error_not_a_duplication() {
+        // The shape `shared_graph` covers — one node feeding both stages —
+        // is exactly the case the old rules answered by computing twice.
+        // A derivative cannot take that answer.
+        let mut registry = registry();
+        register_fragment_only(&mut registry);
+        let mut graph = Graph::new("shared derivative");
+        let value = graph.add(Node::new("test.derivative"));
+        let surface = graph.add(Node::new(abi::SURFACE_OUTPUT_ID));
+        let vertex = graph.add(Node::new(abi::VERTEX_OUTPUT_ID));
+        graph
+            .wire(&registry, (value, "out"), (surface, "base_color"))
+            .expect("vec3 into base_color");
+        graph
+            .wire(
+                &registry,
+                (value, "out"),
+                (vertex, abi::SOCKET_POSITION_OFFSET),
+            )
+            .expect("vec3 into the offset");
+        let outputs = graph.outputs(&registry).expect("complete");
+        let errors = analyze(&graph, &registry, &outputs).expect_err("unservable");
+        assert!(
+            errors
+                .0
+                .iter()
+                .any(|error| matches!(error, GraphError::WrongStage { .. })),
+            "{errors}"
+        );
     }
 
     #[test]

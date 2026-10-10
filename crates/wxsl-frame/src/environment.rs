@@ -550,6 +550,14 @@ impl InstanceRows {
     }
 }
 
+/// Camera-space depth of a point along the view direction — the sort key
+/// a pass's draw order hangs on (plan5 D3). Positive in front of the
+/// camera, larger is farther. Pure, device-free, and shared by every
+/// sorting pass so two passes cannot disagree about "nearest".
+pub fn view_depth(origin: Vec3, eye: Vec3, forward: Vec3) -> f32 {
+    (origin - eye).dot(forward)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +671,18 @@ mod tests {
         let length = light.position_or_direction.length();
         assert!((length - 1.0).abs() < 1e-6);
         assert_eq!(light.uniform(-1, Mat4::IDENTITY).kind, 1.0);
+    }
+
+    #[test]
+    fn view_depth_orders_points_along_the_view() {
+        // Looking down -z: nearer points have smaller depth, off-axis
+        // points sort by their component along the view.
+        let eye = Vec3::ZERO;
+        let forward = Vec3::new(0.0, 0.0, -1.0);
+        let near = view_depth(Vec3::new(0.3, 0.0, -2.0), eye, forward);
+        let far = view_depth(Vec3::new(0.0, 2.0, -8.0), eye, forward);
+        let behind = view_depth(Vec3::new(0.0, 0.0, 3.0), eye, forward);
+        assert!(near < far);
+        assert!(behind < near, "behind the camera is nearer than anything");
     }
 }

@@ -84,6 +84,37 @@ pub struct MaterialConfig {
     /// What this material *is*, for a pass's tag expression to select on.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tags: Tags,
+    /// Which group of a pass draws this material: draws sort by
+    /// (`render_order`, camera depth), ascending, inside each pass that
+    /// sorts at all (plan5 D3/D4). Zero — every scene's behaviour before
+    /// this field existed. It never reorders *passes*: that stays the
+    /// document's job.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub render_order: i32,
+    /// Whether this material shades in the geometry pass, whichever stage
+    /// that pass names (plan5 D2). Under a forward pipeline nothing
+    /// changes. Under a deferred one the G-buffer pass runs the material's
+    /// own lighting model, the radiance lands where the G-buffer keeps
+    /// emissive, and the lighting pass returns it — no lights, no shadows,
+    /// no re-shading. This is the escape hatch for shading that needs
+    /// screen-space context (derivatives, plan5 D1).
+    ///
+    /// An explicit, checked decision, never a fallback: resolution
+    /// requires `wxsl.preshaded` in the pipeline's set, refuses
+    /// `receive_shadow` (a preshaded surface is shaded before any shadow
+    /// map exists), and refuses this model named as the material's own.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub forward_shaded: bool,
+    /// How many peel layers this transparent may consume (plan5 D5). Zero
+    /// — every material's behaviour before this field existed — is the
+    /// sorted tier: plain alpha blending under a back-to-front sort, and
+    /// no peel pass reads the draw. One or more asks for
+    /// [ADR 0047](../../docs/adr/0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md)'s
+    /// peeling, one layer per iteration while the budget lasts; a value
+    /// beyond the pipeline's `wxsl_peel_layers` cap is clamped by
+    /// construction, never an error.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub max_layers: i32,
     /// Whether the graph's bake declarations are *consumed* as bakes — the
     /// sampled table — or evaluated inline, the subgraph in the material
     /// module
@@ -126,6 +157,9 @@ impl Default for MaterialConfig {
             cast_shadow: true,
             receive_shadow: true,
             tags: Tags::new(),
+            render_order: 0,
+            forward_shaded: false,
+            max_layers: 0,
             bakes: true,
             features: Vec::new(),
         }
@@ -160,6 +194,26 @@ impl MaterialConfig {
         self
     }
 
+    /// Mark whether this material shades forward under either pipeline
+    /// (plan5 D2).
+    pub fn forward_shaded(mut self, forward: bool) -> Self {
+        self.forward_shaded = forward;
+        self
+    }
+
+    /// Set how many peel layers this transparent may consume (plan5 D5).
+    pub fn with_max_layers(mut self, layers: i32) -> Self {
+        self.max_layers = layers;
+        self
+    }
+
+    /// Pin this draw's group inside every pass that sorts (plan5 D4):
+    /// draws sort by (`render_order`, camera depth), ascending.
+    pub fn with_render_order(mut self, order: i32) -> Self {
+        self.render_order = order;
+        self
+    }
+
     /// Generate against a pipeline carrying `features`' channels.
     pub fn with_features(mut self, features: Vec<ChannelRequest>) -> Self {
         self.features = features;
@@ -179,6 +233,20 @@ impl MaterialConfig {
     pub fn resolve(&self, set: &LightingSet) -> Result<ResolvedMaterialConfig, LightingError> {
         let lighting = MaterialLighting::resolve(set, self.model.as_deref())?
             .with_features(self.features.clone());
+        // The forward-shading demands (plan5 D2) are checked here, at the
+        // one resolution point, so a scene document that cannot be
+        // honoured is refused before anything is built.
+        if self.forward_shaded {
+            if lighting.model().name == crate::lighting::PRESHADED_MODEL {
+                return Err(LightingError::ForwardShadedModel);
+            }
+            if set.preshaded().is_none() {
+                return Err(LightingError::PreshadedNotEnabled);
+            }
+            if self.receive_shadow {
+                return Err(LightingError::ForwardShadedWithShadows);
+            }
+        }
         let mut macros = self.macros.clone();
         // The flag wins over anything the graph or the caller put under the
         // same name, because it is the field's whole meaning.
@@ -191,6 +259,9 @@ impl MaterialConfig {
             lighting,
             cast_shadow: self.cast_shadow,
             tags: self.tags.clone(),
+            render_order: self.render_order,
+            forward_shaded: self.forward_shaded,
+            max_layers: self.max_layers,
             bakes: self.bakes,
         })
     }
@@ -212,6 +283,16 @@ pub struct ResolvedMaterialConfig {
     pub lighting: MaterialLighting,
     /// Whether the shadow passes draw this material.
     pub cast_shadow: bool,
+    /// Which group of a pass draws this material, ascending (plan5 D4).
+    pub render_order: i32,
+    /// How many peel layers this transparent may consume (plan5 D5): zero
+    /// is the sorted tier no peel pass reads, one or more is the draw's
+    /// request under the pipeline's `wxsl_peel_layers` cap.
+    pub max_layers: i32,
+    /// Whether this material shades in the geometry pass under either
+    /// pipeline (plan5 D2): its own model ran in the G-buffer pass, whose
+    /// radiance the lighting pass returns untouched.
+    pub forward_shaded: bool,
     /// What this material *is*, for a pass's tag expression to select on.
     pub tags: Tags,
     /// Whether the graph's bake declarations are consumed as bakes (the
@@ -333,5 +414,70 @@ mod tests {
             .resolve(&LightingSet::default())
             .expect("resolves");
         assert!(carried.check_feature_demands(&effective).is_ok());
+    }
+
+    /// The forward-shading demands (plan5 D2), each refused by name at the
+    /// one resolution point: the preshaded route must be in the set, the
+    /// shadows must be given up, and the route itself is not a shading
+    /// function.
+    #[test]
+    fn the_forward_shading_demands_are_refused_by_name() {
+        let set = crate::lighting::default_set().expect("the shipped models");
+        assert!(
+            set.preshaded().is_some(),
+            "the shipped set carries the route"
+        );
+
+        // Happy path: the flag travels, and the model is the material's own.
+        let resolved = MaterialConfig::default()
+            .with_model("pbr")
+            .forward_shaded(true)
+            .with_shadows(true, false)
+            .resolve(&set)
+            .expect("every demand is met");
+        assert!(resolved.forward_shaded);
+        assert_eq!(resolved.lighting.model().name, "wxsl.pbr");
+
+        // The default set enables the route, so the set-less refusals need
+        // a set without it.
+        let without = crate::lighting::LightingSet::single(
+            crate::lighting::DEFAULT_MODELS
+                .iter()
+                .find(|m| m.name == "wxsl.pbr")
+                .copied()
+                .expect("pbr ships"),
+        );
+        let error = MaterialConfig::default()
+            .forward_shaded(true)
+            .with_shadows(true, false)
+            .resolve(&without)
+            .expect_err("the route is not in the set");
+        assert_eq!(error, crate::lighting::LightingError::PreshadedNotEnabled);
+
+        // Shadows: the flag on its own resolves; with the flag it cannot.
+        let error = MaterialConfig::default()
+            .forward_shaded(true)
+            .resolve(&set)
+            .expect_err("receive_shadow defaults to true");
+        assert_eq!(
+            error,
+            crate::lighting::LightingError::ForwardShadedWithShadows
+        );
+
+        // The route named as the model: nothing left to shade with.
+        let error = MaterialConfig::default()
+            .with_model(crate::lighting::PRESHADED_MODEL)
+            .forward_shaded(true)
+            .with_shadows(true, false)
+            .resolve(&set)
+            .expect_err("the route is not a shading function");
+        assert_eq!(error, crate::lighting::LightingError::ForwardShadedModel);
+
+        // Naming the route *without* the flag stays legal — it shades
+        // inconsistently (the ADR says so) but nothing breaks.
+        assert!(MaterialConfig::default()
+            .with_model(crate::lighting::PRESHADED_MODEL)
+            .resolve(&set)
+            .is_ok());
     }
 }

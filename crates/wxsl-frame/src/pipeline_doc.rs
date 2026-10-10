@@ -71,9 +71,9 @@ use crate::effect::{
 };
 use crate::graph::RenderGraph;
 use crate::pass::{
-    Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
-    Persistence, Policy, Read, ResourceDesc, ResourceId, DEPTH_FORMAT, MAX_BLEND,
-    PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
+    Attachment, DepthAttachment, Dimension, DrawSource, Extent, LayerFilter, PassDesc, PassState,
+    PassView, Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ALPHA_OVER,
+    DEPTH_FORMAT, MAX_BLEND, PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
 };
 #[cfg(test)]
 use crate::pipeline::StockPipeline;
@@ -147,6 +147,29 @@ pub enum PipelineError {
         node: String,
         /// The policy it named.
         policy: String,
+    },
+    /// A pass names a sort order ([`crate::pass::SortOrder`]) that is not
+    /// one (plan5 D3).
+    UnknownSort {
+        /// The pass node.
+        node: String,
+        /// The sort it named.
+        sort: String,
+    },
+    /// A pass names a layer filter ([`crate::pass::LayerFilter`]) that is
+    /// not one of the authorable shapes (plan5 D5).
+    UnknownLayers {
+        /// The pass node.
+        node: String,
+        /// The layers it named.
+        layers: String,
+    },
+    /// A pass names a blend mode that is not one of the document's.
+    UnknownBlend {
+        /// The pass node.
+        node: String,
+        /// The blend it named.
+        blend: String,
     },
     /// A numeric setting is not a number.
     BadNumber {
@@ -358,6 +381,21 @@ impl core::fmt::Display for PipelineError {
                 "pass `{node}` runs {policy:?}, which is not a policy — per frame, once, \
                  on resize or on demand"
             ),
+            PipelineError::UnknownSort { node, sort } => write!(
+                f,
+                "pass `{node}` sorts {sort:?}, which is not a sort order — none, \
+                 front to back or back to front"
+            ),
+            PipelineError::UnknownLayers { node, layers } => write!(
+                f,
+                "pass `{node}` draws {layers:?}, which is not a layer tier — all \
+                 or sorted"
+            ),
+            PipelineError::UnknownBlend { node, blend } => write!(
+                f,
+                "pass `{node}` blends {blend:?}, which is not a blend mode — \
+                 opaque or alpha over"
+            ),
             PipelineError::BadNumber {
                 node,
                 setting,
@@ -450,8 +488,9 @@ impl core::fmt::Display for PipelineError {
             }
             PipelineError::TwoTargetWriters { first, second } => write!(
                 f,
-                "`{first}` and `{second}` both write the frame's target — leave `into` \
-                 unconnected on the last pass in the chain only"
+                "`{first}` and `{second}` both clear the frame's target — leave `into` \
+                 unconnected on the head of the chain only; a later pass that writes \
+                 it must load it, as a sorted-tier pass does (plan5 D5)"
             ),
             PipelineError::TwoShadowSources { nodes } => write!(
                 f,
@@ -567,7 +606,7 @@ struct Compiler<'a> {
     /// the compiled graph once its shape is known.
     layout: Option<Vec<abi::GBufferTarget>>,
     /// Labels of every pass writing the frame's target, in document order.
-    target_writers: Vec<String>,
+    target_writers: Vec<(String, bool)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -862,6 +901,42 @@ impl<'a> Compiler<'a> {
         })
     }
 
+    /// How the pass orders its draws, from the `sort` setting. The
+    /// default setting text parses to `none` — submission order — so
+    /// documents that never mention it draw exactly as they always did
+    /// (plan5 D3/D4).
+    fn sort(&self, node: NodeId) -> Result<SortOrder, PipelineError> {
+        let text = self.setting(node, doc::SETTING_SORT);
+        SortOrder::parse(&text).ok_or_else(|| PipelineError::UnknownSort {
+            node: self.label(node),
+            sort: text,
+        })
+    }
+
+    /// The tier of the source's draws this pass takes, by each material's
+    /// `max_layers` (plan5 D5). Only the authorable shapes parse; the
+    /// `Peeled` filters are `pass.peel`'s own expansion.
+    fn layers(&self, node: NodeId) -> Result<LayerFilter, PipelineError> {
+        let text = self.setting(node, doc::SETTING_LAYERS);
+        LayerFilter::parse(&text).ok_or_else(|| PipelineError::UnknownLayers {
+            node: self.label(node),
+            layers: text,
+        })
+    }
+
+    /// How the pass's fragments land in its target.
+    fn blend(&self, node: NodeId) -> Result<Option<crate::types::BlendState>, PipelineError> {
+        let text = self.setting(node, doc::SETTING_BLEND);
+        match text.trim().replace('_', " ").to_ascii_lowercase().as_str() {
+            "" | "opaque" => Ok(None),
+            "alpha over" => Ok(Some(ALPHA_OVER)),
+            other => Err(PipelineError::UnknownBlend {
+                node: self.label(node),
+                blend: other.to_string(),
+            }),
+        }
+    }
+
     // -- passes -----------------------------------------------------------
 
     /// The tag expression a pass draws: the `tags` setting of the
@@ -913,7 +988,15 @@ impl<'a> Compiler<'a> {
                 Ok(self.colors[&source])
             }
             None => {
-                self.target_writers.push(self.label(node));
+                // A sorted-tier pass *loads* the target — it composites
+                // onto what earlier passes wrote, the peel composite
+                // behind it (plan5 D5) — so several target writers in
+                // sequence are sound when only the first of them clears.
+                self.target_writers.push((
+                    self.label(node),
+                    self.kind(node) == Some(doc::PASS_GEOMETRY)
+                        && self.layers(node)? == LayerFilter::Sorted,
+                ));
                 Ok(RenderGraph::TARGET)
             }
         }
@@ -1033,6 +1116,8 @@ impl<'a> Compiler<'a> {
             .edge_from(&SocketRef::new(node, "color"))
             .is_some();
         let into_wired = self.fed(node, "into").is_some();
+        let layers = self.layers(node)?;
+        let blend = self.blend(node)?;
         let mut wrote = RenderGraph::TARGET;
         let colors: Vec<Attachment> = match stage.output() {
             abi::StageOutput::Color | abi::StageOutput::Velocity => {
@@ -1074,6 +1159,13 @@ impl<'a> Compiler<'a> {
                     // and bleed the history across silhouettes. The stage
                     // owns what its output means where nothing drew.
                     vec![Attachment::clear(wrote, Color::TRANSPARENT)]
+                } else if layers == LayerFilter::Sorted {
+                    // The sorted transparency tier composites onto what
+                    // earlier passes wrote — the peel composite behind it
+                    // (plan5 D5). Clearing here would throw that away,
+                    // and a load orders this pass after the writer the
+                    // scheduler already tracks.
+                    vec![Attachment::load(wrote)]
                 } else {
                     vec![self.color_attachment(wrote)]
                 }
@@ -1139,10 +1231,24 @@ impl<'a> Compiler<'a> {
                 self.graph.make_stable_storage(depth.resource);
             }
         }
+        let sort = self.sort(node)?;
+        let state = match blend {
+            // A blended pass composites: its draws test against the depth
+            // the opaque pass left and leave it alone. Writing depth would
+            // let the first draw's z reject every farther draw after it,
+            // and a painter's-algorithm tier would silently become
+            // "nearest wins" (plan5 D5).
+            Some(blend) => state
+                .with_blend(blend)
+                .with_depth_test(state.depth_compare, false),
+            None => state,
+        };
         let mut pass = PassDesc::geometry(name, DrawSource::Scene(tags), stage)
             .with_colors(colors)
             .with_state(state)
-            .with_policy(policy);
+            .with_policy(policy)
+            .with_sort(sort)
+            .with_layers(layers);
         if let Some(depth) = depth {
             pass = pass.with_depth(depth);
         }
@@ -1399,7 +1505,11 @@ impl<'a> Compiler<'a> {
                     .with_cull_mode(None)
                     .with_depth_test(compare, true),
             )
-            .with_reads([Read::current(scene_depth), Read::current(bounds)]),
+            .with_reads([Read::current(scene_depth), Read::current(bounds)])
+            // Iteration `layer` spends the `layer`-th peel of every
+            // object in it: a draw whose budget ran out sits the
+            // iteration out (plan5 D5).
+            .with_layers(LayerFilter::Peeled { layer }),
         );
         let mut reads = vec![Read::current(scene_depth), Read::current(bounds)];
         if let Some(front_depth) = front_sample {
@@ -1422,7 +1532,8 @@ impl<'a> Compiler<'a> {
                         .with_depth_test(CompareFunction::Equal, false)
                         .with_blend(blend),
                 )
-                .with_reads(reads),
+                .with_reads(reads)
+                .with_layers(LayerFilter::Peeled { layer }),
         );
         peeled
     }
@@ -1485,7 +1596,10 @@ impl<'a> Compiler<'a> {
                 )
                 .with_color(Attachment::clear(pair, Color::TRANSPARENT))
                 .with_state(PassState::FULLSCREEN.with_blend(MAX_BLEND))
-                .with_reads([Read::current(scene_depth), Read::current(*bounds_read)]),
+                .with_reads([Read::current(scene_depth), Read::current(*bounds_read)])
+                // The pair pass computes this iteration's two candidates;
+                // a draw's budget has to cover the front one (plan5 D5).
+                .with_layers(LayerFilter::Peeled { layer }),
             );
             let hdr = TextureFormat::Rgba16Float;
             let front_layer = self.graph.resource(ResourceDesc::color(
@@ -1508,7 +1622,12 @@ impl<'a> Compiler<'a> {
                         .with_blend(PREMULTIPLIED_OVER),
                 ])
                 .with_state(PassState::FULLSCREEN)
-                .with_reads([Read::current(scene_depth), Read::current(pair)]),
+                .with_reads([Read::current(scene_depth), Read::current(pair)])
+                // The front half of the resolve spends layer `layer`, the
+                // back half layer `layer + 1`; a draw's budget covers
+                // both or neither of a pair's layers, and the shallower
+                // read is the honest filter (plan5 D5).
+                .with_layers(LayerFilter::Peeled { layer }),
             );
             front = Some(self.fold_peel_layer(name, layer, true, front, front_layer));
             back = Some(self.fold_peel_layer(name, layer + 1, false, back, back_layer));
@@ -2008,10 +2127,18 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        if self.target_writers.len() > 1 {
+        // Several passes may write the frame's target in sequence, but at
+        // most the *first* of them may clear it: everything after it must
+        // load, or it would throw what the pass before it drew.
+        let clears = self
+            .target_writers
+            .iter()
+            .filter(|(_, loads)| !loads)
+            .count();
+        if clears > 1 || clears == 1 && self.target_writers[0].1 {
             return Err(PipelineError::TwoTargetWriters {
-                first: self.target_writers[0].clone(),
-                second: self.target_writers[1].clone(),
+                first: self.target_writers[0].0.clone(),
+                second: self.target_writers[1].0.clone(),
             });
         }
         Ok(())
@@ -3435,6 +3562,171 @@ mod tests {
             }
             other => panic!("expected a buffer size error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_sort_setting_reaches_the_pass_list() {
+        // plan5 D3/D4: the `sort` setting compiles into the pass, the
+        // stock preset — which never mentions it — stays at submission
+        // order, and a name that is not one is refused by name.
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+
+        let mut graph = StockPipeline::Forward.document();
+        let geometry = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::PASS_GEOMETRY)
+            .map(|(id, _)| id)
+            .expect("forward has a geometry pass");
+        graph.set_setting(geometry, doc::SETTING_SORT, "back to front");
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        assert!(
+            compiled
+                .passes()
+                .iter()
+                .any(|pass| pass.sort == SortOrder::BackToFront),
+            "the setting reached the pass list"
+        );
+        compiled.schedule().expect("schedules");
+
+        // Without the setting, the stock behaviour: submission order.
+        let compiled = compile(
+            &StockPipeline::Forward.document(),
+            &registry,
+            &effects,
+            &config(),
+        )
+        .expect("the stock document compiles");
+        assert!(
+            compiled
+                .passes()
+                .iter()
+                .all(|pass| pass.sort == SortOrder::None),
+            "no default sorting: submission order is the behaviour"
+        );
+
+        // A name that is not one.
+        let mut graph = StockPipeline::Forward.document();
+        let geometry = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::PASS_GEOMETRY)
+            .map(|(id, _)| id)
+            .expect("forward has a geometry pass");
+        graph.set_setting(geometry, doc::SETTING_SORT, "by whimsy");
+        match compile(&graph, &registry, &effects, &config()) {
+            Err(PipelineError::UnknownSort { node, sort }) => {
+                assert_eq!(sort, "by whimsy");
+                assert!(!node.is_empty());
+            }
+            other => panic!("expected a sort error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_layers_and_blend_settings_reach_the_pass_list() {
+        // plan5 D5: the `layers` and `blend` settings compile into the
+        // pass, the stock preset — which never mentions either — stays at
+        // every draw, unblended, and a name that is not one is refused by
+        // name.
+        let effects = EffectRegistry::shipped();
+        let registry = document_registry(&effects);
+
+        let mut graph = StockPipeline::Forward.document();
+        let geometry = graph
+            .nodes()
+            .find(|(_, node)| node.def == doc::PASS_GEOMETRY)
+            .map(|(id, _)| id)
+            .expect("forward has a geometry pass");
+        graph.set_setting(geometry, doc::SETTING_LAYERS, "sorted");
+        graph.set_setting(geometry, doc::SETTING_BLEND, "alpha over");
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let pass = compiled
+            .passes()
+            .iter()
+            .find(|pass| pass.layers != LayerFilter::All)
+            .expect("the setting reached the pass list");
+        assert_eq!(pass.layers, LayerFilter::Sorted);
+        assert!(
+            pass.state.blend.is_some(),
+            "the blend reached the pass list"
+        );
+        // A blended pass tests depth and does not write it: the composite
+        // is the draws' order, not the nearest draw's.
+        assert!(!pass.state.depth_write, "a blended pass leaves depth alone");
+        compiled.schedule().expect("schedules");
+
+        // Without the settings, the stock behaviour.
+        let compiled = compile(
+            &StockPipeline::Forward.document(),
+            &registry,
+            &effects,
+            &config(),
+        )
+        .expect("the stock document compiles");
+        assert!(compiled
+            .passes()
+            .iter()
+            .all(|pass| pass.layers == LayerFilter::All && pass.state.blend.is_none()),);
+        // The stock pass still clears its target: loading is the sorted
+        // tier's behaviour, not every geometry pass's.
+        let stock_geometry = compiled
+            .passes()
+            .iter()
+            .find(|pass| matches!(pass.kind, crate::pass::PassKind::Geometry { .. }))
+            .expect("a geometry pass");
+        assert!(stock_geometry.color.iter().all(|color| {
+            matches!(
+                color.load,
+                crate::pass::Load::Clear(crate::types::Color { .. })
+            )
+        }));
+
+        for (setting, value) in [
+            (doc::SETTING_LAYERS, "peeled"),
+            (doc::SETTING_BLEND, "by whimsy"),
+        ] {
+            let mut graph = StockPipeline::Forward.document();
+            let geometry = graph
+                .nodes()
+                .find(|(_, node)| node.def == doc::PASS_GEOMETRY)
+                .map(|(id, _)| id)
+                .expect("forward has a geometry pass");
+            graph.set_setting(geometry, setting, value);
+            let compiled = compile(&graph, &registry, &effects, &config());
+            assert!(
+                matches!(
+                    compiled,
+                    Err(PipelineError::UnknownLayers { .. } | PipelineError::UnknownBlend { .. })
+                ),
+                "{setting} = {value:?} should be refused by name"
+            );
+        }
+    }
+
+    /// The tier filter itself (plan5 D5): who a peel iteration and the
+    /// sorted pass take, by each draw's `max_layers`.
+    #[test]
+    fn the_layer_filter_admits_by_budget() {
+        use crate::pass::LayerFilter;
+        // The sorted tier: budget zero only.
+        assert!(LayerFilter::Sorted.admits(0));
+        assert!(!LayerFilter::Sorted.admits(1));
+        // Peel iteration `i` takes a draw whose budget is still unspent
+        // there — and a budget beyond the pipeline's cap is clamped by
+        // the cap bounding which iterations are generated at all, never
+        // an error.
+        assert!(LayerFilter::Peeled { layer: 0 }.admits(1));
+        assert!(!LayerFilter::Peeled { layer: 1 }.admits(1));
+        assert!(LayerFilter::Peeled { layer: 3 }.admits(4));
+        assert!(!LayerFilter::Peeled { layer: 4 }.admits(4));
+        assert!(
+            LayerFilter::Peeled { layer: 7 }.admits(9),
+            "clamped, not refused"
+        );
+        assert!(
+            LayerFilter::All.admits(-3),
+            "everything passes a pass with no filter"
+        );
     }
 
     #[test]

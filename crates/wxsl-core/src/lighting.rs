@@ -78,6 +78,17 @@ pub const MODEL_ID_TARGET: GBufferTarget = GBufferTarget {
 /// The scale the dispatch id travels at, in [`MODEL_ID_TARGET`].
 pub const MODEL_ID_SCALE: f32 = 255.0;
 
+/// The name of the passthrough model a forward-shaded material's pixels
+/// route by (plan5 D2).
+///
+/// A material marked forward-shaded keeps its own model — that is what
+/// shades it, in the geometry pass, under either pipeline. `wxsl.preshaded`
+/// is only the *route*: the material's G-buffer pixels carry its id, and
+/// the generated lighting pass returns the radiance they stored before the
+/// light loop can run. Resolution requires the set to enable it whenever a
+/// material is marked forward-shaded, by name, so the route always exists.
+pub const PRESHADED_MODEL: &str = "wxsl.preshaded";
+
 /// The G-buffer channels a model may ask for, and how they are filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModelExtra {
@@ -401,6 +412,19 @@ pub enum LightingError {
         /// Who claimed it second.
         second: ChannelSource,
     },
+    /// A material is marked forward-shaded while the pipeline's lighting
+    /// set does not enable [`PRESHADED_MODEL`] — its pixels would carry an
+    /// id the lighting pass has no route for (plan5 D2).
+    PreshadedNotEnabled,
+    /// A material is marked forward-shaded and still receives shadows —
+    /// a combination that cannot be honoured, because the surface's
+    /// radiance is computed in the geometry pass, before any shadow map
+    /// exists to attenuate it (plan5 D2).
+    ForwardShadedWithShadows,
+    /// A material is marked forward-shaded and names [`PRESHADED_MODEL`]
+    /// as its own model — the route, not a shading function; there would
+    /// be nothing left to shade it with (plan5 D2).
+    ForwardShadedModel,
 }
 
 impl fmt::Display for LightingError {
@@ -442,6 +466,24 @@ impl fmt::Display for LightingError {
                 f,
                 "the G-buffer field `{field}` is claimed twice: by {first} and by {second} — \
                  rename one of the requested channels"
+            ),
+            LightingError::PreshadedNotEnabled => write!(
+                f,
+                "the material is marked forward-shaded, but this pipeline's lighting set \
+                 does not enable `{PRESHADED_MODEL}` — add it to the set so the lighting \
+                 pass has a route for the material's pixels"
+            ),
+            LightingError::ForwardShadedWithShadows => write!(
+                f,
+                "the material is marked forward-shaded and receives shadows — a preshaded \
+                 surface's radiance is computed before any shadow map exists to attenuate \
+                 it, so set `receive_shadow` to false"
+            ),
+            LightingError::ForwardShadedModel => write!(
+                f,
+                "the material is marked forward-shaded and names `{PRESHADED_MODEL}` as its \
+                 model — that model is the route a forward-shaded pixel travels, not a \
+                 shading function; name a real model, or none for the set's default"
             ),
         }
     }
@@ -558,6 +600,15 @@ impl LightingSet {
         self.models
             .iter()
             .find(|model| model.name == resolved.as_ref())
+    }
+
+    /// The set's passthrough model, if it enables one: the id a
+    /// forward-shaded material's pixels carry so the lighting pass can
+    /// return the radiance they stored instead of re-shading it (plan5
+    /// D2). A set without it cannot honour a forward-shaded material,
+    /// which is why resolution asks for it by name.
+    pub fn preshaded(&self) -> Option<&LightingModel> {
+        self.by_name(PRESHADED_MODEL)
     }
 
     /// The model a material gets when it does not name one: the lowest id.
@@ -688,6 +739,16 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         function: "lighting_cloth",
         extra: None,
         doc: "Fabric: a roughness-wrapped diffuse with a Charlie sheen layer.",
+    },
+    LightingModel {
+        id: 5,
+        name: PRESHADED_MODEL,
+        module: "package::lighting::models::preshaded",
+        function: "lighting_preshaded",
+        extra: None,
+        doc: "Passthrough: returns the radiance a forward-shaded material \
+              computed in the geometry pass, stored where the G-buffer keeps \
+              emissive radiance.",
     },
 ];
 
@@ -950,6 +1011,17 @@ pub fn shade_surface_with(
                     target.precision.field_type(),
                 );
             }
+            // Nobody asked for a channel: no struct and no parameter, for
+            // WGSL refuses an empty struct (and the arms read nothing).
+            let (extras_decl, extras_param, model_extras) = if fields.is_empty() {
+                (String::new(), String::new(), String::new())
+            } else {
+                (
+                    format!("struct ModelExtras {{\n{fields}}}\n\n"),
+                    ", extras: ModelExtras".to_string(),
+                    "ModelExtras".to_string(),
+                )
+            };
             // A narrower target is widened back to the vec4f the model
             // contract hands over.
             let mut arms = String::new();
@@ -972,7 +1044,8 @@ pub fn shade_surface_with(
             out.push_str(&crate::template::fill(
                 DISPATCH_SWITCH_TEMPLATE,
                 &[
-                    ("MODEL_EXTRAS_FIELDS", &fields),
+                    ("MODEL_EXTRAS_DECL", &extras_decl),
+                    ("EXTRAS_PARAM", &extras_param),
                     ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
                     ("SURFACE", abi::SURFACE_STRUCT),
                     ("CONTEXT", abi::CONTEXT_STRUCT),
@@ -982,8 +1055,16 @@ pub fn shade_surface_with(
             (
                 // The shading function receives the extras as they came
                 // off the G-buffer; there is nothing to compute.
-                ", extras: ModelExtras, model_id: u32".to_string(),
-                ", extras, model_id".to_string(),
+                if model_extras.is_empty() {
+                    ", model_id: u32".to_string()
+                } else {
+                    ", extras: ModelExtras, model_id: u32".to_string()
+                },
+                if model_extras.is_empty() {
+                    ", model_id".to_string()
+                } else {
+                    ", extras, model_id".to_string()
+                },
                 String::new(),
             )
         }
@@ -1043,10 +1124,19 @@ pub fn gbuffer_struct(layout: &[GBufferTarget]) -> String {
 /// turns the feature on, zeroed when it does not. Zeroed rather than
 /// skipped: the field exists, and an undefined channel reads back whatever
 /// the clear left.
+///
+/// A forward-shaded material (`forward_shaded`, plan5 D2) packs
+/// differently in one place: the radiance its fragment has already
+/// computed — passed in as `wxsl_preshaded`, rather than read off the
+/// surface — is what the emissive target stores, because that target is
+/// where the lighting pass looks for a preshaded pixel's answer. The
+/// occlusion it displaces only ever attenuated ambient, which a preshaded
+/// pixel's lighting pass never runs.
 pub fn pack_gbuffer(
     model: &LightingModel,
     set: &LightingSet,
     features: &[ChannelRequest],
+    forward_shaded: bool,
 ) -> GeneratedLighting {
     let plan = set
         .plan(features)
@@ -1056,10 +1146,15 @@ pub fn pack_gbuffer(
     let mut source = gbuffer_struct(layout);
     let _ = write!(
         source,
-        "\nfn {pack}(surface: {surface}{id_param}) -> {struct_name} {{\n    \
+        "\nfn {pack}(surface: {surface}{radiance_param}{id_param}) -> {struct_name} {{\n    \
              var out: {struct_name};\n",
         pack = abi::PACK_GBUFFER_FN,
         surface = abi::SURFACE_STRUCT,
+        radiance_param = if forward_shaded {
+            ", wxsl_preshaded: vec4f"
+        } else {
+            ""
+        },
         id_param = if set.dispatches() {
             ", model_id: u32"
         } else {
@@ -1072,12 +1167,15 @@ pub fn pack_gbuffer(
             .iter()
             .any(|base| base.field == target.field)
         {
-            // The base packing, exactly as `deferred.wxsl` wrote it.
-            match target.field {
-                "base_color" => "vec4f(surface.base_color, saturate(surface.metallic))",
-                "normal" => "vec4f(normalize(surface.normal), saturate(surface.roughness))",
-                "emissive" => "vec4f(surface.emissive, saturate(surface.occlusion))",
-                other => unreachable!("base target `{other}` has no pack expression"),
+            // The base packing, exactly as `deferred.wxsl` wrote it —
+            // except the emissive target of a forward-shaded material,
+            // which stores the fragment's own radiance (plan5 D2).
+            match (target.field, forward_shaded) {
+                ("base_color", _) => "vec4f(surface.base_color, saturate(surface.metallic))",
+                ("normal", _) => "vec4f(normalize(surface.normal), saturate(surface.roughness))",
+                ("emissive", false) => "vec4f(surface.emissive, saturate(surface.occlusion))",
+                ("emissive", true) => "vec4f(wxsl_preshaded.rgb, 0.0)",
+                other => unreachable!("base target `{other:?}` has no pack expression"),
             }
             .to_string()
         } else if target.field == MODEL_ID_FIELD {
@@ -1162,7 +1260,19 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         _ => Dispatch::Switch(set.clone()),
     };
     let switch_shape = matches!(dispatch, Dispatch::Switch(_));
-    let shading = shade_surface(&dispatch);
+    // The preshaded route (plan5 D2): a pixel whose id names
+    // `wxsl.preshaded` has already been shaded in the geometry pass, so
+    // the pass returns the radiance it stored — where the G-buffer keeps
+    // emissive — and never runs the light loop or the ambient over it. A
+    // set of *only* that model makes every pixel preshaded: the pass is
+    // pure passthrough, and no shading function is generated at all.
+    let preshaded = set.preshaded().copied();
+    let passthrough = preshaded.is_some() && set.len() == 1;
+    let shading = if passthrough {
+        None
+    } else {
+        Some(shade_surface(&dispatch))
+    };
 
     let mut out = String::with_capacity(4096);
     out.push_str(
@@ -1191,8 +1301,10 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         "import package::space::tangent_basis::tangent_basis;
 ",
     );
-    for (module, item) in &shading.imports {
-        let _ = writeln!(out, "import {module}::{item};");
+    if let Some(shading) = &shading {
+        for (module, item) in &shading.imports {
+            let _ = writeln!(out, "import {module}::{item};");
+        }
     }
 
     // One binding per target, in layout order, then depth — the same order
@@ -1281,19 +1393,38 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         .collect::<Vec<_>>()
         .join(", ");
     let shade_args = if switch_shape {
-        format!(
-            "unpacked.surface, ctx, ModelExtras({}), unpacked.model_id",
-            requests
-                .iter()
-                .map(|request| format!("unpacked.{}", request.target.field))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        let extras = requests
+            .iter()
+            .map(|request| format!("unpacked.{}", request.target.field))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A set whose models asked for no channels passes no extras: the
+        // generated dispatch takes the id and nothing else.
+        if extras.is_empty() {
+            "unpacked.surface, ctx, unpacked.model_id".to_string()
+        } else {
+            format!("unpacked.surface, ctx, ModelExtras({extras}), unpacked.model_id")
+        }
     } else {
         "unpacked.surface, ctx".to_string()
     };
 
     let depth_binding = layout.len().to_string();
+    let final_return = if passthrough {
+        "return vec4f(unpacked.surface.emissive, 1.0);".to_string()
+    } else {
+        let shaded = format!("return {}({});", abi::SHADE_SURFACE_FN, shade_args);
+        match preshaded {
+            // Route first, shade the rest: a preshaded pixel's radiance is
+            // already in the G-buffer, and the loop would add it once per
+            // light on top of the ambient it never asked for.
+            Some(model) => format!(
+                "if (unpacked.model_id == {}u) {{ return vec4f(unpacked.surface.emissive, 1.0); }}\n    {}",
+                model.id, shaded
+            ),
+            None => shaded,
+        }
+    };
     out.push_str(&crate::template::fill(
         LIGHTING_PASS_TEMPLATE,
         &[
@@ -1305,12 +1436,14 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
             ("UNPACK_PARAMS", params.as_str()),
             ("MODEL_ID_LINE", model_id_line.as_str()),
             ("EXTRAS_UNPACK", extras_unpack.as_str()),
-            ("SHADING", shading.source.as_str()),
+            (
+                "SHADING",
+                shading.map(|s| s.source).unwrap_or_default().as_str(),
+            ),
             ("FRAGMENT_ENTRY", abi::LIGHTING_PASS_FRAGMENT_ENTRY),
             ("FIRST_TARGET", layout[0].field),
             ("UNPACK_CALL", loads.as_str()),
-            ("SHADE_FN", abi::SHADE_SURFACE_FN),
-            ("SHADE_ARGS", shade_args.as_str()),
+            ("FINAL_RETURN", &final_return),
         ],
     ));
     out
@@ -1454,14 +1587,19 @@ mod tests {
     #[test]
     fn the_pack_fills_the_id_channel_only_when_dispatching() {
         let single = LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]);
-        let plain = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &single, &[]);
+        let plain = pack_gbuffer(
+            &DEFAULT_MODELS[DEFAULT_MODEL_ID as usize],
+            &single,
+            &[],
+            false,
+        );
         assert!(plain
             .source
             .contains("fn pack_gbuffer(surface: Surface) -> GBuffer"));
         assert!(!plain.source.contains("model_id"));
 
         let set = default_set().unwrap();
-        let dispatched = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[]);
+        let dispatched = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[], false);
         assert!(dispatched
             .source
             .contains("fn pack_gbuffer(surface: Surface, model_id: u32) -> GBuffer"));
@@ -1475,14 +1613,15 @@ mod tests {
             .iter()
             .find(|m| m.name == "wxsl.clearcoat")
             .unwrap();
-        let coated = pack_gbuffer(coat, &set, &[]);
+        let coated = pack_gbuffer(coat, &set, &[], false);
         // The pair-precision target takes the leading components of the
         // pack contract's vec4f.
         assert!(coated
             .source
             .contains("out.clearcoat = pack_clearcoat(surface).xy;"));
         assert!(coated.source.contains("out.lighting = f32(model_id)"));
-        let plain_under_set = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[]);
+        let plain_under_set =
+            pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[], false);
         assert!(plain_under_set
             .source
             .contains("out.clearcoat = vec2f(0.0);"));
@@ -1526,6 +1665,39 @@ mod tests {
         // nothing in the module but that model.
         assert!(source.contains("return shade_surface(unpacked.surface, ctx)"));
         assert!(source.contains("return lighting_pbr(surface, ctx, light, extra);"));
+    }
+
+    #[test]
+    fn a_switch_without_requested_channels_names_no_extras() {
+        // Two models, no targets, no features: an empty `ModelExtras`
+        // struct is invalid WGSL, so neither the struct nor the parameter
+        // is generated — found by the first two-model set to reach a real
+        // lighting pass on a device (pbr + preshaded, plan5 D2).
+        let set = LightingSet::new([
+            DEFAULT_MODELS[DEFAULT_MODEL_ID as usize],
+            *DEFAULT_MODELS
+                .iter()
+                .find(|model| model.name == PRESHADED_MODEL)
+                .expect("the route ships"),
+        ])
+        .unwrap();
+        assert!(!set.dispatches() || set.extras().is_empty());
+        let generated = shade_surface(&Dispatch::Switch(set.clone()));
+        assert!(
+            !generated.source.contains("ModelExtras"),
+            "{}",
+            generated.source
+        );
+        assert!(generated
+            .source
+            .contains("fn shade_surface(surface: Surface, ctx: SurfaceContext, model_id: u32)"));
+
+        let source = lighting_pass_source(&set, &[]);
+        assert!(
+            source.contains("return shade_surface(unpacked.surface, ctx, unpacked.model_id)"),
+            "{}",
+            source
+        );
     }
 
     #[test]
@@ -1626,7 +1798,7 @@ mod tests {
         // Under the feature: the channel exists, filled through the
         // feature's pack when the material's macro turns it on, zeros
         // when it does not.
-        let packed = pack_gbuffer(&model, &single, &features);
+        let packed = pack_gbuffer(&model, &single, &features, false);
         assert!(
             packed.source.contains("subsurface: vec2f,"),
             "{}",
@@ -1645,8 +1817,92 @@ mod tests {
 
         // Without the feature there is no field at all — a narrower plan,
         // and nothing emitted for it.
-        let plain = pack_gbuffer(&model, &single, &[]);
+        let plain = pack_gbuffer(&model, &single, &[], false);
         assert!(!plain.source.contains("subsurface"));
+    }
+
+    /// The preshaded route (plan5 D2): findable by name in any set that
+    /// enables it, absent from one that does not.
+    #[test]
+    fn the_preshaded_route_is_findable_by_name() {
+        let full = default_set().unwrap();
+        let route = full.preshaded().expect("the shipped set enables it");
+        assert_eq!(route.name, PRESHADED_MODEL);
+
+        let bare = LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]);
+        assert!(bare.preshaded().is_none());
+    }
+
+    /// A forward-shaded material's pack takes the fragment's radiance and
+    /// stores it where the lighting pass looks — the emissive target —
+    /// while every other target packs as it always did.
+    #[test]
+    fn the_forward_shaded_pack_stores_the_radiance_in_emissive() {
+        let set = default_set().unwrap();
+        let model = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
+        let packed = pack_gbuffer(&model, &set, &[], true);
+        assert!(
+            packed
+                .source
+                .contains("fn pack_gbuffer(surface: Surface, wxsl_preshaded: vec4f, model_id: u32) -> GBuffer"),
+            "{}",
+            packed.source
+        );
+        assert!(
+            packed
+                .source
+                .contains("out.emissive = vec4f(wxsl_preshaded.rgb, 0.0);"),
+            "{}",
+            packed.source
+        );
+        // The untouched targets, for contrast.
+        assert!(packed
+            .source
+            .contains("out.base_color = vec4f(surface.base_color, saturate(surface.metallic));"));
+
+        // The plain pack of the same material is unchanged: one bool, not
+        // a second code path.
+        let plain = pack_gbuffer(&model, &set, &[], false);
+        assert!(plain
+            .source
+            .contains("fn pack_gbuffer(surface: Surface, model_id: u32) -> GBuffer"));
+        assert!(plain
+            .source
+            .contains("out.emissive = vec4f(surface.emissive, saturate(surface.occlusion));"));
+    }
+
+    /// A dispatching lighting pass answers a preshaded pixel before its
+    /// light loop can run; a set of only the route is pure passthrough,
+    /// with no shading function generated at all.
+    #[test]
+    fn the_lighting_pass_returns_a_preshaded_pixel_before_the_loop() {
+        let set = default_set().unwrap();
+        let source = lighting_pass_source(&set, &[]);
+        let route = set.preshaded().expect("the shipped set enables it");
+        assert!(
+            source.contains(&format!(
+                "if (unpacked.model_id == {}u) {{ return vec4f(unpacked.surface.emissive, 1.0); }}",
+                route.id
+            )),
+            "{}",
+            source
+        );
+        // Everyone else still shades.
+        assert!(source.contains("return shade_surface(unpacked.surface, ctx"));
+
+        let only = LightingSet::single(*set.preshaded().expect("ships"));
+        let passthrough = lighting_pass_source(&only, &[]);
+        assert!(
+            passthrough.contains("return vec4f(unpacked.surface.emissive, 1.0);"),
+            "{}",
+            passthrough
+        );
+        assert!(!passthrough.contains("shade_surface"));
+        assert!(
+            !passthrough.contains("lighting_preshaded"),
+            "the passthrough generates no shading function at all: {}",
+            passthrough
+        );
     }
 
     #[test]

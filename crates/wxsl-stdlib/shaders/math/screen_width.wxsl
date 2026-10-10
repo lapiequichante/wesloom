@@ -1,0 +1,17 @@
+// Screen-space width
+//
+// How much one pixel of screen travel changes a value — the graph-facing
+// spelling of `fwidth`. The caller-side recipe an anti-aliased width
+// wants: feed a distance field's `screen_width` into `sdf_coverage`'s
+// `width`, and the coverage ramp is always about one pixel wide however
+// the surface foreshortens. A constant width aliases exactly where the
+// field crosses texel boundaries steeply.
+//
+// Fragment-only by construction: the derivative *is* the measurement.
+// The stage analysis refuses a graph that feeds the vertex stage with
+// this node (ADR 0054).
+fn screen_width(
+    value: f32, // The quantity whose pixel-to-pixel change matters. @default 0.0
+) -> f32 {
+    return fwidth(value);
+}
