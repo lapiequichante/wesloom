@@ -402,6 +402,26 @@ channel, a G-buffer shaped exactly as it always was. The shipped models —
 they are shaded through the registry's contract, not placed on a canvas.
 See [ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md).
 
+`wxsl.iridescent` reads graph-authored film strength, thickness (nm) and
+IOR from the surface output. Its HDR extra target fills the 32-byte budget
+in a single-model set, so it is selected explicitly from `DEFAULT_MODELS`;
+the historical `default_set()` keeps its six-model, 30-byte layout.
+Forward packs the film once; deferred hands the stored channel to the same
+light loop, even for one model. Position is reconstructed from depth and
+the inverse camera matrix, never stored in the G-buffer. Ambient remains
+the shared GGX approximation pending S3's spectral IBL work. See
+[ADR 0058](adr/0058-iridescence-is-authored-on-the-surface-and-carried-by-a-model-channel.md).
+
+`wxsl.sheen` adds a Charlie/Neubelt layer over PBR, with independent
+`sheen_color` and `sheen_roughness` surface sockets. Its HDR channel also
+fills a single-model 32-byte layout. Model entries can name an optional
+ambient function; the generated loop uses the same id and stored extra to
+select it, falling back to the historical GGX ambient for existing models.
+Sheen attenuates the base and uses the shipped Charlie hemispherical fit
+for the analytic sky/ground environment. Cubemap prefiltering remains S3.
+The historical cloth model and six-model demo set retain their behavior.
+See [ADR 0059](adr/0059-sheen-is-a-surface-layer-with-model-owned-ambient.md).
+
 Models are one *source* of G-buffer channels. A material **feature** is
 the second ([ADR 0037](adr/0037-semantic-channels.md)): a registry entry
 in `wxsl_core::lighting::FEATURES` — subsurface is the first — that asks

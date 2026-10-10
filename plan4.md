@@ -466,6 +466,33 @@ fragment-only contract opened the door:
   (S2-D) remains the queue's honest next step; the node is the surface
   term, not a fake BRDF.
 
+**Model-channel increment landed on 2026-10-10** (ADR 0058): surface
+output sockets author film strength, thickness (nm) and IOR per fragment;
+`wxsl.iridescent` packs them into an HDR channel and evaluates the existing
+spectral node inside the GGX direct-light loop. The single-model deferred
+path consumes stored extras rather than regenerating them from base surface
+fields. Its layout fills the 32-byte budget, so it is explicitly selected,
+outside the historical six-model `default_set()`. The gallery sphere now
+uses this model under deferred; a matching scene joins the Dawn parity list.
+N6 and compatible spectral IBL remain open.
+
+**Sheen surface increment landed on 2026-10-10** (ADR 0059): independent
+`sheen_color` and `sheen_roughness` surface sockets, carried in the
+`wxsl.sheen` model's HDR target. Charlie/Neubelt direct lighting attenuates
+the PBR base; the new optional model-owned ambient uses the shipped Charlie
+hemispherical fit rather than treating the layer as GGX. Black sheen
+reproduces PBR exactly; old cloth materials and `default_set()` keep their
+behavior. The gallery and Dawn parity list include a fragment-varying sheen
+scene, with GPU tests for tint, roughness, energy budget and both paths.
+This closes S2-D's surface-input/channel work; physical cubemap IBL stays S3.
+
+AgX remains open after a provenance audit: Three.js's MIT chunk refers to
+Filament's Apache-2.0 implementation, which itself cites EaryChow's
+`AgX_LUT_Gen` and the IOLITE contrast/look implementation. The audit has not
+established a permissive license for the complete upstream chain. ADR 0053
+therefore keeps these technique-only until that is resolved; no AgX source
+has been imported. See the implementation guide's audit note.
+
 Finding the first iridescence compile also exposed a latent
 `simplex3` bug the device-free corpus could never see: `h` was typed
 `vec3f` where Ashima's original is a `vec4`, and its `.w` accessor is
@@ -615,7 +642,9 @@ tickets: ticket 2 (the fragment-only derivative contract) closed as
 plan5's D1 with its AA'd family and ticket 6 (full spectral
 iridescence) closed behind it — see the S2 note. Still open: the
 single-scattering sky and the IBL ADR (8–9), the pyramid synthesis ADR
-and DOF (11–12), AgX, and the surface-schema half of S2-D. The palette
+and DOF (11–12), and AgX (provenance chain still under audit). S2-D's
+iridescent and sheen surface channels landed in ADRs 0058–0059;
+compatible physical IBL remains with S3. The palette
 is at 176 nodes; N9's palette reorganization trigger has fired.
 
 The B-series owns the critical path because the owner's priority is the

@@ -1,0 +1,56 @@
+// The iridescent lighting model
+//
+// GGX with a spectral thin-film Fresnel response at each light's half-vector
+// angle. The graph authors the film, and the model's HDR channel carries it
+// through the deferred path. Ambient still uses the shared GGX environment
+// approximation; this model does not claim a spectral IBL prefilter.
+// See ADR 0058. The spectral evaluation is the attributed existing node;
+// the packing and direct-light composition here are original.
+
+import package::lighting::iridescence::iridescence;
+import package::lighting::fresnel_schlick::fresnel_schlick;
+import package::lighting::distribution_ggx::distribution_ggx;
+import package::lighting::visibility_smith::visibility_smith;
+import package::lighting::diffuse_lambert::diffuse_lambert;
+import package::lighting::models::pbr::lighting_pbr;
+import package::wxsl::bindings::LightSample;
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn pack_iridescence(surface: Surface) -> vec4f {
+    return vec4f(
+        saturate(surface.iridescence_strength),
+        clamp(surface.iridescence_thickness, 0.0, 65504.0),
+        clamp(surface.iridescence_ior, 1.0, 3.0),
+        0.0,
+    );
+}
+
+fn lighting_iridescent(
+    surface: Surface,
+    ctx: SurfaceContext,
+    light: LightSample,
+    extra: vec4f,
+) -> vec3f {
+    if extra.x <= 0.0 || extra.y <= 0.0 {
+        return lighting_pbr(surface, ctx, light, extra);
+    }
+    let normal = normalize(surface.normal);
+    let view = normalize(ctx.view_direction);
+    let n_dot_l = dot(normal, light.direction);
+    if n_dot_l <= 0.0 {
+        return vec3f(0.0);
+    }
+    let half_vector = normalize(light.direction + view);
+    let n_dot_v = max(dot(normal, view), 1e-4);
+    let n_dot_h = saturate(dot(normal, half_vector));
+    let v_dot_h = saturate(dot(view, half_vector));
+    let f0 = mix(vec3f(0.04), surface.base_color, saturate(surface.metallic));
+    let base_fresnel = fresnel_schlick(f0, v_dot_h);
+    let film_fresnel = clamp(iridescence(f0, v_dot_h, extra.y, extra.z), vec3f(0.0), vec3f(1.0));
+    let fresnel = mix(base_fresnel, film_fresnel, extra.x);
+    let specular = fresnel * distribution_ggx(n_dot_h, surface.roughness)
+        * visibility_smith(n_dot_v, n_dot_l, surface.roughness);
+    let diffuse = (vec3f(1.0) - fresnel)
+        * diffuse_lambert(surface.base_color, surface.metallic);
+    return (diffuse + specular) * light.radiance * n_dot_l;
+}

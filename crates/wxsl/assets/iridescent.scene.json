@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "abi": 1,
+  "name": "spectral film channel",
+  "meshes": [{ "name": "cube", "source": { "kind": "cube", "size": 1.6 } }],
+  "materials": [{
+    "name": "film",
+    "model": "wxsl.iridescent",
+    "receive_shadow": false,
+    "graph": {
+      "name": "fragment film thickness",
+      "nodes": [
+        { "id": 1, "def": "input.uv" },
+        { "id": 2, "def": "convert.split.vec2f" },
+        { "id": 3, "def": "math.remap", "generics": { "T": "f32" },
+          "params": { "out_min": { "f32": 240.0 }, "out_max": { "f32": 880.0 } } },
+        { "id": 4, "def": "output.surface", "params": {
+          "base_color": { "vec3": [0.5, 0.5, 0.5] },
+          "metallic": { "f32": 1.0 }, "roughness": { "f32": 0.4 },
+          "iridescence_strength": { "f32": 1.0 }
+        } }
+      ],
+      "edges": [
+        { "from": [1, "out"], "to": [2, "v"] },
+        { "from": [2, "x"], "to": [3, "value"] },
+        { "from": [3, "out"], "to": [4, "iridescence_thickness"] }
+      ]
+    }
+  }],
+  "instances": [{ "mesh": 0, "material": 0 }]
+}

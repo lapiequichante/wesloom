@@ -1,0 +1,6 @@
+fn ambient_dispatch(surface: Surface, ctx: SurfaceContext${EXTRAS_PARAM}, model_id: u32) -> vec3f {
+    switch model_id {
+${SWITCH_ARMS}        default: { return vec3f(0.0); }
+    }
+}
+

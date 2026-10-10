@@ -383,6 +383,17 @@ l’espace d’entrée/sortie. Une rational curve approchant ACES n’est pas le
 transform ACES complet. AgX implique des matrices/gamut, un domaine log,
 un contraste et des looks ; ne pas baptiser une courbe arbitraire « AgX ».
 
+Audit du 2026-10-10 : le chunk Three.js à la révision ci-dessus renvoie à
+Filament (`filament/src/ToneMapper.cpp`, révision
+`5f83f24898dbb573cc02afd99acf855774ba7d8a`, Apache-2.0). Filament renvoie au
+générateur [EaryChow/AgX_LUT_Gen](https://github.com/EaryChow/AgX_LUT_Gen)
+pour les matrices et au billet IOLITE pour le contraste/les looks. La licence
+permissive de toute cette chaîne n'a pas été établie : aucune indication de
+licence trouvée dans le fichier `AgXBaseRec2020.py` ou l'inventaire du dépôt
+amont consultés. Les looks sont aussi décrits dans AgX-S2O3, mais cela ne
+suffit pas à autoriser la copie du reste. Conserver les références comme
+technique-only tant que l'audit ADR 0053 reste incomplet. Aucun port AgX livré.
+
 ### S2.19 — IOR et F0
 
 ```wxsl

@@ -722,6 +722,12 @@ mod tests {
         // align 2, so 25 rounds to 26 first) = 30. The round-up is the
         // part that was once guessed wrong: the naive sum says 29.
         assert_eq!(cost(wxsl_core::lighting::default_set().unwrap()), 30);
+        assert_eq!(cost(LightingSet::single(model("iridescent"))), 32);
+        assert_eq!(cost(LightingSet::single(model("sheen"))), 32);
+        assert!(
+            cost(LightingSet::new([model("pbr"), model("iridescent")]).unwrap())
+                > MAX_GBUFFER_BYTES_PER_SAMPLE
+        );
         assert_eq!(
             cost(LightingSet::new([model("lambert"), model("clearcoat")]).unwrap()),
             30

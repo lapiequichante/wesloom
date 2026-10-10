@@ -98,6 +98,19 @@ fn model(name: &str) -> lighting::LightingModel {
 fn telling_sets() -> Vec<(&'static str, LightingSet)> {
     vec![
         ("single pbr", LightingSet::single(model("pbr"))),
+        ("single sheen", LightingSet::single(model("sheen"))),
+        (
+            "pbr + sheen (codegen only; exceeds portable budget)",
+            LightingSet::new([model("pbr"), model("sheen")]).unwrap(),
+        ),
+        (
+            "single iridescent",
+            LightingSet::single(model("iridescent")),
+        ),
+        (
+            "pbr + iridescent (codegen only; exceeds portable budget)",
+            LightingSet::new([model("pbr"), model("iridescent")]).unwrap(),
+        ),
         ("full set", lighting::default_set().unwrap()),
         (
             "lambert + clearcoat",
@@ -185,6 +198,13 @@ fn every_registry_entry_points_at_a_shipped_source() {
                 "{} does not define its pack fn {}",
                 model.module,
                 extra.pack
+            );
+        }
+        if let Some(ambient) = model.ambient {
+            assert!(
+                source.contains(&format!("fn {ambient}(")),
+                "{} does not define its ambient function {ambient}",
+                model.module
             );
         }
     }

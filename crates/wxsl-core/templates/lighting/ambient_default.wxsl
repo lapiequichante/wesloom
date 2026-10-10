@@ -1,0 +1,16 @@
+// The historical GGX response to the frame's analytic hemisphere.
+fn default_ambient(surface: Surface, ctx: SurfaceContext) -> vec3f {
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+    return ambient_environment(
+        normal,
+        view_direction,
+        surface.base_color,
+        surface.metallic,
+        surface.roughness,
+        scene.ambient_sky,
+        scene.ambient_ground,
+        environment_brdf(saturate(dot(normal, view_direction)), surface.roughness),
+    );
+}
+

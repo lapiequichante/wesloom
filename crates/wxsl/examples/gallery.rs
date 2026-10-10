@@ -559,14 +559,28 @@ fn demos() -> Vec<Demo> {
         },
         Demo {
             name: "iridescence",
-            blurb: "a thin-film sphere: the spectral Khronos evaluation over a \
-                    noise-swept thickness, the view term an honest dot(N, V) — \
-                    plan4's ticket 6, unblocked by the derivative contract",
-            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            blurb: "a thin-film sphere: graph-authored thickness carried by an HDR \
+                    model channel into the spectral specular light loop (ADR 0058)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
             instances: 1,
             key_intensity: 42.0,
             features: &[],
-            model: None,
+            model: Some("wxsl.iridescent"),
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "sheen",
+            blurb: "a PBR sphere under graph-authored sheen: tint and roughness \
+                    carried into the Charlie light loop and analytic ambient (ADR 0059)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            model: Some("wxsl.sheen"),
             sky: None,
             params: &[],
             material: None,
@@ -1162,21 +1176,21 @@ fn apply(demo: &Demo, renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     if renderer.features() != demo.features {
         renderer.set_features(demo.features)?;
     }
-    // A model-name demo needs the wide set; every other demo wants the
-    // stock single-model one back. Comparing on the one model only the
-    // wide set carries keeps this a no-op between two wide demos.
-    let wide = demo.model.is_some();
-    let carries_cloth = renderer
-        .lighting()
-        .models()
-        .iter()
-        .any(|model| model.name == "wxsl.cloth");
-    if wide != carries_cloth {
-        let set = if wide {
-            wxsl::core::lighting::default_set()?
-        } else {
-            wxsl::core::lighting::default_single_set()
-        };
+    // Layer models fill the portable budget alone; other demos share the
+    // historical wide set. Compare sets before rebuilding the renderer.
+    let set = match demo.model {
+        Some(name @ ("wxsl.iridescent" | "wxsl.sheen")) => {
+            wxsl::core::lighting::LightingSet::single(
+                *wxsl::core::lighting::DEFAULT_MODELS
+                    .iter()
+                    .find(|model| model.name == name)
+                    .expect("shipped layer model"),
+            )
+        }
+        Some(_) => wxsl::core::lighting::default_set()?,
+        None => wxsl::core::lighting::default_single_set(),
+    };
+    if renderer.lighting() != &set {
         renderer.set_lighting(set)?;
     }
     // The bake table's view rides only with its demo: the next pass list
@@ -1628,18 +1642,10 @@ fn sdf_aa_material_graph() -> Result<Graph, Box<dyn Error>> {
     Ok(graph)
 }
 
-/// A thin-film sphere (plan4's ticket 6): the film's thickness sweeps
-/// with simplex noise over the surface, the view term is the honest
-/// dot(N, V), and the spectral Khronos evaluation tints the base colour.
-/// Until a model carries the film as a channel (the guide's S2-D), the
-/// response is a surface term — this graph is the honest spelling of
-/// that: it modulates colour it owns, it does not fake a BRDF.
+/// A thin-film sphere whose graph authors thickness, not reflected colour.
 fn iridescent_material_graph() -> Result<Graph, Box<dyn Error>> {
     let registry = wxsl::stdlib::registry();
     let mut graph = Graph::new("iridescence");
-    let normal = graph.add_node("input.world_normal");
-    let view = graph.add_node("input.view_direction");
-    let facing = graph.add_node("vector.dot");
     // The thickness field lives in *object* space — sampled from the
     // world position it would stay put while the sphere turns underneath
     // it, and the film would appear to swim across the surface instead of
@@ -1660,23 +1666,15 @@ fn iridescent_material_graph() -> Result<Graph, Box<dyn Error>> {
         graph.add(Node::new(abi::VARYING_OUTPUT_ID).with_setting("name", "film_thickness"));
     let thickness_in =
         graph.add(Node::new("input.attribute").with_setting("name", "film_thickness"));
-    let f0 = graph.add(Node::new("const.value").with_param("value", Value::F32(0.04)));
-    let f0_vec = graph.add_node("convert.splat");
-    let film = graph.add(Node::new("lighting.iridescence").with_param("film_ior", Value::F32(1.3)));
-    let base =
-        graph.add(Node::new("const.value").with_param("value", Value::Vec3([0.42, 0.38, 0.36])));
-    let colour = graph.add_node("math.multiply");
     let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
-    graph
-        .set_generic(&registry, facing, "T", ValueType::Vec3)
-        .map_err(|error| format!("the dot does not resolve: {error}"))?;
+    graph.set_param(output, "base_color", Value::Vec3([0.42, 0.38, 0.36]));
+    graph.set_param(output, "metallic", Value::F32(0.85));
+    graph.set_param(output, "roughness", Value::F32(0.3));
+    graph.set_param(output, "iridescence_strength", Value::F32(1.0));
     for side in ["A", "B"] {
         graph
             .set_generic(&registry, scale, side, ValueType::Vec3)
             .map_err(|error| format!("the scale does not resolve: {error}"))?;
-        graph
-            .set_generic(&registry, colour, side, ValueType::Vec3)
-            .map_err(|error| format!("the multiply does not resolve: {error}"))?;
     }
     graph
         .set_generic(&registry, thickness, "T", ValueType::F32)
@@ -1686,23 +1684,12 @@ fn iridescent_material_graph() -> Result<Graph, Box<dyn Error>> {
             .set_generic(&registry, *interpolant, "T", ValueType::F32)
             .map_err(|error| format!("the interpolant does not resolve: {error}"))?;
     }
-    graph
-        .set_generic(&registry, f0_vec, "T", ValueType::Vec3)
-        .map_err(|error| format!("the splat does not resolve: {error}"))?;
     for (from, to) in [
-        ((normal, "out"), (facing, "a")),
-        ((view, "out"), (facing, "b")),
         ((position, "out"), (scale, "a")),
         ((scale, "out"), (noise, "p")),
         ((noise, "out"), (thickness, "value")),
         ((thickness, "out"), (varying, abi::SOCKET_VARYING)),
-        ((thickness_in, "out"), (film, "thickness_nm")),
-        ((f0, "out"), (f0_vec, "value")),
-        ((f0_vec, "out"), (film, "base_f0")),
-        ((facing, "out"), (film, "cos_theta")),
-        ((film, "out"), (colour, "a")),
-        ((base, "out"), (colour, "b")),
-        ((colour, "out"), (output, "base_color")),
+        ((thickness_in, "out"), (output, "iridescence_thickness")),
     ] {
         graph
             .wire(&registry, from, to)
@@ -1809,6 +1796,8 @@ struct Stage {
     sdf_aa: DemoMaterial,
     /// The iridescence demo's thin-film sphere (plan4's ticket 6).
     iridescent: DemoMaterial,
+    /// Graph-authored sheen tint and roughness (ADR 0059).
+    sheen: DemoMaterial,
     /// The bake demo's own material and the table its bake pass writes
     /// through (ADR 0045): the graph is parsed once, the effect and the
     /// material are compiled from it, the texture is the *material's*
@@ -1987,14 +1976,57 @@ impl Stage {
                 .with_shadows(false, false),
         )?;
         let iridescent_graph = iridescent_material_graph()?;
-        let iridescent = DemoMaterial::new(
-            &gpu,
+        let film_set = wxsl::core::lighting::LightingSet::single(
+            *wxsl::core::lighting::DEFAULT_MODELS
+                .iter()
+                .find(|model| model.name == "wxsl.iridescent")
+                .expect("shipped film model"),
+        );
+        let film_material = wxsl::render::Material::with_lighting(
+            &iridescent_graph,
+            &registry,
+            &wxsl::render::material::MaterialConfig::default().with_model("iridescent"),
+            &film_set,
+        )?;
+        let film_bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
             &mut renderer,
+            &film_material,
             &texture,
             &sampler,
-            &iridescent_graph,
-            &wxsl::render::material::MaterialConfig::default(),
         )?;
+        let iridescent = DemoMaterial {
+            material: film_material,
+            bindings: film_bindings,
+        };
+        let mut sheen_scene: wxsl::core::scene::Scene =
+            serde_json::from_str(include_str!("../assets/sheen.scene.json"))?;
+        let sheen_entry = sheen_scene.materials.remove(0);
+        let sheen_set = wxsl::core::lighting::LightingSet::single(
+            *wxsl::core::lighting::DEFAULT_MODELS
+                .iter()
+                .find(|model| model.name == "wxsl.sheen")
+                .expect("shipped sheen model"),
+        );
+        let sheen_material = wxsl::render::Material::with_lighting(
+            &sheen_entry.graph,
+            &registry,
+            &sheen_entry.config,
+            &sheen_set,
+        )?;
+        let sheen_bindings = demo_bindings(
+            &gpu.device,
+            &gpu.queue,
+            &mut renderer,
+            &sheen_material,
+            &texture,
+            &sampler,
+        )?;
+        let sheen = DemoMaterial {
+            material: sheen_material,
+            bindings: sheen_bindings,
+        };
         Ok(Stage {
             gpu,
             renderer,
@@ -2018,6 +2050,7 @@ impl Stage {
             order,
             sdf_aa,
             iridescent,
+            sheen,
             bake: Some(bake),
         })
     }
@@ -2196,12 +2229,15 @@ impl Stage {
             )?;
             return Ok(());
         }
-        if demo.name == "iridescence" {
-            // The thin-film sphere: the spectral response sweeping with
-            // the noise over the surface (plan4's ticket 6).
-            let draws: DrawList = [DrawItem::new(&self.sphere, &self.iridescent.material)
+        if matches!(demo.name, "iridescence" | "sheen") {
+            let layer = if demo.name == "sheen" {
+                &self.sheen
+            } else {
+                &self.iridescent
+            };
+            let draws: DrawList = [DrawItem::new(&self.sphere, &layer.material)
                 .with_transform(cube_transform(time * 0.5))
-                .with_bindings(&self.iridescent.bindings)]
+                .with_bindings(&layer.bindings)]
             .into_iter()
             .collect();
             self.renderer.render(

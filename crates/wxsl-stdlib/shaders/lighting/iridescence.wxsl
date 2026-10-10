@@ -4,13 +4,12 @@
 // refraction into the film, Fresnel amplitudes at both interfaces, the
 // phase inversions, and the two harmonic terms of the Fourier-space
 // XYZ-sensitivity integration — the full evaluation, not a stand-in.
-// The result is the film's RGB reflectance modifier: a material mixes
-// its F0 toward this response (the glTF KHR_materials_iridescence
-// spelling, `mix(f0, response * f0, strength)`); a model-level channel
-// is future work (the guide's S2-D), so this node is the honest surface
-// term, and `thin_film_phase` is the one scalar term of it.
+// The result is the film's RGB Fresnel reflectance. A lighting model blends
+// its ordinary Fresnel toward this response with the film strength; the
+// iridescent model evaluates it at the light's half-vector angle (ADR 0058).
+// `thin_film_phase` is the one scalar term of this spectral evaluation.
 //
-// Zero thickness returns the base interface's own white — the film's
+// Zero thickness returns the base interface's Fresnel reflectance — the film's
 // IOR fades out with the thickness — and total internal reflection
 // inside the film returns full reflectance. Out-of-gamut results are
 // clamped at zero, as upstream clamps them; the response is not
@@ -44,7 +43,7 @@ fn iridescence(
     let thickness = max(thickness_nm, 0.0);
 
     // The film's interface fades in with thickness, so a zero-thickness
-    // film is no film: the response is the unmodulated interface white.
+    // film is no film: the response is the base interface's reflectance.
     let ior = mix(outside_ior, clamp(film_ior, 1.0, 3.0), smoothstep(0.0, 0.03, thickness));
     // Snell: the cosine on the base layer, inside the film.
     let ratio = outside_ior / ior;

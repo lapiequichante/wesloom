@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "abi": 1,
+  "name": "graph-authored sheen layer",
+  "meshes": [{ "name": "cube", "source": { "kind": "cube", "size": 1.6 } }],
+  "materials": [{
+    "name": "sheen",
+    "model": "wxsl.sheen",
+    "receive_shadow": false,
+    "graph": {
+      "name": "fragment sheen tint and roughness",
+      "nodes": [
+        { "id": 1, "def": "input.uv" },
+        { "id": 2, "def": "convert.split.vec2f" },
+        { "id": 3, "def": "convert.combine.vec3f", "params": { "y": { "f32": 0.02 } } },
+        { "id": 4, "def": "math.remap", "generics": { "T": "f32" },
+          "params": { "out_min": { "f32": 0.2 }, "out_max": { "f32": 0.85 } } },
+        { "id": 5, "def": "output.surface", "params": {
+          "base_color": { "vec3": [0.12, 0.12, 0.12] }, "roughness": { "f32": 0.4 }
+        } }
+      ],
+      "edges": [
+        { "from": [1, "out"], "to": [2, "v"] },
+        { "from": [2, "x"], "to": [3, "x"] },
+        { "from": [2, "y"], "to": [3, "z"] },
+        { "from": [3, "out"], "to": [5, "sheen_color"] },
+        { "from": [2, "x"], "to": [4, "value"] },
+        { "from": [4, "out"], "to": [5, "sheen_roughness"] }
+      ]
+    }
+  }],
+  "instances": [{ "mesh": 0, "material": 0 }]
+}

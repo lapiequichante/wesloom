@@ -4,6 +4,10 @@ Date: 2026-09-12
 
 Status: Accepted
 
+Extended by [0059](0059-sheen-is-a-surface-layer-with-model-owned-ambient.md):
+models may name an ambient function using the same stored extra as direct
+lighting; absent keeps the shared GGX response.
+
 Amends [ADR 0008](0008-surface-graphs-and-a-named-shader-abi.md) (the shading
 function is no longer fixed shipped text).
 

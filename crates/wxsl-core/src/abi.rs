@@ -1446,6 +1446,36 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
         doc: "Opacity. The deferred path ignores it (the G-buffer is opaque).",
         editable_default: Some(Value::F32(1.0)),
     },
+    SurfaceField {
+        name: "iridescence_strength",
+        ty: ValueType::F32,
+        doc: "Thin-film specular weight, 0..1; read by the iridescent model.",
+        editable_default: Some(Value::F32(0.0)),
+    },
+    SurfaceField {
+        name: "iridescence_thickness",
+        ty: ValueType::F32,
+        doc: "Thin-film thickness in nanometres; zero disables the film.",
+        editable_default: Some(Value::F32(300.0)),
+    },
+    SurfaceField {
+        name: "iridescence_ior",
+        ty: ValueType::F32,
+        doc: "Thin-film index of refraction, 1..3.",
+        editable_default: Some(Value::F32(1.3)),
+    },
+    SurfaceField {
+        name: "sheen_color",
+        ty: ValueType::Vec3,
+        doc: "Linear RGB sheen reflectance, 0..1; black disables the layer.",
+        editable_default: Some(Value::Vec3([0.0, 0.0, 0.0])),
+    },
+    SurfaceField {
+        name: "sheen_roughness",
+        ty: ValueType::F32,
+        doc: "Perceptual roughness of the Charlie sheen layer, 0..1.",
+        editable_default: Some(Value::F32(0.5)),
+    },
 ];
 
 // ---------------------------------------------------------------------------

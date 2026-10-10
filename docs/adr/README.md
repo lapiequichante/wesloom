@@ -72,6 +72,8 @@ is signal, don't delete it.
 | [0055](0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md) | Sorting is opt-in per pass, and it sorts draws, not passes | Accepted |
 | [0056](0056-a-material-may-shade-forward-under-either-pipeline.md) | A material may shade forward under either pipeline, routed by the preshaded model | Accepted, amends [0022](0022-material-stages-replace-the-render-path-enum.md), [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md) |
 | [0057](0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md) | Transparency is tiered: sorted by default, peeled on request | Accepted, extends [0047](0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md) |
+| [0058](0058-iridescence-is-authored-on-the-surface-and-carried-by-a-model-channel.md) | Iridescence is authored on the surface and carried by a model channel | Accepted, extends 0008 and 0028 |
+| [0059](0059-sheen-is-a-surface-layer-with-model-owned-ambient.md) | Sheen is a surface layer with model-owned ambient | Accepted, extends 0008 and 0028 |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

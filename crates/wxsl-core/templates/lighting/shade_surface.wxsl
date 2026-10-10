@@ -1,12 +1,11 @@
 @if(wxsl_debug_normals)
-fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}) -> vec4f {
+fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
     return vec4f(normalize(surface.normal) * 0.5 + vec3f(0.5), 1.0);
 }
 
 @if(!wxsl_debug_normals)
 fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
     let normal = normalize(surface.normal);
-    let view_direction = normalize(ctx.view_direction);
 ${EXTRA_DECL}    var lit = vec3f(0.0);
     let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
     for (var index = 0u; index < light_count; index = index + 1u) {
@@ -32,16 +31,7 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
     // specular knows about grazing angles and roughness rather than
     // approximating both (ADR 0039).
     lit = lit
-        + ambient_environment(
-            normal,
-            view_direction,
-            surface.base_color,
-            surface.metallic,
-            surface.roughness,
-            scene.ambient_sky,
-            scene.ambient_ground,
-            environment_brdf(saturate(dot(normal, view_direction)), surface.roughness),
-        )
+        + ${AMBIENT_CALL}
         * saturate(surface.occlusion);
     lit = lit + surface.emissive;
 

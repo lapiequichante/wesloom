@@ -19,6 +19,12 @@ ${UNPACKED_STRUCT}fn ${UNPACK_FN}(${UNPACK_PARAMS}) -> UnpackedGBuffer {
     out.surface.occlusion = emissive.a;
     // `alpha` comes back as 1: the G-buffer is opaque by construction.
     out.surface.alpha = 1.0;
+    // Model-owned fields are consumed through the stored extra channel.
+    out.surface.iridescence_strength = 0.0;
+    out.surface.iridescence_thickness = 300.0;
+    out.surface.iridescence_ior = 1.3;
+    out.surface.sheen_color = vec3f(0.0);
+    out.surface.sheen_roughness = 0.5;
 ${MODEL_ID_LINE}${EXTRAS_UNPACK}    return out;
 }
 

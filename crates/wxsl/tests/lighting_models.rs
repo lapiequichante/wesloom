@@ -122,6 +122,10 @@ impl Scene {
     /// Draw one quad per slot, each with its own material, and read the
     /// image back.
     fn render(&mut self, materials: &[&Material]) -> Vec<u8> {
+        self.render_in(materials, &lit())
+    }
+
+    fn render_in(&mut self, materials: &[&Material], environment: &Environment) -> Vec<u8> {
         let items: Vec<DrawItem> = SLOTS
             .iter()
             .zip(materials)
@@ -131,8 +135,14 @@ impl Scene {
             })
             .collect();
         let draws: DrawList<'_> = items.into_iter().collect();
-        probe::render_list_in(&self.gpu, &mut self.renderer, &self.target, &draws, &lit())
-            .expect("the frame renders")
+        probe::render_list_in(
+            &self.gpu,
+            &mut self.renderer,
+            &self.target,
+            &draws,
+            environment,
+        )
+        .expect("the frame renders")
     }
 }
 
@@ -141,6 +151,304 @@ fn named(name: &str) -> MaterialConfig {
         model: Some(name.to_string()),
         ..MaterialConfig::default()
     }
+}
+
+#[test]
+fn iridescence_transports_fragment_thickness_and_has_an_exact_zero_film_fallback() {
+    let Some(gpu) = gpu() else { return };
+    let film_model = *DEFAULT_MODELS
+        .iter()
+        .find(|m| m.name == "wxsl.iridescent")
+        .unwrap();
+    let mut scene = Scene::with_lighting(gpu, LightingSet::single(film_model));
+    let mut graph = glossy(&scene.registry, "film", 0.4);
+    let output = graph
+        .nodes()
+        .find(|(_, n)| n.def == abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .unwrap();
+    graph.set_param(output, "metallic", Value::F32(1.0));
+    graph.set_param(output, "base_color", Value::Vec3([0.5, 0.5, 0.5]));
+    let zero = scene.material(&graph, &named("iridescent"));
+    let without = scene.render(&[&zero, &zero, &zero]);
+    graph.set_param(output, "iridescence_strength", Value::F32(1.0));
+    graph.set_param(output, "iridescence_thickness", Value::F32(0.0));
+    let zero_thickness = scene.material(&graph, &named("iridescent"));
+    assert_eq!(
+        without,
+        scene.render(&[&zero_thickness, &zero_thickness, &zero_thickness])
+    );
+
+    let uv = graph.add_node("input.uv");
+    let split = graph.add_node("convert.split.vec2f");
+    let thickness = graph.add(
+        Node::new("math.remap")
+            .with_param("out_min", Value::F32(240.0))
+            .with_param("out_max", Value::F32(880.0)),
+    );
+    graph
+        .set_generic(
+            &scene.registry,
+            thickness,
+            "T",
+            wxsl::core::node::ValueType::F32,
+        )
+        .unwrap();
+    graph
+        .wire(&scene.registry, (uv, "out"), (split, "v"))
+        .unwrap();
+    graph
+        .wire(&scene.registry, (split, "x"), (thickness, "value"))
+        .unwrap();
+    graph
+        .wire(
+            &scene.registry,
+            (thickness, "out"),
+            (output, "iridescence_thickness"),
+        )
+        .unwrap();
+    let film = scene.material(&graph, &named("iridescent"));
+    let deferred = scene.render(&[&film, &film, &film]);
+    scene.renderer.set_pipeline(StockPipeline::Forward);
+    let forward = scene.render(&[&film, &film, &film]);
+    for x in SLOTS {
+        let point = Vec3::new(x, 0.0, 0.0);
+        assert!(
+            probe::patch_gap(&deferred, &forward, camera(), point, 6) <= 4.0,
+            "film channel disagrees across paths at {x}"
+        );
+    }
+    assert!(
+        probe::patch_gap(&deferred, &without, camera(), Vec3::ZERO, 6) > 8.0,
+        "fragment-authored film did not change the specular response"
+    );
+    let mut constant_graph = graph.clone();
+    constant_graph.disconnect(
+        &scene.registry,
+        &wxsl::core::graph::SocketRef::new(output, "iridescence_thickness"),
+    );
+    constant_graph.set_param(output, "iridescence_thickness", Value::F32(300.0));
+    let constant = scene.material(&constant_graph, &named("iridescent"));
+    let constant_image = scene.render(&[&constant, &constant, &constant]);
+    assert!(
+        probe::patch_gap(&constant_image, &forward, camera(), Vec3::ZERO, 6) > 4.0,
+        "the fragment thickness gradient was replaced by a default thickness"
+    );
+    graph.set_param(output, "iridescence_ior", Value::F32(2.0));
+    let other_ior = scene.material(&graph, &named("iridescent"));
+    let changed = scene.render(&[&other_ior, &other_ior, &other_ior]);
+    assert!(
+        probe::patch_gap(&changed, &forward, camera(), Vec3::ZERO, 6) > 4.0,
+        "film IOR did not reach the model"
+    );
+    scene.renderer.set_pipeline(StockPipeline::Deferred);
+    let changed_deferred = scene.render(&[&other_ior, &other_ior, &other_ior]);
+    let ior_gap = probe::patch_gap(&changed, &changed_deferred, camera(), Vec3::ZERO, 6);
+    println!("changed IOR forward/deferred gap: {ior_gap}");
+    // The HDR channel rounds thickness to float16; the spectral response
+    // at IOR 2 amplifies that sub-nanometre error near a highlight.
+    assert!(
+        ior_gap <= 6.0,
+        "the changed IOR was lost in the deferred channel"
+    );
+
+    let oversized =
+        LightingSet::new([DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], film_model]).unwrap();
+    let error = scene
+        .renderer
+        .set_lighting(oversized)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("iridescent") && error.contains("bytes per sample"),
+        "{error}"
+    );
+    scene
+        .renderer
+        .set_lighting(wxsl::core::lighting::default_single_set())
+        .unwrap();
+    let pbr = scene.material(&glossy_film_base(&scene.registry), &named("pbr"));
+    scene.renderer.set_pipeline(StockPipeline::Deferred);
+    assert_eq!(without, scene.render(&[&pbr, &pbr, &pbr]));
+}
+
+fn glossy_film_base(registry: &NodeRegistry) -> Graph {
+    let mut graph = glossy(registry, "base without film", 0.4);
+    let output = graph
+        .nodes()
+        .find(|(_, n)| n.def == abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .unwrap();
+    graph.set_param(output, "metallic", Value::F32(1.0));
+    graph.set_param(output, "base_color", Value::Vec3([0.5, 0.5, 0.5]));
+    graph
+}
+
+#[test]
+fn sheen_transports_tint_and_roughness_in_direct_and_ambient_light() {
+    let Some(gpu) = gpu() else { return };
+    let model = *DEFAULT_MODELS
+        .iter()
+        .find(|m| m.name == "wxsl.sheen")
+        .unwrap();
+    let mut scene = Scene::with_lighting(gpu, LightingSet::single(model));
+    // The mixed layout exceeds the portable render budget, but its shader
+    // still needs device validation: exercise the ambient switch in naga.
+    let switched = wxsl::core::lighting::lighting_pass_source(
+        &LightingSet::new([DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], model]).unwrap(),
+        &[],
+    );
+    let wgsl = wxsl::render::variants::compile(
+        &wxsl::stdlib_library(),
+        &[(abi::LIGHTING_PASS_MODULE, std::borrow::Cow::Owned(switched))],
+        abi::LIGHTING_PASS_MODULE,
+        &wxsl::core::macros::MacroSet::new(),
+    )
+    .unwrap();
+    let scope = scene
+        .gpu
+        .device
+        .push_error_scope(wxsl::render::wgpu::ErrorFilter::Validation);
+    let _module =
+        scene
+            .gpu
+            .device
+            .create_shader_module(wxsl::render::wgpu::ShaderModuleDescriptor {
+                label: Some("sheen ambient switch"),
+                source: wxsl::render::wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+    let validation = pollster::block_on(scope.pop());
+    assert!(
+        validation.is_none(),
+        "invalid ambient switch: {validation:?}"
+    );
+    let mut ambient = lit();
+    ambient.lights.clear();
+    ambient.ambient_sky = Vec3::splat(0.7);
+    ambient.ambient_ground = Vec3::splat(0.7);
+    let mut graph = glossy(&scene.registry, "sheen", 0.4);
+    let output = graph
+        .nodes()
+        .find(|(_, node)| node.def == abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .unwrap();
+    graph.set_param(output, "base_color", Value::Vec3([0.12; 3]));
+    let no_sheen = scene.material(&graph, &named("sheen"));
+    let base_ambient = scene.render_in(&[&no_sheen; 3], &ambient);
+    let base_direct = scene.render(&[&no_sheen; 3]);
+
+    let uv = graph.add_node("input.uv");
+    let split = graph.add_node("convert.split.vec2f");
+    let tint = graph.add_node("convert.combine.vec3f");
+    let roughness = graph.add(
+        Node::new("math.remap")
+            .with_param("out_min", Value::F32(0.2))
+            .with_param("out_max", Value::F32(0.85)),
+    );
+    graph
+        .set_generic(
+            &scene.registry,
+            roughness,
+            "T",
+            wxsl::core::node::ValueType::F32,
+        )
+        .unwrap();
+    for (from, to) in [
+        ((uv, "out"), (split, "v")),
+        ((split, "x"), (tint, "x")),
+        ((split, "y"), (tint, "z")),
+        ((tint, "out"), (output, "sheen_color")),
+        ((split, "x"), (roughness, "value")),
+        ((roughness, "out"), (output, "sheen_roughness")),
+    ] {
+        graph.wire(&scene.registry, from, to).unwrap();
+    }
+    let sheen = scene.material(&graph, &named("sheen"));
+    let ambient_deferred = scene.render_in(&[&sheen; 3], &ambient);
+    let direct_deferred = scene.render(&[&sheen; 3]);
+    scene.renderer.set_pipeline(StockPipeline::Forward);
+    let ambient_forward = scene.render_in(&[&sheen; 3], &ambient);
+    let direct_forward = scene.render(&[&sheen; 3]);
+    for x in SLOTS {
+        let point = Vec3::new(x, 0.0, 0.0);
+        assert!(
+            probe::patch_gap(&ambient_forward, &ambient_deferred, camera(), point, 6) <= 4.0,
+            "sheen ambient lost its stored inputs at {x}"
+        );
+        assert!(
+            probe::patch_gap(&direct_forward, &direct_deferred, camera(), point, 6) <= 4.0,
+            "sheen direct lighting lost its stored inputs at {x}"
+        );
+    }
+    assert!(
+        probe::patch_gap(&ambient_deferred, &base_ambient, camera(), Vec3::ZERO, 6) > 8.0,
+        "the ambient function did not consume the sheen channel"
+    );
+    assert!(
+        probe::patch_gap(&direct_deferred, &base_direct, camera(), Vec3::ZERO, 6) > 4.0,
+        "sheen did not change the light response"
+    );
+
+    let mut flat = graph.clone();
+    for field in ["sheen_color", "sheen_roughness"] {
+        flat.disconnect(
+            &scene.registry,
+            &wxsl::core::graph::SocketRef::new(output, field),
+        );
+    }
+    flat.set_param(output, "sheen_color", Value::Vec3([0.9, 0.1, 0.03]));
+    flat.set_param(output, "sheen_roughness", Value::F32(0.2));
+    let red = scene.material(&flat, &named("sheen"));
+    let red_image = scene.render_in(&[&red; 3], &ambient);
+    flat.set_param(output, "sheen_color", Value::Vec3([0.03, 0.1, 0.9]));
+    let blue = scene.material(&flat, &named("sheen"));
+    let blue_image = scene.render_in(&[&blue; 3], &ambient);
+    assert!(
+        probe::patch_gap(&red_image, &blue_image, camera(), Vec3::ZERO, 6) > 8.0,
+        "sheen tint never reached ambient"
+    );
+    flat.set_param(output, "sheen_roughness", Value::F32(0.85));
+    let rough = scene.material(&flat, &named("sheen"));
+    let rough_image = scene.render_in(&[&rough; 3], &ambient);
+    assert!(
+        probe::patch_gap(&blue_image, &rough_image, camera(), Vec3::ZERO, 6) > 4.0,
+        "sheen roughness never reached ambient"
+    );
+
+    // A white layer under a uniform white hemisphere takes energy from
+    // the white base instead of adding its full response on top.
+    flat.set_param(output, "base_color", Value::Vec3([1.0; 3]));
+    flat.set_param(output, "sheen_color", Value::Vec3([1.0; 3]));
+    let white = scene.material(&flat, &named("sheen"));
+    let white_image = scene.render_in(&[&white; 3], &ambient);
+    flat.set_param(output, "sheen_color", Value::Vec3([0.0; 3]));
+    let white_base = scene.material(&flat, &named("sheen"));
+    let white_base_image = scene.render_in(&[&white_base; 3], &ambient);
+    for x in SLOTS {
+        let point = Vec3::new(x, 0.0, 0.0);
+        let layer = probe::color_at(&white_image, camera(), point);
+        let base = probe::color_at(&white_base_image, camera(), point);
+        assert!(
+            layer.iter().zip(base).all(|(l, b)| *l <= b + 1.0),
+            "white sheen created ambient energy: {layer:?} vs {base:?}"
+        );
+    }
+
+    scene
+        .renderer
+        .set_lighting(wxsl::core::lighting::default_single_set())
+        .unwrap();
+    let mut base_graph = glossy(&scene.registry, "PBR base", 0.4);
+    let output = base_graph
+        .nodes()
+        .find(|(_, node)| node.def == abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .unwrap();
+    base_graph.set_param(output, "base_color", Value::Vec3([0.12; 3]));
+    let pbr = scene.material(&base_graph, &named("pbr"));
+    scene.renderer.set_pipeline(StockPipeline::Deferred);
+    assert_eq!(base_ambient, scene.render_in(&[&pbr; 3], &ambient));
+    assert_eq!(base_direct, scene.render(&[&pbr; 3]));
 }
 
 /// A roughness-AA'd surface (plan5 D1): a hard checker pattern folded

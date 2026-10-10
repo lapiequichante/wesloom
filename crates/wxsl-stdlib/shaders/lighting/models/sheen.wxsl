@@ -1,0 +1,59 @@
+// The sheen-layer lighting model
+//
+// PBR under a graph-authored Charlie/Neubelt layer. The stored RGB colour
+// and perceptual roughness control both direct light and analytic ambient.
+// The hemispherical response fit budgets energy removed from the base;
+// this is the current two-colour environment approximation, not a cubemap
+// prefilter. See ADR 0059. Original composition over shipped BRDF primitives.
+
+import package::lighting::models::pbr::lighting_pbr;
+import package::lighting::charlie_distribution::charlie_distribution;
+import package::lighting::visibility_neubelt::visibility_neubelt;
+import package::lighting::sheen_ibl_response::sheen_ibl_response;
+import package::lighting::ambient_environment::ambient_environment;
+import package::wxsl::bindings::{LightSample, scene, environment_brdf};
+import package::wxsl::surface::{Surface, SurfaceContext};
+
+fn pack_sheen(surface: Surface) -> vec4f {
+    return vec4f(clamp(surface.sheen_color, vec3f(0.0), vec3f(1.0)),
+        clamp(surface.sheen_roughness, 0.07, 1.0));
+}
+
+fn lighting_sheen(surface: Surface, ctx: SurfaceContext, light: LightSample, extra: vec4f) -> vec3f {
+    let base = lighting_pbr(surface, ctx, light, extra);
+    let weight = max(extra.x, max(extra.y, extra.z));
+    if weight <= 0.0 {
+        return base;
+    }
+    let normal = normalize(surface.normal);
+    let view = normalize(ctx.view_direction);
+    let n_dot_l = saturate(dot(normal, light.direction));
+    if n_dot_l <= 0.0 {
+        return base;
+    }
+    let n_dot_v = saturate(dot(normal, view));
+    let half_vector = normalize(light.direction + view);
+    let attenuation = 1.0 - weight * max(
+        sheen_ibl_response(n_dot_v, extra.w),
+        sheen_ibl_response(n_dot_l, extra.w),
+    );
+    let sheen = extra.rgb * charlie_distribution(saturate(dot(normal, half_vector)), extra.w)
+        * visibility_neubelt(n_dot_v, n_dot_l) * n_dot_l * light.radiance;
+    return base * attenuation + sheen;
+}
+
+fn ambient_sheen(surface: Surface, ctx: SurfaceContext, extra: vec4f) -> vec3f {
+    let normal = normalize(surface.normal);
+    let view = normalize(ctx.view_direction);
+    let n_dot_v = saturate(dot(normal, view));
+    let base = ambient_environment(normal, view, surface.base_color, surface.metallic,
+        surface.roughness, scene.ambient_sky, scene.ambient_ground,
+        environment_brdf(n_dot_v, surface.roughness));
+    let weight = max(extra.x, max(extra.y, extra.z));
+    if weight <= 0.0 {
+        return base;
+    }
+    let response = sheen_ibl_response(n_dot_v, extra.w);
+    let irradiance = mix(scene.ambient_ground, scene.ambient_sky, normal.y * 0.5 + 0.5);
+    return base * (1.0 - weight * response) + extra.rgb * irradiance * response;
+}

@@ -401,7 +401,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut config =
         PipelineConfig::new(TargetConfig::new(width, height, TextureFormat::Rgba8Unorm));
     config.features = lighting::feature_requests(&features)?;
-    let wire_config = json!({"target": config.target, "features": features});
+    let mut model_names = scene
+        .materials
+        .iter()
+        .map(|material| material.config.model.as_deref().unwrap_or("wxsl.pbr"))
+        .map(|name| wxsl_core::identity::resolve(name).into_owned())
+        .collect::<Vec<_>>();
+    model_names.sort();
+    model_names.dedup();
+    config.lighting = LightingSet::new(
+        model_names
+            .iter()
+            .map(|name| {
+                lighting::DEFAULT_MODELS
+                    .iter()
+                    .copied()
+                    .find(|model| model.name == name)
+                    .ok_or_else(|| format!("unknown lighting model `{name}`"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    let wire_config =
+        json!({"target": config.target, "features": features, "lighting_models": model_names});
     let registry = wxsl_stdlib::registry();
     let mut library = ShaderLibrary::new();
     library.insert_all(wxsl_stdlib::MODULES.iter().copied());
@@ -750,6 +771,7 @@ fn render_reference(
         library,
         wxsl_render::TargetConfig::new(config.target.width, config.target.height, target.format()),
     )?;
+    renderer.set_lighting(config.lighting.clone())?;
     renderer.set_features(
         &config
             .features

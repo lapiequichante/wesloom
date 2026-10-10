@@ -24,6 +24,11 @@ struct Surface {
     emissive: vec3f,
     occlusion: f32,
     alpha: f32,
+    iridescence_strength: f32,
+    iridescence_thickness: f32,
+    iridescence_ior: f32,
+    sheen_color: vec3f,
+    sheen_roughness: f32,
 }
 
 // A neutral dielectric surface using the geometric normal.
@@ -42,5 +47,10 @@ fn default_surface(ctx: SurfaceContext) -> Surface {
     out.emissive = vec3f(0.0, 0.0, 0.0);
     out.occlusion = 1.0;
     out.alpha = 1.0;
+    out.iridescence_strength = 0.0;
+    out.iridescence_thickness = 300.0;
+    out.iridescence_ior = 1.3;
+    out.sheen_color = vec3f(0.0);
+    out.sheen_roughness = 0.5;
     return out;
 }

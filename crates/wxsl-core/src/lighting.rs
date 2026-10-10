@@ -342,6 +342,10 @@ pub struct LightingModel {
     pub module: &'static str,
     /// The model function, per the contract in this module's docs.
     pub function: &'static str,
+    /// Optional model-owned analytic ambient, of signature
+    /// `fn(surface: Surface, ctx: SurfaceContext, extra: vec4f) -> vec3f`.
+    /// `None` retains the shared GGX ambient (ADR 0059).
+    pub ambient: Option<&'static str>,
     /// The G-buffer target this model asks for, if any.
     pub extra: Option<ModelExtra>,
     /// What the model is, for editors and diagnostics.
@@ -351,7 +355,11 @@ pub struct LightingModel {
 impl LightingModel {
     /// The registry entry as a cache-key and label string.
     fn signature(&self) -> String {
-        format!("{}:{}", self.name, self.id)
+        let mut signature = format!("{}:{}", self.name, self.id);
+        if let Some(ambient) = self.ambient {
+            let _ = write!(signature, ":ambient={ambient}");
+        }
+        signature
     }
 }
 
@@ -698,6 +706,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.lambert",
         module: "package::lighting::models::lambert",
         function: "lighting_lambert",
+        ambient: None,
         extra: None,
         doc: "Diffuse-only Lambertian: radiance * albedo * max(dot(n, l), 0).",
     },
@@ -706,6 +715,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.phong",
         module: "package::lighting::models::phong",
         function: "lighting_phong",
+        ambient: None,
         extra: None,
         doc: "Lambertian diffuse plus a Phong specular lobe from the roughness.",
     },
@@ -714,6 +724,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.pbr",
         module: "package::lighting::models::pbr",
         function: "lighting_pbr",
+        ambient: None,
         extra: None,
         doc: "The Cook-Torrance GGX model the library has always shaded with.",
     },
@@ -722,6 +733,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.clearcoat",
         module: "package::lighting::models::clearcoat",
         function: "lighting_clearcoat",
+        ambient: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
                 field: "clearcoat",
@@ -737,6 +749,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.cloth",
         module: "package::lighting::models::cloth",
         function: "lighting_cloth",
+        ambient: None,
         extra: None,
         doc: "Fabric: a roughness-wrapped diffuse with a Charlie sheen layer.",
     },
@@ -745,10 +758,43 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: PRESHADED_MODEL,
         module: "package::lighting::models::preshaded",
         function: "lighting_preshaded",
+        ambient: None,
         extra: None,
         doc: "Passthrough: returns the radiance a forward-shaded material \
               computed in the geometry pass, stored where the G-buffer keeps \
               emissive radiance.",
+    },
+    LightingModel {
+        id: 6,
+        name: "wxsl.iridescent",
+        module: "package::lighting::models::iridescent",
+        function: "lighting_iridescent",
+        ambient: None,
+        extra: Some(ModelExtra {
+            target: GBufferTarget {
+                field: "iridescence",
+                doc: "xyz = film strength, thickness in nm, IOR",
+                precision: GBufferPrecision::HighDynamicRange,
+            },
+            pack: "pack_iridescence",
+        }),
+        doc: "GGX with graph-authored spectral thin-film direct lighting.",
+    },
+    LightingModel {
+        id: 7,
+        name: "wxsl.sheen",
+        module: "package::lighting::models::sheen",
+        function: "lighting_sheen",
+        ambient: Some("ambient_sheen"),
+        extra: Some(ModelExtra {
+            target: GBufferTarget {
+                field: "sheen",
+                doc: "rgb = linear sheen colour, a = perceptual sheen roughness",
+                precision: GBufferPrecision::HighDynamicRange,
+            },
+            pack: "pack_sheen",
+        }),
+        doc: "PBR under a graph-authored Charlie sheen layer with fitted analytic ambient.",
     },
 ];
 
@@ -764,10 +810,17 @@ pub fn default_single_set() -> LightingSet {
     LightingSet::single(model)
 }
 
-/// Every shipped model, enabled: the set a demo or a "show me everything"
-/// pipeline asks for.
+/// The historical portable demo set (30 bytes per sample).
+///
+/// Iridescent and sheen models are selected explicitly from [`DEFAULT_MODELS`]:
+/// their single-model layouts fill the 32-byte floor (ADRs 0058/0059).
 pub fn default_set() -> Result<LightingSet, LightingError> {
-    LightingSet::new(DEFAULT_MODELS.iter().copied())
+    LightingSet::new(
+        DEFAULT_MODELS
+            .iter()
+            .copied()
+            .filter(|model| !matches!(model.name, "wxsl.iridescent" | "wxsl.sheen")),
+    )
 }
 
 /// What one material is shaded with: its model, and the set around it.
@@ -916,6 +969,8 @@ const MACROS_TEMPLATE: &str = include_str!("../templates/lighting/macros.wxsl");
 const DISPATCH_DIRECT_TEMPLATE: &str = include_str!("../templates/lighting/dispatch_direct.wxsl");
 const DISPATCH_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/dispatch_switch.wxsl");
 const SHADE_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/shade_surface.wxsl");
+const AMBIENT_DEFAULT_TEMPLATE: &str = include_str!("../templates/lighting/ambient_default.wxsl");
+const AMBIENT_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/ambient_switch.wxsl");
 const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lighting_pass.wxsl");
 
 /// [`shade_surface`], with the macro declarations omitted and `features`'
@@ -933,6 +988,17 @@ pub fn shade_surface_with(
     dispatch: &Dispatch,
     features: &[ChannelRequest],
     declare_macros: bool,
+) -> GeneratedLighting {
+    shade_surface_from(dispatch, features, declare_macros, false)
+}
+
+/// Deferred direct dispatch consumes a stored model extra, rather than
+/// packing the reconstructed base surface (ADR 0058).
+fn shade_surface_from(
+    dispatch: &Dispatch,
+    features: &[ChannelRequest],
+    declare_macros: bool,
+    stored_extra: bool,
 ) -> GeneratedLighting {
     let mut imports = vec![
         (abi::SURFACE_MODULE, abi::SURFACE_STRUCT),
@@ -962,12 +1028,20 @@ pub fn shade_surface_with(
         out.push_str(&crate::template::fill(MACROS_TEMPLATE, &[]));
     }
 
-    let (shading_params, dispatch_args, extra_decl) = match dispatch {
+    out.push_str(AMBIENT_DEFAULT_TEMPLATE);
+    let (shading_params, dispatch_args, extra_decl, ambient_call) = match dispatch {
         Dispatch::Direct(model) => {
             imports.push((model.module, model.function));
+            let ambient_call = if let Some(ambient) = model.ambient {
+                imports.push((model.module, ambient));
+                format!("{ambient}(surface, ctx, model_extra)")
+            } else {
+                "default_ambient(surface, ctx)".to_string()
+            };
             let extra = match model.extra {
                 // Computed once, before the loop: the pack reads the same
                 // surface every light would hand it.
+                Some(_) if stored_extra => "model_extra".to_string(),
                 Some(extra) => {
                     imports.push((model.module, extra.pack));
                     format!("{}(surface)", extra.pack)
@@ -984,9 +1058,18 @@ pub fn shade_surface_with(
                 ],
             ));
             (
-                String::new(),
+                if stored_extra && model.extra.is_some() {
+                    ", model_extra: vec4f".to_string()
+                } else {
+                    String::new()
+                },
                 ", model_extra".to_string(),
-                format!("    let model_extra = {extra};\n"),
+                if stored_extra && model.extra.is_some() {
+                    String::new()
+                } else {
+                    format!("    let model_extra = {extra};\n")
+                },
+                ambient_call,
             )
         }
         Dispatch::Switch(set) => {
@@ -1025,6 +1108,8 @@ pub fn shade_surface_with(
             // A narrower target is widened back to the vec4f the model
             // contract hands over.
             let mut arms = String::new();
+            let mut ambient_arms = String::new();
+            let custom_ambient = set.models().iter().any(|model| model.ambient.is_some());
             for model in set.models() {
                 let extra = match model.extra {
                     Some(extra) => match extra.target.precision.channels() {
@@ -1040,6 +1125,19 @@ pub fn shade_surface_with(
                     id = model.id,
                     function = model.function,
                 );
+                if custom_ambient {
+                    let call = if let Some(ambient) = model.ambient {
+                        imports.push((model.module, ambient));
+                        format!("{ambient}(surface, ctx, {extra})")
+                    } else {
+                        "default_ambient(surface, ctx)".to_string()
+                    };
+                    let _ = writeln!(
+                        ambient_arms,
+                        "        case {}u: {{ return {call}; }}",
+                        model.id
+                    );
+                }
             }
             out.push_str(&crate::template::fill(
                 DISPATCH_SWITCH_TEMPLATE,
@@ -1052,6 +1150,22 @@ pub fn shade_surface_with(
                     ("SWITCH_ARMS", &arms),
                 ],
             ));
+            let ambient_call = if custom_ambient {
+                out.push_str(&crate::template::fill(
+                    AMBIENT_SWITCH_TEMPLATE,
+                    &[
+                        ("EXTRAS_PARAM", &extras_param),
+                        ("SWITCH_ARMS", &ambient_arms),
+                    ],
+                ));
+                if model_extras.is_empty() {
+                    "ambient_dispatch(surface, ctx, model_id)".to_string()
+                } else {
+                    "ambient_dispatch(surface, ctx, extras, model_id)".to_string()
+                }
+            } else {
+                "default_ambient(surface, ctx)".to_string()
+            };
             (
                 // The shading function receives the extras as they came
                 // off the G-buffer; there is nothing to compute.
@@ -1066,6 +1180,7 @@ pub fn shade_surface_with(
                     ", extras, model_id".to_string()
                 },
                 String::new(),
+                ambient_call,
             )
         }
     };
@@ -1081,6 +1196,7 @@ pub fn shade_surface_with(
             ("SHADOW_FN", abi::SHADOW_FACTOR_FN),
             ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
             ("DISPATCH_ARGS", &dispatch_args),
+            ("AMBIENT_CALL", &ambient_call),
         ],
     ));
 
@@ -1271,7 +1387,7 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
     let shading = if passthrough {
         None
     } else {
-        Some(shade_surface(&dispatch))
+        Some(shade_surface_from(&dispatch, features, true, true))
     };
 
     let mut out = String::with_capacity(4096);
@@ -1405,6 +1521,13 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         } else {
             format!("unpacked.surface, ctx, ModelExtras({extras}), unpacked.model_id")
         }
+    } else if let Some(extra) = set.models()[0].extra {
+        let value = match extra.target.precision.channels() {
+            1 => format!("vec4f(unpacked.{}, 0.0, 0.0, 0.0)", extra.target.field),
+            2 => format!("vec4f(unpacked.{}, 0.0, 0.0)", extra.target.field),
+            _ => format!("unpacked.{}", extra.target.field),
+        };
+        format!("unpacked.surface, ctx, {value}")
     } else {
         "unpacked.surface, ctx".to_string()
     };
@@ -1470,6 +1593,7 @@ mod tests {
             name: Box::leak(name.to_string().into_boxed_str()),
             module: "package::test",
             function: "test_model",
+            ambient: None,
             extra: None,
             doc: "",
         }
@@ -1668,6 +1792,43 @@ mod tests {
     }
 
     #[test]
+    fn a_single_model_reads_its_stored_extra_instead_of_repacking_the_surface() {
+        for name in ["wxsl.clearcoat", "wxsl.iridescent", "wxsl.sheen"] {
+            let model = *DEFAULT_MODELS
+                .iter()
+                .find(|model| model.name == name)
+                .unwrap();
+            let extra = model.extra.unwrap();
+            let source = lighting_pass_source(&LightingSet::single(model), &[]);
+            assert!(source.contains("ctx: SurfaceContext, model_extra: vec4f"));
+            assert!(source.contains(&format!("unpacked.{}", extra.target.field)));
+            assert!(!source.contains(extra.pack));
+            let forward = shade_surface(&Dispatch::Direct(model));
+            assert!(forward.source.contains(&format!("{}(surface)", extra.pack)));
+        }
+    }
+
+    #[test]
+    fn custom_ambient_uses_the_same_model_and_extra_as_direct_lighting() {
+        let sheen = *DEFAULT_MODELS
+            .iter()
+            .find(|model| model.name == "wxsl.sheen")
+            .unwrap();
+        let pbr = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
+        let single = lighting_pass_source(&LightingSet::single(sheen), &[]);
+        assert!(single.contains("+ ambient_sheen(surface, ctx, model_extra)"));
+        let switch = lighting_pass_source(&LightingSet::new([pbr, sheen]).unwrap(), &[]);
+        assert!(switch.contains("case 7u: { return ambient_sheen(surface, ctx, extras.sheen); }"));
+        assert!(switch.contains("case 2u: { return default_ambient(surface, ctx); }"));
+        let mut changed = sheen;
+        changed.ambient = None;
+        assert_ne!(
+            LightingSet::single(sheen).stable_id(),
+            LightingSet::single(changed).stable_id()
+        );
+    }
+
+    #[test]
     fn a_switch_without_requested_channels_names_no_extras() {
         // Two models, no targets, no features: an empty `ModelExtras`
         // struct is invalid WGSL, so neither the struct nor the parameter
@@ -1707,7 +1868,7 @@ mod tests {
         assert_ne!(single.signature(), all.signature());
         assert_ne!(single.stable_id(), all.stable_id());
         // Order of construction does not change the identity.
-        let reordered = LightingSet::new(DEFAULT_MODELS.iter().rev().copied()).unwrap();
+        let reordered = LightingSet::new(all.models().iter().rev().copied()).unwrap();
         assert_eq!(all.signature(), reordered.signature());
     }
 
