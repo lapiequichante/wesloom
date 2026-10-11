@@ -1282,7 +1282,9 @@ impl Emitter<'_> {
                         self.request_import(abi::VELOCITY_MODULE, abi::PREVIOUS_CONTEXT_FN);
                     }
                 }
-                abi::StageOutput::Nothing | abi::StageOutput::PeelDepth => {}
+                abi::StageOutput::Nothing
+                | abi::StageOutput::PeelDepth
+                | abi::StageOutput::RefractionSurface => {}
             }
         }
     }
@@ -2127,7 +2129,10 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface, stage: abi:
 /// pass that reads the pass group is a peel.
 fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
     let bindings = match stage {
-        abi::MaterialStage::PEEL_FRONT | abi::MaterialStage::PEEL_DEPTH => {
+        abi::MaterialStage::REFRACTION_SURFACE => {
+            "\nstruct WxslOpticalLayer {\n    @location(0) normal_depth: vec4f,\n    @location(1) transmission_ior: vec4f,\n}\n"
+        }
+        abi::MaterialStage::PEEL_FRONT | abi::MaterialStage::PEEL_DEPTH | abi::MaterialStage::REFRACTION_DEPTH => {
             "\n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
              @group(3) @binding(1) var wxsl_peel_bounds: texture_2d<f32>;\n"
         }
@@ -2149,17 +2154,16 @@ fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
 }
 
 /// Discard fragments behind the opaque surface or outside the window the
-/// previous iteration left. The bias on the window is `1e-5`: wide enough
-/// that the layer just peeled is not taken again, narrow enough that the
-/// crack between two surfaces stays under a pixel. Defines `wxsl_peel_z`
-/// and `wxsl_peel_px`.
-fn peel_window() -> &'static str {
-    "    let wxsl_peel_z = vertex.clip_position.z;\n    \
+/// previous iteration left. Alpha uses its historical `1e-5` bias; optical
+/// depth uses a float-scale tolerance to retain grazing entry/exit pairs.
+/// Defines `wxsl_peel_z` and `wxsl_peel_px`.
+fn peel_window(epsilon: &str) -> String {
+    format!("    let wxsl_peel_z = vertex.clip_position.z;\n    \
      let wxsl_peel_px = vec2i(vertex.clip_position.xy);\n    \
      let wxsl_peel_scene_z = textureLoad(wxsl_scene_depth, wxsl_peel_px, 0);\n    \
      let wxsl_peel_window = textureLoad(wxsl_peel_bounds, wxsl_peel_px, 0);\n    \
-     if wxsl_peel_z >= wxsl_peel_scene_z || wxsl_peel_z <= wxsl_peel_window.r + 1e-5 || wxsl_peel_z >= wxsl_peel_window.g - 1e-5 {\n        \
-     discard;\n    }\n"
+     if wxsl_peel_z >= wxsl_peel_scene_z || wxsl_peel_z <= wxsl_peel_window.r + {epsilon} || wxsl_peel_z >= wxsl_peel_window.g - {epsilon} {{\n        \
+     discard;\n    }}\n")
 }
 
 /// Emit the vertex entry, and the fragment entry this stage calls for.
@@ -2396,7 +2400,7 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     let velocity = stage.output() == abi::StageOutput::Velocity;
     // The depth pair is position, like velocity's motion: a context exists
     // only so an alpha test can discard before the pair is written.
-    let peel_depth = stage == abi::MaterialStage::PEEL_DEPTH;
+    let peel_depth = stage.output() == abi::StageOutput::PeelDepth;
     let context_fn = match velocity && geometry.is_empty() {
         true => abi::VELOCITY_CONTEXT_FN,
         false => abi::SURFACE_CONTEXT_FN,
@@ -2418,10 +2422,20 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     };
     write_peel_declarations(out, stage);
     let body = match stage.output() {
+        abi::StageOutput::RefractionSurface => format!(
+            "-> WxslOpticalLayer {{\n{prologue}    \
+             let s = {material}({ctx}{args});\n    \
+             let n = normalize(s.normal);\n    \
+             let sign = select(-1.0, 1.0, dot(n, {ctx}.view_direction) >= 0.0);\n    \
+             let transmission = pow(clamp(s.base_color, vec3f(0.0001), vec3f(1.0)), vec3f(1.0 / max(s.attenuation_distance, 0.0001)));\n    \
+             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(transmission, sign * clamp(s.ior, 1.0, 3.0)));\n}}\n",
+            material = options.material_fn,
+            ctx = abi::CONTEXT_VAR,
+        ),
         abi::StageOutput::Color if stage == abi::MaterialStage::PEEL_FRONT
             || stage == abi::MaterialStage::PEEL_BACK =>
         {
-            let window = peel_window();
+            let window = peel_window("1e-5");
             let back = match stage == abi::MaterialStage::PEEL_BACK {
                 true => {
                     "    let wxsl_peeled_front = textureLoad(wxsl_peel_front, wxsl_peel_px, 0);\n    \
@@ -2447,7 +2461,9 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             material = options.material_fn,
         ),
         abi::StageOutput::PeelDepth => {
-            let window = peel_window();
+            // Optical entry/exit surfaces may be much closer than alpha
+            // layers near a grazing silhouette. Keep the alpha path intact.
+            let window = peel_window(if stage == abi::MaterialStage::REFRACTION_DEPTH { "2e-7" } else { "1e-5" });
             format!(
                 "-> @location(0) vec2f {{\n{prologue}{window}    \
                  return vec2f(1.0 - wxsl_peel_z, wxsl_peel_z);\n}}\n"

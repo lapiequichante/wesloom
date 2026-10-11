@@ -1021,6 +1021,8 @@ pub enum StageOutput {
     /// Two `vec4f` targets: the front accumulator and the back one. The
     /// native shade pass writes both from one draw.
     PeelResolve,
+    /// Two optical layer targets: world normal/depth and transmission/IOR.
+    RefractionSurface,
 }
 
 impl StageOutput {
@@ -1028,7 +1030,7 @@ impl StageOutput {
     pub fn color_targets(self) -> usize {
         match self {
             StageOutput::Color | StageOutput::Velocity | StageOutput::PeelDepth => 1,
-            StageOutput::PeelResolve => 2,
+            StageOutput::PeelResolve | StageOutput::RefractionSurface => 2,
             StageOutput::GBuffer => GBUFFER_BASE_TARGETS.len(),
             StageOutput::Nothing => 0,
         }
@@ -1139,6 +1141,18 @@ pub const MATERIAL_STAGES: &[MaterialStageDesc] = &[
               `peel_depth` stored: the front target where it matches the near \
               value, the back target where it matches the far value.",
     },
+    MaterialStageDesc {
+        name: "refraction_surface",
+        fragment_entry: "fs_refraction_surface",
+        output: StageOutput::RefractionSurface,
+        doc: "Store the peeled optical interface's world normal, depth, transmission and IOR (ADR 0067).",
+    },
+    MaterialStageDesc {
+        name: "refraction_depth",
+        fragment_entry: "fs_refraction_depth",
+        output: StageOutput::PeelDepth,
+        doc: "Peel optical interfaces with a float-depth-scale separation tolerance, preserving thin entry/exit pairs (ADR 0067).",
+    },
 ];
 
 /// Which stage a material is compiled for.
@@ -1175,6 +1189,10 @@ impl MaterialStage {
     pub const PEEL_DEPTH: MaterialStage = MaterialStage(7);
     /// Shade both ends of the native depth pair.
     pub const PEEL_RESOLVE: MaterialStage = MaterialStage(8);
+    /// Gather an optical interface, selected by an equal-depth peel pass.
+    pub const REFRACTION_SURFACE: MaterialStage = MaterialStage(9);
+    /// Optical depth peel, without the alpha peel's wider separation bias.
+    pub const REFRACTION_DEPTH: MaterialStage = MaterialStage(10);
 
     /// Every stage, in table order.
     pub const ALL: &'static [MaterialStage] = &[
@@ -1187,6 +1205,8 @@ impl MaterialStage {
         MaterialStage::PEEL_BACK,
         MaterialStage::PEEL_DEPTH,
         MaterialStage::PEEL_RESOLVE,
+        MaterialStage::REFRACTION_SURFACE,
+        MaterialStage::REFRACTION_DEPTH,
     ];
 
     /// The stage at `index` in [`MATERIAL_STAGES`], if there is one.
@@ -1236,7 +1256,10 @@ impl MaterialStage {
     pub fn needs_surface(self) -> bool {
         matches!(
             self.output(),
-            StageOutput::Color | StageOutput::GBuffer | StageOutput::PeelResolve
+            StageOutput::Color
+                | StageOutput::GBuffer
+                | StageOutput::PeelResolve
+                | StageOutput::RefractionSurface
         )
     }
 
@@ -1446,6 +1469,18 @@ pub struct SurfaceField {
 ///
 /// The `.wxsl` struct must list exactly these, in this order.
 pub const SURFACE_FIELDS: &[SurfaceField] = &[
+    SurfaceField {
+        name: "ior",
+        ty: ValueType::F32,
+        doc: "Optical index of refraction; 1 means no bending. Read by pass.refraction.",
+        editable_default: Some(Value::F32(1.5)),
+    },
+    SurfaceField {
+        name: "attenuation_distance",
+        ty: ValueType::F32,
+        doc: "World distance at which transmitted white becomes base_color (Beer absorption).",
+        editable_default: Some(Value::F32(1.0)),
+    },
     SurfaceField {
         name: "base_color",
         ty: ValueType::Vec3,
@@ -1989,7 +2024,10 @@ mod tests {
                 stage.needs_surface(),
                 matches!(
                     stage.output(),
-                    StageOutput::Color | StageOutput::GBuffer | StageOutput::PeelResolve
+                    StageOutput::Color
+                        | StageOutput::GBuffer
+                        | StageOutput::PeelResolve
+                        | StageOutput::RefractionSurface
                 )
             );
             assert_eq!(

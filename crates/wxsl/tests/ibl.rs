@@ -4,6 +4,98 @@ mod fixture;
 mod probe;
 
 #[test]
+fn optical_documents_roundtrip_and_expand_into_baseline_layers_on_both_paths() {
+    use wxsl::render::{pass::PassKind, PipelineConfig, StockPipeline, TargetConfig};
+    let effects = wxsl::render::effect::EffectRegistry::shipped();
+    let registry = wxsl::render::pipeline_doc::document_registry(&effects);
+    let config = PipelineConfig::new(TargetConfig::new(
+        64,
+        64,
+        wxsl::render::wgpu::TextureFormat::Rgba8Unorm,
+    ));
+    for stock in StockPipeline::ALL {
+        let document = fixture::refraction_document(*stock);
+        let roundtrip = serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+        let plan =
+            wxsl::render::pipeline_doc::compile(&roundtrip, &registry, &effects, &config).unwrap();
+        plan.schedule().unwrap();
+        let optical = plan.passes().iter().filter(|p| matches!(&p.kind, PassKind::Geometry { stage, .. } if *stage == wxsl::core::abi::MaterialStage::REFRACTION_SURFACE)).collect::<Vec<_>>();
+        assert_eq!(optical.len(), 6);
+        assert!(optical
+            .iter()
+            .all(|p| p.color.len() == 2 && p.state.blend.is_none()));
+        let layers = plan.passes().iter().filter(|p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction_layer")).collect::<Vec<_>>();
+        assert_eq!(
+            layers.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            [
+                "optical glass compose 2",
+                "optical glass compose 1",
+                "optical glass compose 0"
+            ]
+        );
+        assert_eq!(
+            layers
+                .iter()
+                .map(|p| p.parameters["layer"])
+                .collect::<Vec<_>>(),
+            [
+                wxsl::core::node::Value::U32(4),
+                wxsl::core::node::Value::U32(2),
+                wxsl::core::node::Value::U32(0)
+            ]
+        );
+        assert!(!plan.passes().iter().any(
+            |p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction")
+        ));
+        let mut invalid = document.clone();
+        let optical = invalid
+            .nodes()
+            .find(|(_, n)| n.def == wxsl::core::pipeline::PASS_REFRACTION)
+            .unwrap()
+            .0;
+        let mut precise = document.clone();
+        precise.set_setting(optical, "quality", "precise");
+        let precise =
+            wxsl::render::pipeline_doc::compile(&precise, &registry, &effects, &config).unwrap();
+        precise.schedule().unwrap();
+        assert!(precise.passes().iter().any(
+            |p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction")
+        ));
+        assert!(!precise.passes().iter().any(
+            |p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction_layer")
+        ));
+        let mut bad_quality = document.clone();
+        bad_quality.set_setting(optical, "quality", "unknown");
+        let error = wxsl::render::pipeline_doc::compile(&bad_quality, &registry, &effects, &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("optical glass") && error.contains("quality"),
+            "{error}"
+        );
+        let hdr = invalid
+            .nodes()
+            .find(|(_, n)| n.label.as_deref() == Some("source HDR"))
+            .unwrap()
+            .0;
+        invalid.disconnect(
+            &registry,
+            &wxsl::core::graph::SocketRef::new(optical, "environment"),
+        );
+        invalid
+            .wire(&registry, (hdr, "color"), (optical, "environment"))
+            .unwrap();
+        let error = wxsl::render::pipeline_doc::compile(&invalid, &registry, &effects, &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("optical glass") && error.contains("cube"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn parameterized_ibl_shaders_compile_without_a_device() {
     let set = wxsl::core::lighting::LightingSet::default();
     let macros = wxsl::core::macros::MacroSet::new();

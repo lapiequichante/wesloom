@@ -69,6 +69,86 @@ pub fn hdr_document(stock: wxsl_render::StockPipeline) -> wxsl_core::graph::Grap
 }
 
 /// Compile the same document consumed through the FFI and offline host.
+pub fn refraction_document(stock: wxsl_render::StockPipeline) -> wxsl_core::graph::Graph {
+    use wxsl_core::{
+        graph::{Node, SocketRef},
+        pipeline as doc,
+    };
+    let registry = wxsl_render::pipeline_doc::document_registry(
+        &wxsl_render::effect::EffectRegistry::shipped(),
+    );
+    let mut graph = hdr_document(stock);
+    let scenes: Vec<_> = graph
+        .nodes()
+        .filter(|(_, n)| n.def == doc::SOURCE_SCENE)
+        .map(|(id, _)| id)
+        .collect();
+    for id in scenes {
+        graph.set_setting(id, doc::SETTING_TAGS, "!refractive");
+    }
+    let tonemap = graph
+        .nodes()
+        .find(|(_, n)| n.label.as_deref() == Some("tonemap"))
+        .unwrap()
+        .0;
+    let environment = graph
+        .nodes()
+        .find(|(_, n)| n.def == doc::PASS_ENVIRONMENT)
+        .unwrap()
+        .0;
+    let background = graph
+        .nodes()
+        .find(|(_, n)| n.label.as_deref() == Some("environment background"))
+        .unwrap()
+        .0;
+    let depth = graph
+        .edges()
+        .iter()
+        .find(|e| e.to == SocketRef::new(background, "depth"))
+        .unwrap()
+        .from
+        .clone();
+    let scene = graph
+        .disconnect(&registry, &SocketRef::new(tonemap, "image"))
+        .unwrap()
+        .from;
+    let target = graph.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("optical colour")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    // Insert before the tonemap: document declaration order is the existing
+    // compiler's producer lookup contract. Rebuild it after the optical pass.
+    let present = graph
+        .nodes()
+        .find(|(_, n)| n.def == doc::PRESENT)
+        .unwrap()
+        .0;
+    graph.remove_node(&registry, tonemap);
+    let optical = graph.add(
+        Node::new(doc::PASS_REFRACTION)
+            .with_label("optical glass")
+            .with_setting("surface_count", "3"),
+    );
+    let tonemap = graph.add(
+        Node::new(doc::PASS_SCREEN)
+            .with_label("tonemap")
+            .with_setting(doc::SETTING_EFFECT, "wxsl.tonemap"),
+    );
+    for (from, to) in [
+        ((depth.node, depth.socket.as_str()), (optical, "depth")),
+        ((scene.node, scene.socket.as_str()), (optical, "scene")),
+        ((environment, "radiance"), (optical, "environment")),
+        ((target, "color"), (optical, "into")),
+        ((target, "color"), (tonemap, "image")),
+        ((tonemap, "color"), (present, "surface")),
+    ] {
+        graph.wire(&registry, from, to).unwrap();
+    }
+    graph
+}
+
+/// Compile the same document consumed through the FFI and offline host.
 pub fn hdr_plan(
     stock: wxsl_render::StockPipeline,
     config: &wxsl_render::PipelineConfig,

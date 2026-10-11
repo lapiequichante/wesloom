@@ -1,0 +1,77 @@
+import package::wxsl::bindings::camera;
+import package::gallery::probe_glass::fresnel;
+import package::gallery::probe_sample::probe_sample;
+@group(3) @binding(0) var interfaces: texture_2d_array<f32>;
+
+fn project(point: vec3f) -> vec3f {
+    let h = camera.view_proj * vec4f(point, 1.0);
+    return vec3f(h.x / h.w * 0.5 + 0.5, 0.5 - h.y / h.w * 0.5, h.z / h.w);
+}
+fn unproject(uv: vec2f, z: f32) -> vec3f {
+    let h = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
+    return h.xyz / h.w;
+}
+fn surface(uv: vec2f, layer: i32) -> vec4f {
+    if any(uv < vec2f(0.0)) || any(uv >= vec2f(1.0)) { return vec4f(0.0); }
+    let size = vec2f(textureDimensions(interfaces));
+    let p = uv * size - 0.5;
+    let pixel = vec2i(floor(p));
+    let nearest = textureLoad(interfaces, vec2i(uv * size), layer, 0);
+    if any(pixel < vec2i(0)) || any(pixel + vec2i(1) >= vec2i(size)) { return nearest; }
+    let a = textureLoad(interfaces, pixel, layer, 0);
+    let b = textureLoad(interfaces, pixel + vec2i(1, 0), layer, 0);
+    let c = textureLoad(interfaces, pixel + vec2i(0, 1), layer, 0);
+    let d = textureLoad(interfaces, pixel + vec2i(1, 1), layer, 0);
+    if min(min(dot(a.xyz, a.xyz), dot(b.xyz, b.xyz)), min(dot(c.xyz, c.xyz), dot(d.xyz, d.xyz))) < 0.5
+        || min(min(dot(a.xyz, b.xyz), dot(a.xyz, c.xyz)), dot(a.xyz, d.xyz)) < 0.8 { return nearest; }
+    let f = fract(p);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Only this object's four interfaces are peeled. Colour never reads screen radiance.
+fn probe_torus(color: texture_cube<f32>, distances: texture_cube<f32>, filtering: sampler,
+    position: vec3f, normal: vec3f, view: vec3f, origin: vec3f, scale: f32, sky: texture_cube<f32>) -> vec3f {
+    var point = position;
+    var ray = -normalize(view);
+    var weight = vec3f(1.0);
+    var light = vec3f(0.0);
+    var uv = project(position).xy;
+    for (var pair = 0; pair < 2; pair += 1) {
+        let front = surface(uv, pair * 2);
+        let back = surface(uv, pair * 2 + 1);
+        if dot(front.xyz, front.xyz) < 0.5 || dot(back.xyz, back.xyz) < 0.5 { break; }
+        if pair > 0 {
+            let entry = unproject(uv, front.w);
+            let n = normalize(front.xyz);
+            let t = dot(entry - point, n) / min(dot(ray, n), -0.02);
+            if t <= 0.0 { break; }
+            point += ray * t;
+        }
+        let nf = normalize(front.xyz);
+        let entry_f = fresnel(1.0, 1.5, -dot(ray, nf));
+        light += weight * entry_f * probe_sample(color, distances, filtering, point, reflect(ray, nf), origin, sky);
+        weight *= 1.0 - entry_f;
+        let internal = refract(ray, nf, 1.0 / 1.5);
+        var exit_point = unproject(uv, back.w);
+        var nb = normalize(back.xyz);
+        let chord = length(exit_point - point);
+        var thickness = chord;
+        for (var refine = 0; refine < 2; refine += 1) {
+            thickness = clamp(dot(exit_point - point, nb) / max(dot(internal, nb), 0.02), 0.0, chord * 4.0);
+            let candidate_uv = project(point + internal * thickness).xy;
+            let sample = surface(candidate_uv, pair * 2 + 1);
+            if dot(sample.xyz, sample.xyz) < 0.5 || sample.w <= front.w { break; }
+            exit_point = unproject(candidate_uv, sample.w);
+            nb = normalize(sample.xyz);
+        }
+        point += internal * thickness;
+        weight *= pow(vec3f(0.18, 0.45, 0.9), vec3f(thickness));
+        let exit_f = fresnel(1.5, 1.0, dot(internal, nb));
+        light += weight * exit_f * probe_sample(color, distances, filtering, point, reflect(internal, -nb), origin, sky);
+        weight *= 1.0 - exit_f;
+        ray = refract(internal, -nb, 1.5);
+        if dot(ray, ray) < 0.5 { return light * scale; }
+        uv = project(point + ray * 0.001).xy;
+    }
+    return (light + weight * probe_sample(color, distances, filtering, point, ray, origin, sky)) * scale;
+}

@@ -1,0 +1,21 @@
+@group(3) @binding(0) var background_depth: texture_2d<f32>;
+@group(3) @binding(1) var opaque_depth: texture_depth_2d;
+@group(3) @binding(2) var normal_layers: texture_2d_array<f32>;
+@group(3) @binding(3) var optical_layers: texture_2d_array<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) p: vec4f) -> @location(0) f32 {
+    let pixel = vec2i(p.xy);
+    let front = textureLoad(normal_layers, pixel, i32(params.layer), 0);
+    let material = textureLoad(optical_layers, pixel, i32(params.layer), 0);
+    if dot(front.xyz, front.xyz) < 0.5 || material.w <= 0.0
+        || front.w >= textureLoad(opaque_depth, pixel, 0) {
+        return textureLoad(background_depth, pixel, 0).r;
+    }
+    return front.w;
+}

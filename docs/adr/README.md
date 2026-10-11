@@ -81,6 +81,10 @@ is signal, don't delete it.
 | [0064](0064-author-environment-bakes-and-depth-aware-backgrounds.md) | Author environment bakes and depth-aware backgrounds | Accepted |
 | [0065](0065-a-pyramid-is-one-document-node-with-scoped-names.md) | A multi-pass recipe is one document node with scoped names | Accepted |
 | [0066](0066-pack-shadow-slots-into-a-depth-atlas.md) | Pack shadow slots into a depth atlas | Accepted |
+| [0067](0067-trace-refraction-through-peeled-surface-layers.md) | Trace refraction through peeled surface layers | Superseded by 0068 |
+| [0068](0068-compose-optical-peels-back-to-front-by-default.md) | Compose optical peels back to front by default | Accepted |
+| [0069](0069-cache-local-colour-and-distance-probes-in-the-glass-demo.md) | Cache local colour and distance probes in the glass demo | Superseded by 0070 |
+| [0070](0070-render-local-probe-glass-as-opaque-surfaces.md) | Render local-probe glass as opaque surfaces | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

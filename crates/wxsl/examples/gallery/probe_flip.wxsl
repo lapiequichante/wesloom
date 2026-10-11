@@ -1,0 +1,21 @@
+// RH camera render targets have opposite V to WebGPU's cube-face convention.
+@group(3) @binding(0) var image: texture_2d<f32>;
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+fn pixel(p: vec4f) -> vec2i {
+    return vec2i(i32(p.x), i32(textureDimensions(image).y) - 1 - i32(p.y));
+}
+@fragment
+fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    return textureLoad(image, pixel(p), 0);
+}
+@fragment
+fn fragment_distance(@builtin(position) p: vec4f) -> @location(0) f32 {
+    return textureLoad(image, pixel(p), 0).r;
+}
+@fragment
+fn fragment_copy(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    return textureLoad(image, vec2i(p.xy), 0);
+}

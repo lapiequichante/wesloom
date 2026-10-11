@@ -1,0 +1,18 @@
+import package::wxsl::bindings::scene;
+import package::gallery::probe_sample::probe_sample;
+// Local mirror
+// Reflect the world-space camera ray into the object's own colour/distance probe.
+fn probe_mirror(
+    color: texture_cube<f32>, // Captured linear radiance.
+    distances: texture_cube<f32>, // Radial world distance; zero is sky.
+    filtering: sampler, // Cube filtering.
+    position: vec3f, // World surface point.
+    normal: vec3f, // World normal.
+    view: vec3f, // Direction towards the camera.
+    origin: vec3f, // Probe centre.
+    scale: f32, // Restore HDR safety scaling.
+    sky: texture_cube<f32>, // Global environment for rays that miss local geometry.
+) -> vec3f {
+    return probe_sample(color, distances, filtering, position,
+        reflect(-normalize(view), normalize(normal)), origin, sky) * scale;
+}

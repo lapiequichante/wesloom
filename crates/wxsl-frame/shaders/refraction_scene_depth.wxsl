@@ -1,0 +1,11 @@
+@group(3) @binding(0) var depth_image: texture_depth_2d;
+
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) p: vec4f) -> @location(0) f32 {
+    return textureLoad(depth_image, vec2i(p.xy), 0);
+}

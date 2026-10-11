@@ -67,7 +67,7 @@ static void expect(WxslResult *result, WxslStatus status) {
 
 int main(int argc, char **argv) {
     const char *presets[] = {"forward.pipeline.json", "deferred.pipeline.json"};
-    const char *stages[] = {"forward_lit", "gbuffer", "depth_only", "shadow", "velocity", "peel_front", "peel_back", "peel_depth", "peel_resolve"};
+    const char *stages[] = {"forward_lit", "gbuffer", "depth_only", "shadow", "velocity", "peel_front", "peel_back", "peel_depth", "peel_resolve", "refraction_surface", "refraction_depth"};
     size_t i;
     REQUIRE(argc == 4);
 #ifdef _WIN32
@@ -159,6 +159,6 @@ int main(int argc, char **argv) {
 #else
     REQUIRE(dlclose(library) == 0);
 #endif
-    puts("C ABI: presets, nine native WGSL variants, field tables, capability/version refusals passed");
+    puts("C ABI: presets, eleven native WGSL variants, field tables, capability/version refusals passed");
     return 0;
 }

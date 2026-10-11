@@ -13,3 +13,7 @@ cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/shadow-atl
     --shadow-atlas --reference --width 320 --height 240
 target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/shadow-atlas \
     --out target/dawn-images/shadow-atlas --verify
+cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/refraction \
+    --refraction --reference --width 320 --height 240
+target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/refraction \
+    --out target/dawn-images/refraction --verify

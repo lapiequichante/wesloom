@@ -108,6 +108,8 @@ pub const RESOURCE_BUFFER: &str = "resource.buffer";
 pub const PASS_GEOMETRY: &str = "pass.geometry";
 /// Node id of `pass.peel`.
 pub const PASS_PEEL: &str = "pass.peel";
+/// Layered optical transmission through the `refractive` tag (ADR 0067).
+pub const PASS_REFRACTION: &str = "pass.refraction";
 /// Node id of `pass.shadow`.
 pub const PASS_SHADOW: &str = "pass.shadow";
 /// Node id of `pass.screen`.
@@ -161,6 +163,7 @@ pub const NODE_IDS: &[&str] = &[
     RESOURCE_BUFFER,
     PASS_GEOMETRY,
     PASS_PEEL,
+    PASS_REFRACTION,
     PASS_SHADOW,
     PASS_SCREEN,
     PASS_ENVIRONMENT,
@@ -515,6 +518,16 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 Socket::new("color", ValueType::ColorTarget)
                     .with_doc("The opaque colour with the transparent layers composited over it."),
             )
+            .document(),
+        NodeDefinition::builder(PASS_REFRACTION, "refraction")
+            .doc("Gather optical interfaces and trace IOR refraction through the refractive tag. Clear glass, with HDR fallback (ADR 0067).")
+            .input(Socket::new("depth", ValueType::DepthTarget))
+            .input(Socket::new("scene", ValueType::ColorTarget))
+            .input(Socket::new("environment", ValueType::ColorTarget).with_doc("Linear radiance cube, normally pass.environment's radiance output."))
+            .input(Socket::new("into", ValueType::ColorTarget).optional())
+            .output(Socket::new("color", ValueType::ColorTarget))
+            .setting(text_setting("surface_count", "Surface count", "Whole scene crossing budget (1..4), doubled for front/back. A torus consumes two crossings, a sphere one.", "2"))
+            .setting(text_setting("quality", "Quality", "layered: fast back-to-front composition; precise: opt-in expensive ray marching.", "layered"))
             .document(),
         NodeDefinition::builder(PASS_SHADOW, "shadow")
             .doc(

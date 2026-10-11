@@ -23,6 +23,10 @@
 //! The `peel` demo is ADR 0047: the same PBR cube graph, with an `alpha`
 //! uniform at 0.3, on a torus and a sphere that pass through each other,
 //! composited by dual depth peeling.
+//! `glass` is the optical counterpart (ADR 0068): IOR, front/back interfaces,
+//! Beer absorption and HDR refraction; its torus budgets two crossings and
+//! its sphere one, composed back to front. `--refraction-quality precise`
+//! retains the expensive ray marcher for comparison.
 //! Nothing below is a renderer feature. The bloom pipeline is a document
 //! — lighting into a colour target, then the two bloom passes — compiled
 //! by the same public `compile_pipeline` an application would call, and the
@@ -56,12 +60,16 @@ use wxsl::core::graph::{AttributeDecl, Node, NodeId};
 use wxsl::core::node::{Value, ValueType};
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::{Tags, TAG_OPAQUE, TAG_TRANSPARENT};
+use wxsl::render::effect::refraction::Quality as RefractionQuality;
 use wxsl::render::effect::{BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::{
     compile_pipeline, Camera, DrawItem, DrawList, EffectRegistry, Environment, InstanceAttributes,
     Light, Mesh, PipelineConfig, RenderRequest, Renderer, StockPipeline, TargetConfig,
 };
+
+#[path = "gallery/glass_probes.rs"]
+mod glass_probes;
 
 const USAGE: &str = "\
 gallery — the wxsl demos in one window, or as screenshots
@@ -76,6 +84,7 @@ OPTIONS:
                            screenshots)
     --start <NAME>         Which demo to show first
     --ibl-source <PATH|sky> HDR environment for ibl (default: local resources/hdri HDR, otherwise sky)
+    --refraction-quality <layered|precise> Solver for glass (default: layered; precise is expensive)
     --list                 List the demos and exit
     --export-pipeline PATH Export the single-pass pipeline document without a device
     -h, --help             Print this help
@@ -127,7 +136,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     match options.screenshot {
-        Some(dir) => run_screenshots(options.size, &demos, &dir, &options.ibl_source),
+        Some(dir) => run_screenshots(
+            options.size,
+            &demos,
+            &dir,
+            &options.ibl_source,
+            options.refraction_quality,
+        ),
         None => run_windowed(options, demos, start.unwrap_or(0)),
     }
 }
@@ -138,6 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 struct Options {
     ibl_source: String,
+    refraction_quality: RefractionQuality,
     export_pipeline: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     size: Option<(u32, u32)>,
@@ -159,6 +175,7 @@ impl Options {
                 }
             },
             export_pipeline: None,
+            refraction_quality: RefractionQuality::Layered,
             screenshot: None,
             size: None,
             start: None,
@@ -170,6 +187,9 @@ impl Options {
             let mut value = || args.next().ok_or_else(|| format!("`{arg}` needs a value"));
             match arg.as_str() {
                 "--ibl-source" => options.ibl_source = value()?,
+                "--refraction-quality" => {
+                    options.refraction_quality = value()?.parse().map_err(str::to_string)?
+                }
                 "--export-pipeline" => options.export_pipeline = Some(PathBuf::from(value()?)),
                 "-h" | "--help" => options.help = true,
                 "--list" => options.list = true,
@@ -568,6 +588,26 @@ fn demos() -> Vec<Demo> {
             material: None,
             motion: None,
             warmup: 0,
+        },
+        Demo {
+            name: "glass",
+            blurb: "clear glass sphere and blue smoked torus: layered IOR refraction, Fresnel and absorption over HDR; orbit to overlap",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 2,
+            key_intensity: 0.0,
+            features: &[], macros: &[], model: None,
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[], material: None, motion: None, warmup: 0,
+        },
+        Demo {
+            name: "glass-probes",
+            blurb: "triangle of opaque glass sphere, blue torus and mirror; two cached probe generations for mutual reflection/refraction",
+            pipeline: Pipeline::Stock(StockPipeline::Forward),
+            instances: 3,
+            key_intensity: 0.0,
+            features: &[], macros: &[], model: None,
+            sky: Some((Vec3::ZERO, Vec3::ZERO)),
+            params: &[], material: None, motion: None, warmup: 0,
         },
         Demo {
             name: "ibl-grid",
@@ -1723,6 +1763,20 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
     Environment {
         camera: if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
             ibl_grid_camera(aspect)
+        } else if demo.name == "glass-probes" {
+            Camera {
+                eye: Vec3::new(0.0, 3.4, 9.6),
+                target: Vec3::new(0.0, 0.0, -0.4),
+                aspect,
+                ..Camera::default()
+            }
+        } else if demo.name == "glass" {
+            Camera {
+                eye: Vec3::new(0.0, 0.7, 6.8),
+                target: Vec3::ZERO,
+                aspect,
+                ..Camera::default()
+            }
         } else {
             Camera {
                 eye: Vec3::new(2.4, 1.9, 3.2),
@@ -2161,6 +2215,8 @@ fn cube_draws<'a>(
 struct Stage {
     ibl_source: wxsl::render::environment::EnvironmentImage,
     ibl_sky: bool,
+    refraction_quality: RefractionQuality,
+    probes: Option<glass_probes::GlassProbes>,
     /// The screen graph normalizes UV by its input image's size. The sky
     /// bake's extent input must match its output, independent of HDR dimensions.
     sky_extent: wgpu::TextureView,
@@ -2209,6 +2265,8 @@ struct Stage {
     sheen: DemoMaterial,
     /// White conductor, no procedural texture or direct lamps.
     mirror: DemoMaterial,
+    glass: [DemoMaterial; 2],
+    glass_torus: Mesh,
     grid_material: wxsl::render::Material,
     grid_bindings: Vec<wxsl::render::MaterialBindings>,
     grid_floor: DemoMaterial,
@@ -2517,6 +2575,34 @@ impl Stage {
             &mirror_graph,
             &wxsl::render::material::MaterialConfig::default().with_shadows(false, false),
         )?;
+        let glass = [
+            ([1.0; 3], "glass_sphere"),
+            ([0.18, 0.45, 0.9], "glass_torus"),
+        ]
+        .map(|(tint, tag)| {
+            let mut graph = Graph::new("optical glass");
+            let output = graph.add_node("output.surface");
+            graph.set_param(output, "base_color", Value::Vec3(tint));
+            graph.set_param(output, "roughness", Value::F32(0.0));
+            graph.set_param(output, "ior", Value::F32(1.5));
+            graph.set_param(output, "attenuation_distance", Value::F32(1.0));
+            DemoMaterial::new(
+                &gpu,
+                &mut renderer,
+                &texture,
+                &sampler,
+                &graph,
+                &wxsl::render::material::MaterialConfig::default()
+                    .with_shadows(false, false)
+                    .with_tags(wxsl::core::scene::Tags::from_iter(["refractive", tag])),
+            )
+        });
+        let [glass_sphere, glass_torus] = glass;
+        let glass = [glass_sphere?, glass_torus?];
+        // Smooth normals do not smooth rasterized depth: a strong lens
+        // magnifies the coarse tube's planar triangles at its exit surface.
+        let (vertices, indices) = wxsl::render::mesh::torus_geometry(1.15, 0.38, 128, 96);
+        let glass_torus = Mesh::new(&gpu.device, "optical torus", &vertices, &indices);
         let grid_config =
             wxsl::render::material::MaterialConfig::default().with_shadows(false, false);
         let grid_material = wxsl::render::Material::with_config(
@@ -2552,6 +2638,8 @@ impl Stage {
         Ok(Stage {
             ibl_source,
             ibl_sky,
+            refraction_quality: RefractionQuality::Layered,
+            probes: None,
             sky_extent,
             gpu,
             renderer,
@@ -2578,6 +2666,8 @@ impl Stage {
             iridescent,
             sheen,
             mirror,
+            glass,
+            glass_torus,
             grid_material,
             grid_bindings,
             grid_floor,
@@ -2648,9 +2738,28 @@ impl Stage {
         time: f32,
         step: f32,
     ) -> Result<(), Box<dyn Error>> {
+        if demo.name == "glass-probes" {
+            let mut environment = demo_environment(demo, width as f32 / height.max(1) as f32, time);
+            if let Some((camera, previous)) = self.camera_override {
+                environment.camera = camera;
+                environment.previous_camera = previous;
+            }
+            let mut probes = match self.probes.take() {
+                Some(probes) if probes.matches_source(self) => probes,
+                _ => glass_probes::GlassProbes::new(
+                    self,
+                    width,
+                    height,
+                    self.renderer.target().format,
+                )?,
+            };
+            probes.render(self, view, &environment, width, height)?;
+            self.probes = Some(probes);
+            return Ok(());
+        }
         let uses_ibl = matches!(
             demo.name,
-            "ibl" | "ibl-mirror" | "ibl-grid" | "ibl-grid-sky"
+            "ibl" | "ibl-mirror" | "ibl-grid" | "ibl-grid-sky" | "glass"
         );
         let use_sky = self.ibl_sky || demo.name == "ibl-grid-sky";
         let source_changed = uses_ibl
@@ -2660,7 +2769,20 @@ impl Stage {
                     .render_graph()
                     .resource_by_label("gallery sky")
                     .is_some();
-        if !uses_ibl || self.renderer.render_graph().environment_maps().is_none() || source_changed
+        let optics_changed = (demo.name == "glass")
+            != self
+                .renderer
+                .render_graph()
+                .resource_by_label("gallery glass color")
+                .is_some();
+        let quality_changed = demo.name == "glass" &&
+            self.renderer.render_graph().passes().iter().any(|p| matches!(&p.kind, wxsl::render::pass::PassKind::Screen { effect } if effect == "wxsl.refraction"))
+                != (self.refraction_quality == RefractionQuality::Precise);
+        if !uses_ibl
+            || self.renderer.render_graph().environment_maps().is_none()
+            || source_changed
+            || optics_changed
+            || quality_changed
         {
             self.renderer.remove_import("gallery HDR");
             apply(demo, &mut self.renderer)?;
@@ -2670,6 +2792,18 @@ impl Stage {
                 };
                 use wxsl::render::types::{Color, TextureFormat};
                 let mut graph = self.renderer.render_graph().clone();
+                if demo.name == "glass" {
+                    // Optical objects never enter the opaque depth/colour chain.
+                    for index in 0..graph.passes().len() {
+                        if let wxsl::render::pass::PassKind::Geometry { source, .. } =
+                            &mut graph.pass_mut(index).unwrap().kind
+                        {
+                            *source = wxsl::render::pass::DrawSource::Scene(
+                                wxsl::core::scene::TagExpr::parse("!refractive")?,
+                            );
+                        }
+                    }
+                }
                 let imported = graph.resource(ResourceDesc::imported(
                     "gallery HDR",
                     if use_sky {
@@ -2729,6 +2863,19 @@ impl Stage {
                     maps.radiance,
                     "gallery environment background",
                 );
+                let background = if demo.name == "glass" {
+                    wxsl::render::effect::refraction::append_with_quality(
+                        &mut graph,
+                        background,
+                        depth,
+                        maps.radiance,
+                        "gallery glass",
+                        3, // One sphere crossing + two torus crossings, each front/back.
+                        self.refraction_quality,
+                    )
+                } else {
+                    background
+                };
                 graph.pass_mut(tonemap).unwrap().reads[0] = Read::current(background);
                 self.renderer.set_graph(graph)?;
                 self.renderer.import_resource(
@@ -2747,6 +2894,32 @@ impl Stage {
         if let Some((camera, previous)) = self.camera_override {
             environment.camera = camera;
             environment.previous_camera = previous;
+        }
+        if demo.name == "glass" {
+            let mut draws = DrawList::new();
+            draws.push(
+                DrawItem::new(&self.sphere, &self.glass[0].material)
+                    .with_bindings(&self.glass[0].bindings)
+                    .with_transform(Mat4::from_translation(Vec3::new(-1.15, 0.0, 0.0))),
+            );
+            draws.push(
+                DrawItem::new(&self.glass_torus, &self.glass[1].material)
+                    .with_bindings(&self.glass[1].bindings)
+                    .with_transform(
+                        Mat4::from_translation(Vec3::new(1.25, 0.0, -0.3))
+                            * Mat4::from_rotation_x(0.3),
+                    ),
+            );
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
         }
         if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
             let mut draws = DrawList::new();
@@ -3005,6 +3178,7 @@ fn run_screenshots(
     demos: &[Demo],
     dir: &Path,
     ibl_source: &str,
+    refraction_quality: RefractionQuality,
 ) -> Result<(), Box<dyn Error>> {
     let (width, height) = size.unwrap_or((800, 600));
     let gpu = pollster::block_on(GpuContext::headless())?;
@@ -3015,6 +3189,7 @@ fn run_screenshots(
         TargetConfig::new(width, height, target.format()),
         ibl_source,
     )?;
+    stage.refraction_quality = refraction_quality;
 
     std::fs::create_dir_all(dir)?;
     let mut shots: Vec<Shot> = Vec::new();
@@ -3464,6 +3639,7 @@ impl App {
             TargetConfig::new(size.width, size.height, format),
             &self.options.ibl_source,
         )?;
+        stage.refraction_quality = self.options.refraction_quality;
         apply(&self.demos[self.current], &mut stage.renderer)?;
         let mut state = State {
             window,
@@ -3545,6 +3721,106 @@ fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn optical_quality_cli_is_explicit_and_defaults_to_layered() {
+        assert_eq!(
+            Options::parse(std::iter::empty())
+                .unwrap()
+                .refraction_quality,
+            RefractionQuality::Layered
+        );
+        assert_eq!(
+            Options::parse(
+                ["--refraction-quality", "precise"]
+                    .into_iter()
+                    .map(String::from)
+            )
+            .unwrap()
+            .refraction_quality,
+            RefractionQuality::Precise
+        );
+        assert!(Options::parse(
+            ["--refraction-quality", "unknown"]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err());
+    }
+    #[test]
+    #[ignore = "manual GPU timing comparison at 1280x720"]
+    fn glass_quality_timing() {
+        use wxsl::render::pass::PassKind;
+        let gpu = pollster::block_on(GpuContext::headless()).unwrap();
+        let target = OffscreenTarget::new(&gpu.device, 1280, 720);
+        let mut stage =
+            Stage::new(gpu, TargetConfig::new(1280, 720, target.format()), "sky").unwrap();
+        let demos = demos();
+        let demo = demos.iter().find(|d| d.name == "glass").unwrap();
+        for quality in [
+            RefractionQuality::Layered,
+            RefractionQuality::Precise,
+            RefractionQuality::Layered,
+        ] {
+            stage.refraction_quality = quality;
+            for _ in 0..2 {
+                stage
+                    .render(demo, target.view(), 1280, 720, 0.6, 0.0)
+                    .unwrap();
+                stage.gpu.wait();
+            }
+            let misses = stage.renderer.cache_stats().misses;
+            let bake_runs = stage.renderer.pass_run_count("gallery sky");
+            let started = Instant::now();
+            for _ in 0..5 {
+                stage
+                    .render(demo, target.view(), 1280, 720, 0.6, 0.0)
+                    .unwrap();
+                stage.gpu.wait();
+            }
+            println!(
+                "{quality:?}: {:.2} ms/frame",
+                started.elapsed().as_secs_f64() * 200.0
+            );
+            assert_eq!(misses, stage.renderer.cache_stats().misses);
+            assert_eq!(bake_runs, stage.renderer.pass_run_count("gallery sky"));
+            assert_eq!(bake_runs, Some(1));
+            assert_eq!(stage.renderer.render_graph().passes().iter().any(|p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction")), quality == RefractionQuality::Precise);
+        }
+    }
+    #[test]
+    fn glass_and_mirror_switch_optical_topology_without_reusing_the_other_plan() {
+        let gpu = match pollster::block_on(GpuContext::headless()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping GPU test: {error}");
+                return;
+            }
+        };
+        let target = OffscreenTarget::new(&gpu.device, 192, 144);
+        let mut stage =
+            Stage::new(gpu, TargetConfig::new(192, 144, target.format()), "sky").unwrap();
+        let demos = demos();
+        let mut pictures = Vec::new();
+        for name in ["ibl-mirror", "glass", "ibl-mirror", "glass"] {
+            let demo = demos.iter().find(|demo| demo.name == name).unwrap();
+            stage
+                .render(demo, target.view(), 192, 144, 0.0, 0.0)
+                .unwrap();
+            assert_eq!(
+                stage
+                    .renderer
+                    .render_graph()
+                    .resource_by_label("gallery glass color")
+                    .is_some(),
+                name == "glass"
+            );
+            stage.gpu.wait();
+            pictures.push(target.read_rgba8(&stage.gpu.device, &stage.gpu.queue));
+        }
+        assert_eq!(pictures[0], pictures[2]);
+        assert_eq!(pictures[1], pictures[3]);
+        assert_ne!(pictures[0], pictures[1]);
+    }
     use super::*;
 
     #[test]

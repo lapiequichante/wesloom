@@ -1,0 +1,82 @@
+// Intersect the outgoing world ray with the captured radial-depth surface.
+// The six-unit bound encloses THIS gallery's static neighbours, not general scenes.
+fn radial_gap(distances: texture_cube<f32>, filtering: sampler, point: vec3f) -> vec2f {
+    let radius = length(point);
+    if radius < 0.00001 { return vec2f(-6.0, 0.0); }
+    let depth = textureSampleLevel(distances, filtering, point / radius, 0.0).r;
+    if depth < 0.05 { return vec2f(-6.0, 0.0); }
+    return vec2f(radius - depth, depth);
+}
+fn probe_sample(
+    color: texture_cube<f32>,
+    distances: texture_cube<f32>,
+    filtering: sampler,
+    position: vec3f,
+    ray: vec3f,
+    origin: vec3f,
+    sky: texture_cube<f32>,
+) -> vec3f {
+    let offset = position - origin;
+    let b = dot(offset, ray);
+    let discriminant = b * b + 36.0 - dot(offset, offset);
+    if discriminant <= 0.0 {
+        return textureSampleLevel(sky, filtering, ray, 0.0).rgb;
+    }
+    let end = max(-b + sqrt(discriminant), 0.0);
+    var begin = 0.002;
+    var limit = end;
+    // Conservative broad phase for this static gallery. Do not query empty
+    // radial space on HDR-only rays. Unknown origins retain the generic bound.
+    let objects = array<vec4f, 3>(
+        vec4f(-1.65, 0.0, 0.7, 0.86),
+        vec4f(1.85, 0.0, 0.7, 1.54),
+        vec4f(0.0, 0.0, -2.8, 0.86));
+    var known_origin = false;
+    var near = 100000.0;
+    var far = 0.0;
+    for (var object = 0; object < 3; object += 1) {
+        let volume = objects[object];
+        if length(volume.xyz - origin) < 0.001 { known_origin = true; continue; }
+        let relative = position - volume.xyz;
+        let projection = dot(relative, ray);
+        let d = projection * projection + volume.w * volume.w - dot(relative, relative);
+        if d >= 0.0 {
+            let exit = -projection + sqrt(d);
+            if exit > 0.002 {
+                near = min(near, max(-projection - sqrt(d), 0.002));
+                far = max(far, exit);
+            }
+        }
+    }
+    if known_origin {
+        if far <= near { return textureSampleLevel(sky, filtering, ray, 0.0).rgb; }
+        begin = max(near - 0.002, 0.002);
+        limit = min(far + 0.002, end);
+    }
+    var previous_t = begin;
+    var previous = radial_gap(distances, filtering, offset + ray * previous_t);
+    for (var step = 1; step <= 24; step += 1) {
+        let t = mix(begin, limit, f32(step) / 24.0);
+        let sample = radial_gap(distances, filtering, offset + ray * t);
+        if previous.x < 0.0 && sample.x >= 0.0 && sample.y > 0.05 {
+            var low = previous_t;
+            var high = t;
+            for (var refine = 0; refine < 8; refine += 1) {
+                let mid = (low + high) * 0.5;
+                let gap = radial_gap(distances, filtering, offset + ray * mid);
+                if gap.x < 0.0 { low = mid; } else { high = mid; }
+            }
+            let point = offset + ray * high;
+            let gap = radial_gap(distances, filtering, point);
+            // A silhouette/occlusion depth jump is not an intersection.
+            // Accept only a root on the ray, within cube/half-float precision.
+            if gap.y > 0.05 && abs(gap.x) < max(0.005, gap.y * 0.008) {
+                return textureSampleLevel(color, filtering, normalize(point), 0.0).rgb;
+            }
+        }
+        previous_t = t;
+        previous = sample;
+    }
+    // Never fall back to local colour: it includes geometry this ray missed.
+    return textureSampleLevel(sky, filtering, ray, 0.0).rgb;
+}

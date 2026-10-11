@@ -1,0 +1,255 @@
+// Original bounded layered-depth ray marcher. Technique references: ADR 0067.
+// Normal/depth uses full precision: half-float device depth cannot distinguish
+// nearby interfaces. Colour is linear throughout; display encoding is downstream.
+import package::wxsl::bindings::{camera, scene, environment_lut_sampler};
+
+@group(3) @binding(0) var scene_image: texture_2d<f32>;
+@group(3) @binding(1) var scene_depth: texture_depth_2d;
+@group(3) @binding(2) var environment: texture_cube<f32>;
+@group(3) @binding(3) var normal_layers: texture_2d_array<f32>;
+@group(3) @binding(4) var optical_layers: texture_2d_array<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+
+fn normal_depth(layer: i32, pixel: vec2i) -> vec4f {
+    return textureLoad(normal_layers, pixel, layer, 0);
+}
+
+fn optics(layer: i32, pixel: vec2i) -> vec4f {
+    return textureLoad(optical_layers, pixel, layer, 0);
+}
+
+// Interpolate only a fully covered quad. Mixing a cleared texel into depth
+// would invent an interface along silhouettes.
+fn surface(layer: i32, uv: vec2f) -> vec4f {
+    let p = uv * vec2f(textureDimensions(normal_layers)) - 0.5;
+    let pixel = vec2i(floor(p));
+    let a = normal_depth(layer, pixel);
+    let b = normal_depth(layer, pixel + vec2i(1, 0));
+    let c = normal_depth(layer, pixel + vec2i(0, 1));
+    let d = normal_depth(layer, pixel + vec2i(1, 1));
+    if min(min(dot(a.xyz, a.xyz), dot(b.xyz, b.xyz)), min(dot(c.xyz, c.xyz), dot(d.xyz, d.xyz))) < 0.5
+        || min(min(dot(a.xyz, b.xyz), dot(a.xyz, c.xyz)), dot(a.xyz, d.xyz)) < 0.8 {
+        return normal_depth(layer, vec2i(uv * vec2f(textureDimensions(normal_layers))));
+    }
+    let f = fract(p);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+fn project(p: vec3f) -> vec3f {
+    let h = camera.view_proj * vec4f(p, 1.0);
+    let ndc = h.xyz / h.w;
+    return vec3f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, ndc.z);
+}
+
+fn unproject(uv: vec2f, depth: f32) -> vec3f {
+    let h = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    return h.xyz / h.w;
+}
+
+fn on_screen(uv: vec2f) -> bool {
+    return all(uv >= vec2f(0.0)) && all(uv < vec2f(1.0));
+}
+
+fn sky(ray: vec3f) -> vec3f {
+    return textureSampleLevel(environment, environment_lut_sampler, ray, 0.0).rgb * scene.environment_scale * scene.exposure;
+}
+
+struct Hit {
+    // -1: missed, 8: opaque, 0..7: optical layer.
+    layer: i32,
+    position: vec3f,
+    pixel: vec2i,
+    distance: f32,
+}
+
+// Signed camera-depth separation in world units, not non-linear device depth.
+fn separation(p: vec3f, uv: vec2f, depth: f32) -> f32 {
+    let surface = unproject(uv, depth);
+    let eye_ray = normalize(surface - camera.position.xyz);
+    return dot(p - surface, eye_ray);
+}
+
+fn trace(origin: vec3f, ray: vec3f, inside: bool) -> Hit {
+    let size = vec2f(textureDimensions(normal_layers));
+    let layers = i32(textureNumLayers(normal_layers));
+    var previous = origin;
+    var t = 0.0;
+    // Follow contiguous half-pixel footprints rather than jumping across
+    // thin exit layers with a fixed world step. Keep both work and range
+    // bounded; this is deterministic, not stochastic supersampling.
+    for (var step = 0; step < 512; step += 1) {
+        let previous_uv = project(previous).xy;
+        let trial_uv = project(previous + ray * 0.04).xy;
+        let pixel_delta = abs(trial_uv - previous_uv) * size;
+        let increment = 0.04 / max(1.0, 2.0 * max(pixel_delta.x, pixel_delta.y));
+        t += increment;
+        if t > 6.4 { break; }
+        let current = origin + ray * t;
+        let projected = project(current);
+        if !on_screen(projected.xy) || projected.z < 0.0 || projected.z >= 1.0 {
+            break;
+        }
+        let pixel = vec2i(projected.xy * size);
+        var nearest = Hit(-1, current, pixel, 1e10);
+        for (var layer = 0; layer <= layers; layer += 1) {
+            var depth = textureLoad(scene_depth, pixel, 0);
+            if layer < layers {
+                let nd = surface(layer, projected.xy);
+                if dot(nd.xyz, nd.xyz) < 0.5 { continue; }
+                depth = nd.w;
+            }
+            if depth >= 1.0 { continue; }
+            var previous_depth = textureLoad(scene_depth, vec2i(previous_uv * size), 0);
+            if layer < layers {
+                let nd = surface(layer, previous_uv);
+                if dot(nd.xyz, nd.xyz) < 0.5 {
+                    // The ray may step into a layer's silhouette after
+                    // crossing its surface. An uncovered previous pixel is
+                    // not a reason to lose the exit. Test the covered pixel's
+                    // local tangent plane, bounded to this segment/footprint.
+                    let covered = surface(layer, projected.xy);
+                    let n = normalize(covered.xyz);
+                    let facing = dot(ray, n);
+                    let correct_side = select((facing < -0.001), (facing > 0.001), inside);
+                    let surface_point = unproject(projected.xy, depth);
+                    let distance = dot(surface_point - origin, n) / facing;
+                    let point = origin + ray * distance;
+                    if correct_side && distance > max(0.006, t - increment) && distance <= t
+                        && length(point - surface_point) < 0.07 && distance < nearest.distance {
+                        nearest = Hit(layer, point, pixel, distance);
+                    }
+                    continue;
+                }
+                previous_depth = nd.w;
+            }
+            let a = separation(previous, previous_uv, previous_depth);
+            let b = separation(current, projected.xy, depth);
+            if a * b > 0.0 || abs(a - b) < 0.000001 { continue; }
+            // Refine the root while resampling the curved depth field.
+            var lo = previous;
+            var hi = current;
+            var sign_lo = a;
+            for (var refine = 0; refine < 7; refine += 1) {
+                let mid = (lo + hi) * 0.5;
+                let uv = project(mid).xy;
+                let px = vec2i(uv * size);
+                var z = textureLoad(scene_depth, px, 0);
+                if layer < layers { z = surface(layer, uv).w; }
+                let gap = separation(mid, uv, z);
+                if sign_lo * gap <= 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                    sign_lo = gap;
+                }
+            }
+            let point = (lo + hi) * 0.5;
+            let distance = length(point - origin);
+            let uv = project(point).xy;
+            var z = textureLoad(scene_depth, vec2i(uv * size), 0);
+            if layer < layers { z = surface(layer, uv).w; }
+            // A layer ordinal can change identity at a silhouette. A sign
+            // change across that discontinuity is not a geometric hit.
+            let residual = abs(separation(point, uv, z));
+            var orientation_matches = true;
+            if layer < layers {
+                let facing = dot(ray, surface(layer, uv).xyz);
+                // Disjoint closed solids alternate entry/exit. A depth-field
+                // discontinuity or numerical self-hit must not enter again
+                // while already inside (or exit while travelling through air).
+                orientation_matches = select((facing < -0.001), (facing > 0.001), inside);
+            }
+            if distance > 0.006 && distance < nearest.distance && residual < 0.015 && orientation_matches {
+                nearest = Hit(select(layer, 8, layer == layers), point, vec2i(project(point).xy * size), distance);
+            }
+        }
+        if nearest.layer >= 0 { return nearest; }
+        previous = current;
+    }
+    return Hit(-1, origin, vec2i(0), 0.0);
+}
+
+// If the bent exit ray leaves the captured field, use its camera-visible
+// entry/exit chord for both absorption and the exit refraction. Returning
+// HDR with a ray still inside glass would produce one-interface patches.
+// This is a documented local-thickness fallback, not hidden geometry.
+fn fallback_exit(hit: Hit, ray: vec3f) -> Hit {
+    let uv = project(hit.position).xy;
+    let material = optics(hit.layer, hit.pixel);
+    if material.w <= 0.0 { return Hit(-1, hit.position, hit.pixel, 0.0); }
+    let view = normalize(hit.position - camera.position.xyz);
+    for (var layer = hit.layer + 1; layer < i32(textureNumLayers(normal_layers)); layer += 1) {
+        let exit = normal_depth(layer, hit.pixel);
+        let optical = optics(layer, hit.pixel);
+        if dot(exit.xyz, exit.xyz) > 0.5 && optical.w < 0.0 && abs(optical.w + material.w) < 0.02 {
+            let position = unproject(uv, exit.w);
+            let chord = length(position - hit.position);
+            return Hit(layer, position, hit.pixel, chord / max(abs(dot(ray, view)), 0.35));
+        }
+    }
+    return Hit(-1, hit.position, hit.pixel, 0.0);
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let first = normal_depth(0, pixel);
+    if dot(first.xyz, first.xyz) < 0.5 { return textureLoad(scene_image, pixel, 0); }
+    let uv = position.xy / vec2f(textureDimensions(normal_layers));
+    var point = unproject(uv, first.w);
+    var ray = normalize(point - camera.position.xyz);
+    var throughput = vec3f(1.0);
+    var radiance = vec3f(0.0);
+    var medium = 1.0;
+    var inside = false;
+    var absorption = vec3f(1.0);
+    var hit = Hit(0, point, pixel, 0.0);
+    // Up to eight interfaces, with a few extra TIR bounces allowed.
+    for (var boundary = 0; boundary < 12; boundary += 1) {
+        let nd = surface(hit.layer, project(hit.position).xy);
+        let material = optics(hit.layer, hit.pixel);
+        let outward = normalize(nd.xyz);
+        // Disjoint closed solids alternate entry/exit, including a grazing
+        // exit reconstructed from the visible front/back chord.
+        let entering = !inside;
+        let n = select(-outward, outward, entering);
+        let next_medium = select(1.0, abs(material.w), entering);
+        let eta = medium / next_medium;
+        let cos_i = clamp(-dot(ray, n), 0.0, 1.0);
+        let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+        let reflected = reflect(ray, n);
+        if k < 0.0 {
+            ray = reflected;
+        } else {
+            let cos_t = sqrt(k);
+            let rs = (medium * cos_i - next_medium * cos_t) / max(medium * cos_i + next_medium * cos_t, 0.000001);
+            let rp = (next_medium * cos_i - medium * cos_t) / max(next_medium * cos_i + medium * cos_t, 0.000001);
+            let fresnel = clamp(0.5 * (rs * rs + rp * rp), 0.0, 1.0);
+            radiance += throughput * fresnel * sky(reflected);
+            throughput *= 1.0 - fresnel;
+            ray = normalize(eta * ray + (eta * cos_i - cos_t) * n);
+            medium = next_medium;
+            inside = entering;
+            absorption = select(vec3f(1.0), material.rgb, entering);
+        }
+        var next = trace(hit.position + ray * 0.003, ray, inside);
+        if next.layer < 0 {
+            if inside {
+                next = fallback_exit(hit, ray);
+            }
+            if next.layer < 0 { return vec4f(radiance + throughput * sky(ray), 1.0); }
+        }
+        throughput *= pow(max(absorption, vec3f(0.0001)), vec3f(next.distance));
+        if next.layer == 8 {
+            let sample_uv = project(next.position).xy;
+            let background = textureSampleLevel(scene_image, environment_lut_sampler, sample_uv, 0.0).rgb;
+            return vec4f(radiance + throughput * background, 1.0);
+        }
+        hit = next;
+    }
+    return vec4f(radiance + throughput * sky(ray), 1.0);
+}

@@ -710,6 +710,7 @@ impl<'a> Compiler<'a> {
             match kind.as_deref() {
                 Some(doc::PASS_GEOMETRY) => self.geometry_pass(*node)?,
                 Some(doc::PASS_PEEL) => self.peel_passes(*node)?,
+                Some(doc::PASS_REFRACTION) => self.refraction_passes(*node)?,
                 Some(doc::PASS_SHADOW) => self.shadow_passes(*node)?,
                 Some(doc::PASS_BLOOM) => self.bloom_pyramid(*node)?,
                 Some(doc::PASS_DOF) => self.depth_of_field(*node)?,
@@ -1508,12 +1509,22 @@ impl<'a> Compiler<'a> {
                 }
                 Vec::new()
             }
-            abi::StageOutput::PeelDepth | abi::StageOutput::PeelResolve => {
+            abi::StageOutput::PeelDepth
+            | abi::StageOutput::PeelResolve
+            | abi::StageOutput::RefractionSurface => {
                 return Err(PipelineError::Peel {
                     node: name,
                     reason: format!(
-                        "stage `{}` is drawn by `pass.peel`, which selects the transparent tag",
-                        stage.name()
+                        "stage `{}` is drawn by `{}`",
+                        stage.name(),
+                        if matches!(
+                            stage,
+                            MaterialStage::REFRACTION_DEPTH | MaterialStage::REFRACTION_SURFACE
+                        ) {
+                            "pass.refraction"
+                        } else {
+                            "pass.peel"
+                        }
                     ),
                 });
             }
@@ -1567,6 +1578,62 @@ impl<'a> Compiler<'a> {
         }
         self.graph.pass(pass);
         self.pass_colors.insert(node, wrote);
+        Ok(())
+    }
+
+    fn refraction_passes(&mut self, node: NodeId) -> Result<(), PipelineError> {
+        let name = self.label(node);
+        let depth = self.sampled_depth(self.fed(node, "depth").expect("validated depth"), &name)?;
+        let scene = self.sampled_color(self.fed(node, "scene").expect("validated scene"), &name)?;
+        let environment = self.image_source(
+            self.fed(node, "environment")
+                .expect("validated environment"),
+            node,
+        )?;
+        if !matches!(
+            self.graph.resource_desc(environment).map(|r| r.shape),
+            Some(crate::pass::ResourceShape::Texture {
+                dimension: crate::pass::Dimension::Cube,
+                ..
+            })
+        ) {
+            return Err(PipelineError::Peel {
+                node: name,
+                reason: "refraction environment must be a radiance cube".into(),
+            });
+        }
+        let count = self
+            .setting(node, "surface_count")
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=4).contains(n))
+            .ok_or_else(|| PipelineError::Peel {
+                node: name.clone(),
+                reason: "surface_count must be an integer in 1..=4".into(),
+            })?;
+        let quality = self
+            .setting(node, "quality")
+            .parse()
+            .map_err(|reason: &str| PipelineError::Peel {
+                node: name.clone(),
+                reason: reason.into(),
+            })?;
+        let color = crate::effect::refraction::append_with_quality(
+            &mut self.graph,
+            scene,
+            depth,
+            environment,
+            &name,
+            count,
+            quality,
+        );
+        let target = self.write_target(node)?;
+        self.graph.pass(
+            PassDesc::screen(format!("{name} output"), "wxsl.peel_over")
+                .with_color(self.color_attachment(target))
+                .with_reads([Read::current(scene), Read::current(color)]),
+        );
+        self.pass_colors.insert(node, target);
         Ok(())
     }
 
@@ -1990,19 +2057,20 @@ impl<'a> Compiler<'a> {
     fn sampled_color(&self, source: NodeId, node: &str) -> Result<ResourceId, PipelineError> {
         match self.kind(source) {
             Some(doc::RESOURCE_COLOR) => Ok(self.colors[&source]),
-            Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL) => {
-                match self.pass_colors.get(&source) {
-                    Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
-                    _ => Err(PipelineError::Peel {
-                        node: node.to_string(),
-                        reason: format!(
-                            "the opaque colour comes from `{}`, which writes the frame target — \
+            Some(doc::PASS_GEOMETRY)
+            | Some(doc::PASS_SCREEN)
+            | Some(doc::PASS_PEEL)
+            | Some(doc::PASS_REFRACTION) => match self.pass_colors.get(&source) {
+                Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                _ => Err(PipelineError::Peel {
+                    node: node.to_string(),
+                    reason: format!(
+                        "the opaque colour comes from `{}`, which writes the frame target — \
                              wire that pass into a `resource.color` so the peel can sample it",
-                            label(self.document, self.registry, source)
-                        ),
-                    }),
-                }
-            }
+                        label(self.document, self.registry, source)
+                    ),
+                }),
+            },
             _ => Err(PipelineError::Peel {
                 node: node.to_string(),
                 reason: "the opaque colour must come from a `resource.color` or a pass that \
@@ -2389,6 +2457,7 @@ impl<'a> Compiler<'a> {
             Some(doc::PASS_GEOMETRY)
             | Some(doc::PASS_SCREEN)
             | Some(doc::PASS_PEEL)
+            | Some(doc::PASS_REFRACTION)
             | Some(doc::PASS_BLOOM)
             | Some(doc::PASS_DOF) => match self.pass_colors.get(&source) {
                 Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
@@ -2449,7 +2518,10 @@ impl<'a> Compiler<'a> {
         if let Some(feeder) = self.fed(present, "surface") {
             let stands_for_target = matches!(
                 self.kind(feeder),
-                Some(doc::PASS_GEOMETRY) | Some(doc::PASS_SCREEN) | Some(doc::PASS_PEEL)
+                Some(doc::PASS_GEOMETRY)
+                    | Some(doc::PASS_SCREEN)
+                    | Some(doc::PASS_PEEL)
+                    | Some(doc::PASS_REFRACTION)
             ) && self.pass_colors.get(&feeder)
                 == Some(&RenderGraph::TARGET);
             if !stands_for_target {

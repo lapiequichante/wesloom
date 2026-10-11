@@ -354,6 +354,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut reference = false;
     let mut probes = false;
     let mut shadow_atlas = false;
+    let mut refraction = false;
     let mut sample = None;
     let mut pipeline_path = None;
     let mut hdri_path = None;
@@ -377,6 +378,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--probes" => probes = true,
             "--shadow-atlas" => shadow_atlas = true,
+            "--refraction" => refraction = true,
             "--sample" => sample = Some(args.next().ok_or("--sample needs a category")?),
             "--pipeline" => {
                 pipeline_path = Some(PathBuf::from(
@@ -394,6 +396,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     if shadow_atlas && (scene_path.is_some() || graph_path.is_some() || sample.is_some()) {
         return Err("--shadow-atlas supplies its own scene and material".into());
     }
+    if refraction
+        && (scene_path.is_some()
+            || graph_path.is_some()
+            || sample.is_some()
+            || shadow_atlas
+            || pipeline_path.is_some())
+    {
+        return Err("--refraction supplies its own scene and pipeline".into());
+    }
     let hdri = if let Some(path) = hdri_path {
         let reader = image::ImageReader::open(path)?.with_guessed_format()?;
         if reader.format() != Some(image::ImageFormat::Hdr) {
@@ -408,7 +419,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    let scene: Scene = if shadow_atlas {
+    let scene: Scene = if refraction {
+        let mut scene = Scene::new("optical glass");
+        scene.add_mesh(MeshEntry {
+            name: "sphere".into(),
+            source: MeshSource::Sphere { radius: 0.85 },
+        });
+        scene.add_mesh(MeshEntry {
+            name: "torus".into(),
+            source: MeshSource::Torus {
+                radius: 1.15,
+                tube_radius: 0.38,
+            },
+        });
+        for (index, tint) in [[1.0; 3], [0.18, 0.45, 0.9]].into_iter().enumerate() {
+            let mut surface = Graph::new("glass");
+            let output = surface.add_node(abi::SURFACE_OUTPUT_ID);
+            surface.set_param(output, "base_color", Value::Vec3(tint));
+            surface.set_param(output, "roughness", Value::F32(0.0));
+            surface.set_param(output, "ior", Value::F32(1.5));
+            let mut entry = MaterialEntry::new("glass", surface)
+                .with_tags(wxsl_core::scene::Tags::from_iter(["refractive"]));
+            entry.config = entry.config.with_shadows(false, false);
+            scene.add_material(entry);
+            let x = if index == 0 { -1.15 } else { 1.25 };
+            scene
+                .add_instance(Instance::new(index, index).with_transform(
+                    Mat4::from_translation(Vec3::new(x, 0.0, 0.0)).to_cols_array(),
+                ));
+        }
+        scene
+    } else if shadow_atlas {
         let mut scene = Scene::new("shadow atlas ground");
         scene.add_mesh(MeshEntry {
             name: "caster".into(),
@@ -506,6 +547,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         serde_json::to_vec_pretty(&scene)?,
     )?;
     let mut env = environment(width as f32 / height as f32);
+    if refraction {
+        env.camera.eye = Vec3::new(0.0, 0.7, 6.8);
+        env.camera.target = Vec3::ZERO;
+        env.lights.clear();
+        env.ambient_sky = Vec3::ZERO;
+        env.ambient_ground = Vec3::ZERO;
+    }
     if shadow_atlas {
         // Exercise every resolution tier supported by the current light budget.
         env.lights = (0..abi::MAX_LIGHTS)
@@ -632,15 +680,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut graphs = Vec::new();
     for stock in StockPipeline::ALL {
         let output = response(wxsl_ffi::api::pipeline(&serde_json::to_vec(
-            &json!({"pipeline": stock.document(), "config": wire_config}),
+            &json!({"pipeline": if refraction { ibl_probe::refraction_document(*stock) } else { stock.document() }, "config": wire_config}),
         )?))?;
         let data: Json = serde_json::from_slice(&output.json)?;
         let mut pipeline = data["data"].clone();
-        pipeline["request"] = json!({"pipeline": stock.document(), "config": wire_config});
+        let document = if refraction {
+            ibl_probe::refraction_document(*stock)
+        } else {
+            stock.document()
+        };
+        pipeline["request"] = json!({"pipeline": document, "config": wire_config});
         pipeline["check_request"] =
-            json!({"pipeline": stock.document(), "scene": scene, "config": wire_config});
+            json!({"pipeline": document, "scene": scene, "config": wire_config});
         pipelines.insert(stock.name().to_string(), pipeline);
-        graphs.push((stock.name().to_string(), stock.graph(&config)));
+        let graph = wxsl_frame::pipeline_doc::compile(
+            &document,
+            &wxsl_frame::pipeline_doc::document_registry(&effects),
+            &effects,
+            &config,
+        )?;
+        graphs.push((stock.name().to_string(), graph));
     }
     if probes {
         if scene.instances.is_empty() || cpu_meshes[scene.instances[0].mesh].indices.len() < 36 {

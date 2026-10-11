@@ -111,7 +111,7 @@ variant parity tests. The shipped vocabulary is embedded; applications may
 overlay WXSL modules and derive additional function nodes. The contract is
 data, never renderer behavior ([ADR 0049](adr/0049-share-the-core-through-a-data-only-c-abi.md)).
 `bash dawn/tests/run_abi_smoke.sh` dynamically loads the cdylib from both C
-and C++, validates both presets and compares all nine WGSL material stages
+and C++, validates both presets and compares all eleven WGSL material stages
 with native Rust variants.
 
 **`dawn/`** — Conan-managed, pinned Dawn SDK; `wxsl_render_cpp` implements
@@ -296,6 +296,48 @@ Bright HDR emitters are integrated deterministically for diffuse and broad GGX
 lobes, using solid-angle-weighted texels of the filtered source chain. Sharp GGX
 lobes retain importance sampling. This avoids sparse-hit irradiance speckles;
 finite texture resolution and mirror/pixel aliasing are still approximations.
+
+`pass.refraction` gathers the nearest optical interfaces from the `refractive`
+tag, including back faces. `surface_count` budgets 1–4 closed-volume crossings,
+each entry/exit pair costing four baseline geometry passes. The glass demo
+budgets three crossings: one sphere and two torus crossings (six interfaces).
+Two texture arrays avoid growing the texture-binding count. The
+`refraction_surface` stage stores world normal/device depth at full float
+precision and unit-distance transmission/IOR in a second HDR target. A
+bounded screen-space composition processes entry/exit pairs back to front,
+using front/back thickness, Snell refraction, Fresnel and Beer absorption.
+Colour and nearest depth ping-pong so nearer glass warps the already composed
+background. Missing/off-screen hits use the explicit environment cube.
+The previous expensive ray marcher remains opt-in with `quality: "precise"`;
+the default `quality: "layered"` performs no ray search (ADR 0068).
+Surface sockets `ior` and `attenuation_distance` control the optics;
+`base_color` is the transmitted colour at that distance, not alpha. This
+clear-glass approximation is for disjoint closed solids, not arbitrary
+nested media, rough transmission or caustics. Ordinary alpha
+sorting/peeling remains unchanged. `gallery --start glass` shows the local
+HDR through a clear sphere and a blue smoked torus; orbit to overlap them.
+Use `--refraction-quality precise` to compare the retained precision path.
+
+`glass-probes` adds a third, mirror sphere and three application-owned local
+colour/distance cubemaps. Each owner is excluded from its six captures. All
+three objects render opaque, with no blending or screen-colour composition.
+The sphere computes its analytic exit and samples only its probe; only the
+torus self-peels four interfaces for refraction and thickness-dependent blue
+absorption. Objects form a triangle, and every probe is generated twice:
+all three first capture against global HDR, then all three capture against
+the complete first generation into separate final cubes. The mirror therefore
+sees the glass refractions and the glass sees the mirror reflections, without
+mixing generations or capture-order feedback. The bake records 36 cube views
+and then stays cached. Local sampling validates an intersection of the outgoing
+world ray with radial depth, including the exit-position offset; misses use
+the separate global HDR cube, not uncorrected local colour. The bounded query
+can still miss thin surfaces or geometry hidden from the probe.
+There is no recursive capture or colour ping-pong. Capture colour and radial distance
+are flipped together into WebGPU cube orientation. There is no ground plane.
+The static captures survive orbit, resize and demo switching; HDR/sky changes
+invalidate them. Live geometry/material edits would also need invalidation.
+This is a finite-resolution, radial-parallax approximation (ADR 0070), not
+recursive scene ray tracing. The original `glass` demo remains unchanged.
 
 `cargo run -p wxsl --example gallery -- --screenshot` renders
 the stock pipelines, the minimal document, the bloom chain (as authored

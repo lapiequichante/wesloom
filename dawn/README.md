@@ -33,6 +33,13 @@ a matte ground plane and cube under four shadow-casting directional lights.
 It compares both paths against wgpu, exercising the atlas's 1024²/512² tiles,
 viewport/scissor recording and generated light rectangles (ADR 0066).
 
+`bake_docs --refraction --reference` exports a clear sphere and blue smoked
+torus through the shared optical document on both paths (ADR 0068). The smoke
+script verifies the six-interface array peel and back-to-front colour/depth
+composition against wgpu. Add `--hdri <file>`
+to both the exporter and `pbr_cube_cpp` for a real Radiance environment; without
+it the shared constant HDR fixture isolates thickness-dependent absorption.
+
 Omit `--reference` to export without a device. `--scene`, `--graph`, `--width`
 and `--height` customize export input; the two stock pipeline documents stay
 shared. Mesh generation, draw selection, scheduling, layouts and shader

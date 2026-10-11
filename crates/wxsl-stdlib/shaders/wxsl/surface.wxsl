@@ -17,6 +17,8 @@ struct SurfaceContext {
 }
 
 struct Surface {
+    ior: f32,
+    attenuation_distance: f32,
     base_color: vec3f,
     metallic: f32,
     roughness: f32,
@@ -40,6 +42,8 @@ struct Surface {
 // editor shows on an unconnected input is what the shader would have used.
 fn default_surface(ctx: SurfaceContext) -> Surface {
     var out: Surface;
+    out.ior = 1.5;
+    out.attenuation_distance = 1.0;
     out.base_color = vec3f(0.8, 0.8, 0.8);
     out.metallic = 0.0;
     out.roughness = 0.5;

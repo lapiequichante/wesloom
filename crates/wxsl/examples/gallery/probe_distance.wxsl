@@ -1,0 +1,14 @@
+import package::wxsl::bindings::camera;
+@group(3) @binding(0) var nearest_depth: texture_depth_2d;
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+@fragment
+fn fragment(@builtin(position) p: vec4f) -> @location(0) f32 {
+    let z = textureLoad(nearest_depth, vec2i(p.xy), 0);
+    if z >= 1.0 { return 0.0; }
+    let uv = p.xy / vec2f(textureDimensions(nearest_depth));
+    let h = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
+    return length(h.xyz / h.w - camera.position.xyz);
+}

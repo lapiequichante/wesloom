@@ -1,0 +1,168 @@
+// Original front/back optical composition, far pairs before near pairs (ADR 0068).
+// There is no depth-field search. Both reprojections have fixed, small work.
+import package::wxsl::bindings::{camera, scene, environment_lut_sampler};
+
+@group(3) @binding(0) var background: texture_2d<f32>;
+@group(3) @binding(1) var background_depth: texture_2d<f32>;
+@group(3) @binding(2) var opaque_depth: texture_depth_2d;
+@group(3) @binding(3) var environment: texture_cube<f32>;
+@group(3) @binding(4) var normal_layers: texture_2d_array<f32>;
+@group(3) @binding(5) var optical_layers: texture_2d_array<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+
+fn unproject(uv: vec2f, z: f32) -> vec3f {
+    let h = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
+    return h.xyz / h.w;
+}
+
+fn project(p: vec3f) -> vec3f {
+    let h = camera.view_proj * vec4f(p, 1.0);
+    let ndc = h.xyz / h.w;
+    return vec3f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, ndc.z);
+}
+
+fn on_screen(uv: vec2f) -> bool {
+    return all(uv >= vec2f(0.0)) && all(uv < vec2f(1.0));
+}
+
+fn sky(ray: vec3f) -> vec3f {
+    return textureSampleLevel(environment, environment_lut_sampler, ray, 0.0).rgb * scene.environment_scale * scene.exposure;
+}
+
+// Interpolate normals/depth only inside a covered, consistently oriented quad.
+fn surface(layer: i32, uv: vec2f) -> vec4f {
+    let size = vec2f(textureDimensions(normal_layers));
+    let p = uv * size - 0.5;
+    let pixel = vec2i(floor(p));
+    let a = textureLoad(normal_layers, pixel, layer, 0);
+    let b = textureLoad(normal_layers, pixel + vec2i(1, 0), layer, 0);
+    let c = textureLoad(normal_layers, pixel + vec2i(0, 1), layer, 0);
+    let d = textureLoad(normal_layers, pixel + vec2i(1, 1), layer, 0);
+    if min(min(dot(a.xyz, a.xyz), dot(b.xyz, b.xyz)), min(dot(c.xyz, c.xyz), dot(d.xyz, d.xyz))) < 0.5
+        || min(min(dot(a.xyz, b.xyz), dot(a.xyz, c.xyz)), dot(a.xyz, d.xyz)) < 0.8 {
+        return textureLoad(normal_layers, vec2i(uv * size), layer, 0);
+    }
+    let f = fract(p);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+fn fresnel(eta_i: f32, eta_t: f32, cosine: f32) -> f32 {
+    let ci = clamp(cosine, 0.0, 1.0);
+    let eta = eta_i / eta_t;
+    let k = 1.0 - eta * eta * (1.0 - ci * ci);
+    if k <= 0.0 { return 1.0; }
+    let ct = sqrt(k);
+    let rs = (eta_i * ci - eta_t * ct) / max(eta_i * ci + eta_t * ct, 0.000001);
+    let rp = (eta_t * ci - eta_i * ct) / max(eta_t * ci + eta_i * ct, 0.000001);
+    return clamp(0.5 * (rs * rs + rp * rp), 0.0, 1.0);
+}
+
+struct ExitSurface {
+    position: vec3f,
+    normal: vec3f,
+    distance: f32,
+}
+
+// Shared by the screen-space composition and the local-probe gallery variant.
+fn optical_exit(uv: vec2f, front: vec4f, back: vec4f, internal: vec3f, incident: vec3f, layer: i32) -> ExitSurface {
+    let start = unproject(uv, front.w);
+    var exit_point = unproject(uv, back.w);
+    var nb = normalize(back.xyz);
+    let chord = length(exit_point - start);
+    var distance = chord / max(dot(internal, incident), 0.2);
+    for (var refine = 0; refine < 2; refine += 1) {
+        let denominator = dot(internal, nb);
+        if denominator > 0.02 {
+            distance = clamp(dot(exit_point - start, nb) / denominator, 0.0, chord * 4.0);
+        }
+        let candidate = start + internal * distance;
+        let exit_uv = project(candidate).xy;
+        if !on_screen(exit_uv) { break; }
+        let sample = surface(layer + 1, exit_uv);
+        if dot(sample.xyz, sample.xyz) < 0.5 || sample.w <= front.w { break; }
+        exit_point = unproject(exit_uv, sample.w);
+        nb = normalize(sample.xyz);
+    }
+    return ExitSurface(start + internal * distance, nb, distance);
+}
+
+@fragment
+fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(p.xy);
+    let size = vec2f(textureDimensions(normal_layers));
+    let uv = p.xy / size;
+    let original = textureLoad(background, pixel, 0);
+    let layer = i32(params.layer);
+    let front = textureLoad(normal_layers, pixel, layer, 0);
+    let material = textureLoad(optical_layers, pixel, layer, 0);
+    if dot(front.xyz, front.xyz) < 0.5 || material.w <= 0.0
+        || front.w >= textureLoad(opaque_depth, pixel, 0) {
+        return original;
+    }
+    let start = unproject(uv, front.w);
+    let incident = normalize(start - camera.position.xyz);
+    let nf = normalize(front.xyz);
+    let ior = abs(material.w);
+    let back = textureLoad(normal_layers, pixel, layer + 1, 0);
+    var exit_point = start;
+    var nb = -nf;
+    var thickness = 0.0;
+    let paired = dot(back.xyz, back.xyz) > 0.5 && back.w > front.w;
+    if paired {
+        exit_point = unproject(uv, back.w);
+        nb = normalize(back.xyz);
+        thickness = length(exit_point - start);
+    }
+    // A neutral IOR is an exact screen-space identity, even after another
+    // transparent has already modified the background.
+    if ior <= 1.0001 {
+        let attenuation = pow(max(material.rgb, vec3f(0.0001)), vec3f(thickness));
+        return vec4f(original.rgb * attenuation, 1.0);
+    }
+    let internal = refract(incident, nf, 1.0 / ior);
+    let entry_f = fresnel(1.0, ior, -dot(incident, nf));
+    let entry_light = sky(reflect(incident, nf));
+    if !paired {
+        return vec4f(entry_light * entry_f + original.rgb * (1.0 - entry_f), 1.0);
+    }
+    // Local exit plane, followed by two reprojections onto the captured
+    // back surface. The bound prevents a grazing plane from inventing an
+    // arbitrarily thick slab; missing texels retain the visible camera chord.
+    let exit = optical_exit(uv, front, back, internal, incident, layer);
+    exit_point = exit.position;
+    nb = exit.normal;
+    thickness = exit.distance;
+    let attenuation = pow(max(material.rgb, vec3f(0.0001)), vec3f(thickness));
+    let exit_f = fresnel(ior, 1.0, dot(internal, nb));
+    let outgoing = refract(internal, -nb, ior);
+    let exit_light = sky(reflect(internal, -nb));
+    var behind = exit_light;
+    if dot(outgoing, outgoing) > 0.5 {
+        // Read the depth of the *already composed* scene, not just opaque
+        // depth. This lets the near object warp the farther glass as well.
+        var sample_uv = uv;
+        for (var refine = 0; refine < 2; refine += 1) {
+            if !on_screen(sample_uv) { break; }
+            let z = textureLoad(background_depth, vec2i(sample_uv * size), 0).r;
+            var length_to_background = 40.0;
+            if z < 1.0 {
+                length_to_background = length(unproject(sample_uv, z) - exit_point);
+            }
+            sample_uv = project(exit_point + outgoing * length_to_background).xy;
+        }
+        behind = sky(outgoing);
+        if on_screen(sample_uv) {
+            let z = textureLoad(background_depth, vec2i(sample_uv * size), 0).r;
+            if z < 1.0 && z > project(exit_point).z - 0.000001 {
+                behind = textureSampleLevel(background, environment_lut_sampler, sample_uv, 0.0).rgb;
+            }
+        }
+    }
+    let transmitted = behind * (1.0 - exit_f) + exit_light * exit_f;
+    let color = entry_light * entry_f + transmitted * attenuation * (1.0 - entry_f);
+    return vec4f(color, 1.0);
+}
