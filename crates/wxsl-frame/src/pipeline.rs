@@ -319,7 +319,7 @@ fn everything() -> DrawSource {
 /// casting this frame. A pass list is built once and scheduled against
 /// every frame after it, and which lights cast shadows is the
 /// *environment*'s business and changes whenever the application says so.
-/// So the shape is fixed at [`abi::MAX_LIGHTS`] and a slot whose light
+/// So the shape is fixed at [`abi::MAX_SHADOW_TILES`] and a slot whose light
 /// casts nothing is cleared and left alone, which reads as "fully lit" —
 /// the same answer, for the cost of a clear.
 ///
@@ -347,23 +347,23 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
             .with_usage(TextureUsages::TEXTURE_BINDING)
             .persistent(0),
     );
-    for light in 0..abi::MAX_LIGHTS as u32 {
-        let tile = abi::shadow_tile(light);
+    for slot in 0..abi::MAX_SHADOW_TILES as u32 {
+        let tile = abi::shadow_tile(slot);
         // The first pass clears the whole atlas on its way in; the rest
         // load, because their tile is the only part they may touch and
         // the earlier passes' tiles must survive them.
-        let depth = if light == 0 {
+        let depth = if slot == 0 {
             DepthAttachment::clear(maps, 1.0)
         } else {
             DepthAttachment::load(maps)
         };
         graph.pass(
             PassDesc::geometry(
-                format!("shadow {light}"),
+                format!("shadow {slot}"),
                 everything(),
                 MaterialStage::SHADOW,
             )
-            .with_view(PassView::Light { index: light })
+            .with_view(PassView::Shadow { tile: slot })
             .with_depth(depth)
             .with_viewport(ViewportRect::square(tile.x, tile.y, tile.edge))
             .with_state(PassState::OPAQUE.with_cull_mode(None)),
@@ -536,9 +536,9 @@ mod tests {
         // A shadow pass per light slot comes first; the two that make this
         // pipeline what it is follow, and then the display transform every
         // stock chain ends in (ADR 0039).
-        assert_eq!(graph.passes().len(), abi::MAX_LIGHTS + 3);
+        assert_eq!(graph.passes().len(), abi::MAX_SHADOW_TILES + 3);
 
-        let prepass = &graph.passes()[abi::MAX_LIGHTS];
+        let prepass = &graph.passes()[abi::MAX_SHADOW_TILES];
         assert!(matches!(
             prepass.kind,
             PassKind::Geometry {
@@ -552,7 +552,7 @@ mod tests {
         assert!(!MaterialStage::DEPTH_ONLY.needs_surface());
         assert!(prepass.state.depth_write);
 
-        let shading = &graph.passes()[abi::MAX_LIGHTS + 1];
+        let shading = &graph.passes()[abi::MAX_SHADOW_TILES + 1];
         assert!(matches!(
             shading.kind,
             PassKind::Geometry {
@@ -568,7 +568,7 @@ mod tests {
         // target rather than the frame's; the tonemap pass is what the
         // frame's target sees.
         assert_ne!(shading.color[0].resource, RenderGraph::TARGET);
-        let tonemap = &graph.passes()[abi::MAX_LIGHTS + 2];
+        let tonemap = &graph.passes()[abi::MAX_SHADOW_TILES + 2];
         assert!(matches!(
             &tonemap.kind,
             PassKind::Screen { effect } if effect == "wxsl.tonemap"
@@ -582,7 +582,7 @@ mod tests {
         let schedule = graph.schedule().expect("the forward pass list schedules");
         assert_eq!(
             schedule.order(),
-            (0..abi::MAX_LIGHTS + 3).collect::<Vec<_>>()
+            (0..abi::MAX_SHADOW_TILES + 3).collect::<Vec<_>>()
         );
         // The shadow maps, the depth buffer and the chain's colour target:
         // three textures, and the shadow maps are never handed to anything
@@ -632,10 +632,10 @@ mod tests {
                     )
                 })
                 .collect();
-            assert_eq!(shadow.len(), abi::MAX_LIGHTS, "{pipeline}");
+            assert_eq!(shadow.len(), abi::MAX_SHADOW_TILES, "{pipeline}");
             for (index, pass) in shadow.iter().enumerate() {
                 let index = index as u32;
-                assert_eq!(pass.view, PassView::Light { index });
+                assert_eq!(pass.view, PassView::Shadow { tile: index });
                 let depth = pass.depth.expect("a shadow pass writes depth");
                 assert_eq!(depth.resource, maps);
                 assert_eq!(depth.layer, 0, "the atlas is one 2D texture");
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn the_deferred_pipeline_is_a_geometry_pass_and_a_screen_pass() {
         let graph = deferred_graph(config(), &default_lighting());
-        let material = abi::MAX_LIGHTS;
+        let material = abi::MAX_SHADOW_TILES;
         let lighting = material + 1;
         let tonemap = lighting + 1;
         assert_eq!(graph.passes().len(), tonemap + 1);

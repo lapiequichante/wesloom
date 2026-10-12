@@ -99,12 +99,41 @@ pub fn structures() -> Vec<Structure> {
                 field("kind", "kind", F32),
                 field("color", "color", Vector(3)),
                 field("intensity", "intensity", F32),
-                field("shadow_view_proj", "shadow_view_proj", Matrix),
+                // Where this light's shadow tiles live in the scene
+                // uniform's tile table: a run of `tile_count` entries
+                // starting at `tile_first` — one per cascade, six per
+                // point light, and zero meaning it casts none. The maps
+                // themselves are per tile, in `ShadowTileUniform` below;
+                // a light no longer names a matrix or a rect of its own.
                 field("shadow_normal_bias", "shadow_normal_bias", F32),
-                // The bias rides the vec4's alignment gap, so the rect is
-                // 16-aligned and the light stays 128 bytes.
+                field("tile_first", "tile_first", U32),
+                field("tile_count", "tile_count", U32),
+                field("_padding", "_pad0", F32),
+                field("area_u", "area_u", Vector(3)),
+                field("_padding1", "_pad1", F32),
+                field("area_v", "area_v", Vector(3)),
+                field("_padding2", "_pad2", F32),
+                field("spot_direction", "spot_direction", Vector(3)),
+                field("spot_outer_cos", "spot_outer_cos", F32),
+                field("spot_inner_cos", "spot_inner_cos", F32),
+                field("cookie_layer", "cookie_layer", U32),
+                field("_padding3", "_pad3", Vector(2)),
+            ],
+        },
+        Structure {
+            name: "ShadowTileUniform",
+            shader_name: "ShadowTile",
+            vertex: false,
+            storage: false,
+            fields: vec![
+                field("rect", "rect", Vector(4)),
+                field("view_proj", "view_proj", Matrix),
+                // How far from the camera this tile's coverage reaches —
+                // the split that sends a fragment to it. A cascade's far
+                // distance; zero on every tile that is not a cascade
+                // (single boxes and cube faces need no selection).
+                field("split", "split", F32),
                 field("_padding", "_pad0", Vector(2)),
-                field("shadow_rect", "shadow_rect", Vector(4)),
             ],
         },
         Structure {
@@ -114,6 +143,11 @@ pub fn structures() -> Vec<Structure> {
             storage: false,
             fields: vec![
                 field("lights", "lights", Array("LightUniform", abi::MAX_LIGHTS)),
+                field(
+                    "shadow_tiles",
+                    "shadow_tiles",
+                    Array("ShadowTileUniform", abi::MAX_SHADOW_TILES),
+                ),
                 field("ambient_sky", "ambient_sky", Vector(3)),
                 field("environment_enabled", "environment_enabled", F32),
                 field("ambient_ground", "ambient_ground", Vector(3)),
@@ -440,6 +474,7 @@ pub fn c_header() -> String {
         ("BINDING_SHADOW_MAPS", abi::BINDING_SHADOW_MAPS),
         ("BINDING_SHADOW_SAMPLER", abi::BINDING_SHADOW_SAMPLER),
         ("BINDING_ENVIRONMENT_LUT", abi::BINDING_ENVIRONMENT_LUT),
+        ("BINDING_LIGHT_COOKIES", abi::BINDING_LIGHT_COOKIES),
         (
             "BINDING_ENVIRONMENT_DIFFUSE",
             abi::BINDING_ENVIRONMENT_DIFFUSE,
@@ -484,7 +519,8 @@ pub fn schema_id() -> u64 {
             abi::BINDING_ENVIRONMENT_SAMPLER,
             abi::BINDING_PREVIOUS_INSTANCES,
             abi::BINDING_ENVIRONMENT_DIFFUSE,
-            abi::BINDING_ENVIRONMENT_SPECULAR
+            abi::BINDING_ENVIRONMENT_SPECULAR,
+            abi::BINDING_LIGHT_COOKIES
         ]
     )
     .unwrap();
@@ -527,6 +563,7 @@ pub fn shader_template(name: &str, source: &str) -> String {
         "bindings" => &[
             "CameraUniform",
             "LightUniform",
+            "ShadowTileUniform",
             "SceneUniform",
             "InstanceTransform",
         ],
@@ -547,8 +584,9 @@ mod tests {
         let all = structures();
         for (name, size) in [
             ("CameraUniform", 224),
-            ("LightUniform", 128),
-            ("SceneUniform", 560),
+            ("LightUniform", 112),
+            ("ShadowTileUniform", 96),
+            ("SceneUniform", 16 * 112 + 112 * 96 + 48),
             ("InstanceTransform", 128),
             ("Vertex", 48),
             ("UiInstance", 68),
@@ -563,6 +601,14 @@ mod tests {
             );
         }
         assert_eq!(all[0].offsets(), vec![0, 64, 128, 140, 144, 208, 220]);
-        assert_eq!(all[4].offsets(), vec![0, 12, 24, 40]);
+        // The light is three vec3+scalar pairs: where it is or points, its
+        // colour, and its shadow hand-off — bias, then the run of tiles in
+        // the scene uniform's table.
+        assert_eq!(
+            all[1].offsets(),
+            vec![0, 12, 16, 28, 32, 36, 40, 44, 48, 60, 64, 76, 80, 92, 96, 100, 104]
+        );
+        assert_eq!(all[2].offsets(), vec![0, 16, 80, 88]);
+        assert_eq!(all[5].offsets(), vec![0, 12, 24, 40]);
     }
 }

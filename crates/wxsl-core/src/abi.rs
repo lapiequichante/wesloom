@@ -523,6 +523,8 @@ pub const BINDING_ENVIRONMENT_SAMPLER: u32 = 7;
 pub const BINDING_ENVIRONMENT_DIFFUSE: u32 = 9;
 /// GGX radiance, with roughness selecting its mip level (ADR 0063).
 pub const BINDING_ENVIRONMENT_SPECULAR: u32 = 10;
+/// Projected RGB/alpha spotlight masks, as a host-owned 2D-array texture.
+pub const BINDING_LIGHT_COOKIES: u32 = 11;
 
 /// [`GROUP_FRAME`] binding of the instance transforms as they were *last
 /// frame* — the array the velocity stage's previous-frame transform reads,
@@ -543,31 +545,44 @@ pub const BINDING_PREVIOUS_INSTANCES: u32 = 8;
 /// dispatch covers exactly this many texels.
 pub const ENVIRONMENT_LUT_SIZE: u32 = 64;
 
-/// How many lights the scene uniform carries, and therefore how many
-/// slices the shadow map array has.
+/// How many lights the scene uniform carries.
 ///
 /// Fixed rather than a macro variable: it is the length of an array in a
 /// host-shared buffer, so it cannot vary per shader variant without the
 /// Rust and WXSL halves disagreeing about the layout. Must match
-/// `WXSL_MAX_LIGHTS` in `shaders/wxsl/bindings.wxsl`.
-pub const MAX_LIGHTS: usize = 4;
+/// `WXSL_MAX_LIGHTS` in `shaders/wxsl/bindings.wxsl`. The generated light
+/// loop runs to the frame's `light_count`, not to this — the constant is
+/// the buffer's stride, not a per-fragment cost.
+pub const MAX_LIGHTS: usize = 16;
 
 /// Edge length in texels of the shadow atlas.
 ///
-/// One depth texture for every light's shadow map ([`BINDING_SHADOW_MAPS`]),
-/// one tile per light slot, packed by [`shadow_tile`]. The tile a slot gets
-/// scales down with the index — the first lights in the list are the ones
-/// an application lights most — which is the per-light resolution: a
-/// shadow wants more texels the more important its light is.
+/// One depth texture for every shadow tile ([`BINDING_SHADOW_MAPS`]), one
+/// tile per slot, packed by [`shadow_tile`]. The tile a slot gets scales
+/// down with the index — the first tiles in the frame are the ones closest
+/// to the viewer (a key light's near cascades, a cube map's first faces) —
+/// which is the per-light resolution: a shadow wants more texels the more
+/// important its slice of the scene is.
 pub const SHADOW_ATLAS_SIZE: u32 = 2048;
 
-/// Where light `index`'s shadow map lives in the atlas.
+/// How many atlas slots the frame group's shadow-tile table carries.
+///
+/// A light takes as many tiles as its shadow kind needs — one per cascade,
+/// six per point light, 96 per rectangle — so the tile count is a budget over *slices*, not
+/// over lights: one shadow-casting point light spends six of these,
+/// a four-cascade sun spends four, a plain shadowed directional one. Tiles
+/// are handed out in light order; a light whose slices do not fit casts
+/// none rather than a partial one. One per light *slot* is the floor that
+/// keeps [`MAX_LIGHTS`] plain directionals fittable.
+pub const MAX_SHADOW_TILES: usize = 112;
+
+/// Where shadow tile `index` lives in the atlas.
 ///
 /// A tile is square, its edge a power of two at most [`SHADOW_ATLAS_SIZE`].
 /// The table is ABI — the pipeline's shadow passes render into the rect,
-/// the light uniform carries it normalized, and `shadow.wxsl` samples
-/// inside it — so a re-packing is a breaking layout change, exactly like
-/// any other edit to the frame group.
+/// the scene uniform carries it normalized per tile, and `shadow.wxsl`
+/// samples inside it — so a re-packing is a breaking layout change,
+/// exactly like any other edit to the frame group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShadowTile {
     /// Texel offset of the tile's top-left corner in the atlas.
@@ -578,22 +593,27 @@ pub struct ShadowTile {
     pub edge: u32,
 }
 
-/// The atlas tile for light slot `index`.
+/// The atlas tile for shadow slot `index`.
 ///
 /// Three shelves: the two key slots at 1024², the next four at 512², the
-/// remaining ten at 256² — all of it inside one [`SHADOW_ATLAS_SIZE`]²
-/// texture, the same memory the old fixed-resolution array spent on four
-/// slots. A slot below [`MAX_LIGHTS`] always has a tile; a light that
-/// casts no shadow leaves it unused.
+/// next ten at 256², then ninety-six at 64² — all inside one [`SHADOW_ATLAS_SIZE`]²
+/// texture. A slot below [`MAX_SHADOW_TILES`] always has a tile; a tile
+/// this frame left unclaimed sits unused.
 pub const fn shadow_tile(index: u32) -> ShadowTile {
     // Row 0: the two 1024² tiles. Row 1: four 512². Rows 2 and 3: the
-    // remaining ten 256², eight across and two over.
+    // remaining ten 256², eight across and two over. The unused portion
+    // of the final shelf holds ninety-six 64² tiles.
     let (x, y, edge) = match index {
         0 => (0, 0, 1024),
         1 => (1024, 0, 1024),
         2..=5 => ((index - 2) * 512, 1024, 512),
         6..=13 => ((index - 6) * 256, 1536, 256),
-        _ => ((index - 14) * 256, 1792, 256),
+        14..=15 => ((index - 14) * 256, 1792, 256),
+        _ => (
+            512 + ((index - 16) % 24) * 64,
+            1792 + ((index - 16) / 24) * 64,
+            64,
+        ),
     };
     ShadowTile { x, y, edge }
 }
@@ -2073,9 +2093,9 @@ mod tests {
     }
 
     #[test]
-    fn every_light_slot_has_a_tile_inside_the_atlas_and_no_two_share_one() {
+    fn every_shadow_slot_has_a_tile_inside_the_atlas_and_no_two_share_one() {
         let mut claimed = vec![false; (SHADOW_ATLAS_SIZE * SHADOW_ATLAS_SIZE) as usize];
-        for index in 0..MAX_LIGHTS as u32 {
+        for index in 0..MAX_SHADOW_TILES as u32 {
             let tile = shadow_tile(index);
             assert!(tile.edge.is_power_of_two(), "tile {index}: {tile:?}");
             assert!(tile.edge <= SHADOW_ATLAS_SIZE);
@@ -2083,7 +2103,7 @@ mod tests {
                 tile.x + tile.edge <= SHADOW_ATLAS_SIZE && tile.y + tile.edge <= SHADOW_ATLAS_SIZE,
                 "tile {index} leaves the atlas: {tile:?}"
             );
-            // Edge resolution falls as the slot rises: the key lights get
+            // Edge resolution falls as the slot rises: the first slots get
             // the most texels, which is the point of the ladder.
             if index > 0 {
                 assert!(shadow_tile(index - 1).edge >= tile.edge);

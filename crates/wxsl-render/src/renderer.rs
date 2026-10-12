@@ -813,6 +813,13 @@ impl Renderer {
         self.pipelines.len()
     }
 
+    /// Replace the host-owned spotlight cookie array without recompiling.
+    /// Use a filterable RGBA D2Array view; white is open, black masked,
+    /// RGB tints the emitted light and alpha attenuates it (ADR 0073).
+    pub fn set_light_cookies(&mut self, device: &wgpu::Device, view: Option<&wgpu::TextureView>) {
+        self.bindings.set_light_cookies(device, view);
+    }
+
     /// The frame group's buffers, for a caller that wants to know what a
     /// frame cost: how many instance row shapes it carried, and how many
     /// rows fit before the next reallocation.
@@ -1222,14 +1229,14 @@ impl Renderer {
             }
             match &pass.kind {
                 PassKind::Geometry { source, stage } => {
-                    // A shadow pass built for a light that is not casting
-                    // this frame draws nothing at all. Its slice is still
+                    // A shadow pass built for a tile no light claimed this
+                    // frame draws nothing at all. Its tile is still
                     // cleared to the far plane, which reads as "lit" —
                     // the same answer as an empty shadow map, for the cost
                     // of a clear rather than of a pass list rebuilt every
                     // time the application moves a light.
-                    if let PassView::Light { index: light } = pass.view {
-                        if !environment.light_casts_shadow(light) {
+                    if let PassView::Shadow { tile } = pass.view {
+                        if !environment.tile_casts_shadow(tile) {
                             plan.geometry.insert(index, Vec::new());
                             continue;
                         }

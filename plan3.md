@@ -554,36 +554,35 @@ the demo runs the single-model set — the shape the budget allows).
 
 ### N7 — Lighting at scale
 
-**In progress (2026-10-10):** the depth atlas and variable slot resolutions
-landed in both wgpu and Dawn (ADR 0066), with scheduler rectangle checks,
-tile-isolated PCF and a gallery ground-shadow regression on both paths.
-The gallery has per-demo orbit/pan/zoom/reset controls and temporal camera
-history. Camera-following cascades, six-face point shadows and compute light
-lists remain open; the current light budget is still four.
+**In progress (2026-10-11):** shadow quality and kinds are implemented.
+The shared frame carries sixteen lights and 112 shadow tiles in a
+2048² atlas. The original sixteen rectangles are preserved; ninety-six 64²
+tiles occupy the remaining space (ADRs 0066, 0071, 0072).
 
-The cluster of debts plan.md carried under M5's "still owed" and its
-hard-parts table, one item because they share the frame group's tightest
-corner:
+* Directional lights have an origin box or up to four camera-following
+  cascades, with texel snapping, complete frustum bounds, 10% blend bands
+  and receiver-plane PCF that does not increase the normal bias with distance.
+* Point lights cast six cube faces; face selection uses the biased receiver
+  position, avoiding lit gaps at face edges.
+* Rectangular area lights integrate one-sided emission and visibility with
+  sixteen quadrature points, each with six shadow views. This bounded approximation
+  occupies one light row and 96 tiles; large emitters can show separate lobes.
+* Spotlights have smooth inner/outer cones, one perspective shadow tile and
+  an optional projected RGBA cookie; the host owns the texture array (ADR 0073).
+* Gallery proofs: `shadow`, `cascade`, `point-shadow`, `area-shadow`, `spot-shadow`, `spot-cookie`, `sixteen`.
+  Orbit/pan/zoom/reset controls retain per-demo and temporal camera history.
+* Shared host layouts and offline exports carry computed data; regenerate the
+  C header and rebake bundles after the light stride/tile-budget changes.
 
-* **Shadow quality**: an atlas with per-light resolution (a shadow wants
-  more texels the closer its light is), instead of fixed-resolution
-  array slices — one differently-shaped binding plus a rect in the light.
-* **Shadow kinds**: cascades that follow the camera; point-light shadows
-  (six faces to a light — today a point light asking for shadows gets
-  none rather than a wrong one).
-* **Light count**: `MAX_LIGHTS = 4` — a light list built by a compute
-  pass, or clustered lighting. plan.md's own note stands: the render
-  graph makes this additive (a compute pass and a bind group, not a
-  redesign), and the policies make the build pass `per frame` for free.
-* The demo's missing ground plane — the reason `pbr_cube` shows no
-  shadow at all — is a one-line fix that rides along.
+**Still open:** compute-built or clustered light lists. Sixteen is a fixed
+uniform budget, not a scalable GPU light-list implementation. The original
+visible acceptance cases are present, but N7 remains in progress until this
+remaining lighting-scale work is decided and implemented. Increasing area
+integration quality beyond sixteen points is a separate quality/performance task.
 
-* Cost: large in total, but each of the four is contained; the atlas is
-  the one that reshapes a binding.
-* Done when: the gallery shows a shadowed ground plane, a cascade
-  following the camera, and sixteen lights.
-* ADR: one per landing piece (atlas; cascades; light lists) — they are
-  three decisions wearing one trench coat.
+Validation: core/frame layout and scheduling tests, shader corpus compilation,
+GPU shadow tests (including penumbra and emitter sidedness), gallery renders,
+and C ABI/Dawn smoke tests. A missing GPU adapter is a skip, not validation.
 
 ### M11 — The code editor
 

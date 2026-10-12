@@ -2089,25 +2089,26 @@ impl<'a> Compiler<'a> {
             .expect("a validated document's shadow pass names declared shadow maps");
         let tags = self.tags(node)?;
         let name = self.label(node);
-        // One pass per light slot, always — not one per light that happens
-        // to be casting this frame. Which lights cast is the environment's
-        // business and changes whenever the application says so. The first
-        // pass clears the whole atlas on its way in; the rest load, because
-        // the tile is the only part of the shared target they may touch.
-        for light in 0..abi::MAX_LIGHTS as u32 {
-            let tile = abi::shadow_tile(light);
-            let depth = if light == 0 {
+        // One pass per atlas tile, always — not one per tile a light
+        // happens to claim this frame. Which lights cast, and how many
+        // tiles each takes, is the environment's business and changes
+        // whenever the application says so. The first pass clears the
+        // whole atlas on its way in; the rest load, because the tile is
+        // the only part of the shared target they may touch.
+        for slot in 0..abi::MAX_SHADOW_TILES as u32 {
+            let tile = abi::shadow_tile(slot);
+            let depth = if slot == 0 {
                 DepthAttachment::clear(maps, 1.0)
             } else {
                 DepthAttachment::load(maps)
             };
             self.graph.pass(
                 PassDesc::geometry(
-                    format!("{name} {light}"),
+                    format!("{name} {slot}"),
                     DrawSource::Scene(tags.clone()),
                     MaterialStage::SHADOW,
                 )
-                .with_view(PassView::Light { index: light })
+                .with_view(PassView::Shadow { tile: slot })
                 .with_depth(depth)
                 .with_viewport(ViewportRect::square(tile.x, tile.y, tile.edge))
                 // Two-sided: the usual cases are an alpha-tested leaf and a
@@ -3589,9 +3590,9 @@ mod tests {
             let bloom = position("bloom");
 
             // Shadow passes, the material pass, then the two effects.
-            assert_eq!(compiled.passes().len(), abi::MAX_LIGHTS + 3);
+            assert_eq!(compiled.passes().len(), abi::MAX_SHADOW_TILES + 3);
             assert_eq!(
-                &schedule.order()[abi::MAX_LIGHTS..],
+                &schedule.order()[abi::MAX_SHADOW_TILES..],
                 &[material, lighting, bloom],
                 "the chain orders by what it reads and writes"
             );

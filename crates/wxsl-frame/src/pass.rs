@@ -1245,14 +1245,15 @@ impl Persistence {
 /// Where a pass renders *from*.
 ///
 /// The frame supplies a small list of points of view — the camera, and one
-/// per light that casts a shadow — and a pass names which of them its
-/// vertex stage transforms against. Nothing in a shader changes: `camera`
-/// in the frame group is whichever view this pass named, so
-/// `transform_vertex` is the same function in a shadow pass as in the
-/// forward one.
+/// per shadow atlas tile — and a pass names which of them its vertex stage
+/// transforms against. Nothing in a shader changes: `camera` in the frame
+/// group is whichever view this pass named, so `transform_vertex` is the
+/// same function in a shadow pass as in the forward one.
 ///
-/// A pass renders from a view rather than carrying a matrix, because the
-/// matrices are the *environment*'s and a pass list is built once and
+/// The unit is the *tile*, not the light: a directional light's cascades
+/// and a point light's six faces each render from a point of view of their
+/// own. A pass renders from a view rather than carrying a matrix, because
+/// the matrices are the *environment*'s and a pass list is built once and
 /// scheduled against many frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1260,14 +1261,14 @@ pub enum PassView {
     /// The frame's camera.
     #[default]
     Camera,
-    /// The point of view light `index` casts its shadow from.
+    /// The point of view atlas tile `tile` renders from.
     ///
-    /// A light that casts none still has a view slot — an identity matrix
-    /// nothing draws against — so that turning shadows off for one light
-    /// does not renumber the others.
-    Light {
-        /// Index into the frame's lights, below [`wxsl_core::abi::MAX_LIGHTS`].
-        index: u32,
+    /// A tile no light claimed still has a view slot — the camera's own
+    /// matrix, nothing draws against — so that turning shadows off for a
+    /// light does not renumber the tiles after it.
+    Shadow {
+        /// Atlas slot, below [`wxsl_core::abi::MAX_SHADOW_TILES`].
+        tile: u32,
     },
 }
 
@@ -1279,12 +1280,12 @@ impl PassView {
     pub fn slot(self) -> usize {
         match self {
             PassView::Camera => 0,
-            PassView::Light { index } => 1 + index as usize,
+            PassView::Shadow { tile } => 1 + tile as usize,
         }
     }
 
-    /// How many view slots a frame needs: the camera plus every light.
-    pub const COUNT: usize = 1 + abi::MAX_LIGHTS;
+    /// How many view slots a frame needs: the camera plus every tile.
+    pub const COUNT: usize = 1 + abi::MAX_SHADOW_TILES;
 }
 
 #[cfg(test)]

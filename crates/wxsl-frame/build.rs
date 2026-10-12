@@ -5,6 +5,7 @@ fn main() {
         wxsl_core::host::rust_source(&[
             "CameraUniform",
             "LightUniform",
+            "ShadowTileUniform",
             "SceneUniform",
             "InstanceTransform",
         ]),

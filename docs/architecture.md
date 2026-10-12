@@ -738,20 +738,49 @@ See [ADR 0060](adr/0060-integrate-single-scattering-as-a-pure-sky-node.md).
 
 ## How a shadow gets there
 
-One depth 2D atlas, one resolution-ranked tile per light, in the **frame group**
-beside the lights themselves — so the generated shading function has one
-`shadow_factor` and the forward stage and the deferred lighting pass both
-inherit it.
+One 2048² depth atlas and a shared table of 112 shadow tiles live in
+the **frame group** beside up to sixteen lights. The first two tiles are
+1024², four are 512², ten are 256² and ninety-six are 64². Each light owns
+an indivisible run: one origin box or up to four directional cascades, six
+point-light cube faces, one perspective tile for a spotlight, or 96 faces
+for a rectangular emitter's sixteen samples.
+A whole run that cannot fit receives no shadows (ADRs 0066, 0071–0073).
 
-A pass renders from a **view**: `PassDesc::view` names the camera or a
-light, and the frame group's camera binding is addressed by a dynamic
-offset, so `camera.view_proj` in a shadow pass is the light's and
-`transform_vertex` never learns that shadows exist. Both stock pipelines
-declare one shadow pass per light slot up front; a slot whose light is
-not casting is drawn into by nothing. The first pass clears the whole atlas,
-and the others load it and restrict viewport/scissor to their own tiles.
-PCF taps clamp to tile texel centres (ADR 0066). Four lights remain the current
-budget; cascades, point-light faces and light lists are separate N7 work.
+A pass renders from a **view**: `PassDesc::view` selects the camera or a shadow
+tile, with a dynamic camera-binding offset. Both stock pipelines declare one
+pass per tile; unused slots draw nothing. The first clears the atlas and later
+passes load it with their own viewport/scissor. Matrices and rectangles belong
+to tiles; sampling and recording consume the same computed views.
+
+Camera-fitted cascades use view-depth splits, eight-corner bounds, snapped
+bounding spheres and 10% overlap/blending. Receiver-plane PCF avoids acne
+without increasing the normal offset as resolution falls. Point-light face
+selection uses the offset receiver position, avoiding gaps at cube edges.
+Atlas taps remain confined to the selected tile.
+
+`Light::rectangle(centre, half_u, half_v, colour, radiance)` defines a one-sided
+emitter: `cross(half_u, half_v)` is its emitting normal. The shader integrates
+sixteen Gauss quadrature samples with emitter cosine, area weights and inverse
+square falloff, evaluating the material BRDF and visibility for each sample
+on both paths. The gallery's `area-shadow` displays the emitter and its
+penumbrae. Receiver-plane PCF also corrects its perspective face comparisons
+without growing the normal offset. Sixteen samples are an approximation and can produce separate shadow
+lobes; this is neither LTC nor stochastic integration.
+
+`Light::spot(position, direction, inner, outer, colour, intensity)` defines
+an inverse-square cone, with half-angles in radians and direction away from
+the source. It casts one perspective shadow matching the outer angle.
+`with_cookie(layer)` selects a layer in a host-uploaded, filterable RGBA
+D2Array view supplied to `Renderer::set_light_cookies`: white is open, black
+masked, RGB tints the light and alpha attenuates it. UVs share the shadow's
+orientation but work without shadows too. Texture updates do not recompile.
+Dawn exposes `upload_light_cookies(width, height, layers, rgba)` for the same
+contract. Gallery demos `spot-shadow` and `spot-cookie` show the cone and a
+projected window mask (ADR 0073).
+
+N7's remaining scale work is compute-built/clustered light lists. The current
+sixteen-light uniform budget is fixed; atlas, cascades, cube shadows and
+rectangular sampled emission and textured spotlights are implemented. See `plan3.md` for status.
 
 The gallery's live cameras orbit with left drag, pan with right/middle drag,
 zoom with the wheel and reset with R. Each demo retains its own view; moving

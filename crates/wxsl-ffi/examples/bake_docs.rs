@@ -827,8 +827,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                             && (*stage != MaterialStage::SHADOW
                                 || native_materials[i.material].cast_shadow())
                             && match pass.view {
-                                wxsl_frame::pass::PassView::Light { index } => {
-                                    env.light_casts_shadow(index)
+                                wxsl_frame::pass::PassView::Shadow { tile } => {
+                                    env.tile_casts_shadow(tile)
                                 }
                                 _ => true,
                             }

@@ -30,23 +30,53 @@ typedef struct WxslLightUniform {
     float kind;
     float color[3];
     float intensity;
-    float shadow_view_proj[4][4];
     float shadow_normal_bias;
-    uint8_t _host_padding6[4];
-    float _padding[2];
-    float shadow_rect[4];
+    uint32_t tile_first;
+    uint32_t tile_count;
+    float _padding;
+    float area_u[3];
+    float _padding1;
+    float area_v[3];
+    float _padding2;
+    float spot_direction[3];
+    float spot_outer_cos;
+    float spot_inner_cos;
+    uint32_t cookie_layer;
+    float _padding3[2];
 } WxslLightUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslLightUniform) == 128, "LightUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslLightUniform) == 112, "LightUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, position_or_direction) == 0, "LightUniform.position_or_direction offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, kind) == 12, "LightUniform.kind offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, color) == 16, "LightUniform.color offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, intensity) == 28, "LightUniform.intensity offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_view_proj) == 32, "LightUniform.shadow_view_proj offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_normal_bias) == 96, "LightUniform.shadow_normal_bias offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding) == 104, "LightUniform._padding offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_rect) == 112, "LightUniform.shadow_rect offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_normal_bias) == 32, "LightUniform.shadow_normal_bias offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_first) == 36, "LightUniform.tile_first offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_count) == 40, "LightUniform.tile_count offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding) == 44, "LightUniform._padding offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_u) == 48, "LightUniform.area_u offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding1) == 60, "LightUniform._padding1 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_v) == 64, "LightUniform.area_v offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding2) == 76, "LightUniform._padding2 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_direction) == 80, "LightUniform.spot_direction offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_outer_cos) == 92, "LightUniform.spot_outer_cos offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_inner_cos) == 96, "LightUniform.spot_inner_cos offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, cookie_layer) == 100, "LightUniform.cookie_layer offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding3) == 104, "LightUniform._padding3 offset");
+typedef struct WxslShadowTileUniform {
+    float rect[4];
+    float view_proj[4][4];
+    float split;
+    uint8_t _host_padding3[4];
+    float _padding[2];
+} WxslShadowTileUniform;
+WXSL_LAYOUT_ASSERT(sizeof(WxslShadowTileUniform) == 96, "ShadowTileUniform size");
+WXSL_LAYOUT_ASSERT(offsetof(WxslShadowTileUniform, rect) == 0, "ShadowTileUniform.rect offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslShadowTileUniform, view_proj) == 16, "ShadowTileUniform.view_proj offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslShadowTileUniform, split) == 80, "ShadowTileUniform.split offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslShadowTileUniform, _padding) == 88, "ShadowTileUniform._padding offset");
 typedef struct WxslSceneUniform {
-    WxslLightUniform lights[4];
+    WxslLightUniform lights[16];
+    WxslShadowTileUniform shadow_tiles[112];
     float ambient_sky[3];
     float environment_enabled;
     float ambient_ground[3];
@@ -56,16 +86,17 @@ typedef struct WxslSceneUniform {
     float exposure;
     float previous_time;
 } WxslSceneUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 560, "SceneUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12592, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 512, "SceneUniform.ambient_sky offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_enabled) == 524, "SceneUniform.environment_enabled offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_ground) == 528, "SceneUniform.ambient_ground offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_scale) == 540, "SceneUniform.environment_scale offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 544, "SceneUniform.light_count offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 548, "SceneUniform.time offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 552, "SceneUniform.exposure offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 556, "SceneUniform.previous_time offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, shadow_tiles) == 1792, "SceneUniform.shadow_tiles offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 12544, "SceneUniform.ambient_sky offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_enabled) == 12556, "SceneUniform.environment_enabled offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_ground) == 12560, "SceneUniform.ambient_ground offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_scale) == 12572, "SceneUniform.environment_scale offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 12576, "SceneUniform.light_count offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 12580, "SceneUniform.time offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 12584, "SceneUniform.exposure offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 12588, "SceneUniform.previous_time offset");
 typedef struct WxslInstanceTransform {
     float model[4][4];
     float normal_matrix[4][4];
@@ -156,10 +187,11 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_SHADOW_MAPS 4u
 #define WXSL_BINDING_SHADOW_SAMPLER 5u
 #define WXSL_BINDING_ENVIRONMENT_LUT 6u
+#define WXSL_BINDING_LIGHT_COOKIES 11u
 #define WXSL_BINDING_ENVIRONMENT_DIFFUSE 9u
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "3740913208811954050"
+#define WXSL_HOST_LAYOUT_ID "8811270282758616560"
 #undef WXSL_LAYOUT_ASSERT
 #endif

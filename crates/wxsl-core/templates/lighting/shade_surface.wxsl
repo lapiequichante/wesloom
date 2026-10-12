@@ -9,20 +9,23 @@ fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
 ${EXTRA_DECL}    var lit = vec3f(0.0);
     let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
     for (var index = 0u; index < light_count; index = index + 1u) {
-        let light = sample_light(index, ctx.world_position);
-        // Declared unconditionally and overwritten under the flag,
-        // because a `let` inside an `@if` is removed along with it.
-        var shadow = 1.0;
-        @if(wxsl_receive_shadows)
-        shadow = ${SHADOW_FN}(
-            index,
-            ctx.world_position,
-            normal,
-            saturate(dot(normal, light.direction)),
-        );
-        lit = lit
-            + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS})
-            * shadow;
+        for (var sample = 0u; sample < light_sample_count(index); sample = sample + 1u) {
+            let light = sample_light_at(index, sample, ctx.world_position);
+            // Declared unconditionally and overwritten under the flag,
+            // because a `let` inside an `@if` is removed along with it.
+            var shadow = 1.0;
+            @if(wxsl_receive_shadows)
+            shadow = ${SHADOW_FN}(
+                index,
+                sample,
+                ctx.world_position,
+                normal,
+                saturate(dot(normal, light.direction)),
+            );
+            lit = lit
+                + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS})
+                * shadow;
+        }
     }
 
     // Ambient stands in for everything the light loop cannot see,

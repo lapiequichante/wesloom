@@ -40,9 +40,14 @@ nodes.
 - **Shadows** that follow what the graph did: a displacing material casts
   a displaced shadow and an alpha-tested one casts a perforated shadow,
   because the shadow pass compiles those parts of the graph and no
-  others. PCF over a per-light slice of a depth array, biased by normal
+  others. PCF over shared depth-atlas tiles, biased by normal
   offset, read from the same function in both render paths
   ([ADR 0026](docs/adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
+  N7 also provides camera-following cascades, six-face point shadows and
+  rectangular area lights with sixteen shadowed integration samples. The
+  gallery demos `cascade`, `point-shadow`, `area-shadow`, `spot-shadow`, `spot-cookie` and `sixteen`
+  show these features, including textured spotlight masks. Sixteen lights remain a fixed uniform budget;
+  compute/clustered light lists are still pending.
 - Materials that **declare what they require of their geometry** too: a
   per-vertex stream the mesh must carry — a second UV set, a vertex
   colour, a wind weight — or a per-instance value the draw supplies, read

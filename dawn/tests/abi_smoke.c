@@ -94,7 +94,21 @@ int main(int argc, char **argv) {
         expect(result, WXSL_STATUS_SUCCESS);
         REQUIRE(contains(api_wxsl_result_json(result), "\"schedule\""));
         REQUIRE(contains(api_wxsl_result_json(result), "\"allocations\""));
-        REQUIRE(contains(api_wxsl_result_json(result), "\"order\":[0,1,2,3,4,5,6]"));
+        {
+            char order[512] = "\"order\":[";
+            size_t used = strlen(order), pass;
+            const size_t count = sizeof(((WxslSceneUniform *)0)->shadow_tiles)
+                / sizeof(WxslShadowTileUniform) + 3;
+            for (pass = 0; pass < count; ++pass) {
+                int written = snprintf(order + used, sizeof(order) - used,
+                    "%s%zu", pass ? "," : "", pass);
+                REQUIRE(written > 0 && (size_t)written < sizeof(order) - used);
+                used += (size_t)written;
+            }
+            REQUIRE(used + 2 <= sizeof(order));
+            strcpy(order + used, "]");
+            REQUIRE(contains(api_wxsl_result_json(result), order));
+        }
         REQUIRE(contains(api_wxsl_result_json(result), "wxsl.tonemap"));
         api_wxsl_result_free(result);
     }

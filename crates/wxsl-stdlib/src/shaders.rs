@@ -383,9 +383,9 @@ mod tests {
             .collect();
         assert_eq!(
             frame,
-            vec![abi::GROUP_FRAME; 8],
+            vec![abi::GROUP_FRAME; 9],
             "camera, scene, object, the previous-frame object, and the \
-             environment-BRDF table, its sampler and two environment cubes (ADR 0063)"
+             environment-BRDF table, its sampler, two environment cubes and spotlight cookies (ADRs 0063, 0073)"
         );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its
@@ -399,6 +399,7 @@ mod tests {
         let source = module("package::wxsl::bindings").expect("bindings module");
         for (binding, declaration) in [
             (abi::BINDING_CAMERA, "var<uniform> camera"),
+            (abi::BINDING_LIGHT_COOKIES, "var light_cookies"),
             (abi::BINDING_SCENE, "var<uniform> scene"),
             (abi::BINDING_ENVIRONMENT_DIFFUSE, "var environment_diffuse"),
             (

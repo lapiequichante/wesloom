@@ -128,7 +128,11 @@ fn both_presets_export_the_actual_shared_plan_and_schedule() {
             payload["target"],
             serde_json::to_value(config.target).unwrap()
         );
-        assert_eq!(payload["graph"]["passes"].as_array().unwrap().len(), 7);
+        // Every shadow tile plus the pipeline's own three passes.
+        assert_eq!(
+            payload["graph"]["passes"].as_array().unwrap().len(),
+            wxsl::core::abi::MAX_SHADOW_TILES + 3
+        );
         assert!(payload["effects"]
             .as_array()
             .unwrap()

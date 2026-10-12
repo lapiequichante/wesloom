@@ -27,6 +27,9 @@ public:
   // Returns the radiance restoration scale, like wgpu's EnvironmentImage.
   float upload_environment_image(const std::string &label, uint32_t width, uint32_t height,
                                  const std::vector<float> &rgb);
+  // Linear RGBA cookie layers: RGB modulates light colour, alpha its intensity.
+  void upload_light_cookies(uint32_t width, uint32_t height, uint32_t layers,
+                            const std::vector<uint8_t> &rgba);
   void set_environment_scale(float scale);
   size_t pipeline_count() const;
   uint32_t width() const;

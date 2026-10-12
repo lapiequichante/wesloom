@@ -8,6 +8,10 @@
 // `position_or_direction`; a point light stores its world position there.
 const LIGHT_KIND_POINT: f32 = 0.0;
 const LIGHT_KIND_DIRECTIONAL: f32 = 1.0;
+const LIGHT_KIND_RECTANGLE: f32 = 2.0;
+const LIGHT_KIND_SPOT: f32 = 3.0;
+
+@group(0) @binding(11) var light_cookies: texture_2d_array<f32>;
 
 ${HOST_LAYOUTS}
 
@@ -129,11 +133,31 @@ struct LightSample {
     radiance: vec3f,
 }
 
-// Sample light `index` at `world_position`.
-//
-// Point lights use inverse-square falloff with a small epsilon so a light
-// sitting exactly on the surface cannot produce infinities.
+// Number of direct BRDF/visibility evaluations for this light.
+fn light_sample_count(index: u32) -> u32 {
+    return select(1u, 16u, scene.lights[index].kind == LIGHT_KIND_RECTANGLE);
+}
+
+// Keep these Gauss nodes in sync with Light::area_sample_positions.
+const AREA_NODES = array<f32, 4>(-0.8611363115940526, -0.3399810435848563,
+    0.3399810435848563, 0.8611363115940526);
+const AREA_WEIGHTS = array<f32, 4>(0.3478548451374539, 0.6521451548625461,
+    0.6521451548625461, 0.3478548451374539);
+fn light_sample_position(index: u32, sample: u32) -> vec3f {
+    let light = scene.lights[index];
+    if light.kind != LIGHT_KIND_RECTANGLE {
+        return light.position_or_direction;
+    }
+    let u = AREA_NODES[sample % 4u];
+    let v = AREA_NODES[sample / 4u];
+    return light.position_or_direction + light.area_u * u + light.area_v * v;
+}
+
 fn sample_light(index: u32, world_position: vec3f) -> LightSample {
+    return sample_light_at(index, 0u, world_position);
+}
+
+fn sample_light_at(index: u32, sample: u32, world_position: vec3f) -> LightSample {
     let light = scene.lights[index];
     var out: LightSample;
     if light.kind == LIGHT_KIND_DIRECTIONAL {
@@ -141,11 +165,37 @@ fn sample_light(index: u32, world_position: vec3f) -> LightSample {
         out.radiance = light.color * light.intensity;
         return out;
     }
-    // The light's position is absolute; `world_position` may not be.
-    let offset = light.position_or_direction - world_origin() - world_position;
+    let offset = light_sample_position(index, sample) - world_origin() - world_position;
     let distance_squared = max(dot(offset, offset), 1e-4);
     out.direction = offset / sqrt(distance_squared);
-    out.radiance = light.color * light.intensity / distance_squared;
+    var weight = 1.0;
+    if light.kind == LIGHT_KIND_RECTANGLE {
+        // Tensor-product Gauss weights integrate the [-1,1]² emitter.
+        let area_normal = cross(light.area_u, light.area_v);
+        weight = max(dot(area_normal, -out.direction), 0.0)
+            * AREA_WEIGHTS[sample % 4u] * AREA_WEIGHTS[sample / 4u];
+    }
+    var cookie = vec3f(1.0);
+    if light.kind == LIGHT_KIND_SPOT {
+        let forward = normalize(light.spot_direction);
+        let cone_cos = dot(forward, -out.direction);
+        weight = smoothstep(light.spot_outer_cos, light.spot_inner_cos, cone_cos);
+        if light.cookie_layer != 0xffffffffu {
+            if weight <= 0.0 || light.cookie_layer >= textureNumLayers(light_cookies) {
+                weight = 0.0;
+            } else {
+                let up = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
+                let right = normalize(cross(forward, up));
+                let vertical = cross(right, forward);
+                let tan_outer = sqrt(1.0 - light.spot_outer_cos * light.spot_outer_cos) / light.spot_outer_cos;
+                let uv = vec2f(dot(-out.direction, right), -dot(-out.direction, vertical))
+                    / (cone_cos * tan_outer) * 0.5 + vec2f(0.5);
+                let mask = textureSampleLevel(light_cookies, environment_lut_sampler, uv, i32(light.cookie_layer), 0.0);
+                cookie = mask.rgb * mask.a;
+            }
+        }
+    }
+    out.radiance = light.color * light.intensity * weight * cookie / distance_squared;
     return out;
 }
 

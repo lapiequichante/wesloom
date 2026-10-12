@@ -86,6 +86,11 @@ is signal, don't delete it.
 | [0069](0069-cache-local-colour-and-distance-probes-in-the-glass-demo.md) | Cache local colour and distance probes in the glass demo | Superseded by 0070 |
 | [0070](0070-render-local-probe-glass-as-opaque-surfaces.md) | Render local-probe glass as opaque surfaces | Accepted |
 
+| [0071](0071-fit-cascades-and-pack-point-shadow-faces.md) | Fit cascades and pack point-shadow faces into shared tile runs | Accepted |
+| [0072](0072-integrate-rectangular-area-lights-with-shadowed-quadrature.md) | Integrate rectangular area lights with shadowed quadrature | Accepted |
+
+| [0073](0073-project-spotlight-cookies-through-the-frame-group.md) | Project spotlight cookies through the frame group | Accepted |
+
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is
 warranted.

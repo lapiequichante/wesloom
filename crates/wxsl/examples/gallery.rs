@@ -487,6 +487,75 @@ fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "cascade",
+            blurb: "a sun split into four cascades fitted to the camera — near \
+                    shadows sharp, far ones coarse, and every box follows the \
+                    view (ADR 0071)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "point-shadow",
+            blurb: "a point light casting through all six cube faces — six atlas \
+                    tiles per light, the fragment picks its face by direction \
+                    (ADR 0071)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "area-shadow",
+            blurb: "a one-sided rectangular emitter with sixteen shadowed quadrature points — finite-area lighting and penumbrae (ADR 0072)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1, key_intensity: 42.0, features: &[], macros: &[],
+            model: None, sky: None,
+            params: &[], material: None, motion: None, warmup: 0,
+        },
+        Demo {
+            name: "spot-shadow", blurb: "a focused cone with soft angular falloff and one shadow tile (ADR 0073)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred), instances: 1, key_intensity: 42.0,
+            features: &[], macros: &[], model: None, sky: None, params: &[], material: None, motion: None, warmup: 0,
+        },
+        Demo {
+            name: "spot-cookie", blurb: "a textured spotlight: a projected window mask with cone falloff and shadows (ADR 0073)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred), instances: 1, key_intensity: 42.0,
+            features: &[], macros: &[], model: None, sky: None, params: &[], material: None, motion: None, warmup: 0,
+        },
+        Demo {
+            name: "sixteen",
+            blurb: "sixteen coloured point lights in a ring — the light budget \
+                    the scene uniform carries, every row of it reaching the \
+                    shader (ADR 0072)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "brdf-lut",
             blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
                     and a per-frame view displays it — the execution-policy proof, \
@@ -1729,6 +1798,63 @@ fn alpha_over_document() -> Graph {
 // The scene — one PBR cube, the pbr_cube demo's, lit per demo
 // ---------------------------------------------------------------------------
 
+fn gallery_spot_cookie(gpu: &GpuContext) -> wgpu::TextureView {
+    let size = 256u32;
+    let pixels: Vec<u8> = (0..size * size)
+        .flat_map(|pixel| {
+            let u = (pixel % size) as f32 / size as f32;
+            let v = (pixel / size) as f32 / size as f32;
+            let cell_u = (u * 3.0).fract();
+            let cell_v = (v * 3.0).fract();
+            let mask = if (0.08..0.92).contains(&cell_u) && (0.08..0.92).contains(&cell_v) {
+                255
+            } else {
+                0
+            };
+            [mask, mask, mask, 255]
+        })
+        .collect();
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gallery spotlight window cookie"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size * 4),
+            rows_per_image: Some(size),
+        },
+        texture.size(),
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    })
+}
+
+fn gallery_area_light() -> Light {
+    Light::rectangle(
+        Vec3::new(0.0, 4.2, 0.0),
+        Vec3::new(1.6, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.9, 0.75),
+        6.0,
+    )
+    .casting_shadow(8.0)
+}
+
 fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
     // A sky demo turns the lamps off: what is left in the image is the
     // ambient term and nothing else, so the roughness and grazing-angle
@@ -1745,6 +1871,64 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
             // A cool fill so the shadow side reads as shadowed, not black.
             Light::point(Vec3::new(-3.0, 1.6, -1.6), Vec3::new(0.4, 0.5, 0.8), 8.0),
         ],
+        None if demo.name == "cascade" => vec![
+            // The same kind of sun, but split: four cascades fitted to the
+            // camera over a 48 m reach. The field of pillars is what makes
+            // the split legible — the near pillars' shadows are the key
+            // tiles' job, the far ones the outer cascades', and the
+            // sharpness falls off with them.
+            Light::directional(Vec3::new(0.7, 0.75, 0.45), Vec3::new(1.0, 0.93, 0.8), 2.4)
+                .casting_shadow(24.0)
+                .with_cascades(4),
+            Light::point(Vec3::new(-4.0, 2.0, -4.0), Vec3::new(0.35, 0.45, 0.7), 8.0),
+        ],
+        None if demo.name == "point-shadow" => vec![
+            // One lamp overhead claiming six tiles — a face per direction —
+            // so the cubes it hangs over shadow the floor outward in every
+            // direction at once. High enough that the shadow spreads well
+            // past the casters' own footprints, where the camera can see it.
+            Light::point(Vec3::new(0.0, 4.2, 0.0), Vec3::new(1.0, 0.9, 0.75), 40.0)
+                .casting_shadow(8.0),
+            Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 7.0),
+        ],
+        None if demo.name == "area-shadow" => vec![
+            gallery_area_light(),
+            Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 3.0),
+        ],
+        None if matches!(demo.name, "spot-shadow" | "spot-cookie") => {
+            let mut spot = Light::spot(
+                Vec3::new(-2.0, 4.2, 1.0),
+                Vec3::new(2.0, -5.2, -1.0),
+                25.0_f32.to_radians(),
+                40.0_f32.to_radians(),
+                Vec3::new(1.0, 0.9, 0.75),
+                85.0,
+            )
+            .casting_shadow(8.0);
+            if demo.name == "spot-cookie" {
+                spot = spot.with_cookie(0);
+            }
+            vec![spot]
+        }
+        None if demo.name == "sixteen" => {
+            // The budget, spent: sixteen lamps in a ring, hue walking with
+            // the angle. No shadows — the point of the demo is that all
+            // sixteen rows of the light array reach the shader.
+            (0..16)
+                .map(|index| {
+                    let angle = index as f32 / 16.0 * core::f32::consts::TAU;
+                    Light::point(
+                        Vec3::new(angle.cos() * 3.2, 1.3, angle.sin() * 3.2),
+                        Vec3::new(
+                            0.5 + 0.5 * (angle).cos(),
+                            0.5 + 0.5 * (angle + 2.1).cos(),
+                            0.5 + 0.5 * (angle + 4.2).cos(),
+                        ) * 1.6,
+                        9.0,
+                    )
+                })
+                .collect()
+        }
         None => vec![
             // Key: warm and close. The bloom demos turn this up far enough
             // that the specular highlight crosses the effect's threshold.
@@ -1759,6 +1943,10 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
     };
     let (ambient_sky, ambient_ground) = demo
         .sky
+        .or_else(|| {
+            (matches!(demo.name, "area-shadow" | "spot-shadow" | "spot-cookie"))
+                .then_some((Vec3::splat(0.04), Vec3::splat(0.02)))
+        })
         .unwrap_or((Vec3::new(0.14, 0.19, 0.28), Vec3::new(0.05, 0.04, 0.035)));
     Environment {
         camera: if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
@@ -1774,6 +1962,34 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
             Camera {
                 eye: Vec3::new(0.0, 0.7, 6.8),
                 target: Vec3::ZERO,
+                aspect,
+                ..Camera::default()
+            }
+        } else if demo.name == "cascade" {
+            // High and back: the pillar field, and the sharpness falloff
+            // from the near cascades to the far ones, in one view.
+            Camera {
+                eye: Vec3::new(1.0, 6.0, 10.5),
+                target: Vec3::new(0.0, -0.8, 0.0),
+                aspect,
+                ..Camera::default()
+            }
+        } else if demo.name == "area-shadow" {
+            Camera {
+                eye: Vec3::new(5.5, 2.6, 10.0),
+                target: Vec3::new(0.0, 1.0, 0.0),
+                aspect,
+                ..Camera::default()
+            }
+        } else if matches!(
+            demo.name,
+            "point-shadow" | "spot-shadow" | "spot-cookie" | "sixteen"
+        ) {
+            // Level with the lamp ring: the cube's shadow spreading outward
+            // and the sixteen pools of colour both read from a low angle.
+            Camera {
+                eye: Vec3::new(0.0, 3.1, 8.2),
+                target: Vec3::new(0.0, -0.4, 0.0),
                 aspect,
                 ..Camera::default()
             }
@@ -1876,26 +2092,67 @@ fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureVie
         height: SIDE,
         depth_or_array_layers: 1,
     };
+    // The full mip chain, box-filtered on the CPU: the floors are seen at
+    // grazing angles, and a mip-less checker minified past one texel per
+    // square hatches the ground with moiré.
+    let mut levels = vec![texels];
+    while levels.last().unwrap().len() > 4 {
+        let prev = levels.last().unwrap();
+        let prev_side = (prev.len() as u32 / 4).isqrt() as usize;
+        let side = (prev_side / 2).max(1);
+        let mut next = Vec::with_capacity(side * side * 4);
+        for y in 0..side {
+            for x in 0..side {
+                for c in 0..4 {
+                    let sample = |yy: usize, xx: usize| {
+                        prev[((yy.min(prev_side - 1) * prev_side + xx.min(prev_side - 1)) * 4 + c)
+                            as usize] as u32
+                    };
+                    let y2 = y * 2;
+                    let x2 = x * 2;
+                    let sum = sample(y2, x2)
+                        + sample(y2, x2 + 1)
+                        + sample(y2 + 1, x2)
+                        + sample(y2 + 1, x2 + 1);
+                    next.push((sum / 4) as u8);
+                }
+            }
+        }
+        levels.push(next);
+    }
+    let mip_count = levels.len() as u32;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("gallery checker"),
         size: extent,
-        mip_level_count: 1,
+        mip_level_count: mip_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    queue.write_texture(
-        texture.as_image_copy(),
-        &texels,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(SIDE * 4),
-            rows_per_image: Some(SIDE),
-        },
-        extent,
-    );
+    for (level, texels) in levels.iter().enumerate() {
+        let side = (texels.len() as u32 / 4).isqrt();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(side * 4),
+                rows_per_image: Some(side),
+            },
+            wgpu::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
     (
         texture.create_view(&wgpu::TextureViewDescriptor::default()),
         device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1904,6 +2161,8 @@ fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureVie
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 8,
             ..Default::default()
         }),
     )
@@ -2271,6 +2530,7 @@ struct Stage {
     grid_bindings: Vec<wxsl::render::MaterialBindings>,
     grid_floor: DemoMaterial,
     shadow_floor: DemoMaterial,
+    area_emitter: DemoMaterial,
     grid_floor_mesh: Mesh,
     camera_override: Option<(Camera, Option<Camera>)>,
     /// The bake demo's own material and the table its bake pass writes
@@ -2635,6 +2895,20 @@ impl Stage {
             &ibl_grid_floor_graph(),
             &wxsl::render::material::MaterialConfig::default(),
         )?;
+        let mut emitter_graph = Graph::new("area emitter");
+        let output = emitter_graph.add_node(wxsl::core::abi::SURFACE_OUTPUT_ID);
+        emitter_graph.set_param(output, "base_color", Value::Vec3([0.0; 3]));
+        emitter_graph.set_param(output, "emissive", Value::Vec3([8.0, 7.2, 6.0]));
+        let area_emitter = DemoMaterial::new(
+            &gpu,
+            &mut renderer,
+            &texture,
+            &sampler,
+            &emitter_graph,
+            &wxsl::render::material::MaterialConfig::default().with_shadows(false, false),
+        )?;
+        let cookie = gallery_spot_cookie(&gpu);
+        renderer.set_light_cookies(&gpu.device, Some(&cookie));
         Ok(Stage {
             ibl_source,
             ibl_sky,
@@ -2672,6 +2946,7 @@ impl Stage {
             grid_bindings,
             grid_floor,
             shadow_floor,
+            area_emitter,
             grid_floor_mesh,
             camera_override: None,
             bake: Some(bake),
@@ -2961,6 +3236,147 @@ impl Stage {
                     )
                     .with_bindings(&self.bindings)
                     .with_attributes(&tint),
+            ]
+            .into_iter()
+            .collect();
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "cascade" {
+            // The cascaded atlas: a field of pillars over one sun split
+            // into four camera-fitted boxes. The nearest pillars sit where
+            // the key cascades are sharp; the far ones ride the outer
+            // cascades, and their shadows show the falloff.
+            let floor = Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0));
+            let mut draws = DrawList::new();
+            draws.push(
+                DrawItem::new(&self.grid_floor_mesh, &self.shadow_floor.material)
+                    .with_bindings(&self.shadow_floor.bindings)
+                    .with_transform(floor),
+            );
+            let pillars = [
+                (Vec3::new(-0.9, -1.1, 0.6), [1.0, 0.85, 0.6]),
+                (Vec3::new(2.4, -1.1, -1.4), [0.85, 0.9, 1.0]),
+                (Vec3::new(-3.4, -1.1, 2.6), [1.0, 0.75, 0.7]),
+                (Vec3::new(4.8, -1.1, 2.0), [0.8, 1.0, 0.85]),
+                (Vec3::new(-5.6, -1.1, -2.8), [0.95, 0.9, 0.7]),
+                (Vec3::new(6.4, -1.1, -3.4), [0.7, 0.85, 1.0]),
+                (Vec3::new(-2.0, -1.1, 6.8), [1.0, 0.8, 0.9]),
+                (Vec3::new(8.0, -1.1, 5.6), [0.85, 1.0, 0.75]),
+            ];
+            let tints: Vec<InstanceAttributes> = pillars
+                .iter()
+                .map(|(_, tint)| {
+                    InstanceAttributes::new().with("instance_tint", Value::Vec3(*tint))
+                })
+                .collect();
+            for ((position, _), tint) in pillars.iter().zip(&tints) {
+                draws.push(
+                    DrawItem::new(&self.mesh, &self.material)
+                        .with_transform(Mat4::from_translation(*position))
+                        .with_bindings(&self.bindings)
+                        .with_attributes(tint),
+                );
+            }
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if matches!(
+            demo.name,
+            "point-shadow" | "area-shadow" | "spot-shadow" | "spot-cookie"
+        ) {
+            // Six faces, one lamp: two cubes under the light, and the
+            // floor catching both shadows in every direction the lamp
+            // reaches.
+            let floor = Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0));
+            let warm =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 0.85, 0.6]));
+            let cool =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([0.8, 0.9, 1.0]));
+            let mut draws: DrawList = [
+                DrawItem::new(&self.grid_floor_mesh, &self.shadow_floor.material)
+                    .with_bindings(&self.shadow_floor.bindings)
+                    .with_transform(floor),
+                DrawItem::new(&self.mesh, &self.material)
+                    .with_transform(
+                        floor
+                            * Mat4::from_translation(Vec3::new(0.0, 3.1, 0.0))
+                            * cube_transform(time),
+                    )
+                    .with_bindings(&self.bindings)
+                    .with_attributes(&warm),
+                DrawItem::new(&self.mesh, &self.material)
+                    .with_transform(
+                        floor
+                            * Mat4::from_translation(Vec3::new(1.9, 2.2, 1.2))
+                            * Mat4::from_rotation_y(time * 0.6),
+                    )
+                    .with_bindings(&self.bindings)
+                    .with_attributes(&cool),
+            ]
+            .into_iter()
+            .collect();
+            if demo.name == "area-shadow" {
+                let light = gallery_area_light();
+                // The shared plate is 3.4 units wide; match the emitter bounds.
+                let transform = Mat4::from_cols(
+                    (light.area_u * (2.0 / 3.4)).extend(0.0),
+                    light.area_u.cross(light.area_v).normalize().extend(0.0),
+                    (-light.area_v * (2.0 / 3.4)).extend(0.0),
+                    light.position_or_direction.extend(1.0),
+                );
+                draws.push(
+                    DrawItem::new(&self.plate, &self.area_emitter.material)
+                        .with_bindings(&self.area_emitter.bindings)
+                        .with_transform(transform),
+                );
+            }
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
+        if demo.name == "sixteen" {
+            // The whole light budget: sixteen coloured lamps in a ring
+            // around one cube. Every lamp's row reaches the shader, so the
+            // floor is a wheel of coloured pools and nothing is dropped.
+            let floor = Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0));
+            let plain =
+                InstanceAttributes::new().with("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
+            let draws: DrawList = [
+                DrawItem::new(&self.grid_floor_mesh, &self.shadow_floor.material)
+                    .with_bindings(&self.shadow_floor.bindings)
+                    .with_transform(floor),
+                DrawItem::new(&self.mesh, &self.material)
+                    .with_transform(
+                        floor
+                            * Mat4::from_translation(Vec3::new(0.0, 0.9, 0.0))
+                            * cube_transform(time),
+                    )
+                    .with_bindings(&self.bindings)
+                    .with_attributes(&plain),
             ]
             .into_iter()
             .collect();

@@ -503,7 +503,7 @@ fn the_depth_prepass_leaves_the_forward_image_alone() {
     // no light is casting; see `pipeline::shadow_passes`.
     assert_eq!(
         graph.passes().len(),
-        wxsl::core::abi::MAX_LIGHTS + 3,
+        wxsl::core::abi::MAX_SHADOW_TILES + 3,
         "a shadow pass per light, then prepass, shading pass and tonemap"
     );
     assert_eq!(

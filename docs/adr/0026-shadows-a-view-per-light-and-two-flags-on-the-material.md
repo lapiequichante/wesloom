@@ -145,7 +145,10 @@ has to reach codegen, which a tag cannot.
 
 ADR [0066](0066-pack-shadow-slots-into-a-depth-atlas.md) replaces the array
 with a depth atlas and normalized rectangles. Views and material flags remain
-unchanged; cascades, point shadows and larger light lists remain N7 follow-ups.
+unchanged. ADRs [0071](0071-fit-cascades-and-pack-point-shadow-faces.md) and
+[0072](0072-integrate-rectangular-area-lights-with-shadowed-quadrature.md) add
+cascades, point/area shadows and sixteen uniform lights; compute/clustered
+light lists remain N7 follow-ups.
 
 Both stock pipelines are four passes longer. `forward_graph` is now four
 shadow passes, a depth prepass and a shading pass; the tests that assert

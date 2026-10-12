@@ -15,8 +15,38 @@ use crate::pass::PassView;
 /// Maximum lights the scene uniform carries.
 ///
 /// The ABI owns the number, because it is the length of an array in a
-/// host-shared buffer and the number of supported shadow atlas slots.
+/// host-shared buffer.
 pub const MAX_LIGHTS: usize = abi::MAX_LIGHTS;
+
+/// Most cascades a directional light may split its shadow into.
+///
+/// A cascade is one atlas tile, so this is bounded by the tile budget and
+/// by sense: past four, the outer cascades are blurred beyond what the
+/// normal-offset bias can hide from the inner ones.
+pub const MAX_SHADOW_CASCADES: u32 = 4;
+
+// Keep in sync with WXSL_SHADOW_CASCADE_BLEND in shadow.wxsl.
+const SHADOW_CASCADE_BLEND: f32 = 0.1;
+
+/// One atlas slot this frame: who owns it, and where it looks.
+///
+/// A light claims as many of these as its shadow kind needs — one per
+/// cascade, six per point light — so the shadow pass list (one pass per
+/// slot, always) and the sampling side (`scene.shadow_tiles`, addressed by
+/// the light's `tile_first` + the kind's selection) agree by construction:
+/// both read this vector, in this order.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowTileView {
+    /// Index of the light that claimed this slot.
+    pub light: u32,
+    /// World-to-clip for the shadow pass and the fragment's lookup alike.
+    pub view_proj: Mat4,
+    /// Where the tile's view sits — the cube face's centre or the cascade
+    /// box's anchor.
+    pub eye: Vec3,
+    /// The tile's split distance — see [`ShadowView::split`].
+    pub split: f32,
+}
 
 /// Where the camera is and what it can see.
 #[derive(Clone, Copy, Debug)]
@@ -113,11 +143,15 @@ impl Camera {
 pub enum LightKind {
     /// Radiates from a point, with inverse-square falloff.
     Point,
+    /// One-sided rectangular emitter, integrated at sixteen surface points.
+    Rectangle,
+    /// Finite cone with smooth falloff and an optional projected cookie.
+    Spot,
     /// Infinitely far away: one direction, no falloff.
     Directional,
 }
 
-/// Where a light renders its shadow map from.
+/// Where a light renders one shadow tile from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowView {
     /// World space to the light's clip space.
@@ -125,6 +159,10 @@ pub struct ShadowView {
     /// Where the light's view sits, which is what a graph reading
     /// `view_direction` in a shadow pass sees.
     pub eye: Vec3,
+    /// How far from the camera this tile's coverage reaches — the split
+    /// that sends a fragment to it. A cascade's far distance; zero on
+    /// every tile that needs no selection (a single box, a cube face).
+    pub split: f32,
 }
 
 /// One light.
@@ -137,44 +175,78 @@ pub struct Light {
     pub position_or_direction: Vec3,
     /// Linear-light colour.
     pub color: Vec3,
-    /// Radiant intensity multiplier.
+    /// Radiant intensity multiplier, or emitted radiance for a rectangle.
     pub intensity: f32,
+    /// Rectangle half-edge vectors; cross(u, v) points towards its emitting side.
+    pub area_u: Vec3,
+    /// Second perpendicular half-edge of a rectangle; zero for other lights.
+    pub area_v: Vec3,
+    /// Direction away from a spotlight, normalized by its constructor.
+    pub spot_direction: Vec3,
+    /// Inner cone half-angle in radians, fully illuminated.
+    pub spot_inner_angle: f32,
+    /// Outer cone half-angle in radians, at which illumination reaches zero.
+    pub spot_outer_angle: f32,
+    /// Optional layer of the application-supplied spotlight cookie texture.
+    pub cookie_layer: Option<u32>,
     /// Whether this light renders a shadow map.
     ///
-    /// Only a [`LightKind::Directional`] light can: one tile is one point
-    /// of view, and a point light needs six. A point light asking for a
-    /// shadow gets none rather than a wrong one, and
-    /// [`Light::shadow_view`] is where that is decided.
+    /// A directional light renders one tile per cascade
+    /// ([`Light::shadow_cascades`]); a point light renders six, one per
+    /// cube face. A rectangle renders six faces per quadrature point (96).
+    /// All kinds claim their tiles from one atlas budget
+    /// ([`abi::MAX_SHADOW_TILES`]), and a light whose tiles do not fit
+    /// casts none rather than a partial one —
+    /// [`Environment::shadow_tiles`] is where that is decided.
     pub casts_shadow: bool,
-    /// Half the edge of the world-space box a directional light shadows,
-    /// centred on the origin.
+    /// Half the edge of the world-space box a single-cascade directional
+    /// light shadows, centred on the origin.
     ///
-    /// Fixed and centred rather than fitted to the camera: cascades are
-    /// what make a shadow follow a view without blurring into nothing, and
-    /// they are a milestone of their own. Until then this is the knob that
-    /// trades area for texels.
+    /// Fixed and centred rather than fitted to the camera: fitting the box
+    /// to the view is what cascades do, and they are the knob that makes a
+    /// shadow follow a view without blurring into nothing — set
+    /// [`Light::with_cascades`] above one and this field stops being read.
+    /// At one cascade it is the knob that trades area for texels.
     pub shadow_extent: f32,
-    /// How deep the directional light's view is, along its own direction.
+    /// How deep the light's view is, along its own direction — the outer
+    /// range the last cascade reaches, or the point light's far plane.
     pub shadow_distance: f32,
     /// How far along the surface normal a lookup is nudged before it is
     /// compared, in world units. See `shaders/wxsl/shadow.wxsl`.
     pub shadow_normal_bias: f32,
+    /// How many cascades a directional light splits its shadow into.
+    ///
+    /// One — the default — is a single origin-centred box, the shape this
+    /// light has always had. More than one fits each cascade to the
+    /// camera's frustum over a slice of its depth range, near slices
+    /// sharpest, and the shadow follows the camera. Clamped to
+    /// [`MAX_SHADOW_CASCADES`]; meaningless for a point or area light, whose
+    /// faces are not negotiable.
+    pub shadow_cascades: u32,
 }
 
 impl Light {
     /// The shadow settings every light starts with: none.
     ///
-    /// Off by default, because a shadow map is a pass per light and an
-    /// application that has not asked for one should not pay for four.
+    /// Off by default, because a shadow map is a pass per tile and an
+    /// application that has not asked for one should not pay for the
+    /// atlas.
     pub const DEFAULTS: Light = Light {
         kind: LightKind::Directional,
         position_or_direction: Vec3::Y,
         color: Vec3::ONE,
         intensity: 1.0,
+        area_u: Vec3::ZERO,
+        area_v: Vec3::ZERO,
+        spot_direction: Vec3::NEG_Y,
+        spot_inner_angle: 0.4,
+        spot_outer_angle: 0.7,
+        cookie_layer: None,
         casts_shadow: false,
         shadow_extent: 8.0,
         shadow_distance: 32.0,
         shadow_normal_bias: 0.03,
+        shadow_cascades: 1,
     };
 
     /// A point light at `position`.
@@ -185,6 +257,98 @@ impl Light {
             color,
             intensity,
             ..Light::DEFAULTS
+        }
+    }
+
+    /// A one-sided rectangle with perpendicular, nonzero half-edges.
+    /// `radiance` is emitted radiance, so flux grows with the rectangle's area.
+    /// Direct lighting and visibility use sixteen Gauss quadrature points (ADR 0072).
+    pub fn rectangle(centre: Vec3, half_u: Vec3, half_v: Vec3, color: Vec3, radiance: f32) -> Self {
+        assert!(centre.is_finite() && half_u.is_finite() && half_v.is_finite());
+        let product = half_u.length() * half_v.length();
+        assert!(
+            product > 1e-6 && half_u.dot(half_v).abs() <= product * 1e-4,
+            "rectangle half-edges must be nonzero and perpendicular"
+        );
+        Light {
+            kind: LightKind::Rectangle,
+            position_or_direction: centre,
+            area_u: half_u,
+            area_v: half_v,
+            color,
+            intensity: radiance,
+            ..Light::DEFAULTS
+        }
+    }
+
+    /// The sixteen points used by rectangular lighting and its shadow views.
+    pub fn area_sample_positions(&self) -> [Vec3; 16] {
+        // Four-point Gauss-Legendre nodes; same order as bindings.wxsl.
+        let nodes = [-0.8611363, -0.33998105, 0.33998105, 0.8611363];
+        std::array::from_fn(|sample| {
+            self.position_or_direction
+                + self.area_u * nodes[sample % 4]
+                + self.area_v * nodes[sample / 4]
+        })
+    }
+
+    /// A spotlight. Cone angles are half-angles in radians, with
+    /// 0 <= inner < outer < pi/2. Direction points away from the source.
+    pub fn spot(
+        position: Vec3,
+        direction: Vec3,
+        inner: f32,
+        outer: f32,
+        color: Vec3,
+        intensity: f32,
+    ) -> Self {
+        assert!(position.is_finite() && direction.is_finite() && direction.length_squared() > 1e-6);
+        assert!(
+            inner.is_finite()
+                && outer.is_finite()
+                && inner >= 0.0
+                && inner < outer
+                && outer < core::f32::consts::FRAC_PI_2
+        );
+        Light {
+            kind: LightKind::Spot,
+            position_or_direction: position,
+            spot_direction: direction.normalize(),
+            spot_inner_angle: inner,
+            spot_outer_angle: outer,
+            color,
+            intensity,
+            ..Light::DEFAULTS
+        }
+    }
+
+    /// Project this layer of Renderer::set_light_cookies through a spot.
+    pub fn with_cookie(mut self, layer: u32) -> Self {
+        assert!(self.kind == LightKind::Spot, "cookies require a spotlight");
+        self.cookie_layer = Some(layer);
+        self
+    }
+
+    fn spot_view(&self) -> ShadowView {
+        let eye = self.position_or_direction;
+        let direction = self.spot_direction;
+        let up = if direction.y.abs() > 0.99 {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        };
+        let far = self.shadow_distance.max(0.1);
+        let near = (far * 1e-3).max(0.01);
+        let projection = glam::camera::rh::proj::directx::perspective(
+            self.spot_outer_angle * 2.0,
+            1.0,
+            near,
+            far,
+        );
+        ShadowView {
+            view_proj: projection * glam::camera::rh::view::look_at_mat4(eye, eye + direction, up),
+            eye,
+            split: 0.0,
         }
     }
 
@@ -200,9 +364,23 @@ impl Light {
     }
 
     /// Cast a shadow, over a box `extent` wide centred on the origin.
+    ///
+    /// For a directional light, `extent` is half the box's edge. A point
+    /// light reads nothing from it: its six faces always cover every
+    /// direction, and [`Light::shadow_distance`] is their far plane.
     pub fn casting_shadow(mut self, extent: f32) -> Self {
         self.casts_shadow = true;
         self.shadow_extent = extent.max(1e-3);
+        self
+    }
+
+    /// Split the directional light's shadow into `count` cascades fitted
+    /// to the camera, nearest slice sharpest.
+    ///
+    /// Clamped to [`MAX_SHADOW_CASCADES`]; one or none means the ordinary
+    /// single box.
+    pub fn with_cascades(mut self, count: u32) -> Self {
+        self.shadow_cascades = count.clamp(1, MAX_SHADOW_CASCADES);
         self
     }
 
@@ -212,26 +390,89 @@ impl Light {
         self
     }
 
-    /// The point of view this light renders its shadow map from, or
-    /// `None` when it casts none.
+    /// The points of view this light renders its shadow tiles from, in
+    /// tile order — near cascades first for a directional light, the
+    /// +x,-x,+y,-y,+z,-z faces for a point light.
     ///
-    /// An orthographic box along the light's direction, centred on the
-    /// origin and deep enough to contain what is in front of it. `directx`
-    /// is the same NDC convention [`Camera::view_proj`] uses, so a depth
-    /// written by one and compared by the other means the same thing.
-    pub fn shadow_view(&self) -> Option<ShadowView> {
-        if !self.casts_shadow || self.kind != LightKind::Directional {
-            return None;
+    /// Empty when the light casts none. `directx` is the same NDC
+    /// convention [`Camera::view_proj`] uses, so a depth written by one
+    /// and compared by the other means the same thing.
+    pub fn shadow_views(&self, camera: &Camera) -> Vec<ShadowView> {
+        self.shadow_views_at(camera, 0)
+    }
+
+    fn shadow_views_at(&self, camera: &Camera, first_tile: u32) -> Vec<ShadowView> {
+        if !self.casts_shadow {
+            return Vec::new();
         }
         let direction = self.position_or_direction.normalize_or_zero();
-        if direction.length_squared() < 1e-6 {
-            return None;
+        match self.kind {
+            LightKind::Point => self.face_views(),
+            LightKind::Spot => vec![self.spot_view()],
+            LightKind::Rectangle => self
+                .area_sample_positions()
+                .into_iter()
+                .flat_map(|position| {
+                    let mut sample = *self;
+                    sample.position_or_direction = position;
+                    sample.face_views()
+                })
+                .collect(),
+            LightKind::Directional => {
+                if direction.length_squared() < 1e-6 {
+                    return Vec::new();
+                }
+                if self.shadow_cascades <= 1 {
+                    vec![self.origin_box(&direction)]
+                } else {
+                    self.cascade_views(camera, &direction, first_tile)
+                }
+            }
         }
+    }
+
+    /// The six cube-face views of a point light.
+    ///
+    /// One 90° perspective per face; the fragment picks its face by
+    /// dominant axis of the surface-to-light direction, the same order
+    /// [`CUBE_FACE_DIRECTIONS`] spells.
+    fn face_views(&self) -> Vec<ShadowView> {
+        let eye = self.position_or_direction;
+        let far = self.shadow_distance.max(0.1);
+        let near = (far * 1e-3).max(0.01);
+        CUBE_FACE_DIRECTIONS
+            .map(|face| {
+                // An up not parallel to the face: the ±y faces look straight
+                // down or up, and would degenerate on `Vec3::Y`.
+                let up = if face.y.abs() > 0.9 {
+                    -Vec3::Z
+                } else {
+                    Vec3::Y
+                };
+                let projection = glam::camera::rh::proj::directx::perspective(
+                    core::f32::consts::FRAC_PI_2,
+                    1.0,
+                    near,
+                    far,
+                );
+                ShadowView {
+                    view_proj: projection
+                        * glam::camera::rh::view::look_at_mat4(eye, eye + face, up),
+                    eye,
+                    split: 0.0,
+                }
+            })
+            .to_vec()
+    }
+
+    /// The single-cascade box this light has always had: centred on the
+    /// origin, deep enough to contain what is in front of it.
+    fn origin_box(&self, direction: &Vec3) -> ShadowView {
         let half = self.shadow_extent.max(1e-3);
         let depth = self.shadow_distance.max(half);
         // `position_or_direction` points *towards* the light, so the eye
         // sits that way from the origin and looks back at it.
-        let eye = direction * depth;
+        let eye = *direction * depth;
         // Any up vector not parallel to the direction; a light straight
         // overhead is the ordinary case and the one that would degenerate.
         let up = if direction.y.abs() > 0.99 {
@@ -247,29 +488,152 @@ impl Light {
             0.0,
             depth * 2.0,
         );
-        Some(ShadowView {
+        ShadowView {
             view_proj: projection * glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, up),
             eye,
-        })
+            split: 0.0,
+        }
     }
 
-    fn uniform(&self, shadow_rect: [f32; 4], shadow_view_proj: Mat4) -> LightUniform {
+    /// One fitted box per cascade: the camera frustum split over its depth
+    /// range, each slice's bounding sphere snapped to its tile's texel
+    /// grid in the light's own space.
+    ///
+    /// The light's view *orientation* is fixed — the eye stays pinned on
+    /// the light's axis — so the snapping is stable while the camera
+    /// moves, which is the whole point: without it, every sub-texel step
+    /// of the camera would swim the shadow across the surface.
+    fn cascade_views(&self, camera: &Camera, direction: &Vec3, first_tile: u32) -> Vec<ShadowView> {
+        let depth = self.shadow_distance.max(1e-3);
+        let eye = *direction * depth;
+        let up = if direction.y.abs() > 0.99 {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        };
+        let light_view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, up);
+        let forward = (camera.target - camera.eye).normalize_or_zero();
+        let right = forward.cross(camera.up).normalize_or_zero();
+        let cam_up = right.cross(forward).normalize_or_zero();
+        let tan_h = (camera.fov_y * 0.5).tan();
+        let tan_w = tan_h * camera.aspect.max(1e-3);
+        let near = camera.near.max(1e-3);
+        let range = camera.far.min(depth).max(near * 2.0);
+        let count = self.shadow_cascades;
+        let mut out = Vec::with_capacity(count as usize);
+        let mut d_near = near;
+        let mut slice_near = near;
+        for index in 0..count {
+            // Every logarithmic split uses the camera near plane, not the
+            // previous split, so the final split ends exactly at range.
+            let t = (index + 1) as f32 / count as f32;
+            let log = near * (range / near).powf(t);
+            let lin = near + (range - near) * t;
+            let d_far = log * 0.5 + lin * 0.5;
+            let centre = camera.eye + forward * ((slice_near + d_far) * 0.5);
+            let corners: Vec<Vec3> = [slice_near, d_far]
+                .into_iter()
+                .flat_map(|d| {
+                    [-1.0, 1.0].into_iter().flat_map(move |x| {
+                        [-1.0, 1.0].into_iter().map(move |y| {
+                            camera.eye
+                                + forward * d
+                                + right * (x * d * tan_w)
+                                + cam_up * (y * d * tan_h)
+                        })
+                    })
+                })
+                .collect();
+            // A sphere keeps the extent stable under camera rotation. Leave
+            // a texel margin for snapping and the normal-offset lookup.
+            let radius = corners
+                .iter()
+                .map(|p| p.distance(centre))
+                .fold(0.0_f32, f32::max);
+            let radius = (radius * 16.0).ceil().max(1.0) / 16.0;
+            let edge = abi::shadow_tile(first_tile + index).edge as f32;
+            let half = radius / (1.0 - 4.0 / edge);
+            let texel = half * 2.0 / edge;
+            let centre_ls = light_view.transform_point3(centre);
+            let cx = (centre_ls.x / texel).round() * texel;
+            let cy = (centre_ls.y / texel).round() * texel;
+            let light_space: Vec<Vec3> = corners
+                .iter()
+                .map(|p| light_view.transform_point3(*p))
+                .collect();
+            let z_min = light_space
+                .iter()
+                .map(|p| p.z)
+                .fold(f32::INFINITY, f32::min);
+            let z_max = light_space
+                .iter()
+                .map(|p| p.z)
+                .fold(f32::NEG_INFINITY, f32::max);
+            // Include casters towards the light, even outside the camera
+            // slice. Signed near distances also cover a camera past the
+            // fixed light eye; clamping would silently clip its receivers.
+            let projection = glam::camera::rh::proj::directx::orthographic(
+                cx - half,
+                cx + half,
+                cy - half,
+                cy + half,
+                -z_max - depth,
+                -z_min + texel * 2.0,
+            );
+            out.push(ShadowView {
+                view_proj: projection * light_view,
+                eye,
+                split: d_far,
+            });
+            // The next cascade also covers this one's blend band.
+            let previous_split = if index == 0 { 0.0 } else { d_near };
+            slice_near = d_far - (d_far - previous_split) * SHADOW_CASCADE_BLEND;
+            d_near = d_far;
+        }
+        out
+    }
+
+    fn uniform(&self, tile_first: u32, tile_count: u32) -> LightUniform {
         LightUniform {
             position_or_direction: self.position_or_direction.to_array(),
             kind: match self.kind {
                 LightKind::Point => 0.0,
+                LightKind::Rectangle => 2.0,
+                LightKind::Spot => 3.0,
                 LightKind::Directional => 1.0,
             },
             color: self.color.to_array(),
             intensity: self.intensity,
-            shadow_view_proj: shadow_view_proj.to_cols_array_2d(),
             shadow_normal_bias: self.shadow_normal_bias,
-            _padding: [0.0; 2],
-            _host_padding6: [0; 4],
-            shadow_rect,
+            tile_first,
+            tile_count,
+            _padding: 0.0,
+            area_u: self.area_u.to_array(),
+            _padding1: 0.0,
+            area_v: self.area_v.to_array(),
+            _padding2: 0.0,
+            spot_direction: self.spot_direction.to_array(),
+            spot_outer_cos: self.spot_outer_angle.cos(),
+            spot_inner_cos: self.spot_inner_angle.cos(),
+            cookie_layer: self.cookie_layer.unwrap_or(u32::MAX),
+            _padding3: [0.0; 2],
         }
     }
 }
+
+/// The six cube-face directions of a point light's shadow, in tile order.
+///
+/// The fragment's face selection picks the dominant axis of the
+/// surface-to-light direction with the same table, so a face never
+/// renders into a slot the sampler cannot reach.
+pub const CUBE_FACE_DIRECTIONS: [Vec3; 6] = [
+    Vec3::X,
+    Vec3::NEG_X,
+    Vec3::Y,
+    Vec3::NEG_Y,
+    Vec3::Z,
+    Vec3::NEG_Z,
+];
 
 /// What is lighting the frame and where it is seen from.
 ///
@@ -340,6 +704,32 @@ impl Environment {
         self.time = time;
     }
 
+    /// The atlas slots this frame claims, in slot order.
+    ///
+    /// Lights claim their tiles in list order from one budget of
+    /// [`abi::MAX_SHADOW_TILES`]: a directional light takes one per
+    /// cascade, a point light six, a rectangle 96. A light whose tiles do
+    /// not fit is left with none — half a cube shadow or a missing near cascade would be
+    /// worse than no shadow at all, and the pipeline's pass list is fixed,
+    /// so "casts none" is the one answer that needs nothing rebuilt.
+    pub fn shadow_tiles(&self) -> Vec<ShadowTileView> {
+        let camera = self.camera;
+        let mut tiles = Vec::new();
+        for (index, light) in self.lights.iter().take(MAX_LIGHTS).enumerate() {
+            let views = light.shadow_views_at(&camera, tiles.len() as u32);
+            if tiles.len() + views.len() > abi::MAX_SHADOW_TILES {
+                break;
+            }
+            tiles.extend(views.into_iter().map(|view| ShadowTileView {
+                light: index as u32,
+                view_proj: view.view_proj,
+                eye: view.eye,
+                split: view.split,
+            }));
+        }
+        tiles
+    }
+
     /// The uniform this environment fills in.
     ///
     /// Lights beyond [`MAX_LIGHTS`] are dropped: the alternative is silently
@@ -347,32 +737,46 @@ impl Environment {
     pub fn uniform(&self) -> SceneUniform {
         let mut lights = [LightUniform::zeroed(); MAX_LIGHTS];
         let count = self.lights.len().min(MAX_LIGHTS);
-        for (index, (slot, light)) in lights.iter_mut().zip(&self.lights[..count]).enumerate() {
-            // A light's shadow tile is its own slot's, so turning shadows
-            // off for one does not renumber the others — and the pass that
-            // fills tile `i` is the one that was built for light `i`. The
-            // rect is the tile in atlas UV, which `shadow.wxsl` samples
-            // inside; a zero rect says "casts nothing".
-            let (shadow_rect, view_proj) = match light.shadow_view() {
-                Some(view) => {
-                    let tile = abi::shadow_tile(index as u32);
-                    let atlas = abi::SHADOW_ATLAS_SIZE as f32;
-                    (
-                        [
-                            tile.x as f32 / atlas,
-                            tile.y as f32 / atlas,
-                            tile.edge as f32 / atlas,
-                            tile.edge as f32 / atlas,
-                        ],
-                        view.view_proj,
-                    )
-                }
-                None => ([0.0; 4], Mat4::IDENTITY),
+        let tiles = self.shadow_tiles();
+        let mut shadow_tiles = [ShadowTileUniform::zeroed(); abi::MAX_SHADOW_TILES];
+        let atlas = abi::SHADOW_ATLAS_SIZE as f32;
+        for (slot, tile) in tiles.iter().enumerate() {
+            let t = abi::shadow_tile(slot as u32);
+            shadow_tiles[slot] = ShadowTileUniform {
+                rect: [
+                    t.x as f32 / atlas,
+                    t.y as f32 / atlas,
+                    t.edge as f32 / atlas,
+                    t.edge as f32 / atlas,
+                ],
+                view_proj: tile.view_proj.to_cols_array_2d(),
+                split: tile.split,
+                _padding: [0.0; 2],
+                _host_padding3: [0; 4],
             };
-            *slot = light.uniform(shadow_rect, view_proj);
+        }
+        for (index, slot) in lights.iter_mut().take(count).enumerate() {
+            // The light's tiles are its own run of the table, in slot
+            // order; a light that claimed none gets a zero count, which
+            // `shadow.wxsl` reads as "casts nothing". Turning shadows off
+            // for one light shifts the runs after it — the pass list is
+            // per *slot*, not per light, so nothing downstream renumbers.
+            let first = tiles.iter().position(|tile| tile.light == index as u32);
+            let (tile_first, tile_count) = match first {
+                Some(first) => {
+                    let count = tiles[first..]
+                        .iter()
+                        .take_while(|tile| tile.light == index as u32)
+                        .count() as u32;
+                    (first as u32, count)
+                }
+                None => (0, 0),
+            };
+            *slot = self.lights[index].uniform(tile_first, tile_count);
         }
         SceneUniform {
             lights,
+            shadow_tiles,
             ambient_sky: self.ambient_sky.to_array(),
             environment_enabled: 0.0,
             ambient_ground: self.ambient_ground.to_array(),
@@ -385,34 +789,26 @@ impl Environment {
     }
 
     /// Every point of view this frame renders from, in [`PassView::slot`]
-    /// order: the camera, then one per light.
+    /// order: the camera, then one per shadow tile.
     ///
     /// Always the full length, so a pass's view slot is a fixed offset
-    /// rather than a lookup into whatever lights happen to exist. A light
-    /// that casts no shadow gets the camera's own view, which nothing ever
+    /// rather than a lookup into whatever tiles happen to exist. A slot
+    /// no tile claimed gets the camera's own view, which nothing ever
     /// draws against — the pass built for it issues no draws at all.
     pub fn views(&self) -> Vec<CameraUniform> {
         let camera = self.camera.uniform_with(self.previous_camera.as_ref());
         let mut views = vec![camera; PassView::COUNT];
-        for (index, light) in self.lights.iter().take(MAX_LIGHTS).enumerate() {
-            let Some(view) = light.shadow_view() else {
-                continue;
-            };
-            let slot = PassView::Light {
-                index: index as u32,
-            }
-            .slot();
-            views[slot] = CameraUniform::new(view.view_proj, view.eye);
+        for (slot, tile) in self.shadow_tiles().iter().enumerate() {
+            views[PassView::Shadow { tile: slot as u32 }.slot()] =
+                CameraUniform::new(tile.view_proj, tile.eye);
         }
         views
     }
 
-    /// Whether light `index` renders a shadow map this frame.
-    pub fn light_casts_shadow(&self, index: u32) -> bool {
-        self.lights
-            .get(index as usize)
-            .filter(|_| (index as usize) < MAX_LIGHTS)
-            .is_some_and(|light| light.shadow_view().is_some())
+    /// Whether shadow tile `index` belongs to a light this frame —
+    /// i.e. whether the pass built for that slot has draws to make.
+    pub fn tile_casts_shadow(&self, index: u32) -> bool {
+        (index as usize) < self.shadow_tiles().len()
     }
 }
 
@@ -633,14 +1029,20 @@ mod tests {
         // vec3f aligns to 16 in WGSL, so every uniform struct is a multiple
         // of 16 bytes and each vec3 is padded to its own 16.
         assert_eq!(size_of::<CameraUniform>(), 64 + 64 + 16 + 64 + 16);
-        // Two vec3+scalar pairs, then a mat4x4f (aligned to 16, so it
-        // starts at 32), then the bias with its padding and the atlas
-        // rect.
-        assert_eq!(size_of::<LightUniform>(), 16 + 16 + 64 + 32);
+        // Two vec3+scalar pairs, then bias + the run of tiles in the
+        // shadow table — the matrix and rect moved into `ShadowTileUniform`
+        // (one per tile, 96 bytes), because a light owns as many tiles as
+        // its shadow kind needs.
+        assert_eq!(size_of::<LightUniform>(), 112);
+        assert_eq!(size_of::<ShadowTileUniform>(), 96);
         assert_eq!(
             size_of::<SceneUniform>(),
-            MAX_LIGHTS * 128 + 16 + 16 + 16,
+            MAX_LIGHTS * 112 + abi::MAX_SHADOW_TILES * 96 + 48,
             "scene uniform layout drifted from bindings.wxsl"
+        );
+        assert!(
+            size_of::<SceneUniform>() <= 16384,
+            "frame uniform must fit the WebGPU baseline"
         );
         assert_eq!(size_of::<InstanceTransform>(), 128);
         for size in [
@@ -682,11 +1084,57 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_shadows_use_the_same_sixteen_quadrature_positions_and_allocate_atomically() {
+        let area = Light::rectangle(Vec3::new(0.0, 3.0, 0.0), Vec3::X, Vec3::Z, Vec3::ONE, 5.0)
+            .casting_shadow(4.0);
+        let views = area.shadow_views(&Camera::default());
+        assert_eq!(views.len(), 96);
+        for (sample, position) in area.area_sample_positions().iter().enumerate() {
+            for view in &views[sample * 6..sample * 6 + 6] {
+                assert_eq!(view.eye, *position);
+            }
+        }
+        let env = Environment {
+            lights: vec![area, area],
+            ..Environment::default()
+        };
+        let uniform = env.uniform();
+        assert_eq!(uniform.lights[0].tile_count, 96);
+        assert_eq!(uniform.lights[1].tile_count, 0);
+        assert_eq!(env.shadow_tiles().len(), 96);
+        assert_eq!(uniform.lights[0].area_u, Vec3::X.to_array());
+        assert_eq!(uniform.lights[0].area_v, Vec3::Z.to_array());
+    }
+
+    #[test]
+    fn spot_shadow_projection_matches_the_outer_cone_and_uses_one_tile() {
+        let light = Light::spot(
+            Vec3::new(1.0, 3.0, 2.0),
+            Vec3::NEG_Y,
+            0.2,
+            0.6,
+            Vec3::ONE,
+            10.0,
+        )
+        .casting_shadow(4.0)
+        .with_cookie(2);
+        let views = light.shadow_views(&Camera::default());
+        assert_eq!(views.len(), 1);
+        let world =
+            light.position_or_direction + Vec3::NEG_Y * 2.0 + Vec3::X * (2.0 * 0.6_f32.tan());
+        let clip = views[0].view_proj * world.extend(1.0);
+        assert!((clip.x.abs() / clip.w - 1.0).abs() < 1e-5);
+        let uniform = light.uniform(0, 1);
+        assert_eq!(uniform.cookie_layer, 2);
+        assert_eq!(uniform.spot_outer_cos, 0.6_f32.cos());
+    }
+
+    #[test]
     fn directional_lights_store_a_unit_direction() {
         let light = Light::directional(Vec3::new(0.0, 3.0, 4.0), Vec3::ONE, 2.0);
         let length = light.position_or_direction.length();
         assert!((length - 1.0).abs() < 1e-6);
-        assert_eq!(light.uniform([0.0; 4], Mat4::IDENTITY).kind, 1.0);
+        assert_eq!(light.uniform(0, 0).kind, 1.0);
     }
 
     #[test]
@@ -700,5 +1148,56 @@ mod tests {
         let behind = view_depth(Vec3::new(0.0, 0.0, 3.0), eye, forward);
         assert!(near < far);
         assert!(behind < near, "behind the camera is nearer than anything");
+    }
+
+    #[test]
+    fn cascades_cover_all_slice_corners_overlap_and_offscreen_casters() {
+        for eye in [Vec3::new(1.0, 6.0, 10.5), Vec3::new(101.0, 56.0, -89.5)] {
+            let camera = Camera {
+                eye,
+                target: eye + Vec3::new(-1.0, -6.8, -10.5),
+                aspect: 1.8,
+                ..Camera::default()
+            };
+            let light = Light::directional(Vec3::new(0.7, 0.75, 0.45), Vec3::ONE, 2.4)
+                .casting_shadow(24.0)
+                .with_cascades(4);
+            // Also exercise cascades after other lights' atlas allocations.
+            for first_tile in [0, 6] {
+                let views = light.shadow_views_at(&camera, first_tile);
+                assert!(
+                    (views.last().unwrap().split - light.shadow_distance.min(camera.far)).abs()
+                        < 1e-5
+                );
+                let forward = (camera.target - camera.eye).normalize();
+                let right = forward.cross(camera.up).normalize();
+                let up = right.cross(forward).normalize();
+                let mut slice_near = camera.near;
+                let mut previous_split = 0.0;
+                for view in &views {
+                    for d in [slice_near, view.split] {
+                        for x in [-1.0, 1.0] {
+                            for y in [-1.0, 1.0] {
+                                let point = camera.eye
+                                    + forward * d
+                                    + (right * (x * camera.aspect) + up * y)
+                                        * (d * (camera.fov_y * 0.5).tan());
+                                let ndc = view.view_proj.transform_point3(point);
+                                assert!(
+                                    ndc.x.abs() <= 1.0001 && ndc.y.abs() <= 1.0001,
+                                    "slice corner clipped: {ndc:?}"
+                                );
+                                assert!((0.0..=1.0).contains(&ndc.z), "receiver clipped: {ndc:?}");
+                                let caster = point + light.position_or_direction * 24.0;
+                                let z = view.view_proj.transform_point3(caster).z;
+                                assert!((0.0..=1.0).contains(&z), "offscreen caster clipped: {z}");
+                            }
+                        }
+                    }
+                    slice_near = view.split - (view.split - previous_split) * SHADOW_CASCADE_BLEND;
+                    previous_split = view.split;
+                }
+            }
+        }
     }
 }

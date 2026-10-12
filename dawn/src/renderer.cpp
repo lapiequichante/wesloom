@@ -217,7 +217,7 @@ struct Renderer::Impl {
   gpu::BindGroupLayout frame_layout, empty_layout;
   gpu::Buffer camera, scene, transforms, empty_attributes;
   gpu::Texture lut, checker, fallback;
-  gpu::TextureView lut_view, checker_view, fallback_view, environment_placeholder;
+  gpu::TextureView lut_view, checker_view, fallback_view, environment_placeholder, cookie_view;
   gpu::Sampler checker_sampler, lut_sampler, shadow_sampler;
   std::vector<MaterialGpu> materials;
   std::vector<gpu::Buffer> vertices, indices;
@@ -485,6 +485,23 @@ struct Renderer::Impl {
     if (!bytes.empty())
       queue.WriteBuffer(materials.at(index).params, 0, bytes.data(), bytes.size());
   }
+  void upload_light_cookies(uint32_t width, uint32_t height, uint32_t layers,
+                            const std::vector<uint8_t> &rgba) {
+    if (!width || !height || !layers || width > limits.maxTextureDimension2D
+        || height > limits.maxTextureDimension2D || layers > limits.maxTextureArrayLayers
+        || uint64_t(width) * height * layers * 4 != rgba.size())
+      throw std::runtime_error("cookie dimensions do not match pixels or device limits");
+    auto value = resource({{"texture", {{"format", "rgba8unorm"}, {"dimension", "d2_array"},
+        {"usage", "TEXTURE_BINDING | COPY_DST"}, {"size", {width, height, layers}}}}});
+    gpu::TexelCopyTextureInfo destination;
+    destination.texture = value.texture;
+    gpu::TexelCopyBufferLayout layout;
+    layout.bytesPerRow = width * 4;
+    layout.rowsPerImage = height;
+    gpu::Extent3D extent = {width, height, layers};
+    queue.WriteTexture(&destination, rgba.data(), rgba.size(), &layout, &extent);
+    cookie_view = value.view;
+  }
   Resource resource(const Json &shape) {
     Resource result;
     result.shape = shape;
@@ -600,6 +617,10 @@ struct Renderer::Impl {
       entry.visibility = gpu::ShaderStage::Fragment;
       entries.push_back(entry);
     }
+    entry = layout_entry(WXSL_BINDING_LIGHT_COOKIES,
+        {{"kind", "texture"}, {"sample_type", "float"}, {"dimension", "d2_array"}});
+    entry.visibility = gpu::ShaderStage::Fragment;
+    entries.push_back(entry);
     frame_layout = layout(entries);
     const auto views = read(root, data.at("frame").at("views"));
     if (views.size() % sizeof(WxslCameraUniform) != 0)
@@ -662,6 +683,9 @@ struct Renderer::Impl {
     value = resource({{"texture", {{"format", "rgba16float"}, {"dimension", "cube"},
                         {"usage", "TEXTURE_BINDING"}, {"size", {1, 1, 6}}}}});
     environment_placeholder = value.view;
+    value = resource({{"texture", {{"format", "rgba8unorm"}, {"dimension", "d2_array"},
+        {"usage", "TEXTURE_BINDING"}, {"size", {1, 1, 1}}}}});
+    cookie_view = value.view;
     for (const auto &row : data.at("meshes")) {
       vertices.push_back(buffer(read(root, row.at("vertices")), gpu::BufferUsage::Vertex));
       indices.push_back(buffer(read(root, row.at("indices")), gpu::BufferUsage::Index));
@@ -817,6 +841,10 @@ struct Renderer::Impl {
     entry = {};
     entry.binding = WXSL_BINDING_ENVIRONMENT_SAMPLER;
     entry.sampler = lut_sampler;
+    entries.push_back(entry);
+    entry = {};
+    entry.binding = WXSL_BINDING_LIGHT_COOKIES;
+    entry.textureView = cookie_view;
     entries.push_back(entry);
     const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
     for (size_t index = 0; index < 2; ++index) {
@@ -1190,6 +1218,10 @@ void Renderer::upload_material_params(size_t index, const std::vector<uint8_t> &
 float Renderer::upload_environment_image(const std::string &label, uint32_t width, uint32_t height,
                                         const std::vector<float> &rgb) {
   return impl_->upload_environment_image(label, width, height, rgb);
+}
+void Renderer::upload_light_cookies(uint32_t width, uint32_t height, uint32_t layers,
+                                    const std::vector<uint8_t> &rgba) {
+  impl_->upload_light_cookies(width, height, layers, rgba);
 }
 void Renderer::set_environment_scale(float scale) { impl_->set_environment_scale(scale); }
 size_t Renderer::pipeline_count() const { return impl_->render_pipelines.size(); }

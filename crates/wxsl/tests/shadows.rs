@@ -195,7 +195,25 @@ impl Scene {
         ground: &Material,
         caster: Option<&Material>,
     ) -> Vec<u8> {
-        let mut items = vec![DrawItem::new(&self.ground, ground)];
+        self.render_lowered(
+            environment,
+            ground,
+            caster,
+            Mat4::from_translation(Vec3::ZERO),
+        )
+    }
+
+    /// The same, with the ground plane moved by `floor` — the gallery's
+    /// floor hangs below the origin, and the difference has to be
+    /// reachable from the tests that pin it.
+    fn render_lowered(
+        &mut self,
+        environment: &Environment,
+        ground: &Material,
+        caster: Option<&Material>,
+        floor: Mat4,
+    ) -> Vec<u8> {
+        let mut items = vec![DrawItem::new(&self.ground, ground).with_transform(floor)];
         if let Some(caster) = caster {
             items.push(
                 DrawItem::new(&self.caster, caster)
@@ -289,6 +307,526 @@ fn a_caster_darkens_the_ground_beneath_it_and_nowhere_else() {
         brightness(&shadowed, beside),
         brightness(&unshadowed, beside),
         "ground away from the caster is untouched"
+    );
+}
+
+/// The cascaded twin of the test above: the same sun, the same caster, the
+/// shadow split over four camera-fitted cascades instead of one box.
+///
+/// The second half moves the camera: a cascade is fitted to the view, so
+/// the shadow has to still be under the caster afterwards — a fixed box
+/// would pass the first half and smear away on the second.
+#[test]
+fn four_cascades_shadow_the_ground_and_follow_the_camera() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "cascade receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+
+    let sun = |casting: bool| {
+        let mut light = Light::directional(Vec3::Y, Vec3::ONE, 3.0)
+            .casting_shadow(4.0)
+            .with_cascades(4);
+        light.casts_shadow = casting;
+        let mut environment = lit(false);
+        environment.lights = vec![light];
+        environment
+    };
+    let unshadowed = scene.render(&sun(false), &ground, Some(&caster));
+    let shadowed = scene.render(&sun(true), &ground, Some(&caster));
+
+    let under = Vec3::ZERO;
+    let beside = Vec3::new(0.0, 0.0, 2.0);
+    assert!(
+        brightness(&shadowed, under) + SHADOW_DROP < brightness(&unshadowed, under),
+        "the nearest cascade must shadow under the caster: {} vs {}",
+        brightness(&shadowed, under),
+        brightness(&unshadowed, under),
+    );
+    assert_eq!(
+        brightness(&shadowed, beside),
+        brightness(&unshadowed, beside),
+        "ground away from the caster is untouched"
+    );
+
+    // The camera walks away and looks back: every cascade is refitted, and
+    // the caster's shadow comes with it.
+    let mut moved = sun(true);
+    moved.camera.eye = Vec3::new(4.0, 2.5, 6.0);
+    moved.camera.target = Vec3::ZERO;
+    let followed = scene.render(&moved, &ground, Some(&caster));
+    let mut moved_uncast = moved;
+    moved_uncast.lights[0].casts_shadow = false;
+    let unshadowed_moved = scene.render(&moved_uncast, &ground, Some(&caster));
+    assert!(
+        brightness(&followed, under) + SHADOW_DROP < brightness(&unshadowed_moved, under),
+        "the shadow follows the refitted cascades: {} vs {}",
+        brightness(&followed, under),
+        brightness(&unshadowed_moved, under),
+    );
+}
+
+/// A slanted sun must not darken an unobstructed floor as the camera's
+/// depth crosses the split and its blend band, even on low-resolution tiles.
+#[test]
+fn cascaded_floor_has_no_acne_across_splits() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    scene.ground = Mesh::plane(&scene.gpu.device, 80.0);
+    let ground = scene.material(
+        &plain(&scene.registry, "cascade floor"),
+        &MaterialConfig::default(),
+    );
+    let mut environment = lit(false);
+    environment.camera = Camera {
+        eye: Vec3::new(1.0, 6.0, 10.5),
+        target: Vec3::new(0.0, -0.8, 0.0),
+        ..Camera::default()
+    };
+    // Six preceding tiles force the cascades onto the smaller atlas slots.
+    environment.lights = vec![
+        Light::point(Vec3::Y, Vec3::ONE, 0.0).casting_shadow(4.0),
+        Light::directional(Vec3::new(0.7, 0.75, 0.45), Vec3::ONE, 3.0)
+            .casting_shadow(24.0)
+            .with_cascades(4),
+    ];
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let shadowed = scene.render(&environment, &ground, None);
+        let mut uncast = environment.clone();
+        uncast.lights[1].casts_shadow = false;
+        let reference = scene.render(&uncast, &ground, None);
+        let mut checked = 0;
+        for (actual, expected) in shadowed.chunks_exact(4).zip(reference.chunks_exact(4)) {
+            if expected[1] > 80 {
+                assert!(
+                    actual[1].abs_diff(expected[1]) <= 1,
+                    "unobstructed floor darkened: {} vs {}",
+                    actual[1],
+                    expected[1]
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 500, "must check visible floor pixels");
+    }
+}
+
+/// The end of a grazing sun's shadow must stay in place when its atlas
+/// texels get coarser; increasing the normal offset would move it inwards.
+#[test]
+fn coarser_cascades_preserve_the_shadow_tip() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    scene.caster = Mesh::plane(&scene.gpu.device, 4.0);
+    scene.ground = Mesh::plane(&scene.gpu.device, 40.0);
+    let graph = plain(&scene.registry, "shadow length");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    let mut environment = lit(false);
+    environment.camera.eye.x = -2.0;
+    environment.camera.target.x = -2.0;
+    let mut sun = Light::directional(Vec3::new(1.0, 0.4, 0.0), Vec3::ONE, 5.0).casting_shadow(4.0);
+    sun.shadow_distance = 12.0;
+    sun.shadow_normal_bias = 0.005;
+    environment.lights = vec![
+        Light::point(Vec3::Y, Vec3::ONE, 0.0).casting_shadow(4.0),
+        sun,
+    ];
+    // Quad edge x=-2 at height 1 casts its tip at x=-4.5.
+    let clip = environment.camera.view_proj() * Vec3::new(-4.2, 0.0, 0.0).extend(1.0);
+    let ndc = clip.xyz() / clip.w;
+    let x = ((ndc.x * 0.5 + 0.5) * SIZE as f32) as u32;
+    let y = ((0.5 - ndc.y * 0.5) * SIZE as f32) as u32;
+    assert!(x < SIZE && y < SIZE);
+    let pixel = ((y * SIZE + x) * 4 + 1) as usize;
+    for count in [2, 3, 4] {
+        environment.lights[1].shadow_cascades = count;
+        let shadowed = scene.render(&environment, &ground, Some(&caster));
+        let mut uncast = environment.clone();
+        uncast.lights[1].casts_shadow = false;
+        let reference = scene.render(&uncast, &ground, Some(&caster));
+        assert!(
+            shadowed[pixel] + SHADOW_DROP < reference[pixel],
+            "shadow tip lost with {count} cascades: {} vs {}",
+            shadowed[pixel],
+            reference[pixel]
+        );
+    }
+}
+
+/// A point light now casts through all six of its faces: a floating plate
+/// under the light darkens the ground beneath it, on every pipeline.
+///
+/// The light sits straight above, so the ground under it samples the +y
+/// face and the other five contribute nothing — one tile of the six does
+/// all the work, which is also the assertion that the face picked by
+/// dominant axis is the face the pass drew.
+#[test]
+fn a_point_light_casts_through_its_faces() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "point receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+
+    let environment = |casting: bool| {
+        let mut light = Light::point(Vec3::new(0.0, 2.5, 0.0), Vec3::ONE, 12.0);
+        light.shadow_distance = 8.0;
+        light.casts_shadow = casting;
+        let mut environment = lit(false);
+        environment.lights = vec![light];
+        environment
+    };
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let unshadowed = scene.render(&environment(false), &ground, Some(&caster));
+        let shadowed = scene.render(&environment(true), &ground, Some(&caster));
+        assert!(
+            brightness(&shadowed, Vec3::ZERO) + SHADOW_DROP < brightness(&unshadowed, Vec3::ZERO),
+            "{}: the plate must shadow the ground beneath the light",
+            pipeline.name()
+        );
+        // Off the plate's projection (its shadow's half-edge is
+        // 0.5 * 2.5 / 1.5 ≈ 0.83), the ground is untouched.
+        assert_eq!(
+            brightness(&shadowed, Vec3::new(0.0, 0.0, 2.0)),
+            brightness(&unshadowed, Vec3::new(0.0, 0.0, 2.0)),
+            "{}: ground away from the plate is untouched",
+            pipeline.name()
+        );
+    }
+}
+
+/// The normal offset can move a receiver across a cube-face boundary.
+/// A fully shadowed strip straddling that boundary must stay dark.
+#[test]
+fn point_shadow_has_no_lit_gap_at_a_cube_face_edge() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let size = 256;
+    scene.target = OffscreenTarget::new(&scene.gpu.device, size, size);
+    scene.renderer = Renderer::new(
+        &scene.gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(size, size, scene.target.format()),
+    )
+    .unwrap();
+    scene.caster = Mesh::plane(&scene.gpu.device, 2.0);
+    let graph = plain(&scene.registry, "cube edge receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    let mut environment = lit(false);
+    environment.camera.eye = Vec3::new(2.0, 3.0, 5.0);
+    environment.camera.target = Vec3::new(2.0, 0.0, 0.0);
+    environment.lights =
+        vec![Light::point(Vec3::new(0.0, 2.0, 0.0), Vec3::ONE, 30.0).casting_shadow(4.0)];
+    let render = |scene: &mut Scene, environment: &Environment| {
+        let draws: DrawList<'_> = vec![
+            DrawItem::new(&scene.ground, &ground),
+            DrawItem::new(&scene.caster, &caster)
+                .with_transform(Mat4::from_translation(Vec3::new(1.0, 1.0, 0.0))),
+        ]
+        .into_iter()
+        .collect();
+        scene
+            .renderer
+            .render(
+                &scene.gpu.device,
+                &scene.gpu.queue,
+                &RenderRequest {
+                    view: scene.target.view(),
+                    environment,
+                    draws: &draws,
+                },
+            )
+            .unwrap();
+        scene.gpu.wait();
+        scene.target.read_rgba8(&scene.gpu.device, &scene.gpu.queue)
+    };
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let shadowed = render(&mut scene, &environment);
+        let mut uncast = environment.clone();
+        uncast.lights[0].casts_shadow = false;
+        let reference = render(&mut scene, &uncast);
+        // The plate projects to x=[0,4], z=[-2,2]. The -y/+x cube
+        // boundary crosses its interior at x=2, far from the shadow edge.
+        for x in [1.92, 1.95, 1.98, 2.0, 2.02, 2.05, 2.08] {
+            for z in [-0.3, 0.0, 0.3] {
+                let clip = environment.camera.view_proj() * Vec3::new(x, 0.0, z).extend(1.0);
+                let ndc = clip.xyz() / clip.w;
+                let px = ((ndc.x * 0.5 + 0.5) * size as f32) as u32;
+                let py = ((0.5 - ndc.y * 0.5) * size as f32) as u32;
+                assert!(px < size && py < size);
+                let pixel = ((py * size + px) * 4 + 1) as usize;
+                assert!(
+                    shadowed[pixel] + SHADOW_DROP < reference[pixel],
+                    "{}: cube edge ({x}, {z}) is lit: {} vs {}",
+                    pipeline.name(),
+                    shadowed[pixel],
+                    reference[pixel]
+                );
+            }
+        }
+    }
+}
+
+/// Finite emission has a fully occluded centre, partially visible fringe,
+/// and no emission from its back. Both pipelines integrate the same samples.
+#[test]
+fn rectangular_area_light_casts_a_penumbra_and_emits_on_one_side() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "area receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    let area = Light::rectangle(
+        Vec3::new(0.0, 2.5, 0.0),
+        Vec3::X * 1.5,
+        Vec3::Z * 0.5,
+        Vec3::ONE,
+        12.0,
+    )
+    .casting_shadow(4.0);
+    let mut env = lit(false);
+    env.lights = vec![area];
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let empty_shadow = scene.render(&env, &ground, None);
+        let mut uncast_empty = env.clone();
+        uncast_empty.lights[0].casts_shadow = false;
+        let empty_reference = scene.render(&uncast_empty, &ground, None);
+        for (actual, expected) in empty_shadow
+            .chunks_exact(4)
+            .zip(empty_reference.chunks_exact(4))
+        {
+            assert!(
+                actual[1].abs_diff(expected[1]) <= 1,
+                "unobstructed area-lit floor darkened: {} vs {}",
+                actual[1],
+                expected[1]
+            );
+        }
+        let shadowed = scene.render(&env, &ground, Some(&caster));
+        let mut uncast = env.clone();
+        uncast.lights[0].casts_shadow = false;
+        let lit = scene.render(&uncast, &ground, Some(&caster));
+        let centre_drop =
+            i16::from(brightness(&lit, Vec3::ZERO)) - i16::from(brightness(&shadowed, Vec3::ZERO));
+        let fringe = Vec3::new(1.0, 0.0, 0.0);
+        let fringe_drop =
+            i16::from(brightness(&lit, fringe)) - i16::from(brightness(&shadowed, fringe));
+        assert!(
+            centre_drop > i16::from(SHADOW_DROP),
+            "area must cast an umbra: {centre_drop}"
+        );
+        assert!(
+            fringe_drop > 5 && fringe_drop < centre_drop - 10,
+            "area must cast a partially occluded fringe: {fringe_drop} vs {centre_drop}"
+        );
+        let mut back = env.clone();
+        back.lights[0].area_v = -back.lights[0].area_v;
+        let backside = scene.render(&back, &ground, None);
+        back.lights.clear();
+        let ambient = scene.render(&back, &ground, None);
+        assert_eq!(backside, ambient, "back of the rectangle emits nothing");
+    }
+}
+
+#[test]
+fn spotlight_cone_cookie_and_shadow_agree_on_both_paths() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "spot receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    let mut env = lit(false);
+    env.lights = vec![Light::spot(
+        Vec3::new(0.0, 2.5, 0.0),
+        Vec3::NEG_Y,
+        20.0_f32.to_radians(),
+        40.0_f32.to_radians(),
+        Vec3::ONE,
+        20.0,
+    )
+    .casting_shadow(4.0)];
+    let cookie = scene
+        .gpu
+        .device
+        .create_texture(&wxsl::render::wgpu::TextureDescriptor {
+            label: Some("half masked spot cookie"),
+            size: wxsl::render::wgpu::Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wxsl::render::wgpu::TextureDimension::D2,
+            format: wxsl::render::wgpu::TextureFormat::Rgba8Unorm,
+            usage: wxsl::render::wgpu::TextureUsages::TEXTURE_BINDING
+                | wxsl::render::wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+    let view = cookie.create_view(&wxsl::render::wgpu::TextureViewDescriptor {
+        dimension: Some(wxsl::render::wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    scene.gpu.queue.write_texture(
+        cookie.as_image_copy(),
+        &[255, 255, 255, 255, 0, 0, 0, 255],
+        wxsl::render::wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(8),
+            rows_per_image: Some(1),
+        },
+        cookie.size(),
+    );
+    scene
+        .renderer
+        .set_light_cookies(&scene.gpu.device, Some(&view));
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let open = scene.render(&env, &ground, None);
+        let shadow = scene.render(&env, &ground, Some(&caster));
+        assert!(brightness(&shadow, Vec3::ZERO) + SHADOW_DROP < brightness(&open, Vec3::ZERO));
+        let mut masked = env.clone();
+        masked.lights[0].cookie_layer = Some(0);
+        let image = scene.render(&masked, &ground, None);
+        let white = Vec3::new(1.1, 0.0, 0.0);
+        let black = Vec3::new(-1.1, 0.0, 0.0);
+        assert!(
+            brightness(&image, black) + 25 < brightness(&open, black),
+            "cookie masks its black half"
+        );
+        assert!(
+            brightness(&image, white).abs_diff(brightness(&open, white)) <= 2,
+            "cookie preserves its white half"
+        );
+        let mut dark = env.clone();
+        dark.lights.clear();
+        let ambient = scene.render(&dark, &ground, None);
+        let outside = Vec3::new(0.0, 0.0, 3.0);
+        assert_eq!(
+            brightness(&open, outside),
+            brightness(&ambient, outside),
+            "outside cone is unlit"
+        );
+        let misses = scene.renderer.cache_stats().misses;
+        let pipelines = scene.renderer.pipeline_count();
+        scene.gpu.queue.write_texture(
+            cookie.as_image_copy(),
+            &[0, 0, 0, 255, 0, 0, 0, 255],
+            wxsl::render::wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: Some(1),
+            },
+            cookie.size(),
+        );
+        let black_image = scene.render(&masked, &ground, None);
+        assert_eq!(
+            black_image, ambient,
+            "all-black cookie masks the whole spot"
+        );
+        assert_eq!(scene.renderer.cache_stats().misses, misses);
+        assert_eq!(scene.renderer.pipeline_count(), pipelines);
+        // Restore the mask for the next pipeline.
+        scene.gpu.queue.write_texture(
+            cookie.as_image_copy(),
+            &[255, 255, 255, 255, 0, 0, 0, 255],
+            wxsl::render::wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: Some(1),
+            },
+            cookie.size(),
+        );
+    }
+}
+
+/// The light budget is sixteen: fifteen dim lamps in a ring light the
+/// ground measurably more than one of them alone, which is only true if
+/// every row of the light array reaches the shader.
+#[test]
+fn sixteen_lights_all_reach_the_shader() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "ring receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+
+    let ring = |count: usize| {
+        let mut environment = lit(false);
+        environment.lights = (0..count)
+            .map(|index| {
+                let angle = index as f32 / 16.0 * core::f32::consts::TAU;
+                Light::point(
+                    Vec3::new(angle.cos() * 2.0, 1.5, angle.sin() * 2.0),
+                    Vec3::ONE,
+                    3.0,
+                )
+            })
+            .collect();
+        environment
+    };
+    let one = scene.render(&ring(1), &ground, None);
+    let all = scene.render(&ring(abi::MAX_LIGHTS), &ground, None);
+    let centre = Vec3::ZERO;
+    assert!(
+        brightness(&all, centre) > brightness(&one, centre),
+        "sixteen lamps outshine one: {} vs {}",
+        brightness(&all, centre),
+        brightness(&one, centre)
+    );
+}
+
+/// The gallery's `point-shadow` rig, exactly: a big cube hanging below a
+/// lamp, a second cube beside it, a cool fill that casts nothing, and the
+/// ground well below both. The shadows must ring the casters' footprints
+/// on the ground, not hide beneath them.
+#[test]
+fn the_gallery_point_rig_shadows_outward() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "gallery point");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+
+    // The gallery's `point-shadow` lights, exactly — a casting lamp high
+    // overhead and a fill that casts nothing — over the floor the gallery
+    // hangs at -1.6. The camera is the harness's, which is what
+    // `brightness` projects with, so the samples land where the frame
+    // rendered them.
+    let environment = |casting: bool| {
+        let mut lamp = Light::point(Vec3::new(0.0, 4.2, 0.0), Vec3::new(1.0, 0.9, 0.75), 40.0)
+            .casting_shadow(8.0);
+        lamp.casts_shadow = casting;
+        let mut environment = lit(false);
+        environment.lights = vec![
+            lamp,
+            Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 7.0),
+        ];
+        environment
+    };
+    let floor_drop = Mat4::from_translation(Vec3::new(0.0, -1.6, 0.0));
+    let unshadowed = scene.render_lowered(&environment(false), &ground, Some(&caster), floor_drop);
+    let shadowed = scene.render_lowered(&environment(true), &ground, Some(&caster), floor_drop);
+    // The plate at height 1 casts a square of half-edge ~0.9 on the lowered
+    // floor: sample inside it and outside it.
+    let ring = Vec3::new(0.0, -1.6, 0.6);
+    let beyond = Vec3::new(0.0, -1.6, 2.0);
+    assert!(
+        brightness(&shadowed, ring) + 20 < brightness(&unshadowed, ring),
+        "the ring around the footprint must darken: {} vs {}",
+        brightness(&shadowed, ring),
+        brightness(&unshadowed, ring)
+    );
+    assert_eq!(
+        brightness(&shadowed, beyond),
+        brightness(&unshadowed, beyond),
+        "floor beyond the shadow square is untouched"
     );
 }
 

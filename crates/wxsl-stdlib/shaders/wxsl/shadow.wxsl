@@ -6,21 +6,39 @@
 // pass group is what lets the forward stage and the deferred lighting pass
 // share `shadow_factor` instead of each growing a lookup of its own.
 //
-// One depth atlas for every light (`abi::SHADOW_ATLAS_SIZE`), one tile per
-// light slot (`abi::shadow_tile`) — the key lights get the most texels,
-// which is the per-light resolution. The light carries its tile as a
-// normalized rect; a light that casts no shadow has a zero rect and is
-// skipped before anything is sampled.
+// One depth atlas for every shadow tile (`abi::SHADOW_ATLAS_SIZE`), one
+// tile per atlas slot (`abi::shadow_tile`) — the low slots get the most
+// texels, which is the per-slice resolution: a light claims a run of tiles
+// (`Light.tile_first` + `Light.tile_count`, one per cascade, six per point
+// light) and this module picks the run member that owns the fragment. A
+// light with a zero count is skipped before anything is sampled.
 
-import package::wxsl::bindings::{scene, world_origin};
+import package::wxsl::bindings::{scene, camera, world_origin, LIGHT_KIND_DIRECTIONAL, LIGHT_KIND_RECTANGLE, light_sample_position};
 
 // How many texels either side of the centre the PCF kernel reaches. 1 is a
 // 3x3 kernel of hardware-filtered comparisons, which is nine fetches and
 // looks like a 4x4 box because each fetch is already bilinear.
 const WXSL_SHADOW_PCF_RADIUS: i32 = 1;
 
+// Keep in sync with SHADOW_CASCADE_BLEND in environment.rs.
+const WXSL_SHADOW_CASCADE_BLEND: f32 = 0.1;
+
 @group(0) @binding(4) var shadow_maps: texture_depth_2d;
 @group(0) @binding(5) var shadow_sampler: sampler_comparison;
+
+// Which of a point light's six tiles the fragment belongs to: the
+// dominant axis of the surface-to-light direction, in the same order the
+// host's `CUBE_FACE_DIRECTIONS` renders them.
+fn cube_face(to_light: vec3f) -> u32 {
+    let a = abs(to_light);
+    if a.x >= a.y && a.x >= a.z {
+        return select(1u, 0u, to_light.x > 0.0);
+    }
+    if a.y >= a.z {
+        return select(3u, 2u, to_light.y > 0.0);
+    }
+    return select(5u, 4u, to_light.z > 0.0);
+}
 
 // How much of light `index` reaches `world_position`: 1.0 fully lit, 0.0
 // fully shadowed.
@@ -46,30 +64,81 @@ fn shadow_factor(
     world_normal: vec3f,
     n_dot_l: f32,
 ) -> f32 {
+    return shadow_factor_at(index, 0u, world_position, world_normal, n_dot_l);
+}
+
+fn shadow_factor_at(
+    index: u32, sample: u32, world_position: vec3f, world_normal: vec3f, n_dot_l: f32,
+) -> f32 {
     let light = scene.lights[index];
-    let rect = light.shadow_rect;
     // No tile, or a surface facing away from the light — which contributes
     // nothing whether or not it is shadowed.
-    if rect.z <= 0.0 || n_dot_l <= 0.0 {
+    if light.tile_count == 0u || n_dot_l <= 0.0 {
         return 1.0;
     }
 
-    // tan(acos(n_dot_l)), clamped: how far along the surface one texel of
-    // depth error reaches at this angle.
-    let slope = clamp(sqrt(1.0 - n_dot_l * n_dot_l) / max(n_dot_l, 1e-3), 0.0, 4.0);
-    let offset = world_normal * light.shadow_normal_bias * (1.0 + slope);
+    // `world_position` may be relative to the eye; every matrix and light
+    // position here is absolute, so the origin goes back on first (see
+    // `world_origin`).
+    let absolute = world_position + world_origin();
+    var tile_index = light.tile_first;
+    var blend = 0.0;
+    if light.tile_count > 1u {
+        if light.kind != LIGHT_KIND_DIRECTIONAL {
+            // Select the face after normal offset, just as the projection
+            // below does. The offset can cross an edge; selecting from the
+            // original point would leave the chosen face and return lit.
+            let offset = shadow_normal_offset(world_normal, light.shadow_normal_bias, n_dot_l);
+            tile_index = tile_index + sample * 6u + cube_face(absolute + offset - light_sample_position(index, sample));
+        } else {
+            // Perspective clip.w is camera view depth, exactly the metric
+            // used to fit the slices (also independent of TAA jitter).
+            let reach = (camera.view_proj * vec4f(absolute, 1.0)).w;
+            tile_index = light.tile_first + light.tile_count - 1u;
+            var previous_split = 0.0;
+            for (var t = 0u; t < light.tile_count - 1u; t = t + 1u) {
+                let candidate = light.tile_first + t;
+                let split = scene.shadow_tiles[candidate].split;
+                if reach < split {
+                    tile_index = candidate;
+                    let start = split - (split - previous_split) * WXSL_SHADOW_CASCADE_BLEND;
+                    blend = smoothstep(start, split, reach);
+                    break;
+                }
+                previous_split = split;
+            }
+        }
+    }
+    let shadow = sample_shadow_tile(tile_index, absolute, world_normal, n_dot_l,
+        light.shadow_normal_bias, (light.kind == LIGHT_KIND_DIRECTIONAL && light.tile_count > 1u) || light.kind == LIGHT_KIND_RECTANGLE);
+    if blend > 0.0 {
+        let next = sample_shadow_tile(tile_index + 1u, absolute, world_normal, n_dot_l,
+            light.shadow_normal_bias, true);
+        return mix(shadow, next, blend);
+    }
+    return shadow;
+}
 
-    // `shadow_view_proj` is absolute, so this is one of the two places
-    // that has to put the origin back (see `world_origin`).
-    let clip =
-        light.shadow_view_proj * vec4f(world_position + offset + world_origin(), 1.0);
+fn sample_shadow_tile(
+    tile_index: u32,
+    absolute: vec3f,
+    world_normal: vec3f,
+    n_dot_l: f32,
+    normal_bias: f32,
+    receiver_plane: bool,
+) -> f32 {
+    let tile = scene.shadow_tiles[tile_index];
+    let rect = tile.rect;
+
+    let offset = shadow_normal_offset(world_normal, normal_bias, n_dot_l);
+    let clip = tile.view_proj * vec4f(absolute + offset, 1.0);
     let ndc = clip.xyz / clip.w;
     // Past the far plane of the light's view: nothing was rendered there to
     // cast a shadow, so it is lit rather than black.
     if ndc.z <= 0.0 || ndc.z >= 1.0 {
         return 1.0;
     }
-    // Inside the light's own tile: the atlas is shared, and a projection
+    // Inside the tile itself: the atlas is shared, and a projection
     // that leaves the frustum must not read the neighbour's texels.
     let local = vec2f(ndc.x, -ndc.y) * 0.5 + vec2f(0.5);
     if local.x < 0.0 || local.x > 1.0 || local.y < 0.0 || local.y > 1.0 {
@@ -79,6 +148,26 @@ fn shadow_factor(
 
     // Atlas UVs advance by one atlas texel, regardless of tile size.
     let texel = 1.0 / vec2f(textureDimensions(shadow_maps));
+    // The receiver plane gives the reference depth at each texel centre.
+    // Correct each bilinear comparison separately: one shared reference
+    // would still self-shadow the far cascades on a slanted surface.
+    var depth_gradient = vec2f(0.0);
+    if receiver_plane {
+        // Differentiate the projected receiver plane analytically; this
+        // works for both orthographic cascades and perspective area faces.
+        let axis = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(world_normal.y) > 0.9);
+        let tangent = normalize(cross(world_normal, axis));
+        let bitangent = cross(world_normal, tangent);
+        let a_clip = tile.view_proj * vec4f(tangent, 0.0);
+        let b_clip = tile.view_proj * vec4f(bitangent, 0.0);
+        let a = (a_clip.xyz - ndc * a_clip.w) / clip.w;
+        let b = (b_clip.xyz - ndc * b_clip.w) / clip.w;
+        let det = a.x * b.y - a.y * b.x;
+        if abs(det) > 1e-12 {
+            depth_gradient = vec2f(a.z * b.y - a.y * b.z, a.x * b.z - a.z * b.x)
+                / det * vec2f(2.0, -2.0) / rect.zw;
+        }
+    }
     var sum = 0.0;
     var taps = 0.0;
     for (var y = -WXSL_SHADOW_PCF_RADIUS; y <= WXSL_SHADOW_PCF_RADIUS; y = y + 1) {
@@ -89,9 +178,48 @@ fn shadow_factor(
             // uniform control flow: this is called from inside a light loop
             // after an early return, and a shadow map has no mip chain to
             // pick a level from anyway.
-            sum = sum + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, ndc.z);
+            if receiver_plane {
+                sum = sum + compare_receiver_plane(tap, uv, ndc.z, depth_gradient, rect, texel);
+            } else {
+                sum = sum + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, ndc.z);
+            }
             taps = taps + 1.0;
         }
     }
     return sum / taps;
+}
+
+// Bilinear depth comparison with the receiver's depth at each fetched
+// texel, retaining the comparison sampler's PCF weights and tile clamp.
+fn compare_receiver_plane(
+    tap: vec2f, uv: vec2f, depth: f32, gradient: vec2f, rect: vec4f, texel: vec2f,
+) -> f32 {
+    let pixel = tap / texel - vec2f(0.5);
+    let base = vec2i(floor(pixel));
+    let fraction = fract(pixel);
+    let low = vec2i(round(rect.xy / texel));
+    let high = vec2i(round((rect.xy + rect.zw) / texel)) - vec2i(1);
+    var result = 0.0;
+    for (var y = 0; y < 2; y = y + 1) {
+        for (var x = 0; x < 2; x = x + 1) {
+            let coord = clamp(base + vec2i(x, y), low, high);
+            let centre = (vec2f(coord) + vec2f(0.5)) * texel;
+            let reference = depth + dot(gradient, centre - uv);
+            let stored = textureLoad(shadow_maps, coord, 0);
+            let weight = select(1.0 - fraction.x, fraction.x, x == 1)
+                * select(1.0 - fraction.y, fraction.y, y == 1);
+            result = result + select(0.0, 1.0, reference <= stored) * weight;
+        }
+    }
+    return result;
+}
+
+fn shadow_normal_offset(normal: vec3f, bias: f32, n_dot_l: f32) -> vec3f {
+    return normal * bias * (1.0 + slope(n_dot_l));
+}
+
+// tan(acos(n_dot_l)), clamped: how far along the surface one texel of
+// depth error reaches at this angle.
+fn slope(n_dot_l: f32) -> f32 {
+    return clamp(sqrt(1.0 - n_dot_l * n_dot_l) / max(n_dot_l, 1e-3), 0.0, 4.0);
 }

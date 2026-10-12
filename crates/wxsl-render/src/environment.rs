@@ -132,6 +132,8 @@ pub struct FrameBindings {
     environment_scale: Option<f32>,
     environment_maps: [wgpu::TextureView; 2],
     environment_placeholder: wgpu::TextureView,
+    cookie_view: wgpu::TextureView,
+    cookie_placeholder: wgpu::TextureView,
     /// One buffer and bind group per *declared attribute* row shape,
     /// keyed by [`BufferLayout::signature`]. The empty shape — a material
     /// declaring none — is always present and is what a pass with no
@@ -264,6 +266,25 @@ impl FrameBindings {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let cookie_placeholder = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("wxsl cookie placeholder"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
         let environment_placeholder = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("wxsl environment placeholder"),
@@ -358,6 +379,16 @@ impl FrameBindings {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_LIGHT_COOKIES,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
                 cube_layout(abi::BINDING_ENVIRONMENT_DIFFUSE),
                 cube_layout(abi::BINDING_ENVIRONMENT_SPECULAR),
             ],
@@ -377,6 +408,8 @@ impl FrameBindings {
             environment_lut,
             environment_lut_view,
             environment_lut_sampler,
+            cookie_view: cookie_placeholder.clone(),
+            cookie_placeholder,
             environment_lut_baked: false,
             environment_source: None,
             environment_scale: None,
@@ -435,6 +468,12 @@ impl FrameBindings {
     /// applies to the pass form of this bake (ADR 0035).
     pub fn mark_environment_baked(&mut self) {
         self.environment_lut_baked = true;
+    }
+
+    /// Bind host-owned, filterable RGBA D2Array spotlight cookies (ADR 0073).
+    pub fn set_light_cookies(&mut self, device: &wgpu::Device, view: Option<&wgpu::TextureView>) {
+        self.cookie_view = view.unwrap_or(&self.cookie_placeholder).clone();
+        self.rebuild_groups(device);
     }
 
     /// Bind `texture` as the shadow maps.
@@ -546,6 +585,10 @@ impl FrameBindings {
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_SHADOW_SAMPLER,
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_LIGHT_COOKIES,
+                    resource: wgpu::BindingResource::TextureView(&self.cookie_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_ENVIRONMENT_LUT,

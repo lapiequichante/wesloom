@@ -45,6 +45,11 @@ int main(int argc, char **argv) {
     require(argc == 2, "renderer_smoke needs the exported --probes bundle");
     const std::filesystem::path root = argv[1];
     wxsl::Renderer renderer(root);
+    bool invalid_cookie = false;
+    try { renderer.upload_light_cookies(2, 1, 1, {255, 255, 255, 255}); }
+    catch (const std::runtime_error &) { invalid_cookie = true; }
+    require(invalid_cookie, "cookie upload accepted mismatched dimensions");
+    renderer.upload_light_cookies(1, 1, 1, {255, 255, 255, 255});
     const auto first = renderer.render("buffer_probe");
     require(first == renderer.render("buffer_probe", 2), "stable buffer was lost between calls");
     require(renderer.pass_run_count("fill ramp") == 1, "once compute was recorded again");

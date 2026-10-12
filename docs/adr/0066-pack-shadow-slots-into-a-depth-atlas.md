@@ -33,9 +33,28 @@ separate allocation policy before cascades and light lists are designed.
 
 ## Consequences
 
-This lands the atlas part of N7, not camera-following cascades, six-face
-point shadows or compute light lists. The light budget remains four.
+The initial landing covered the atlas with four light slots.
+[0071](0071-fit-cascades-and-pack-point-shadow-faces.md) adds camera-following
+cascades and six-face point shadows;
+[0072](0072-integrate-rectangular-area-lights-with-shadowed-quadrature.md) records
+sixteen uniform lights, sampled rectangular emission and 112 tiles.
+[0073](0073-project-spotlight-cookies-through-the-frame-group.md) adds shadowed
+spotlights and projected cookies.
+Compute-built/clustered light lists remain open.
 Changing the frame texture dimension and light stride requires regenerating
 host headers and backend exports. Existing exported bundles must be rebaked.
 Gallery orbit controls are example-local; moving cameras also supply the
 previous camera to temporal passes, while headless screenshots stay fixed.
+
+Camera-fitted cascades use view-depth splits and full eight-corner slice
+bounds, with a stable snapped sphere sized for the actual allocated tile.
+Adjacent slices overlap over the last 10% of the preceding interval and
+the lookup blends their PCF results there. The depth range includes casters
+towards the light. Cascades retain the authored normal offset and correct
+each bilinear PCF comparison against the receiver plane at that texel, so
+coarser cascades do not require larger offsets that shorten shadows. The
+host and shader blend fractions must stay in sync.
+
+Point-light face selection uses the normal-offset receiver position, the
+same position projected for the depth comparison. Selecting a face before
+the offset can move the lookup outside it and create a lit gap at cube edges.
