@@ -238,6 +238,25 @@ pub struct UiState {
     scroll: HashMap<Id, Vec2>,
     drag_origin: HashMap<Id, f32>,
     color_picker: Option<Id>,
+    /// The dropdown whose list is open, if any — drawn last, over
+    /// everything, by [`Ui::show_popup`].
+    popup: Option<Popup>,
+    /// A choice made in an open list, waiting for its dropdown to read it
+    /// back on the next frame.
+    popup_choice: Option<(Id, usize)>,
+}
+
+/// An open dropdown list: where its button is and what it offers.
+#[derive(Debug)]
+struct Popup {
+    id: Id,
+    anchor: Rect,
+    /// Each option's label, and whether it can be picked.
+    options: Vec<(String, bool)>,
+    selected: usize,
+    /// Whether the dropdown was built this frame; a list whose button went
+    /// away (a panel switched, a row deleted) closes rather than floating.
+    seen: bool,
 }
 
 impl UiState {
@@ -267,6 +286,8 @@ impl UiState {
             scroll: HashMap::new(),
             drag_origin: HashMap::new(),
             color_picker: None,
+            popup: None,
+            popup_choice: None,
         }
     }
 
@@ -619,6 +640,193 @@ impl<'a> Ui<'a> {
         };
         self.truncated_label(rect.shrink(4.0), label, text_color, Align::Center);
         response
+    }
+
+    /// A closed set of choices behind one button: the current option's
+    /// label, and a list over the rest of the interface when clicked.
+    ///
+    /// The list itself is drawn by [`Ui::show_popup`] at the end of the
+    /// frame, so it lands on top of panels built after this one; a pick is
+    /// read back here on the next frame, the same one-frame latency every
+    /// request in the editor has. Disabled options are shown, greyed, and
+    /// cannot be picked.
+    pub fn dropdown(
+        &mut self,
+        id: Id,
+        rect: Rect,
+        options: &[(&str, bool)],
+        selected: &mut usize,
+    ) -> Response {
+        let mut response = self.interact(id, rect);
+        if let Some((chosen, index)) = self.state.popup_choice {
+            if chosen == id {
+                self.state.popup_choice = None;
+                if index != *selected && index < options.len() {
+                    *selected = index;
+                    response.changed = true;
+                }
+            }
+        }
+        let open = self
+            .state
+            .popup
+            .as_ref()
+            .is_some_and(|popup| popup.id == id);
+        if response.clicked && !open {
+            self.state.popup = Some(Popup {
+                id,
+                anchor: rect,
+                options: Vec::new(),
+                selected: *selected,
+                seen: true,
+            });
+        }
+        if let Some(popup) = self.state.popup.as_mut().filter(|popup| popup.id == id) {
+            // Refreshed every frame: the button may have scrolled, and the
+            // options may have changed under it.
+            popup.anchor = rect;
+            popup.options = options
+                .iter()
+                .map(|&(label, enabled)| (label.to_string(), enabled))
+                .collect();
+            popup.selected = *selected;
+            popup.seen = true;
+        }
+
+        let theme = self.state.theme;
+        let open = self
+            .state
+            .popup
+            .as_ref()
+            .is_some_and(|popup| popup.id == id);
+        let background = if open || response.dragging {
+            theme.palette.control_active
+        } else if response.hovered {
+            theme.palette.control_hover
+        } else {
+            theme.palette.control
+        };
+        self.state
+            .draw
+            .round_rect(rect, theme.metrics.radius, background);
+        // A chevron from four bars, since the draw list has no triangles.
+        let size = (rect.height() * 0.3).max(4.0);
+        let (chevron_rect, label_rect) = rect.split_right(size + theme.metrics.padding * 1.5);
+        let tip = Vec2::new(
+            chevron_rect.center().x - theme.metrics.padding * 0.25,
+            rect.center().y,
+        );
+        let bars = 4;
+        for bar in 0..bars {
+            let width = size * (1.0 - bar as f32 / bars as f32);
+            let height = size * 0.5 / bars as f32;
+            let y = tip.y - size * 0.25 + height * bar as f32;
+            self.state.draw.rect(
+                Rect::from_min_size(Vec2::new(tip.x - width * 0.5, y), Vec2::new(width, height)),
+                theme.palette.text_dim,
+            );
+        }
+        let label = options.get(*selected).map_or("", |&(label, _)| label);
+        self.truncated_label(
+            label_rect.shrink(4.0),
+            label,
+            theme.palette.text,
+            Align::Left,
+        );
+        response
+    }
+
+    /// Draw the open dropdown list, if any, over everything built so far.
+    ///
+    /// Call once per frame, after every panel. While a list is open the
+    /// rest of the interface is modal-blocked; a press outside the list,
+    /// or Escape, closes it without picking.
+    pub fn show_popup(&mut self, screen: Rect) {
+        let Some(popup) = self.state.popup.as_mut() else {
+            return;
+        };
+        if !popup.seen {
+            self.state.popup = None;
+            self.close_modal();
+            return;
+        }
+        popup.seen = false;
+        let (id, anchor, selected) = (popup.id, popup.anchor, popup.selected);
+        let options = popup.options.clone();
+        let theme = self.state.theme;
+        let metrics = theme.metrics;
+
+        let widest = options
+            .iter()
+            .map(|(label, _)| self.measure_ui(label).x)
+            .fold(0.0_f32, f32::max);
+        let width = anchor.width().max(widest + metrics.padding * 3.0);
+        let height = metrics.row_height * options.len() as f32 + metrics.padding;
+        // Below the button when it fits, above it when it does not.
+        let below = anchor.max.y + 2.0;
+        let top = if below + height > screen.max.y && anchor.min.y - height - 2.0 >= screen.min.y {
+            anchor.min.y - height - 2.0
+        } else {
+            below
+        };
+        let left = anchor.min.x.min(screen.max.x - width).max(screen.min.x);
+        let list = Rect::from_min_size(Vec2::new(left, top), Vec2::new(width, height));
+        self.open_modal(list);
+
+        self.state.draw.push_clip(screen);
+        self.state
+            .draw
+            .round_rect(list.expand(1.0), metrics.radius, theme.palette.outline);
+        self.state
+            .draw
+            .round_rect(list, metrics.radius, theme.palette.panel);
+        let mut picked = None;
+        for (index, (label, enabled)) in options.iter().enumerate() {
+            let row = Rect::from_min_size(
+                Vec2::new(
+                    list.min.x,
+                    list.min.y + metrics.padding * 0.5 + metrics.row_height * index as f32,
+                ),
+                Vec2::new(list.width(), metrics.row_height),
+            );
+            let response = self.interact(id.with(0x5050_0000 + index as u64), row);
+            if *enabled && response.hovered {
+                self.state
+                    .draw
+                    .rect(row.shrink(2.0), theme.palette.control_hover);
+            }
+            let color = if !enabled {
+                theme.palette.text_dim.with_alpha(0.5)
+            } else if index == selected {
+                theme.palette.accent
+            } else {
+                theme.palette.text
+            };
+            self.truncated_label(
+                Rect::from_min_max(row.min + Vec2::new(metrics.padding, 0.0), row.max),
+                label,
+                color,
+                Align::Left,
+            );
+            if *enabled && response.clicked {
+                picked = Some(index);
+            }
+        }
+        self.state.draw.pop_clip();
+
+        let pressed_outside = self.input.pressed(MouseButton::Left)
+            && self
+                .input
+                .pointer()
+                .is_some_and(|point| !list.contains(point));
+        if let Some(index) = picked {
+            self.state.popup_choice = Some((id, index));
+        }
+        if picked.is_some() || pressed_outside || self.input.key_pressed(Key::Escape) {
+            self.state.popup = None;
+            self.close_modal();
+            self.claim_pointer();
+        }
     }
 
     /// A checkbox with a label to its right.

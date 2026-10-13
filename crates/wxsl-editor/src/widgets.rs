@@ -606,6 +606,36 @@ pub fn macro_editor(
     }
 }
 
+/// A setting's editor: a dropdown over `choices` when the setting has a
+/// closed set, a text field otherwise. Returns the new value when it
+/// changed. A pinned value outside the choices (an older document, a
+/// hand edit) stays visible as one more option rather than vanishing.
+pub fn setting_editor(
+    ui: &mut Ui<'_>,
+    id: Id,
+    rect: Rect,
+    current: &str,
+    choices: &[String],
+) -> Option<String> {
+    if choices.is_empty() {
+        let mut value = current.to_string();
+        return ui
+            .text_field(id, rect, &mut value)
+            .changed
+            .then(|| value.trim().to_string());
+    }
+    let mut options: Vec<(&str, bool)> = choices.iter().map(|c| (c.as_str(), true)).collect();
+    let mut selected = choices.iter().position(|choice| choice == current);
+    if selected.is_none() {
+        options.push((current, true));
+        selected = Some(options.len() - 1);
+    }
+    let mut selected = selected.expect("set above");
+    ui.dropdown(id, rect, &options, &mut selected)
+        .changed
+        .then(|| options[selected].0.to_string())
+}
+
 /// A read-only row: a dim name on the left, a value on the right.
 pub fn field_row(ui: &mut Ui<'_>, rect: Rect, name: &str, value: &str) {
     let theme = *ui.theme();

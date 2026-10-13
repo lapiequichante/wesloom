@@ -437,19 +437,36 @@ pub(crate) fn inspector_panel(
                 theme.palette.text_dim,
                 Align::Left,
             );
-            let mut value = state
+            let mut current = state
                 .graph
                 .setting(&state.registry, id, setting_name)
                 .unwrap_or_default()
                 .to_string();
+            // The effect id's choices are the registry's screen effects —
+            // the palette's effect rows — and a bare shipped id reads as
+            // its `wxsl.` spelling (ADR 0044).
+            let effect_choices: Vec<String>;
+            let choices = if setting_name == doc::SETTING_EFFECT {
+                if !current.contains('.') {
+                    current = format!("wxsl.{current}");
+                }
+                effect_choices = preview
+                    .effects()
+                    .iter()
+                    .filter(|effect| !effect.is_compute() && effect.fits_pass_screen())
+                    .map(|effect| effect.id.to_string())
+                    .collect();
+                &effect_choices
+            } else {
+                &setting.choices
+            };
             let field_id = Id::new("pipeline.setting")
                 .with(u64::from(id.0))
                 .with(Id::new(setting_name).0);
-            if ui
-                .text_field(field_id, next(metrics.row_height), &mut value)
-                .changed
+            if let Some(value) =
+                widgets::setting_editor(ui, field_id, next(metrics.row_height), &current, choices)
             {
-                state.graph.set_setting(id, setting_name, value.trim());
+                state.graph.set_setting(id, setting_name, &value);
                 state.dirty = true;
                 requests.changed_metadata = true;
             }

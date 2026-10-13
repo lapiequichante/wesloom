@@ -646,9 +646,20 @@ bytes-per-sample bar, with the preview's material now resolved against the
 renderer's own plan so a toggle re-renders instead of failing the
 handshake. The pipeline canvas's passes list shows runs and last-frame
 draws per pass, a `run` button on `on demand` rows (`mark_pass`), and a
-`reset` (`Renderer::reset_runs`, now public). Both are GPU tests in
-`editor_frame`. Still open: the resolved material config with parameter
-sliders, debug views, A/B split, pass stepping, hot reload, timings.
+`reset` (`Renderer::reset_runs`, now public). The inspector's
+`material` section shows the resolved config (model, set, channels) and
+one value editor per uniform parameter: a drag writes the preview's
+buffer and pins the value on the `param` node, compiling nothing. All
+three are GPU tests in `editor_frame`. Dropdowns: `SettingDef::choices`
+closes a setting over its values (stage, policy, sort, layers, blend,
+precision, imported, refraction quality) and both inspectors draw it as a
+dropdown, `effect` listing the registry's screen effects; the toolbar's
+pipeline is a dropdown whose third row previews the material through the
+pipeline canvas's document, and the mesh is one too. Debug views have
+their shader half — `wxsl_debug_view` and `debug_views()` in the
+generated lighting pass — but no menu, no curve-free display pass and no
+test yet. Still open beyond that: A/B split, pass stepping, hot reload,
+timings.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

@@ -781,3 +781,165 @@ fn the_policy_inspectors_reset_makes_every_pass_due_again() {
         "the reset cleared the bookkeeping and the pass ran once more"
     );
 }
+
+/// The resolved material in the inspector (plan3 N9): the demo graph's
+/// `tint` parameter as a drag value. Dragging it moves the value in the
+/// preview's buffer and pins it on the `param` node, and compiles nothing
+/// — a parameter's value is not part of the variant key (ADR 0023).
+#[test]
+fn dragging_a_material_parameter_writes_the_buffer_and_compiles_nothing() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    // Nothing selected, so the material section sits right under the
+    // "no node selected" row; at scale 1 the tint's first component is the
+    // field at x ≈ 1086, y ≈ 439.
+    editor.select([]);
+    frame(&gpu, &mut editor, &target, 0.0);
+    frame(&gpu, &mut editor, &target, 0.016);
+    let tint = |editor: &Editor| match editor.preview().material_params().as_slice() {
+        [(name, wxsl::core::node::Value::Vec3(value))] if name == "tint" => *value,
+        other => panic!("the demo graph declares one vec3f tint: {other:?}"),
+    };
+    assert_eq!(tint(&editor), [1.0, 1.0, 1.0]);
+    // Drawing looks variants up every frame, so the baseline is what eight
+    // idle frames — as many as the drag below takes — add to the counters.
+    let (_, idle_start) = editor.preview().variant_stats();
+    for step in 0..8 {
+        frame(&gpu, &mut editor, &target, 0.02 + 0.01 * step as f64);
+    }
+    let (_, compiles_before) = editor.preview().variant_stats();
+    let idle = (
+        compiles_before.hits - idle_start.hits,
+        compiles_before.misses - idle_start.misses,
+    );
+
+    let start = Vec2::new(1086.0, 439.0);
+    editor.handle_event(UiEvent::PointerMoved(start));
+    frame(&gpu, &mut editor, &target, 0.1);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+    });
+    frame(&gpu, &mut editor, &target, 0.11);
+    for step in 1..=4 {
+        editor.handle_event(UiEvent::PointerMoved(
+            start - Vec2::new(10.0 * step as f32, 0.0),
+        ));
+        frame(&gpu, &mut editor, &target, 0.11 + 0.01 * step as f64);
+    }
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
+    frame(&gpu, &mut editor, &target, 0.2);
+    frame(&gpu, &mut editor, &target, 0.21);
+
+    let moved = tint(&editor);
+    assert!(
+        moved[0] < 1.0,
+        "dragging left lowers the red component: {moved:?}"
+    );
+    assert_eq!(&moved[1..], &[1.0, 1.0], "only the dragged component moves");
+    let pinned: Vec<_> = editor
+        .graph()
+        .nodes()
+        .filter(|(_, node)| node.def == "param.value")
+        .filter_map(|(_, node)| node.params.get("value").copied())
+        .collect();
+    assert_eq!(
+        pinned,
+        vec![wxsl::core::node::Value::Vec3(moved)],
+        "the value is pinned on the param node, so it saves with the graph"
+    );
+    let (_, compiles_after) = editor.preview().variant_stats();
+    // Hits too: a rebuild of the same graph would be a cache *hit*, so
+    // only both counters moving exactly as idle frames do says nothing was
+    // regenerated.
+    assert_eq!(
+        (
+            compiles_after.hits - compiles_before.hits,
+            compiles_after.misses - compiles_before.misses,
+        ),
+        idle,
+        "a parameter drag neither regenerates nor compiles anything"
+    );
+    assert!(editor.is_modified());
+    assert!(editor.preview().status().is_ok());
+}
+
+/// The toolbar's pipeline dropdown: its list opens over the canvas, and
+/// picking the third row previews the material through the pipeline
+/// canvas's document; picking `forward` puts a stock pipeline back.
+#[test]
+fn the_pipeline_dropdown_previews_through_the_document() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02)
+    };
+    // At scale 1 the pipeline dropdown sits right of the name field
+    // (x ≈ 330..490), and its list opens under it, one 22 px row per
+    // option starting at y ≈ 35.
+    let dropdown = Vec2::new(400.0, 19.0);
+    click(&mut editor, dropdown, 0.1);
+    click(&mut editor, Vec2::new(400.0, 90.0), 0.2);
+    for step in 0..3 {
+        frame(&gpu, &mut editor, &target, 0.3 + 0.01 * step as f64);
+    }
+    assert!(
+        editor.previews_document(),
+        "the third row previews through the document"
+    );
+    assert!(
+        editor.pipeline_graph().is_some(),
+        "choosing the document opens it"
+    );
+    assert!(
+        editor.pipeline_status().is_empty(),
+        "the document compiled: {:?}",
+        editor.pipeline_status()
+    );
+    assert!(
+        editor.preview().runs_document(),
+        "the renderer runs the installed document, not a stock pass list"
+    );
+    assert_eq!(
+        editor.canvas_mode(),
+        wxsl::editor::CanvasMode::Material,
+        "the canvas stays on the material"
+    );
+    assert!(editor.preview().status().is_ok());
+
+    // And back to a stock pipeline through the same list.
+    click(&mut editor, dropdown, 0.4);
+    click(&mut editor, Vec2::new(400.0, 68.0), 0.5);
+    for step in 0..30 {
+        frame(&gpu, &mut editor, &target, 0.6 + 0.01 * step as f64);
+        if editor.preview().swap_progress().is_none() {
+            break;
+        }
+    }
+    assert!(!editor.previews_document());
+    assert!(!editor.preview().runs_document());
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Deferred
+    );
+    assert!(editor.preview().status().is_ok());
+}

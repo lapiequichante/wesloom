@@ -160,6 +160,10 @@ pub struct Editor {
     /// it is asked for. `None` until then, so a session that never
     /// switches never builds one.
     pipeline: Option<PipelineCanvas>,
+    /// Whether the material canvas previews through the pipeline canvas's
+    /// document instead of a stock pipeline — the toolbar's third
+    /// pipeline choice.
+    material_uses_document: bool,
     /// Which bottom panel is showing while the pipeline canvas is up.
     pipeline_tab: PipelineTab,
 }
@@ -219,6 +223,7 @@ impl Editor {
             last_canvas_rect: Rect::NOTHING,
             mode: CanvasMode::default(),
             pipeline: None,
+            material_uses_document: false,
             pipeline_tab: PipelineTab::default(),
         })
     }
@@ -288,6 +293,9 @@ impl Editor {
                     .dirty = true;
                 self.message = "pipeline canvas — the document compiles on every edit".to_string();
             }
+            CanvasMode::Material if self.material_uses_document => {
+                self.message = "material canvas — pipeline: the document".to_string();
+            }
             CanvasMode::Material => {
                 self.preview.restore_stock();
                 self.message = format!(
@@ -296,6 +304,12 @@ impl Editor {
                 );
             }
         }
+    }
+
+    /// Whether the material canvas previews through the pipeline
+    /// canvas's document rather than a stock pipeline.
+    pub fn previews_document(&self) -> bool {
+        self.material_uses_document
     }
 
     /// The pipeline document, if the canvas has been opened.
@@ -448,7 +462,7 @@ impl Editor {
         // the config the renderer is actually running, and the frame
         // below renders the result. That ordering is what makes a
         // pipeline edit live by construction rather than by promise.
-        if self.mode == CanvasMode::Pipeline {
+        if self.mode == CanvasMode::Pipeline || self.material_uses_document {
             if let Some(state) = self.pipeline.as_mut() {
                 if state.dirty {
                     state.dirty = false;
@@ -541,7 +555,7 @@ impl Editor {
                 &mut requests,
                 &self.preview,
                 self.backend,
-                self.mode,
+                (self.mode, (false, "")),
                 &mut self
                     .pipeline
                     .as_mut()
@@ -555,7 +569,15 @@ impl Editor {
                 &mut requests,
                 &self.preview,
                 self.backend,
-                self.mode,
+                (
+                    self.mode,
+                    (
+                        self.material_uses_document,
+                        self.pipeline
+                            .as_ref()
+                            .map_or("deferred", |state| state.graph.name()),
+                    ),
+                ),
                 &mut self.graph,
             );
         }
@@ -698,6 +720,11 @@ impl Editor {
                 self.modified,
             );
         }
+
+        // -- open dropdown -------------------------------------------------
+        // Over every panel; the drag ghost below still wins, being the
+        // pointer's own.
+        ui.show_popup(screen);
 
         // -- drag ghost ---------------------------------------------------
         // Drawn last (and so on top, and unclipped by any panel's own
@@ -894,7 +921,15 @@ impl Editor {
                     .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
             }
         }
+        if requests.use_document {
+            self.material_uses_document = true;
+            self.pipeline
+                .get_or_insert_with(|| PipelineCanvas::open_on_preset(StockPipeline::Deferred))
+                .dirty = true;
+            self.message = "pipeline: the pipeline canvas's document".to_string();
+        }
         if let Some(pipeline) = requests.pipeline {
+            self.material_uses_document = false;
             self.preview.set_pipeline(device, pipeline);
             self.message = match self.preview.swap_progress() {
                 Some(progress) => format!("pipeline: {pipeline} ({progress})"),
@@ -937,6 +972,34 @@ impl Editor {
             self.preview.reset_runs();
             self.message = "run counts reset".to_string();
         }
+        if let Some((name, value)) = requests.material_param.take() {
+            match self.preview.set_material_param(&name, value) {
+                Ok(()) => {
+                    // Every `param` node declaring the name, so whichever
+                    // one the interface's "first wins" picks carries it.
+                    let declaring: Vec<NodeId> = self
+                        .graph
+                        .nodes()
+                        .filter(|(id, node)| {
+                            self.registry.get(&node.def).is_some_and(|definition| {
+                                matches!(definition.body, wxsl_core::node::NodeBody::Param)
+                            }) && self.graph.setting(
+                                &self.registry,
+                                *id,
+                                wxsl_core::node::SETTING_NAME,
+                            ) == Some(name.as_str())
+                        })
+                        .map(|(id, _)| id)
+                        .collect();
+                    for id in declaring {
+                        self.graph
+                            .set_param(id, wxsl_core::node::SOCKET_VALUE, value);
+                    }
+                    self.modified = true;
+                }
+                Err(error) => self.message = error.to_string(),
+            }
+        }
         if requests.toggle_theme {
             self.ui.theme.toggle_mode();
         }
@@ -962,6 +1025,8 @@ impl Editor {
 #[derive(Default)]
 pub(crate) struct Requests {
     pub(crate) pipeline: Option<StockPipeline>,
+    /// Preview the material through the pipeline canvas's document.
+    pub(crate) use_document: bool,
     pub(crate) mesh: Option<MeshKind>,
     pub(crate) backend: Option<MsdfBackend>,
     /// Switch which canvas the panels point at.
@@ -1003,6 +1068,11 @@ pub(crate) struct Requests {
     /// Make every `once` and `on resize` pass due again — the policy
     /// inspector's reset.
     pub(crate) reset_runs: bool,
+    /// A material parameter the inspector's slider moved: written into the
+    /// preview's buffer and pinned on the declaring `param` node as its
+    /// starting value — saved with the graph, yet no recompile, because a
+    /// parameter's value is not part of the variant key (ADR 0023).
+    pub(crate) material_param: Option<(String, wxsl_core::node::Value)>,
     /// Show this in the status bar instead of building a message at the
     /// apply site — for a widget (the inspector's generic-type picker) whose
     /// outcome depends on what it did, not just that it ran.
@@ -1056,7 +1126,9 @@ fn toolbar_panel(
     requests: &mut Requests,
     preview: &Preview,
     backend: MsdfBackend,
-    mode: CanvasMode,
+    // Which canvas is up, whether the material previews through the
+    // pipeline document, and that document's name.
+    (mode, document): (CanvasMode, (bool, &str)),
     graph: &mut Graph,
 ) {
     let theme = *ui.theme();
@@ -1133,24 +1205,63 @@ fn toolbar_panel(
             .clicked
     };
 
+    // A dropdown sized for its widest option, so it does not jump as the
+    // choice changes.
+    let dropdown_rect = |ui: &mut Ui<'_>, cursor: &mut Rect, labels: &[String]| {
+        let widest = labels
+            .iter()
+            .map(|label| ui.measure_ui(label).x)
+            .fold(0.0_f32, f32::max);
+        let width = widest + metrics.padding * 2.0 + metrics.row_height;
+        let (rect, rest) = cursor.split_left(width);
+        *cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
+        rect
+    };
+
     if mode == CanvasMode::Material {
-        for pipeline in StockPipeline::ALL {
-            let label = pipeline.name();
-            let on = preview.pipeline() == *pipeline;
-            if button(
-                ui,
-                &mut cursor,
-                &format!("toolbar.pipeline.{label}"),
-                label,
-                on,
-            ) {
-                requests.pipeline = Some(*pipeline);
+        // The stock pipelines, then whatever the pipeline canvas holds:
+        // the material previews through that document, live.
+        let (uses_document, document_name) = document;
+        let mut labels: Vec<String> = StockPipeline::ALL
+            .iter()
+            .map(|pipeline| pipeline.name().to_string())
+            .collect();
+        labels.push(format!("document: {document_name}"));
+        let mut selected = if uses_document {
+            StockPipeline::ALL.len()
+        } else {
+            StockPipeline::ALL
+                .iter()
+                .position(|pipeline| *pipeline == preview.pipeline())
+                .unwrap_or(0)
+        };
+        let rect = dropdown_rect(ui, &mut cursor, &labels);
+        let options: Vec<(&str, bool)> = labels.iter().map(|l| (l.as_str(), true)).collect();
+        if ui
+            .dropdown(Id::new("toolbar.pipeline"), rect, &options, &mut selected)
+            .changed
+        {
+            match StockPipeline::ALL.get(selected) {
+                Some(pipeline) => requests.pipeline = Some(*pipeline),
+                None => requests.use_document = true,
             }
         }
     }
-    let mesh_label = format!("mesh: {}", preview.mesh_kind().name());
-    if button(ui, &mut cursor, "toolbar.mesh", &mesh_label, false) {
-        requests.mesh = Some(preview.mesh_kind().next());
+    let labels: Vec<String> = MeshKind::ALL
+        .iter()
+        .map(|kind| format!("mesh: {}", kind.name()))
+        .collect();
+    let mut selected = MeshKind::ALL
+        .iter()
+        .position(|kind| *kind == preview.mesh_kind())
+        .unwrap_or(0);
+    let rect = dropdown_rect(ui, &mut cursor, &labels);
+    let options: Vec<(&str, bool)> = labels.iter().map(|l| (l.as_str(), true)).collect();
+    if ui
+        .dropdown(Id::new("toolbar.mesh"), rect, &options, &mut selected)
+        .changed
+    {
+        requests.mesh = Some(MeshKind::ALL[selected]);
     }
     let backend_label = format!("msdf: {}", backend.name());
     if button(ui, &mut cursor, "toolbar.backend", &backend_label, false) {
@@ -1471,6 +1582,23 @@ fn inspector_panel(
     if !macros.is_empty() {
         content += row * (1.0 + macros.len() as f32);
     }
+    // The resolved material: its config, then one editor per parameter.
+    let material_params = preview.material_params();
+    let param_id = |name: &str| Id::new("inspector.material.param").with(Id::new(name).0);
+    content += row
+        * if preview.material().is_some() {
+            4.0
+        } else {
+            2.0
+        };
+    if material_params.is_empty() {
+        content += row;
+    }
+    for (name, value) in &material_params {
+        content += small_row
+            + widgets::value_editor_height(ui, param_id(name), value.ty(), width)
+            + metrics.row_gap;
+    }
 
     let area = ui.scroll_area(Id::new("inspector.scroll"), body, Vec2::new(width, content));
     let mut cursor = area.origin().y;
@@ -1601,18 +1729,21 @@ fn inspector_panel(
                     theme.palette.text_dim,
                     Align::Left,
                 );
-                let mut value = graph
+                let current = graph
                     .setting(registry, id, setting_name)
                     .unwrap_or_default()
                     .to_string();
                 let field_id = Id::new("inspector.setting")
                     .with(u64::from(id.0))
                     .with(Id::new(setting_name).0);
-                if ui
-                    .text_field(field_id, next(metrics.row_height), &mut value)
-                    .changed
-                {
-                    graph.set_setting(id, setting_name, value.trim());
+                if let Some(value) = widgets::setting_editor(
+                    ui,
+                    field_id,
+                    next(metrics.row_height),
+                    &current,
+                    &setting.choices,
+                ) {
+                    graph.set_setting(id, setting_name, &value);
                     // A declaration, not decoration: renaming a parameter
                     // changes the generated struct, so the material has to
                     // be recompiled rather than merely redrawn.
@@ -1768,6 +1899,69 @@ fn inspector_panel(
         }
     }
 
+    // -- the resolved material (plan3 N9) --------------------------------
+    // What `MaterialConfig::resolve` made of the graph under the running
+    // plan, and the parameters as the buffer holds them: a drag here is a
+    // buffer write, not a recompile.
+    let header = next(metrics.row_height);
+    ui.separator(header);
+    ui.label(header, "material", theme.palette.text, Align::Left);
+    match preview.material() {
+        Some(material) => {
+            let lighting = &material.config().lighting;
+            let model = lighting
+                .set
+                .get(lighting.model)
+                .map_or("?", |model| model.name);
+            let set: Vec<&str> = lighting.set.models().iter().map(|m| m.name).collect();
+            let features = preview.features();
+            widgets::field_row(ui, next(metrics.row_height), "model", model);
+            widgets::field_row(ui, next(metrics.row_height), "set", &set.join(", "));
+            widgets::field_row(
+                ui,
+                next(metrics.row_height),
+                "channels",
+                &if features.is_empty() {
+                    "none".to_string()
+                } else {
+                    features.join(", ")
+                },
+            );
+        }
+        None => {
+            ui.small_label(
+                next(metrics.row_height),
+                "no material compiled",
+                theme.palette.text_dim,
+                Align::Left,
+            );
+        }
+    }
+    if material_params.is_empty() {
+        ui.small_label(
+            next(metrics.row_height),
+            "no parameters — add a param node",
+            theme.palette.text_dim,
+            Align::Left,
+        );
+    }
+    for (name, mut value) in material_params {
+        ui.small_label(
+            next(metrics.small_text_size * 1.4),
+            &format!(
+                "{name}  {}",
+                widgets::typed_summary(value.ty(), Some(&value))
+            ),
+            theme.palette.text_dim,
+            Align::Left,
+        );
+        let id = param_id(&name);
+        let editor = next(widgets::value_editor_height(ui, id, value.ty(), width));
+        if widgets::value_editor(ui, id, editor, &mut value) {
+            requests.material_param = Some((name, value));
+        }
+    }
+
     // -- macro variables -----------------------------------------------
     if !macros.is_empty() {
         let header = next(metrics.row_height);
@@ -1788,6 +1982,7 @@ fn inspector_panel(
             }
         }
     }
+
     area.end(ui);
 }
 

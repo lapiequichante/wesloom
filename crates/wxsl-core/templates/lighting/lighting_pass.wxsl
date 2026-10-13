@@ -1,3 +1,6 @@
+// Which G-buffer view to return instead of shading; 0 shades (plan3 N9).
+@macro const ${DEBUG_VIEW_MACRO}: i32 = 0;
+
 ${GBUFFER_BINDINGS}@group(3) @binding(${DEPTH_BINDING}) var gbuffer_depth: texture_depth_2d;
 
 // A fullscreen triangle covering the viewport, from three vertices and no
@@ -60,5 +63,5 @@ fn ${FRAGMENT_ENTRY}(@builtin(position) position: vec4f) -> @location(0) vec4f {
     ctx.uv = uv;
     ctx.time = scene.time;
 
-    ${FINAL_RETURN}
+    ${DEBUG_VIEW}${FINAL_RETURN}
 }

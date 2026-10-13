@@ -1444,6 +1444,133 @@ pub fn pack_gbuffer(
     }
 }
 
+/// The macro that turns the deferred lighting pass into a G-buffer view
+/// (plan3 N9): `0` shades, any other value is a [`DebugView::id`] and the
+/// pass returns that channel instead. An `i32` macro rather than a uniform
+/// because a debug view is a different shader, not a different value, and
+/// the lighting pass already compiles under the materials' macro set.
+pub const DEBUG_VIEW_MACRO: &str = "wxsl_debug_view";
+
+/// One G-buffer isolation view the lighting pass can return instead of
+/// shading (plan3 N9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DebugView {
+    /// The [`DEBUG_VIEW_MACRO`] value that selects this view. Stable for a
+    /// build: the base views first, then every channel a shipped feature
+    /// or model can request, in registry order.
+    pub id: i32,
+    /// What a menu shows.
+    pub label: &'static str,
+    /// The requested channel this view isolates, or `None` for a base
+    /// view, which every plan carries.
+    pub channel: Option<&'static str>,
+}
+
+impl DebugView {
+    /// Whether `plan` carries what this view reads; a menu greys out the
+    /// rest rather than hiding them.
+    pub fn available(&self, plan: &GBufferPlan) -> bool {
+        match self.channel {
+            None => true,
+            Some(field) => plan
+                .requests()
+                .iter()
+                .any(|request| request.target.field == field),
+        }
+    }
+}
+
+/// The base views: what every G-buffer holds.
+const BASE_DEBUG_VIEWS: &[&str] = &[
+    "albedo",
+    "normal",
+    "depth",
+    "metallic-roughness",
+    "emissive",
+    "occlusion",
+];
+
+/// Every view the lighting pass knows: the base ones, then one per channel
+/// a shipped feature or model can request — whether or not the current
+/// plan carries it, so the ids do not move as features are toggled.
+pub fn debug_views() -> Vec<DebugView> {
+    let mut views: Vec<DebugView> = BASE_DEBUG_VIEWS
+        .iter()
+        .map(|&label| DebugView {
+            id: 0,
+            label,
+            channel: None,
+        })
+        .collect();
+    let requested = FEATURES.iter().map(|feature| feature.target).chain(
+        DEFAULT_MODELS
+            .iter()
+            .filter_map(|model| model.extra.map(|extra| extra.target)),
+    );
+    for target in requested {
+        if !views.iter().any(|view| view.channel == Some(target.field)) {
+            views.push(DebugView {
+                id: 0,
+                label: target.field,
+                channel: Some(target.field),
+            });
+        }
+    }
+    for (index, view) in views.iter_mut().enumerate() {
+        view.id = index as i32 + 1;
+    }
+    views
+}
+
+/// The lighting pass's debug arm: one branch per view `plan` carries, each
+/// writing what a plain sRGB encode should display. Colours stay linear;
+/// data is lifted with `srgb_to_linear` so the encode shows the raw
+/// numbers — so a debug view wants a curve-free encode in place of the
+/// tonemap at the end of the chain (ADR 0039); that pass is not built yet.
+fn debug_view_arm(plan: &GBufferPlan) -> String {
+    let mut arm = format!("if ({DEBUG_VIEW_MACRO} != 0) {{\n        var shown = vec3f(0.0);\n");
+    for view in debug_views() {
+        if !view.available(plan) {
+            continue;
+        }
+        let expr = match (view.label, view.channel) {
+            ("albedo", None) => "unpacked.surface.base_color".to_string(),
+            ("emissive", None) => "unpacked.surface.emissive".to_string(),
+            ("normal", None) => {
+                "srgb_to_linear(unpacked.surface.normal * 0.5 + vec3f(0.5))".to_string()
+            }
+            ("depth", None) => {
+                "srgb_to_linear(vec3f(exp(-0.15 * distance(camera.position, world_position))))"
+                    .to_string()
+            }
+            ("metallic-roughness", None) => "srgb_to_linear(vec3f(unpacked.surface.metallic, \
+                 unpacked.surface.roughness, 0.0))"
+                .to_string(),
+            ("occlusion", None) => "srgb_to_linear(vec3f(unpacked.surface.occlusion))".to_string(),
+            (_, Some(field)) => {
+                let channels = plan
+                    .requests()
+                    .iter()
+                    .find(|request| request.target.field == field)
+                    .map_or(4, |request| request.target.precision.channels());
+                let value = match channels {
+                    1 => format!("vec3f(unpacked.{field}, 0.0, 0.0)"),
+                    2 => format!("vec3f(unpacked.{field}, 0.0)"),
+                    _ => format!("unpacked.{field}.rgb"),
+                };
+                format!("srgb_to_linear(saturate({value}))")
+            }
+            (label, None) => unreachable!("base view `{label}` has no expression"),
+        };
+        arm.push_str(&format!(
+            "        if ({DEBUG_VIEW_MACRO} == {id}) {{ shown = {expr}; }}\n",
+            id = view.id
+        ));
+    }
+    arm.push_str("        return vec4f(shown, 1.0);\n    }\n    ");
+    arm
+}
+
 /// Generate the whole deferred lighting pass for `set`, with `features`'
 /// channels in the layout (plan2 P12), as one root module.
 ///
@@ -1507,6 +1634,10 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
     );
     out.push_str(
         "import package::space::tangent_basis::tangent_basis;
+",
+    );
+    out.push_str(
+        "import package::color::srgb_to_linear::srgb_to_linear;
 ",
     );
     if let Some(shading) = &shading {
@@ -1676,6 +1807,8 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
             ("FRAGMENT_ENTRY", abi::LIGHTING_PASS_FRAGMENT_ENTRY),
             ("FIRST_TARGET", layout[0].field),
             ("UNPACK_CALL", loads.as_str()),
+            ("DEBUG_VIEW", &debug_view_arm(&plan)),
+            ("DEBUG_VIEW_MACRO", DEBUG_VIEW_MACRO),
             ("FINAL_RETURN", &final_return),
         ],
     ));

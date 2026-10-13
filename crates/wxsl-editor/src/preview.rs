@@ -199,6 +199,12 @@ impl Preview {
         self.stock
     }
 
+    /// Whether the renderer runs an installed document rather than a stock
+    /// pass list.
+    pub fn runs_document(&self) -> bool {
+        self.renderer.pipeline().is_none()
+    }
+
     /// The effects this renderer can run — what the pipeline canvas's
     /// palette offers beside the document vocabulary, and what its
     /// documents compile against.
@@ -284,6 +290,43 @@ impl Preview {
     /// — the policy inspector's reset.
     pub fn reset_runs(&mut self) {
         self.renderer.reset_runs();
+    }
+
+    /// The material the preview last compiled, for the inspector's
+    /// resolved-config rows.
+    pub fn material(&self) -> Option<&Material> {
+        self.material.as_ref()
+    }
+
+    /// The material's uniform parameters, in layout order, at the values
+    /// the buffer currently holds.
+    pub fn material_params(&self) -> Vec<(String, wxsl_core::node::Value)> {
+        let Some(bindings) = self.bindings.as_ref() else {
+            return Vec::new();
+        };
+        bindings
+            .interface()
+            .params
+            .fields()
+            .iter()
+            .filter_map(|field| {
+                let name = field.name.as_str();
+                Some((name.to_string(), bindings.get(name)?))
+            })
+            .collect()
+    }
+
+    /// Write one parameter into the buffer: an upload at the next frame,
+    /// no recompile — the slider path ADR 0023 exists for.
+    pub fn set_material_param(
+        &mut self,
+        name: &str,
+        value: wxsl_core::node::Value,
+    ) -> Result<(), RenderError> {
+        match self.bindings.as_mut() {
+            Some(bindings) => bindings.set(name, value),
+            None => Ok(()),
+        }
     }
 
     /// Back to the stock pipeline the material canvas chose.

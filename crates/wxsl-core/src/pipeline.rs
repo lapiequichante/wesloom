@@ -341,7 +341,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "Precision",
                 "standard (8-bit), hdr (half float), float (linear rgba32float import), scalar or pair.",
                 "standard",
-            ))
+            ).with_choices(&["standard", "hdr", "float", "scalar", "pair"]))
             .setting(text_setting(
                 SETTING_SIZE,
                 "Size",
@@ -368,7 +368,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                  materials created and sample. Its label must match the bake's, \
                  and the size settings say nothing.",
                 "false",
-            ))
+            ).with_choices(&["false", "true"]))
             .document(),
         NodeDefinition::builder(RESOURCE_DEPTH, "depth target")
             .doc(
@@ -454,21 +454,21 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "forward_lit, gbuffer, depth_only or velocity — the material \
                  stage the pass draws.",
                 "forward_lit",
-            ))
+            ).with_choices(&["forward_lit", "gbuffer", "depth_only", "velocity"]))
             .setting(text_setting(
                 SETTING_POLICY,
                 "Policy",
                 "How often the pass runs: per frame, once, on resize or on demand. Only a \
                  pass whose target survives frames may skip.",
                 "per frame",
-            ))
+            ).with_choices(&["per frame", "once", "on resize", "on demand"]))
             .setting(text_setting(
                 SETTING_SORT,
                 "Sort",
                 "How the pass orders its draws: none (submission order), front to back, \
                  or back to front. Sorting reorders the draws inside this pass only.",
                 "none",
-            ))
+            ).with_choices(&["none", "front to back", "back to front"]))
             .setting(text_setting(
                 SETTING_LAYERS,
                 "Layers",
@@ -476,7 +476,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                  of them, or only the sorted tier (max layers zero) that no \
                  peel pass reads. Peeling itself is a `pass.peel` node.",
                 "all",
-            ))
+            ).with_choices(&["all", "sorted"]))
             .setting(text_setting(
                 SETTING_BLEND,
                 "Blend",
@@ -484,7 +484,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                  over (straight-alpha source over the target), which a sorted \
                  transparent pass composites with.",
                 "opaque",
-            ))
+            ).with_choices(&["opaque", "alpha over"]))
             .document(),
         NodeDefinition::builder(PASS_PEEL, "depth peel")
             .doc(
@@ -527,7 +527,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
             .input(Socket::new("into", ValueType::ColorTarget).optional())
             .output(Socket::new("color", ValueType::ColorTarget))
             .setting(text_setting("surface_count", "Surface count", "Whole scene crossing budget (1..4), doubled for front/back. A torus consumes two crossings, a sphere one.", "2"))
-            .setting(text_setting("quality", "Quality", "layered: fast back-to-front composition; precise: opt-in expensive ray marching.", "layered"))
+            .setting(text_setting("quality", "Quality", "layered: fast back-to-front composition; precise: opt-in expensive ray marching.", "layered").with_choices(&["layered", "precise"]))
             .document(),
         NodeDefinition::builder(PASS_SHADOW, "shadow")
             .doc(
@@ -590,7 +590,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
                 "How often the pass runs: per frame, once, on resize or on demand. Only a \
                  pass whose target survives frames may skip.",
                 "per frame",
-            ))
+            ).with_choices(&["per frame", "once", "on resize", "on demand"]))
             .document(),
         // -- terminal ----------------------------------------------------
         NodeDefinition::builder(PRESENT, "Present")

@@ -1125,6 +1125,10 @@ pub struct SettingDef {
     pub doc: String,
     /// Value used when the node instance pins none.
     pub default: String,
+    /// The closed set of values the setting takes, when it has one — what
+    /// an editor offers as a dropdown instead of a text field. Empty means
+    /// free text.
+    pub choices: Vec<String>,
 }
 
 impl SettingDef {
@@ -1140,12 +1144,20 @@ impl SettingDef {
             label: label.into(),
             doc: doc.into(),
             default: String::new(),
+            choices: Vec::new(),
         }
     }
 
     /// Give the setting a value to start from.
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
         self.default = default.into();
+        self
+    }
+
+    /// Close the setting over `choices`, so an editor offers them as a
+    /// dropdown. Validation stays with whatever reads the setting.
+    pub fn with_choices(mut self, choices: &[&str]) -> Self {
+        self.choices = choices.iter().map(|choice| choice.to_string()).collect();
         self
     }
 }
