@@ -1051,3 +1051,95 @@ fn the_subsurface_debug_view_isolates_the_channel() {
         .count();
     assert!(lit > 1_000, "shading lights the cube again ({lit} pixels)");
 }
+
+/// The A/B split (plan3 N9): the preview header's dropdown puts a deferred
+/// B side beside the forward A side, both frames render the same material
+/// within the forward/deferred parity the render tests assert, and dragging
+/// the edge moves the cut.
+#[test]
+fn the_ab_split_shows_two_pipelines_and_its_edge_drags() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02)
+    };
+    // At scale 1 the inspector's header holds the dropdown at its right
+    // end (x ≈ 1172..1272, y ≈ 39..59); its list opens beneath, one 22 px
+    // row per option: off, forward, deferred (y ≈ 119).
+    click(&mut editor, Vec2::new(1210.0, 49.0), 0.1);
+    click(&mut editor, Vec2::new(1210.0, 119.0), 0.2);
+    for step in 0..30 {
+        frame(&gpu, &mut editor, &target, 0.3 + 0.01 * step as f64);
+        if step >= 3 && editor.preview().swap_progress().is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        editor.preview().compare(),
+        Some(wxsl::render::StockPipeline::Deferred)
+    );
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Forward,
+        "A keeps its pipeline"
+    );
+    assert!(editor.preview().status().is_ok());
+
+    // The same frame, two pipelines: both drew the cube, and they agree
+    // as closely as `render_cube` asserts forward and deferred do.
+    let a = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    let b = editor.preview().compare_rgba8(&gpu.device, &gpu.queue);
+    assert!(painted_pixels(&a) > 5_000 && painted_pixels(&b) > 5_000);
+    let diff: u64 = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| u64::from(x.abs_diff(*y)))
+        .sum();
+    let mean = diff as f64 / a.len() as f64 / 255.0;
+    assert!(mean < 0.01, "forward and deferred disagree: {mean}");
+
+    // The edge sits mid-image (x ≈ 1150 of 1047..1253); dragging it left
+    // shows more of B.
+    let before = editor.preview().split;
+    editor.handle_event(UiEvent::PointerMoved(Vec2::new(1150.0, 200.0)));
+    frame(&gpu, &mut editor, &target, 1.0);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+    });
+    frame(&gpu, &mut editor, &target, 1.01);
+    editor.handle_event(UiEvent::PointerMoved(Vec2::new(1100.0, 200.0)));
+    frame(&gpu, &mut editor, &target, 1.02);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
+    frame(&gpu, &mut editor, &target, 1.03);
+    let after = editor.preview().split;
+    assert!(
+        after < before - 0.1,
+        "the edge follows the drag: {before} then {after}"
+    );
+
+    // And off again.
+    click(&mut editor, Vec2::new(1210.0, 49.0), 1.1);
+    click(&mut editor, Vec2::new(1210.0, 75.0), 1.2);
+    // The dropdown reads its pick back the frame after the click.
+    frame(&gpu, &mut editor, &target, 1.3);
+    frame(&gpu, &mut editor, &target, 1.31);
+    assert_eq!(editor.preview().compare(), None);
+}

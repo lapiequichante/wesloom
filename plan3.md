@@ -666,7 +666,14 @@ pipeline, so a view costs one material/lighting recompile and no pass
 list change. Done-when met: `the_subsurface_debug_view_isolates_the_channel`
 shows the stored 0.5 strength unlit and unbent (mutation-checked against
 the curve), and the corpus gate compiles the pass under every view.
-Still open: A/B split, pass stepping, hot reload, timings.
+A/B split: the preview header's dropdown puts a stock pipeline on a B
+side — a second `Renderer` in the preview (its own target, bindings and
+variant cache, the A side's lighting set and channels, parameter writes
+mirrored), because switching one renderer's pass list per frame would
+reallocate its pool every frame. The image is cut at a draggable edge,
+A left, B right; `the_ab_split_shows_two_pipelines_and_its_edge_drags`
+checks both frames agree within forward/deferred parity and the edge
+follows a drag. Still open: pass stepping, hot reload, timings.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

@@ -33,6 +33,17 @@ use crate::highlight::{self, Run};
 /// debug view switches off.
 const TONEMAP_PASS: &str = "tonemap";
 
+/// The B side of the A/B split: a second renderer on a stock pipeline,
+/// drawing the same material and mesh into its own target. Two renderers
+/// rather than one switching pass lists, because a switch per frame would
+/// reallocate the resource pool every frame.
+struct Compare {
+    renderer: Renderer,
+    pipeline: StockPipeline,
+    bindings: Option<MaterialBindings>,
+    user: Option<wgpu::BindGroup>,
+}
+
 /// How the preview is doing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PreviewStatus {
@@ -108,6 +119,17 @@ pub struct Preview {
     /// The G-buffer debug view the lighting pass returns instead of
     /// shading, by [`lighting::DebugView`] id; 0 shades (plan3 N9).
     debug_view: i32,
+    /// The B side of an A/B split (plan3 N9), when one is up.
+    compare: Option<Compare>,
+    /// The B side's target and texture, registered once with the UI so
+    /// that turning the split on needs no access to the UI renderer.
+    compare_target: OffscreenTarget,
+    compare_texture: TextureId,
+    /// What a B-side renderer is built from.
+    library: ShaderLibrary,
+    /// Where the split's edge sits, as a fraction of the preview's width:
+    /// A is drawn left of it, B right.
+    pub split: f32,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
     angle: f32,
@@ -133,11 +155,18 @@ impl Preview {
         let target = OffscreenTarget::new(device, Self::SIZE, Self::SIZE);
         let renderer = Renderer::new(
             device,
-            library,
+            library.clone(),
             TargetConfig::new(Self::SIZE, Self::SIZE, target.format()),
         )?;
         let texture = ui.register_texture(device, target.view());
+        let compare_target = OffscreenTarget::new(device, Self::SIZE, Self::SIZE);
+        let compare_texture = ui.register_texture(device, compare_target.view());
         Ok(Preview {
+            compare: None,
+            compare_target,
+            compare_texture,
+            library,
+            split: 0.5,
             renderer,
             target,
             texture,
@@ -274,7 +303,13 @@ impl Preview {
     /// it is regenerated against the same plan — the handshake both sides
     /// check.
     pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
-        self.renderer.set_features(names)
+        self.renderer.set_features(names)?;
+        // The B side resolves the same material, so it carries the same
+        // plan.
+        if let Some(compare) = self.compare.as_mut() {
+            compare.renderer.set_features(names)?;
+        }
+        Ok(())
     }
 
     /// Ask the pass labelled `label` to run on the next frame — the policy
@@ -369,10 +404,80 @@ impl Preview {
         name: &str,
         value: wxsl_core::node::Value,
     ) -> Result<(), RenderError> {
+        if let Some(bindings) = self.compare.as_mut().and_then(|c| c.bindings.as_mut()) {
+            bindings.set(name, value)?;
+        }
         match self.bindings.as_mut() {
             Some(bindings) => bindings.set(name, value),
             None => Ok(()),
         }
+    }
+
+    /// The B side's pipeline, when the A/B split is up.
+    pub fn compare(&self) -> Option<StockPipeline> {
+        self.compare.as_ref().map(|compare| compare.pipeline)
+    }
+
+    /// The texture the B side draws into.
+    pub fn compare_texture(&self) -> TextureId {
+        self.compare_texture
+    }
+
+    /// The B side's last frame, read back as RGBA8 rows.
+    pub fn compare_rgba8(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+        self.compare_target.read_rgba8(device, queue)
+    }
+
+    /// Put up the A/B split with `pipeline` on the B side, or take it down
+    /// with `None`. The B renderer is built on first use and carries the
+    /// A side's lighting set and feature channels, so the one material
+    /// resolves against both.
+    pub fn set_compare(
+        &mut self,
+        device: &wgpu::Device,
+        pipeline: Option<StockPipeline>,
+    ) -> Result<(), RenderError> {
+        let Some(pipeline) = pipeline else {
+            self.compare = None;
+            return Ok(());
+        };
+        if let Some(compare) = self.compare.as_mut() {
+            compare.renderer.set_pipeline(pipeline);
+            compare.pipeline = pipeline;
+            return Ok(());
+        }
+        let mut renderer = Renderer::new(
+            device,
+            self.library.clone(),
+            TargetConfig::new(Self::SIZE, Self::SIZE, self.compare_target.format()),
+        )?;
+        renderer.set_lighting(self.renderer.lighting().clone())?;
+        renderer.set_features(&self.renderer.features())?;
+        renderer.set_pipeline(pipeline);
+        let (bindings, user) = match self.material.as_ref() {
+            Some(material) => {
+                let (mut bindings, user) = bind_material(
+                    &mut renderer,
+                    device,
+                    material,
+                    &self.placeholder,
+                    &self.placeholder_sampler,
+                );
+                // The A side's tuned values, not the graph's defaults.
+                for (name, value) in self.material_params() {
+                    bindings.set(&name, value)?;
+                }
+                (Some(bindings), user)
+            }
+            None => (None, None),
+        };
+        self.compare = Some(Compare {
+            renderer,
+            pipeline,
+            bindings,
+            user,
+        });
+        Ok(())
     }
 
     /// Back to the stock pipeline the material canvas chose.
@@ -567,16 +672,26 @@ impl Preview {
     /// be bound cannot be previewed. The parameters start at whatever the
     /// graph declared, which is what the author just typed.
     fn rebind(&mut self, device: &wgpu::Device, material: &Material) {
-        let mut bindings = self.renderer.material_bindings(device, material);
-        for resource in &material.interface().resources {
-            let name = resource.name.as_str();
-            let bound = match resource.ty {
-                ValueType::Sampler => bindings.set_sampler(name, &self.placeholder_sampler),
-                _ => bindings.set_texture(name, &self.placeholder),
-            };
-            debug_assert!(bound.is_ok(), "the interface named this resource");
-        }
+        let (bindings, user) = bind_material(
+            &mut self.renderer,
+            device,
+            material,
+            &self.placeholder,
+            &self.placeholder_sampler,
+        );
         self.bindings = Some(bindings);
+        self.user = user;
+        if let Some(compare) = self.compare.as_mut() {
+            let (bindings, user) = bind_material(
+                &mut compare.renderer,
+                device,
+                material,
+                &self.placeholder,
+                &self.placeholder_sampler,
+            );
+            compare.bindings = Some(bindings);
+            compare.user = user;
+        }
 
         // Per-instance attributes get one, not zero. The editor draws a
         // single object, so there is no *per*-instance variation to
@@ -591,31 +706,6 @@ impl Preview {
                 self.attributes.set(field.name.as_str(), value);
             }
         }
-
-        self.user = material.interface().user.as_ref().map(|block| {
-            // Zeroed: the editor is not the application, so the honest
-            // stand-in is "nothing has been set".
-            let size = u64::from(block.layout.size()).max(16);
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("wxsl preview application block"),
-                size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let layout = self
-                .renderer
-                .user_layout(device, material)
-                .expect("the material declares a block")
-                .clone();
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("wxsl preview application block"),
-                layout: &layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: wxsl_core::abi::BINDING_USER_BLOCK,
-                    resource: buffer.as_entire_binding(),
-                }],
-            })
-        });
     }
 
     /// Re-read the WGSL for the active path, compiling it if needed.
@@ -665,12 +755,15 @@ impl Preview {
         // Kept in step every frame rather than at the toggle: a pipeline
         // swap or a document install can bring a fresh tonemap pass.
         let curve = Value::F32(if self.debug_view == 0 { 1.0 } else { 0.0 });
-        if self
-            .renderer
-            .pass_param(TONEMAP_PASS, "curve")
-            .is_some_and(|current| current != curve)
-        {
-            self.renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
+        let renderers = core::iter::once(&mut self.renderer)
+            .chain(self.compare.as_mut().map(|compare| &mut compare.renderer));
+        for renderer in renderers {
+            if renderer
+                .pass_param(TONEMAP_PASS, "curve")
+                .is_some_and(|current| current != curve)
+            {
+                renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
+            }
         }
         let Some(material) = self.material.as_ref() else {
             return Ok(());
@@ -701,6 +794,30 @@ impl Preview {
                 environment: &environment,
                 draws: &draws,
             },
+        )?;
+        let Some(compare) = self.compare.as_mut() else {
+            return Ok(());
+        };
+        if let Some(bindings) = compare.bindings.as_mut() {
+            bindings.upload(device, queue)?;
+        }
+        let mut item = DrawItem::new(&self.mesh, material)
+            .with_transform(model)
+            .with_attributes(&self.attributes);
+        if let Some(bindings) = compare.bindings.as_ref() {
+            item = item.with_bindings(bindings);
+        }
+        if let Some(user) = compare.user.as_ref() {
+            item = item.with_user(user);
+        }
+        compare.renderer.render(
+            device,
+            queue,
+            &RenderRequest {
+                view: self.compare_target.view(),
+                environment: &environment,
+                draws: &wxsl_render::single_draw(item),
+            },
         )
     }
 
@@ -708,6 +825,52 @@ impl Preview {
     pub fn drag(&mut self, delta: f32) {
         self.angle += delta * 0.01;
     }
+}
+
+/// The material's own bind group on `renderer`, every declared texture and
+/// sampler bound to the placeholder, and the zeroed stand-in for the
+/// application's block. Per renderer, because each caches its own layouts:
+/// the A/B split's B side binds the same material again.
+fn bind_material(
+    renderer: &mut Renderer,
+    device: &wgpu::Device,
+    material: &Material,
+    placeholder: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> (MaterialBindings, Option<wgpu::BindGroup>) {
+    let mut bindings = renderer.material_bindings(device, material);
+    for resource in &material.interface().resources {
+        let name = resource.name.as_str();
+        let bound = match resource.ty {
+            ValueType::Sampler => bindings.set_sampler(name, sampler),
+            _ => bindings.set_texture(name, placeholder),
+        };
+        debug_assert!(bound.is_ok(), "the interface named this resource");
+    }
+    let user = material.interface().user.as_ref().map(|block| {
+        // Zeroed: the editor is not the application, so the honest
+        // stand-in is "nothing has been set".
+        let size = u64::from(block.layout.size()).max(16);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wxsl preview application block"),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = renderer
+            .user_layout(device, material)
+            .expect("the material declares a block")
+            .clone();
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wxsl preview application block"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: wxsl_core::abi::BINDING_USER_BLOCK,
+                resource: buffer.as_entire_binding(),
+            }],
+        })
+    });
+    (bindings, user)
 }
 
 /// An 8x8 magenta-and-grey checker, for a texture the graph declares and

@@ -941,6 +941,20 @@ impl Editor {
                 None => format!("pipeline: {pipeline}"),
             };
         }
+        if let Some(compare) = requests.compare {
+            match self.preview.set_compare(device, compare) {
+                Ok(()) => {
+                    self.message = match compare {
+                        Some(pipeline) => format!("A/B: B is {pipeline}"),
+                        None => "A/B: off".to_string(),
+                    };
+                }
+                Err(error) => self.message = error.to_string(),
+            }
+        }
+        if let Some(split) = requests.split {
+            self.preview.split = split.clamp(0.0, 1.0);
+        }
         if let Some(view) = requests.debug_view {
             // A material macro the lighting pass inherits: the material
             // is regenerated, and the lighting pass with it.
@@ -1044,6 +1058,10 @@ pub(crate) struct Requests {
     pub(crate) use_document: bool,
     /// Show this G-buffer debug view (0 shades again).
     pub(crate) debug_view: Option<i32>,
+    /// Put the A/B split up with this B-side pipeline, or take it down.
+    pub(crate) compare: Option<Option<StockPipeline>>,
+    /// Move the A/B split's edge to this fraction of the preview's width.
+    pub(crate) split: Option<f32>,
     pub(crate) mesh: Option<MeshKind>,
     pub(crate) backend: Option<MsdfBackend>,
     /// Switch which canvas the panels point at.
@@ -1523,6 +1541,45 @@ fn inspector_panel(
     let metrics = theme.metrics;
     let inner = ui.panel(rect, Some("preview"));
 
+    // The A/B split's B side, in the header's right end: off, or a stock
+    // pipeline drawn beside whatever A runs (plan3 N9).
+    {
+        let labels: Vec<String> = core::iter::once("A/B: off".to_string())
+            .chain(
+                StockPipeline::ALL
+                    .iter()
+                    .map(|pipeline| format!("B: {}", pipeline.name())),
+            )
+            .collect();
+        let widest = labels
+            .iter()
+            .map(|label| ui.measure_ui(label).x)
+            .fold(0.0_f32, f32::max);
+        let width = widest + metrics.padding * 2.0 + metrics.row_height;
+        let header = Rect::from_min_max(
+            Vec2::new(rect.max.x - width - metrics.padding * 0.25, rect.min.y),
+            Vec2::new(
+                rect.max.x - metrics.padding * 0.25,
+                rect.min.y + metrics.row_height,
+            ),
+        )
+        .shrink(1.0);
+        let options: Vec<(&str, bool)> = labels.iter().map(|l| (l.as_str(), true)).collect();
+        let mut selected = preview
+            .compare()
+            .and_then(|b| StockPipeline::ALL.iter().position(|p| *p == b))
+            .map_or(0, |index| index + 1);
+        if ui
+            .dropdown(Id::new("preview.compare"), header, &options, &mut selected)
+            .changed
+        {
+            requests.compare = Some(match selected {
+                0 => None,
+                index => Some(StockPipeline::ALL[index - 1]),
+            });
+        }
+    }
+
     // The preview, square, as wide as the panel allows.
     let side = inner.width().min(inner.height() * 0.45);
     let image = Rect::from_min_size(
@@ -1531,20 +1588,92 @@ fn inspector_panel(
     );
     ui.draw()
         .round_rect(image, metrics.radius, theme.palette.canvas);
-    ui.draw().image(
-        image,
-        preview.texture(),
-        Vec2::ZERO,
-        Vec2::ONE,
-        Color::WHITE,
-        metrics.radius,
-    );
+    // With the split up, A left of the edge and B right of it — the same
+    // frame from two pipelines, cut where the author drags.
+    let edge = image.min.x + image.width() * preview.split;
+    let mut handle = None;
+    match preview.compare() {
+        Some(b) => {
+            let (left, right) = (
+                Rect::from_min_max(image.min, Vec2::new(edge, image.max.y)),
+                Rect::from_min_max(Vec2::new(edge, image.min.y), image.max),
+            );
+            let s = preview.split;
+            ui.draw().image(
+                left,
+                preview.texture(),
+                Vec2::ZERO,
+                Vec2::new(s, 1.0),
+                Color::WHITE,
+                0.0,
+            );
+            ui.draw().image(
+                right,
+                preview.compare_texture(),
+                Vec2::new(s, 0.0),
+                Vec2::ONE,
+                Color::WHITE,
+                0.0,
+            );
+            let line = Rect::from_min_max(
+                Vec2::new(edge - 1.0, image.min.y),
+                Vec2::new(edge + 1.0, image.max.y),
+            );
+            ui.draw().rect(line, theme.palette.accent);
+            let pad = metrics.padding * 0.5;
+            let label_height = metrics.small_text_size * 1.4;
+            let a_name = if preview.runs_document() {
+                "document".to_string()
+            } else {
+                preview.pipeline().name().to_string()
+            };
+            ui.small_label(
+                Rect::from_min_size(
+                    image.min + Vec2::splat(pad),
+                    Vec2::new(image.width() * 0.5, label_height),
+                ),
+                &format!("A: {a_name}"),
+                theme.palette.text,
+                Align::Left,
+            );
+            ui.small_label(
+                Rect::from_min_size(
+                    Vec2::new(image.center().x, image.min.y + pad),
+                    Vec2::new(image.width() * 0.5 - pad, label_height),
+                ),
+                &format!("B: {}", b.name()),
+                theme.palette.text,
+                Align::Right,
+            );
+            // A strip either side of the edge drags it; the rest of the
+            // image still turns the mesh.
+            let grip = metrics.padding.max(6.0);
+            handle = Some(Rect::from_min_max(
+                Vec2::new(edge - grip, image.min.y),
+                Vec2::new(edge + grip, image.max.y),
+            ));
+        }
+        None => ui.draw().image(
+            image,
+            preview.texture(),
+            Vec2::ZERO,
+            Vec2::ONE,
+            Color::WHITE,
+            metrics.radius,
+        ),
+    }
     ui.draw().round_rect_border(
         image,
         metrics.radius,
         metrics.outline_width,
         theme.palette.outline,
     );
+    if let Some(handle) = handle {
+        let response = ui.interact(Id::new("preview.split"), handle);
+        if response.dragging && response.drag_delta.x != 0.0 {
+            requests.split = Some(preview.split + response.drag_delta.x / image.width());
+        }
+    }
     // Dragging the image turns the mesh, which is the gesture everyone tries
     // first on a 3D preview.
     let response = ui.interact(Id::new("preview.image"), image);
