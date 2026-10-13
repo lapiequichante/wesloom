@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!  ┌─────────────────────────────────────────────────────────────┐
-//!  │ toolbar: name · path · mesh · msdf · add · fit · theme      │
+//!  │ toolbar: name · path · mesh · msdf · add · fit · tidy · …   │
 //!  ├───────────┬──────────────────────────────┬──────────────────┤
 //!  │ palette   │ node canvas                  │ preview          │
 //!  │ (search,  │ (pan, zoom, link, unlink,    │ selected node    │
@@ -967,6 +967,23 @@ impl Editor {
         if let Some(mode) = requests.mode {
             self.set_canvas_mode(mode);
         }
+        if requests.tidy {
+            // Positions only: nothing to recompile.
+            let count = if pipeline_mode {
+                let state = self
+                    .pipeline
+                    .as_mut()
+                    .expect("pipeline mode opened the canvas");
+                canvas::tidy_layout(&mut state.graph, &state.registry);
+                state.graph.node_count()
+            } else {
+                canvas::tidy_layout(&mut self.graph, &self.registry);
+                self.graph.node_count()
+            };
+            self.modified = true;
+            self.message = format!("tidied {count} nodes");
+            requests.fit = true;
+        }
         if requests.fit {
             if pipeline_mode {
                 let state = self
@@ -1182,6 +1199,8 @@ pub(crate) struct Requests {
     /// Turn the preview by this many pixels of drag.
     pub(crate) spin_drag: Option<f32>,
     pub(crate) fit: bool,
+    /// Lay the canvas's nodes out again, then fit.
+    pub(crate) tidy: bool,
     /// The full set of material features the pipeline should carry, as the
     /// features panel's checkboxes left it (plan3 N9): applied as one
     /// `set_features`, so a toggle is a pass-list rebuild rather than a
@@ -1431,6 +1450,9 @@ fn toolbar_panel(
     }
     if button(ui, &mut cursor, "toolbar.fit", "fit", false) {
         requests.fit = true;
+    }
+    if button(ui, &mut cursor, "toolbar.tidy", "tidy", false) {
+        requests.tidy = true;
     }
     let spin_label = if preview.spinning {
         "spin: on"

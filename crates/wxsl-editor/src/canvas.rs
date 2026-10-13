@@ -1042,6 +1042,180 @@ pub fn auto_layout(graph: &mut Graph, registry: &NodeRegistry) {
     }
 }
 
+/// Lay every node out again, whatever position it had: the toolbar's
+/// "tidy".
+///
+/// Columns count from the right — a node nothing reads is in the last
+/// column, and every other node one column left of its nearest consumer
+/// chain's end (the longest path to a sink), so a producer sits next to
+/// what reads it and the inputs end up furthest left. Columns are placed
+/// right to left: each node is ordered by, and aimed at, the sockets it
+/// feeds, then the column is packed so nothing overlaps while staying as
+/// close to those aims as it can. In the last column the outputs come
+/// first, then dangling branches, then nodes no edge touches.
+pub fn tidy_layout(graph: &mut Graph, registry: &NodeRegistry) {
+    let metrics = crate::theme::Metrics::DEFAULT;
+    let column_width = metrics.node_width + 80.0;
+    let gap = 24.0;
+    let body = metrics.node_header_height + metrics.padding * 0.5;
+    let definition = |graph: &Graph, id: NodeId| {
+        graph
+            .node(id)
+            .and_then(|node| registry.get(&node.def))
+            .cloned()
+    };
+    let height = |definition: Option<&NodeDefinition>| {
+        let rows = definition.map_or(0, |d| d.inputs.len() + d.outputs.len());
+        metrics.node_header_height + rows as f32 * metrics.row_height + metrics.padding
+    };
+    // A socket's centre line, from the node's top edge: outputs first,
+    // then inputs, as `layout_node` draws them.
+    let socket_y = |definition: Option<&NodeDefinition>, socket: &str, output: bool| {
+        let Some(definition) = definition else {
+            return body;
+        };
+        let row = if output {
+            definition
+                .outputs
+                .iter()
+                .position(|s| s.name.as_str() == socket)
+        } else {
+            definition
+                .inputs
+                .iter()
+                .position(|s| s.name.as_str() == socket)
+                .map(|index| definition.outputs.len() + index)
+        };
+        body + (row.unwrap_or(0) as f32 + 0.5) * metrics.row_height
+    };
+
+    let order = match graph.topological_order(None) {
+        Ok(order) => order,
+        Err(_) => graph.nodes().map(|(id, _)| id).collect(),
+    };
+    let mut rank: BTreeMap<NodeId, usize> = BTreeMap::new();
+    for id in order.iter().rev() {
+        let own = graph
+            .edges()
+            .iter()
+            .filter(|edge| edge.from.node == *id)
+            .filter_map(|edge| rank.get(&edge.to.node).copied())
+            .max()
+            .map_or(0, |nearest| nearest + 1);
+        rank.insert(*id, own);
+    }
+    let columns = rank.values().copied().max().unwrap_or(0);
+    let mut by_column: Vec<Vec<NodeId>> = vec![Vec::new(); columns + 1];
+    for (id, column) in &rank {
+        by_column[*column].push(*id);
+    }
+
+    let mut top: BTreeMap<NodeId, f32> = BTreeMap::new();
+    for (column, ids) in by_column.iter().enumerate() {
+        // (node, the socket height it aims at, its top for that aim)
+        let mut aims: Vec<(NodeId, f32, f32)> = ids
+            .iter()
+            .map(|id| {
+                let own = definition(graph, *id);
+                let mut sum = (0.0, 0.0);
+                let mut count = 0;
+                for edge in graph.edges().iter().filter(|edge| edge.from.node == *id) {
+                    let Some(consumer_top) = top.get(&edge.to.node) else {
+                        continue;
+                    };
+                    let consumer = definition(graph, edge.to.node);
+                    let target =
+                        consumer_top + socket_y(consumer.as_deref(), &edge.to.socket, false);
+                    sum.0 += target;
+                    sum.1 += target - socket_y(own.as_deref(), &edge.from.socket, true);
+                    count += 1;
+                }
+                if count == 0 {
+                    // A sink: keep the order the canvas had, but outputs
+                    // (nothing to read from) first, then the dangling
+                    // branches, then the nodes no edge touches.
+                    let isolated = !graph
+                        .edges()
+                        .iter()
+                        .any(|edge| edge.to.node == *id || edge.from.node == *id);
+                    let terminal = own.as_ref().is_some_and(|d| d.outputs.is_empty());
+                    let y = graph
+                        .node(*id)
+                        .and_then(|node| node.position)
+                        .map_or(0.0, |p| p[1]);
+                    let tier = if terminal {
+                        0.0
+                    } else if isolated {
+                        2.0
+                    } else {
+                        1.0
+                    };
+                    let key = tier * 1.0e9 + y;
+                    return (*id, key, f32::NEG_INFINITY);
+                }
+                (*id, sum.0 / count as f32, sum.1 / count as f32)
+            })
+            .collect();
+        aims.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        let heights: Vec<f32> = aims
+            .iter()
+            .map(|(id, _, _)| height(definition(graph, *id).as_deref()))
+            .collect();
+        let tops = if column == 0 {
+            // The sinks just stack.
+            let mut y = 0.0;
+            heights
+                .iter()
+                .map(|h| {
+                    let at = y;
+                    y += h + gap;
+                    at
+                })
+                .collect()
+        } else {
+            let desired: Vec<f32> = aims.iter().map(|(_, _, aim)| *aim).collect();
+            pack(&desired, &heights, gap)
+        };
+        let x = (columns - column) as f32 * column_width;
+        for ((id, _, _), y) in aims.iter().zip(tops) {
+            top.insert(*id, y);
+            if let Some(node) = graph.node_mut(*id) {
+                node.position = Some([x, y]);
+            }
+        }
+    }
+}
+
+/// Tops for a column of boxes, in order, as close to `desired` as they
+/// can get (least squares) without overlapping: isotonic regression by
+/// pool-adjacent-violators on the tops less the stack's running offset.
+fn pack(desired: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(desired.len());
+    let mut offset = 0.0;
+    for h in heights {
+        offsets.push(offset);
+        offset += h + gap;
+    }
+    // (sum of targets, count) per pooled block.
+    let mut blocks: Vec<(f32, usize)> = Vec::new();
+    for (aim, offset) in desired.iter().zip(&offsets) {
+        blocks.push((aim - offset, 1));
+        while let [.., (sum_a, count_a), (sum_b, count_b)] = blocks[..] {
+            if sum_a / count_a as f32 <= sum_b / count_b as f32 {
+                break;
+            }
+            blocks.pop();
+            *blocks.last_mut().expect("two blocks") = (sum_a + sum_b, count_a + count_b);
+        }
+    }
+    blocks
+        .iter()
+        .flat_map(|(sum, count)| std::iter::repeat_n(sum / *count as f32, *count))
+        .zip(offsets)
+        .map(|(level, offset)| level + offset)
+        .collect()
+}
+
 /// Place a new node so that its top-left corner is where the user pointed.
 ///
 /// [`Graph::add_resolved`] rather than `Graph::add`: a node dropped on the
@@ -1336,6 +1510,72 @@ mod tests {
             "a stored position is the document's, not the editor's to move"
         );
         assert!(graph.node(unplaced).and_then(|n| n.position).is_some());
+    }
+
+    #[test]
+    fn tidying_puts_sinks_right_inputs_left_and_overlaps_nothing() {
+        let mut registry = NodeRegistry::new();
+        registry.register(definition());
+        let mut graph = Graph::new("test");
+        // A tangle: everything at one spot. sink ← mid ← {a, b}, a short
+        // edge a → sink as well, and one node no edge touches.
+        let at = [5.0, 5.0];
+        let sink = graph.add(Node::new("math.add.f32").with_position(at));
+        let mid = graph.add(Node::new("math.add.f32").with_position(at));
+        let a = graph.add(Node::new("math.add.f32").with_position(at));
+        let b = graph.add(Node::new("math.add.f32").with_position(at));
+        let lone = graph.add(Node::new("math.add.f32").with_position(at));
+        for (from, to) in [((mid, "out"), (sink, "a")), ((a, "out"), (mid, "a"))] {
+            graph.wire(&registry, from, to).expect("same type");
+        }
+        graph
+            .wire(&registry, (b, "out"), (mid, "b"))
+            .expect("same type");
+        graph
+            .wire(&registry, (a, "out"), (sink, "b"))
+            .expect("same type");
+
+        tidy_layout(&mut graph, &registry);
+        let position = |id| graph.node(id).and_then(|n| n.position).expect("placed");
+        assert!(position(sink)[0] > position(mid)[0]);
+        assert!(
+            position(mid)[0] > position(a)[0],
+            "a sits left of every reader"
+        );
+        assert_eq!(position(a)[0], position(b)[0], "both inputs in one column");
+        assert_eq!(
+            position(lone)[0],
+            position(sink)[0],
+            "isolated: last column"
+        );
+        assert!(position(lone)[1] > position(sink)[1], "below the sinks");
+        assert!(
+            position(a)[1] < position(b)[1],
+            "a feeds the upper socket, so it is the upper node"
+        );
+
+        let metrics = crate::theme::Metrics::DEFAULT;
+        let height = metrics.node_header_height + 3.0 * metrics.row_height + metrics.padding;
+        let ids = [sink, mid, a, b, lone];
+        for (i, first) in ids.iter().enumerate() {
+            for second in &ids[i + 1..] {
+                let (p, q) = (position(*first), position(*second));
+                if p[0] == q[0] {
+                    assert!(
+                        (p[1] - q[1]).abs() >= height,
+                        "{first:?} at {p:?} overlaps {second:?} at {q:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn packing_keeps_order_and_aims_where_there_is_room() {
+        // Room for everyone: each lands on its aim.
+        assert_eq!(pack(&[0.0, 100.0], &[50.0, 50.0], 10.0), vec![0.0, 100.0]);
+        // Both aim at one spot: they share the miss, centred on it.
+        assert_eq!(pack(&[0.0, 0.0], &[50.0, 50.0], 10.0), vec![-30.0, 30.0]);
     }
 
     #[test]
