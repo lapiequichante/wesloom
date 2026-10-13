@@ -1143,3 +1143,95 @@ fn the_ab_split_shows_two_pipelines_and_its_edge_drags() {
     frame(&gpu, &mut editor, &target, 1.31);
     assert_eq!(editor.preview().compare(), None);
 }
+
+/// Pass stepping (plan3 N9): the frame tab freezes the preview on one
+/// frame and runs the pass list cut after any pass, showing what that pass
+/// wrote; `live` puts the stock pass list back.
+#[test]
+fn stepping_runs_the_frame_one_pass_at_a_time() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02);
+        frame(&gpu, editor, &target, time + 0.03)
+    };
+    click(&mut editor, Vec2::new(400.0, 19.0), 0.1);
+    click(&mut editor, Vec2::new(400.0, 68.0), 0.2);
+    for step in 0..30 {
+        frame(&gpu, &mut editor, &target, 0.3 + 0.01 * step as f64);
+        if step >= 3 && editor.preview().swap_progress().is_none() {
+            break;
+        }
+    }
+    // The frame tab (the fourth of five cells over the tab strip's 420
+    // px), then `step` at the start of its bar.
+    click(&mut editor, Vec2::new(294.0, 555.0), 0.7);
+    click(&mut editor, Vec2::new(40.0, 581.0), 0.8);
+    let step = editor.preview().stepping().expect("the frame is stepped");
+    let total = step.passes.len();
+    assert_eq!(step.count, total, "stepping starts with every pass run");
+    assert_eq!(step.shown, None, "the last pass wrote the frame itself");
+    let preview = |editor: &Editor| editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    let full = preview(&editor);
+    frame(&gpu, &mut editor, &target, 1.5);
+    assert_eq!(preview(&editor), full, "a stepped frame does not move");
+
+    // `previous` twice: the lighting pass, then the G-buffer pass, whose
+    // first drawable output is the albedo target — unlit.
+    click(&mut editor, Vec2::new(83.0, 581.0), 2.0);
+    click(&mut editor, Vec2::new(83.0, 581.0), 2.1);
+    let step = editor.preview().stepping().expect("still stepping");
+    assert_eq!(step.count, total - 2);
+    assert_eq!(step.passes[step.count - 1], "deferred material");
+    assert_eq!(step.shown.as_deref(), Some("gbuffer base_color"));
+    assert!(editor.preview().status().is_ok());
+    let albedo = preview(&editor);
+    assert!(painted_pixels(&albedo) > 5_000, "the albedo shows the cube");
+    assert_ne!(albedo, full, "the G-buffer is not the lit frame");
+
+    // The show dropdown (x ≈ 170..362) lists the last pass's output, then
+    // every texture written so far: shadow maps, the three G-buffer
+    // targets, depth — the sixth row, at y ≈ 608 + 5 * 22.
+    click(&mut editor, Vec2::new(265.0, 581.0), 3.0);
+    click(&mut editor, Vec2::new(265.0, 718.0), 3.1);
+    // The dropdown's pick lands after the click's last frame has drawn.
+    frame(&gpu, &mut editor, &target, 3.2);
+    let step = editor.preview().stepping().expect("still stepping");
+    assert_eq!(step.shown.as_deref(), Some("gbuffer depth"));
+    assert!(step.pinned);
+    let depth = preview(&editor);
+    assert!(painted_pixels(&depth) > 5_000, "depth shows the cube");
+    assert!(
+        depth
+            .chunks_exact(4)
+            .all(|texel| texel[0] == texel[1] && texel[1] == texel[2]),
+        "depth is drawn grey"
+    );
+
+    // `live`: the stock pass list again, moving.
+    click(&mut editor, Vec2::new(25.0, 581.0), 4.0);
+    assert!(editor.preview().stepping().is_none());
+    assert!(!editor.preview().runs_document());
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Deferred
+    );
+    assert!(editor.preview().status().is_ok());
+    let a = preview(&editor);
+    frame(&gpu, &mut editor, &target, 4.5);
+    assert_ne!(preview(&editor), a, "the live preview spins again");
+}

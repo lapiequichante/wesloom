@@ -215,7 +215,11 @@ pub fn palette_matches(
         let query = picker.query.trim();
         let mut rows: Vec<Match> = effects
             .iter()
-            .filter(|effect| !effect.is_compute() && effect.fits_pass_screen())
+            .filter(|effect| {
+                !effect.is_compute()
+                    && effect.fits_pass_screen()
+                    && !crate::stepping::is_editor_effect(effect.id)
+            })
             .filter_map(|effect| {
                 let score = score(query, effect.id, effect.label, effect.description)?;
                 Some(Match {
@@ -453,7 +457,11 @@ pub(crate) fn inspector_panel(
                 effect_choices = preview
                     .effects()
                     .iter()
-                    .filter(|effect| !effect.is_compute() && effect.fits_pass_screen())
+                    .filter(|effect| {
+                        !effect.is_compute()
+                            && effect.fits_pass_screen()
+                            && !crate::stepping::is_editor_effect(effect.id)
+                    })
                     .map(|effect| effect.id.to_string())
                     .collect();
                 &effect_choices

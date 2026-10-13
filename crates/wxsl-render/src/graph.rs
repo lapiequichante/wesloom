@@ -19,6 +19,9 @@ impl RenderGraph {
     /// The caller-supplied frame target.
     pub const TARGET: ResourceId = wxsl_frame::graph::RenderGraph::TARGET;
 
+    /// The label of the pass a stepped cut appends to show a resource.
+    pub const STEP_INSPECT_PASS: &'static str = wxsl_frame::graph::RenderGraph::STEP_INSPECT_PASS;
+
     /// An empty graph using the native target format.
     pub fn new(format: wgpu::TextureFormat) -> Self {
         Self(wxsl_frame::graph::RenderGraph::new(

@@ -39,6 +39,10 @@ impl RenderGraph {
     /// The frame's own target, which every graph has and nobody allocates.
     pub const TARGET: ResourceId = ResourceId(0);
 
+    /// The label of the pass [`RenderGraph::stepped`] appends to show a
+    /// resource — what its effect parameters are addressed by.
+    pub const STEP_INSPECT_PASS: &'static str = "step inspect";
+
     /// An empty graph whose target is in `format`.
     pub fn new(format: TextureFormat) -> Self {
         RenderGraph {
@@ -123,6 +127,40 @@ impl RenderGraph {
     /// Edit a declared pass before rescheduling the graph.
     pub fn pass_mut(&mut self, index: usize) -> Option<&mut PassDesc> {
         self.passes.get_mut(index)
+    }
+
+    /// The pass list cut after its first `count` passes in schedule order
+    /// — the editor's pass stepping (plan3 N9) — and, when `show` names a
+    /// resource and an effect, one more fullscreen pass drawing that
+    /// resource into the frame's target through the effect.
+    ///
+    /// A cut of a pass list is a pass list: the prefix of an order keeps
+    /// every writer its reads depend on, so it schedules like any other,
+    /// and stepping is honest because it runs exactly the passes it shows.
+    pub fn stepped(
+        &self,
+        count: usize,
+        show: Option<(ResourceId, &str)>,
+    ) -> Result<RenderGraph, GraphError> {
+        let order = self.schedule()?.order().to_vec();
+        let kept: std::collections::HashSet<usize> = order.into_iter().take(count).collect();
+        let mut cut = self.clone();
+        let mut index = 0;
+        cut.passes.retain(|_| {
+            index += 1;
+            kept.contains(&(index - 1))
+        });
+        if let Some((resource, effect)) = show {
+            let mut pass = PassDesc::screen(Self::STEP_INSPECT_PASS, effect);
+            pass.reads.push(crate::pass::Read::current(resource));
+            pass.color.push(crate::pass::Attachment::clear(
+                Self::TARGET,
+                crate::types::Color::BLACK,
+            ));
+            cut.passes.push(pass);
+        }
+        cut.schedule()?;
+        Ok(cut)
     }
 
     /// Declare `desc` as the graph's shadow maps: the depth atlas

@@ -110,6 +110,8 @@ pub enum CodeTab {
     /// The pipeline's material features and the G-buffer budget they
     /// spend (plan3 N9) — the engine panel, not a code view.
     Features,
+    /// The preview's pass list, stepped one pass at a time (plan3 N9).
+    Frame,
     /// Whatever is stopping it.
     Problems,
 }
@@ -120,6 +122,7 @@ impl CodeTab {
         CodeTab::Wxsl,
         CodeTab::Wgsl,
         CodeTab::Features,
+        CodeTab::Frame,
         CodeTab::Problems,
     ];
 
@@ -941,6 +944,23 @@ impl Editor {
                 None => format!("pipeline: {pipeline}"),
             };
         }
+        if let Some(step) = requests.step {
+            let result = match step {
+                StepRequest::Start => self.preview.start_stepping(),
+                StepRequest::To(count, show) => self.preview.step_to(count, show),
+                StepRequest::Stop => {
+                    self.preview.stop_stepping();
+                    Ok(())
+                }
+            };
+            self.message = match result {
+                Ok(()) => match self.preview.stepping() {
+                    Some(view) => format!("frame: pass {} of {}", view.count, view.passes.len()),
+                    None => "frame: live".to_string(),
+                },
+                Err(error) => error.to_string(),
+            };
+        }
         if let Some(compare) = requests.compare {
             match self.preview.set_compare(device, compare) {
                 Ok(()) => {
@@ -1045,6 +1065,18 @@ impl Editor {
     }
 }
 
+/// What the frame panel asks of the preview's pass stepping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum StepRequest {
+    /// Freeze the frame and step.
+    Start,
+    /// Run this many passes, showing this resource (or the last pass's
+    /// output).
+    To(usize, Option<wxsl_render::pass::ResourceId>),
+    /// Back to the live pass list.
+    Stop,
+}
+
 /// What one frame's widgets asked the editor to do.
 ///
 /// Collected rather than applied in place, because a widget deep in a panel
@@ -1062,6 +1094,8 @@ pub(crate) struct Requests {
     pub(crate) compare: Option<Option<StockPipeline>>,
     /// Move the A/B split's edge to this fraction of the preview's width.
     pub(crate) split: Option<f32>,
+    /// Start, move or stop pass stepping.
+    pub(crate) step: Option<StepRequest>,
     pub(crate) mesh: Option<MeshKind>,
     pub(crate) backend: Option<MsdfBackend>,
     /// Switch which canvas the panels point at.
@@ -2184,8 +2218,8 @@ fn code_panel(
     } else {
         format!("problems ({problems})")
     };
-    let labels = ["WXSL", "WGSL", "features", problem_label.as_str()];
-    let (tabs_rect, meta_rect) = tabs_rect.split_left(340.0 * theme.scale);
+    let labels = ["WXSL", "WGSL", "features", "frame", problem_label.as_str()];
+    let (tabs_rect, meta_rect) = tabs_rect.split_left(420.0 * theme.scale);
     let chosen = ui.tabs(Id::new("code.tabs"), tabs_rect, &labels, tab.index());
     let tab = CodeTab::ALL[chosen.min(CodeTab::ALL.len() - 1)];
 
@@ -2205,6 +2239,15 @@ fn code_panel(
                 format!("{} · the budget bar moves with the plan", on.join(", "))
             }
         }
+        CodeTab::Frame => match preview.stepping() {
+            Some(step) => format!(
+                "pass {} of {} · showing {}",
+                step.count,
+                step.passes.len(),
+                step.shown.as_deref().unwrap_or("the frame")
+            ),
+            None => "live · step to freeze the frame".to_string(),
+        },
         CodeTab::Problems if problems == 0 => "the graph compiles".to_string(),
         CodeTab::Problems => format!("{problems} to fix"),
     };
@@ -2225,6 +2268,7 @@ fn code_panel(
             preview.wgsl_highlight(),
         ),
         CodeTab::Features => features_panel(ui, body, preview, requests),
+        CodeTab::Frame => frame_panel(ui, body, preview, requests),
         CodeTab::Problems => {
             let errors = preview.status().errors();
             if errors.is_empty() {
@@ -2244,6 +2288,131 @@ fn code_panel(
         }
     }
     tab
+}
+
+/// The frame panel (plan3 N9): pass stepping.
+///
+/// Freezes the preview on one frame and runs its pass list cut after any
+/// pass, showing what that pass wrote — or any texture the running passes
+/// wrote — through the editor's inspect effects. The cut is a pass list
+/// like any other, so what is shown is exactly what those passes did.
+fn frame_panel(ui: &mut Ui<'_>, body: Rect, preview: &Preview, requests: &mut Requests) {
+    let theme = *ui.theme();
+    let metrics = theme.metrics;
+    let gap = metrics.row_gap;
+    let (bar, list) = body.split_top(metrics.row_height);
+    let list = Rect::from_min_max(list.min + Vec2::new(0.0, gap), list.max);
+    let step = preview.stepping();
+
+    let mut cursor = bar;
+    let mut button = |ui: &mut Ui<'_>, id: &str, label: &str, on: bool| {
+        let width = (ui.measure_ui(label).x + metrics.padding * 2.0).max(32.0);
+        let (rect, rest) = cursor.split_left(width);
+        cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
+        let fill = on.then_some(theme.palette.accent);
+        ui.button_colored(Id::new(id), rect, label, fill).clicked
+    };
+    let Some(step) = step else {
+        if button(ui, "frame.step", "step", false) {
+            requests.step = Some(StepRequest::Start);
+        }
+        ui.label(
+            list,
+            "pause the preview and run its frame one pass at a time",
+            theme.palette.text_dim,
+            Align::Center,
+        );
+        return;
+    };
+    if button(ui, "frame.step", "live", true) {
+        requests.step = Some(StepRequest::Stop);
+    }
+    let pinned = step
+        .pinned
+        .then(|| {
+            step.resources
+                .iter()
+                .find(|(_, label, _)| Some(label) == step.shown.as_ref())
+                .map(|(id, _, _)| *id)
+        })
+        .flatten();
+    if button(ui, "frame.previous", "previous", false) && step.count > 1 {
+        requests.step = Some(StepRequest::To(step.count - 1, None));
+    }
+    if button(ui, "frame.next", "next", false) && step.count < step.passes.len() {
+        requests.step = Some(StepRequest::To(step.count + 1, None));
+    }
+
+    // What to show: the last pass's output, or any texture written so far.
+    let mut labels = vec!["show: last pass".to_string()];
+    labels.extend(
+        step.resources
+            .iter()
+            .map(|(_, label, _)| format!("show: {label}")),
+    );
+    let widest = labels
+        .iter()
+        .map(|label| ui.measure_ui(label).x)
+        .fold(0.0_f32, f32::max);
+    let width = (widest + metrics.padding * 2.0 + metrics.row_height).min(cursor.width());
+    let (show_rect, _) = cursor.split_left(width);
+    let mut options: Vec<(&str, bool)> = vec![(labels[0].as_str(), true)];
+    options.extend(
+        step.resources
+            .iter()
+            .zip(&labels[1..])
+            .map(|((_, _, drawable), label)| (label.as_str(), *drawable)),
+    );
+    let mut selected = pinned
+        .and_then(|id| step.resources.iter().position(|(r, _, _)| *r == id))
+        .map_or(0, |index| index + 1);
+    if ui
+        .dropdown(Id::new("frame.show"), show_rect, &options, &mut selected)
+        .changed
+    {
+        let show = selected.checked_sub(1).map(|index| step.resources[index].0);
+        requests.step = Some(StepRequest::To(step.count, show));
+    }
+
+    // Every pass in schedule order: the running ones bright, the cut ones
+    // dim, the last one run accented. A click runs up to that pass.
+    let row = metrics.row_height;
+    let width = list.width() - metrics.scrollbar_width;
+    let content = step.passes.len() as f32 * (row + gap);
+    let area = ui.scroll_area(Id::new("frame.passes"), list, Vec2::new(width, content));
+    let origin = area.origin();
+    for (index, label) in step.passes.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            Vec2::new(list.min.x, origin.y + index as f32 * (row + gap)),
+            Vec2::new(width, row),
+        );
+        let ran = index < step.count;
+        let current = index + 1 == step.count;
+        let response = ui.interact(Id::new("frame.pass").with(index as u64), rect);
+        if current {
+            ui.draw()
+                .round_rect(rect, metrics.radius, theme.palette.accent);
+        } else if response.hovered {
+            ui.draw()
+                .round_rect(rect, metrics.radius, theme.palette.control);
+        }
+        let color = if ran {
+            theme.palette.text
+        } else {
+            theme.palette.text_dim
+        };
+        let text = rect.shrink(metrics.padding * 0.5);
+        ui.truncated_label(
+            text,
+            &format!("{:>2}  {label}", index + 1),
+            color,
+            Align::Left,
+        );
+        if response.clicked && !current {
+            requests.step = Some(StepRequest::To(index + 1, pinned));
+        }
+    }
+    area.end(ui);
 }
 
 /// The features panel (plan3 N9): the shipped feature registry as live

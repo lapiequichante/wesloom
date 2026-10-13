@@ -19,6 +19,7 @@ use wxsl_core::lighting;
 use wxsl_core::macros::{MacroSet, MacroValue};
 use wxsl_core::node::{NodeRegistry, Value, ValueType};
 use wxsl_render::gpu::OffscreenTarget;
+use wxsl_render::pass::ResourceId;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
 use wxsl_render::{
@@ -28,10 +29,45 @@ use wxsl_render::{
 };
 
 use crate::highlight::{self, Run};
+use crate::stepping;
 
 /// The label the stock presets give their tonemap pass, whose `curve` a
 /// debug view switches off.
 const TONEMAP_PASS: &str = "tonemap";
+
+/// A pass list being stepped through (plan3 N9).
+struct Stepping {
+    /// The pass list as it ran before stepping: what is cut, and — for a
+    /// document — what is put back.
+    full: wxsl_render::RenderGraph,
+    /// Its passes in schedule order, by declaration index.
+    order: Vec<usize>,
+    /// How many passes of `order` run.
+    count: usize,
+    /// The resource shown, or `None` for what the last pass run wrote.
+    show: Option<ResourceId>,
+    /// The stock pipeline to go back to, or `None` for `full` itself.
+    restore: Option<StockPipeline>,
+    /// The scene time the frame is frozen at, so each step shows the same
+    /// frame.
+    time: f32,
+}
+
+/// What the frame tab shows of a pass list being stepped through.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepView {
+    /// Every pass label, in schedule order.
+    pub passes: Vec<String>,
+    /// How many of them run.
+    pub count: usize,
+    /// The resources the running passes write, by id and label, and
+    /// whether an inspect effect can draw each.
+    pub resources: Vec<(ResourceId, String, bool)>,
+    /// The resource on screen, by label: `None` for the frame's target.
+    pub shown: Option<String>,
+    /// Whether the user chose it, rather than it following the last pass.
+    pub pinned: bool,
+}
 
 /// The B side of the A/B split: a second renderer on a stock pipeline,
 /// drawing the same material and mesh into its own target. Two renderers
@@ -121,6 +157,10 @@ pub struct Preview {
     debug_view: i32,
     /// The B side of an A/B split (plan3 N9), when one is up.
     compare: Option<Compare>,
+    /// The pass list being stepped through, when stepping.
+    stepping: Option<Stepping>,
+    /// The scene time of the last frame, which stepping freezes.
+    time: f32,
     /// The B side's target and texture, registered once with the UI so
     /// that turning the split on needs no access to the UI renderer.
     compare_target: OffscreenTarget,
@@ -163,6 +203,8 @@ impl Preview {
         let compare_texture = ui.register_texture(device, compare_target.view());
         Ok(Preview {
             compare: None,
+            stepping: None,
+            time: 0.0,
             compare_target,
             compare_texture,
             library,
@@ -240,7 +282,11 @@ impl Preview {
     /// Whether the renderer runs an installed document rather than a stock
     /// pass list.
     pub fn runs_document(&self) -> bool {
-        self.renderer.pipeline().is_none()
+        match self.stepping.as_ref() {
+            // A cut is installed as a graph; what it was cut from decides.
+            Some(stepping) => stepping.restore.is_none(),
+            None => self.renderer.pipeline().is_none(),
+        }
     }
 
     /// The effects this renderer can run — what the pipeline canvas's
@@ -270,6 +316,7 @@ impl Preview {
     /// pass list is installed, which is the whole point of a pipeline
     /// being data.
     pub fn install_document(&mut self, graph: wxsl_render::RenderGraph) -> Result<(), RenderError> {
+        self.stepping = None;
         self.renderer.set_graph(graph)
     }
 
@@ -303,6 +350,8 @@ impl Preview {
     /// it is regenerated against the same plan — the handshake both sides
     /// check.
     pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
+        // A new plan is a new pass list: stepping the old one ends.
+        self.stop_stepping();
         self.renderer.set_features(names)?;
         // The B side resolves the same material, so it carries the same
         // plan.
@@ -413,6 +462,136 @@ impl Preview {
         }
     }
 
+    /// Pause on the running pass list and step through it (plan3 N9):
+    /// the frame freezes, and every pass runs until a step cuts it.
+    pub fn start_stepping(&mut self) -> Result<(), RenderError> {
+        if self.stepping.is_some() {
+            return Ok(());
+        }
+        for effect in [stepping::INSPECT, stepping::INSPECT_DEPTH] {
+            if self.renderer.effects().get(effect.id).is_none() {
+                self.renderer.add_effect(effect);
+            }
+        }
+        let full = self.renderer.render_graph().clone();
+        let order = full.schedule()?.order().to_vec();
+        self.stepping = Some(Stepping {
+            count: order.len(),
+            order,
+            full,
+            show: None,
+            restore: self.renderer.pipeline(),
+            time: self.time,
+        });
+        self.apply_step()
+    }
+
+    /// Run the first `count` passes (at least one), showing `show` — or
+    /// what the last of them wrote, with `None`.
+    pub fn step_to(&mut self, count: usize, show: Option<ResourceId>) -> Result<(), RenderError> {
+        let Some(stepping) = self.stepping.as_mut() else {
+            return Ok(());
+        };
+        stepping.count = count.clamp(1, stepping.order.len().max(1));
+        stepping.show = show;
+        self.apply_step()
+    }
+
+    /// Back to the full pass list, running live.
+    pub fn stop_stepping(&mut self) {
+        let Some(stepping) = self.stepping.take() else {
+            return;
+        };
+        match stepping.restore {
+            Some(stock) => self.renderer.set_pipeline(stock),
+            None => {
+                // It ran before stepping, so it installs again.
+                let _ = self.renderer.set_graph(stepping.full);
+            }
+        }
+    }
+
+    /// The pass list being stepped through, for the frame tab.
+    pub fn stepping(&self) -> Option<StepView> {
+        let stepping = self.stepping.as_ref()?;
+        let passes = stepping
+            .order
+            .iter()
+            .map(|&index| stepping.full.passes()[index].label.clone())
+            .collect();
+        let resources = self.step_resources(stepping);
+        let shown = self
+            .shown_resource(stepping)
+            .map(|id| stepping.full.resources()[id.index()].label.clone());
+        Some(StepView {
+            passes,
+            count: stepping.count,
+            resources,
+            shown,
+            pinned: stepping.show.is_some(),
+        })
+    }
+
+    /// The textures the running passes write, in the order they are first
+    /// written, the frame's target left out.
+    fn step_resources(&self, stepping: &Stepping) -> Vec<(ResourceId, String, bool)> {
+        let mut seen = Vec::new();
+        for &index in &stepping.order[..stepping.count] {
+            for id in stepping.full.passes()[index].written() {
+                if id != wxsl_render::RenderGraph::TARGET && !seen.contains(&id) {
+                    seen.push(id);
+                }
+            }
+        }
+        seen.into_iter()
+            .map(|id| {
+                let desc = &stepping.full.resources()[id.index()];
+                (id, desc.label.clone(), stepping::effect_for(desc).is_some())
+            })
+            .collect()
+    }
+
+    /// The resource on screen: the chosen one, or the first drawable one
+    /// the last running pass wrote — `None` when that pass wrote the
+    /// frame's target, which is then simply the frame.
+    fn shown_resource(&self, stepping: &Stepping) -> Option<ResourceId> {
+        if stepping.show.is_some() {
+            return stepping.show;
+        }
+        let last = &stepping.full.passes()[*stepping.order.get(stepping.count.checked_sub(1)?)?];
+        if last
+            .written()
+            .any(|id| id == wxsl_render::RenderGraph::TARGET)
+        {
+            return None;
+        }
+        last.written().find(|&id| {
+            id != wxsl_render::RenderGraph::TARGET
+                && stepping::effect_for(&stepping.full.resources()[id.index()]).is_some()
+        })
+    }
+
+    /// Install the current cut.
+    fn apply_step(&mut self) -> Result<(), RenderError> {
+        let Some(stepping) = self.stepping.as_ref() else {
+            return Ok(());
+        };
+        let show = self.shown_resource(stepping).and_then(|id| {
+            let effect = stepping::effect_for(&stepping.full.resources()[id.index()])?;
+            Some((id, effect))
+        });
+        let cut = stepping.full.stepped(stepping.count, show)?;
+        self.renderer.set_graph(cut)?;
+        if show.is_some() {
+            self.renderer.set_pass_param(
+                wxsl_render::RenderGraph::STEP_INSPECT_PASS,
+                "view_size",
+                Value::Vec2([Self::SIZE as f32; 2]),
+            )?;
+        }
+        Ok(())
+    }
+
     /// The B side's pipeline, when the A/B split is up.
     pub fn compare(&self) -> Option<StockPipeline> {
         self.compare.as_ref().map(|compare| compare.pipeline)
@@ -486,6 +665,7 @@ impl Preview {
     /// renderer, so each puts back what it expects before the other's
     /// next frame.
     pub fn restore_stock(&mut self) {
+        self.stepping = None;
         self.renderer.set_pipeline(self.stock);
         self.swapping = false;
     }
@@ -521,6 +701,7 @@ impl Preview {
     /// while the missing stages compile — the editor is exactly the place
     /// where a frozen frame on a button press is most obvious.
     pub fn set_pipeline(&mut self, device: &wgpu::Device, pipeline: StockPipeline) {
+        self.stop_stepping();
         // The material canvas's choice, whether or not the swap has to
         // wait: it is what leaving the pipeline canvas restores.
         self.stock = pipeline;
@@ -765,6 +946,12 @@ impl Preview {
                 renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
             }
         }
+        // Stepping shows one frame, pass by pass: nothing moves.
+        let (dt, time) = match self.stepping.as_ref() {
+            Some(stepping) => (0.0, stepping.time),
+            None => (dt, time),
+        };
+        self.time = time;
         let Some(material) = self.material.as_ref() else {
             return Ok(());
         };

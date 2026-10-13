@@ -673,7 +673,21 @@ mirrored), because switching one renderer's pass list per frame would
 reallocate its pool every frame. The image is cut at a draggable edge,
 A left, B right; `the_ab_split_shows_two_pipelines_and_its_edge_drags`
 checks both frames agree within forward/deferred parity and the edge
-follows a drag. Still open: pass stepping, hot reload, timings.
+follows a drag. Pass stepping: the bottom panel's `frame` tab freezes
+the preview (no spin, fixed time) and runs the pass list cut after any
+pass in schedule order — `RenderGraph::stepped`, device-free in
+wxsl-frame, plus one appended pass drawing the chosen texture through
+the editor's own `editor.inspect`/`editor.inspect_depth` effects
+(curve-free, scaled to the view, kept out of the pipeline canvas's
+vocabulary). `previous`/`next`, a click on any row, and a `show`
+dropdown over every texture written so far; `live` puts the pass list
+back. A full-frame view in the preview rather than a corner viewport:
+the cut has no final picture to keep. Tested device-free (every cut of
+both presets schedules, showing every written 2D texture) and on the
+GPU (`stepping_runs_the_frame_one_pass_at_a_time`: frozen frame, albedo
+at the G-buffer pass, depth grey, live again). The deferred preset's
+112 shadow-tile passes make a long list; grouping them is open. Still
+open: hot reload, timings.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

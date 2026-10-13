@@ -518,6 +518,51 @@ mod tests {
         assert_eq!(formats[1], TextureFormat::Rgba16Float);
     }
 
+    /// Pass stepping (plan3 N9): every cut of each stock pass list, showing
+    /// every 2D texture its kept passes wrote, is itself a pass list that
+    /// schedules — the prefix of an order keeps every writer it needs.
+    #[test]
+    fn every_cut_of_a_stock_pass_list_schedules() {
+        for stock in StockPipeline::ALL {
+            let graph = stock.graph(&default_config(config()));
+            let order = graph
+                .schedule()
+                .expect("the preset schedules")
+                .order()
+                .to_vec();
+            for count in 0..=order.len() {
+                graph
+                    .stepped(count, None)
+                    .unwrap_or_else(|error| panic!("{stock} cut at {count}: {error}"));
+                let written: std::collections::BTreeSet<_> = order[..count]
+                    .iter()
+                    .flat_map(|&index| graph.passes()[index].written().collect::<Vec<_>>())
+                    .filter(|&id| {
+                        id != RenderGraph::TARGET
+                            && matches!(
+                                graph.resources()[id.index()].shape,
+                                crate::pass::ResourceShape::Texture {
+                                    dimension: crate::pass::Dimension::D2,
+                                    ..
+                                }
+                            )
+                    })
+                    .collect();
+                for id in written {
+                    let cut = graph
+                        .stepped(count, Some((id, "test.inspect")))
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{stock} cut at {count} showing `{}`: {error}",
+                                graph.resources()[id.index()].label
+                            )
+                        });
+                    assert_eq!(cut.passes().len(), count + 1);
+                }
+            }
+        }
+    }
+
     #[test]
     fn target_config_never_has_a_zero_dimension() {
         // A minimized window reports zero, and a zero-sized texture is a

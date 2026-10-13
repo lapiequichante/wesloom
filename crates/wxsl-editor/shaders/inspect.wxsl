@@ -1,0 +1,26 @@
+//! inspect — the editor's pass-stepping view of one colour resource.
+//!
+//! Draws whatever an earlier pass left in the resource into the frame's
+//! target, unbent: clamped and encoded, no filmic curve, so a value reads
+//! as what was stored (the debug views' rule). Scaled by the target's
+//! size (`params.view_size`), so a half-size bloom mip fills the view like a
+//! full-size image does.
+
+import package::color::linear_to_srgb::linear_to_srgb;
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+@vertex
+fn inspect_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn inspect_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(image));
+    let texel = vec2i(min(position.xy * size / params.view_size, size - vec2f(1.0)));
+    let stored = textureLoad(image, texel, 0).rgb;
+    return vec4f(linear_to_srgb(clamp(stored, vec3f(0.0), vec3f(1.0))), 1.0);
+}
