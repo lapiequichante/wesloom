@@ -176,6 +176,9 @@ pub struct Editor {
     watch: Option<ShaderWatch>,
     /// When the watch is next polled, on the frame clock.
     next_poll: f64,
+    /// Space went down as a shortcut and the pointer has not moved since:
+    /// releasing it toggles the spin. Moving pans the canvas instead.
+    space_tap: bool,
 }
 
 impl Editor {
@@ -237,6 +240,7 @@ impl Editor {
             pipeline_tab: PipelineTab::default(),
             watch: None,
             next_poll: 0.0,
+            space_tap: false,
         })
     }
 
@@ -859,7 +863,20 @@ impl Editor {
             if ui.input.key_pressed_plain(Key::Char('r')) {
                 requests.fit = true;
             }
-            if ui.input.key_pressed_plain(Key::Char(' ')) {
+            let space = Key::Char(' ');
+            // Not on a repeat: that would re-arm the tap after a pan.
+            if ui
+                .input
+                .keys()
+                .iter()
+                .any(|press| press.key == space && !press.repeat && press.modifiers.is_none())
+            {
+                self.space_tap = true;
+            }
+            if ui.input.key_down(space) && ui.input.pointer_delta() != Vec2::ZERO {
+                self.space_tap = false;
+            }
+            if ui.input.key_released(space) && std::mem::take(&mut self.space_tap) {
                 requests.toggle_spin = true;
             }
         }

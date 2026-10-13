@@ -35,8 +35,12 @@ use crate::ui::{Align, Ui};
 pub struct View {
     /// Graph-space point at the canvas's top-left corner.
     pub pan: Vec2,
-    /// Screen pixels per graph unit.
+    /// Logical pixels per graph unit: what the user zooms.
     pub zoom: f32,
+    /// Physical pixels per logical pixel ([`Theme::scale`]). Node sizes come
+    /// from the theme's scaled metrics, so positions have to scale with them
+    /// or a layout would tighten on a high-DPI display.
+    pub scale: f32,
 }
 
 impl Default for View {
@@ -44,6 +48,7 @@ impl Default for View {
         View {
             pan: Vec2::ZERO,
             zoom: 1.0,
+            scale: 1.0,
         }
     }
 }
@@ -52,14 +57,19 @@ impl View {
     /// The tightest and loosest zoom the canvas allows.
     pub const ZOOM_RANGE: (f32, f32) = (0.2, 3.0);
 
+    /// Screen pixels per graph unit.
+    pub fn pixels_per_unit(&self) -> f32 {
+        self.zoom * self.scale
+    }
+
     /// Where a graph-space point lands on screen, given the canvas's rect.
     pub fn to_screen(&self, canvas: Rect, point: Vec2) -> Vec2 {
-        canvas.min + (point - self.pan) * self.zoom
+        canvas.min + (point - self.pan) * self.pixels_per_unit()
     }
 
     /// Where a screen point falls in graph space.
     pub fn to_graph(&self, canvas: Rect, point: Vec2) -> Vec2 {
-        self.pan + (point - canvas.min) / self.zoom
+        self.pan + (point - canvas.min) / self.pixels_per_unit()
     }
 
     /// Zoom by `factor` about a screen point, keeping that point still.
@@ -75,7 +85,7 @@ impl View {
 
     /// Pan by a screen-space delta.
     pub fn pan_by(&mut self, delta: Vec2) {
-        self.pan -= delta / self.zoom;
+        self.pan -= delta / self.pixels_per_unit();
     }
 
     /// Centre the view on `bounds`, zoomed to fit inside `canvas`.
@@ -84,10 +94,10 @@ impl View {
         let size = (max - min).max(Vec2::splat(1.0));
         let margin = 40.0;
         let available = (canvas.size() - Vec2::splat(margin * 2.0)).max(Vec2::splat(1.0));
-        let scale = (available / size).min_element();
-        self.zoom = scale.clamp(View::ZOOM_RANGE.0, View::ZOOM_RANGE.1);
+        let zoom = (available / size).min_element() / self.scale;
+        self.zoom = zoom.clamp(View::ZOOM_RANGE.0, View::ZOOM_RANGE.1);
         let center = (min + max) * 0.5;
-        self.pan = center - canvas.size() * 0.5 / self.zoom;
+        self.pan = center - canvas.size() * 0.5 / self.pixels_per_unit();
     }
 }
 
@@ -373,6 +383,7 @@ impl Canvas {
         rect: Rect,
         theme: &Theme,
     ) {
+        self.view.scale = theme.scale;
         if let Some(bounds) = graph_bounds(graph, registry, theme) {
             self.view.fit(rect, bounds);
         }
@@ -392,11 +403,14 @@ impl Canvas {
     ) -> CanvasResponse {
         let mut response = CanvasResponse::default();
         let theme = *ui.theme();
+        self.view.scale = theme.scale;
         let pointer = ui.input.pointer();
         let over_canvas =
             pointer.is_some_and(|point| rect.contains(point)) && !ui.pointer_claimed();
 
         // -- view --------------------------------------------------------
+        // Space held pans with the pointer alone, the trackpad's middle drag.
+        let space = ui.input.key_down(Key::Char(' ')) && !ui.state.is_editing();
         if over_canvas {
             let scroll = ui.input.scroll();
             if scroll.y != 0.0 {
@@ -409,9 +423,15 @@ impl Canvas {
             {
                 self.interaction = Interaction::Panning;
             }
+            if space && self.interaction == Interaction::Idle {
+                self.interaction = Interaction::Panning;
+            }
         }
         if self.interaction == Interaction::Panning {
-            if ui.input.is_down(MouseButton::Middle) || ui.input.is_down(MouseButton::Right) {
+            if space
+                || ui.input.is_down(MouseButton::Middle)
+                || ui.input.is_down(MouseButton::Right)
+            {
                 self.view.pan_by(ui.input.pointer_delta());
             } else {
                 self.interaction = Interaction::Idle;
@@ -470,8 +490,10 @@ impl Canvas {
         }
 
         // -- interaction -------------------------------------------------
-        response.changed |= self.handle_ports(ui, rect, graph, registry, &mut response);
-        response.changed |= self.handle_nodes(ui, rect, graph, clicked_node);
+        if self.interaction != Interaction::Panning {
+            response.changed |= self.handle_ports(ui, rect, graph, registry, &mut response);
+            response.changed |= self.handle_nodes(ui, rect, graph, clicked_node);
+        }
 
         if over_canvas && ui.input.released(MouseButton::Right) && !ui.input.modifiers().shift {
             let point = pointer.unwrap_or(rect.center());
@@ -514,15 +536,15 @@ impl Canvas {
         let theme = *ui.theme();
         // Pick the power of two whose spacing on screen is closest to 24px,
         // so the grid neither disappears nor turns into a solid fill.
-        let target = 24.0;
+        let target = 24.0 * theme.scale;
         let mut spacing = 16.0f32;
-        while spacing * self.view.zoom < target {
+        while spacing * self.view.pixels_per_unit() < target {
             spacing *= 2.0;
         }
-        while spacing * self.view.zoom > target * 2.0 {
+        while spacing * self.view.pixels_per_unit() > target * 2.0 {
             spacing *= 0.5;
         }
-        let step = spacing * self.view.zoom;
+        let step = spacing * self.view.pixels_per_unit();
         if step < 4.0 {
             return;
         }
@@ -1257,10 +1279,12 @@ mod tests {
             View {
                 pan: Vec2::new(-120.0, 45.0),
                 zoom: 2.5,
+                scale: 2.0,
             },
             View {
                 pan: Vec2::new(1000.0, -1000.0),
                 zoom: 0.3,
+                scale: 1.0,
             },
         ] {
             let point = Vec2::new(37.0, -12.0);

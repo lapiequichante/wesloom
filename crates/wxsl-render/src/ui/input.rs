@@ -207,6 +207,8 @@ pub struct InputState {
     press_position: [Vec2; 3],
     scroll: Vec2,
     keys: Vec<KeyPress>,
+    held: Vec<Key>,
+    released_keys: Vec<Key>,
     text: String,
     modifiers: Modifiers,
     size: Vec2,
@@ -228,6 +230,8 @@ impl Default for InputState {
             press_position: [Vec2::ZERO; 3],
             scroll: Vec2::ZERO,
             keys: Vec::new(),
+            held: Vec::new(),
+            released_keys: Vec::new(),
             text: String::new(),
             modifiers: Modifiers::NONE,
             size: Vec2::new(1280.0, 720.0),
@@ -273,6 +277,7 @@ impl InputState {
         self.released = [false; 3];
         self.scroll = Vec2::ZERO;
         self.keys.clear();
+        self.released_keys.clear();
         self.text.clear();
         self.double_clicked = false;
     }
@@ -318,6 +323,12 @@ impl InputState {
                         modifiers: self.modifiers,
                         repeat,
                     });
+                    if !self.held.contains(&key) {
+                        self.held.push(key);
+                    }
+                } else if let Some(index) = self.held.iter().position(|held| *held == key) {
+                    self.held.swap_remove(index);
+                    self.released_keys.push(key);
                 }
             }
             UiEvent::Text(character) => {
@@ -340,6 +351,7 @@ impl InputState {
                     // stays held forever, and the next click drags something.
                     self.down = [false; 3];
                     self.modifiers = Modifiers::NONE;
+                    self.held.clear();
                 }
             }
         }
@@ -434,6 +446,19 @@ impl InputState {
     /// Whether `key` was pressed this frame, with any modifiers.
     pub fn key_pressed(&self, key: Key) -> bool {
         self.keys.iter().any(|press| press.key == key)
+    }
+
+    /// Whether `key` is held.
+    pub fn key_down(&self, key: Key) -> bool {
+        self.held.contains(&key)
+    }
+
+    /// Whether `key` came up this frame.
+    ///
+    /// Only a key seen going down counts, so a release whose press went to
+    /// another window does not read as a tap.
+    pub fn key_released(&self, key: Key) -> bool {
+        self.released_keys.contains(&key)
     }
 
     /// Whether `key` was pressed with no modifiers held.
@@ -612,6 +637,32 @@ mod tests {
         });
         assert!(!input.key_pressed(Key::Escape));
         assert!(input.keys().is_empty());
+    }
+
+    #[test]
+    fn a_held_key_stays_down_across_frames_and_its_release_lasts_one() {
+        let mut input = InputState::new();
+        let key = |pressed, repeat| UiEvent::Key {
+            key: Key::Char(' '),
+            pressed,
+            repeat,
+        };
+        input.handle(key(true, false));
+        input.end_frame();
+        input.handle(key(true, true));
+        assert!(input.key_down(Key::Char(' ')));
+        input.end_frame();
+        assert!(input.key_down(Key::Char(' ')));
+        input.handle(key(false, false));
+        assert!(!input.key_down(Key::Char(' ')));
+        assert!(input.key_released(Key::Char(' ')));
+        input.end_frame();
+        assert!(!input.key_released(Key::Char(' ')));
+
+        // Losing focus drops it, as it drops a held button.
+        input.handle(key(true, false));
+        input.handle(UiEvent::FocusChanged(false));
+        assert!(!input.key_down(Key::Char(' ')));
     }
 
     #[test]

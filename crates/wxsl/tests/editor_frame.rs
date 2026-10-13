@@ -480,6 +480,49 @@ fn dragging_a_palette_row_onto_the_canvas_adds_a_node_there() {
 }
 
 #[test]
+fn space_and_a_moving_pointer_pans_and_a_space_tap_toggles_the_spin() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    let space = |pressed| UiEvent::Key {
+        key: Key::Char(' '),
+        pressed,
+        repeat: false,
+    };
+    let start = Vec2::new(700.0, 400.0);
+    editor.handle_event(UiEvent::PointerMoved(start));
+    frame(&gpu, &mut editor, &target, 0.0);
+    let pan = editor.canvas_view().pan;
+    assert!(editor.preview().spinning);
+
+    editor.handle_event(space(true));
+    frame(&gpu, &mut editor, &target, 0.1);
+    editor.handle_event(UiEvent::PointerMoved(start + Vec2::new(60.0, -30.0)));
+    frame(&gpu, &mut editor, &target, 0.2);
+    editor.handle_event(space(false));
+    frame(&gpu, &mut editor, &target, 0.3);
+    let moved = editor.canvas_view().pan - pan;
+    assert!(
+        moved.x < 0.0 && moved.y > 0.0,
+        "the canvas followed the pointer: {moved:?}"
+    );
+    assert!(editor.preview().spinning, "a pan is not a tap");
+
+    // Holding still, a second pointer move pans nothing.
+    let pan = editor.canvas_view().pan;
+    editor.handle_event(UiEvent::PointerMoved(start));
+    frame(&gpu, &mut editor, &target, 0.4);
+    assert_eq!(editor.canvas_view().pan, pan, "no space, no pan");
+
+    editor.handle_event(space(true));
+    frame(&gpu, &mut editor, &target, 0.5);
+    editor.handle_event(space(false));
+    frame(&gpu, &mut editor, &target, 0.6);
+    assert!(!editor.preview().spinning, "a tap toggles the spin");
+}
+
+#[test]
 fn clicking_the_theme_button_toggles_light_and_dark() {
     // The button is pinned to the toolbar's top-right corner and always
     // reaches the panel's right edge (its width only grows leftward to fit

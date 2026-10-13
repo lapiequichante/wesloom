@@ -91,7 +91,7 @@ KEYS:
     G            switch the MSDF backend (cpu <-> gpu)
     A            add a node at the middle of the canvas
     R            frame the whole graph
-    Space        pause the preview's spin
+    Space        pause the preview's spin (tap; held, it pans)
     Ctrl+S       save the active document
     Delete       delete the selected nodes
     Esc          quit
@@ -102,7 +102,7 @@ POINTER:
     drag a connected input  pick that link up by its other end
     right-click a link      cut it
     right-click the canvas  add a node there
-    middle-drag             pan (shift + right-drag also works)
+    middle-drag             pan (shift + right-drag, or Space + move)
     wheel                   zoom about the pointer
     drag the preview        turn the mesh
 ";
