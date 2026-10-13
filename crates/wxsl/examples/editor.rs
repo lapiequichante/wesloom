@@ -574,6 +574,13 @@ impl App {
         config.scale = scale;
 
         let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
+        // Hot reload over the node library's own sources, when this runs
+        // from a checkout: an edited `.wxsl` lands in the preview.
+        let shaders = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wxsl-stdlib/shaders");
+        if shaders.is_dir() {
+            let watched = editor.watch_shaders(&shaders);
+            eprintln!("hot reload: watching {watched} shader files");
+        }
         if self.options.pipeline {
             editor.set_canvas_mode(CanvasMode::Pipeline);
         }

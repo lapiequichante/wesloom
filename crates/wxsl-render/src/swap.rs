@@ -58,7 +58,7 @@ impl Request {
         }
     }
 
-    fn compile(&self, library: &ShaderLibrary) -> Compiled {
+    pub(crate) fn compile(&self, library: &ShaderLibrary) -> Compiled {
         let (label, wgsl) = match self {
             Request::Material(request) => request.compile(library),
             Request::Effect(request) => request.compile(library),

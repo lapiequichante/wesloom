@@ -1235,3 +1235,83 @@ fn stepping_runs_the_frame_one_pass_at_a_time() {
     frame(&gpu, &mut editor, &target, 4.5);
     assert_ne!(preview(&editor), a, "the live preview spins again");
 }
+
+/// Hot reload (plan3 N9): an edited library module on disk lands in the
+/// preview, a broken edit is reported in the problems panel while the last
+/// working library keeps rendering, and the fix lands again.
+#[test]
+fn an_edited_shader_file_reloads_into_the_preview() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    // A source tree holding one module verbatim: the filmic curve the
+    // tonemap pass applies to every pixel of the frame.
+    let root = std::env::temp_dir().join(format!("wxsl-hot-reload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("color")).unwrap();
+    let file = root.join("color").join("tonemap_filmic.wxsl");
+    let original = wxsl::stdlib_library()
+        .get("package::color::tonemap_filmic")
+        .expect("the library has the curve")
+        .to_string();
+    std::fs::write(&file, &original).unwrap();
+    assert_eq!(editor.watch_shaders(&root), 1);
+
+    // Each write gets a later modification time, so a coarse filesystem
+    // clock cannot hide it.
+    let mut stamp = std::time::SystemTime::now();
+    let mut write = |text: &str| {
+        stamp += std::time::Duration::from_secs(5);
+        std::fs::write(&file, text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+    };
+    let body = original.find("    let x =").expect("the curve's body");
+    let edited = |tail: &str| format!("{}{tail}\n}}\n", &original[..body]);
+    let red = |pixels: &[u8]| {
+        pixels
+            .chunks_exact(4)
+            .all(|texel| texel[0] == 255 && texel[1] == 0 && texel[2] == 0)
+    };
+
+    frame(&gpu, &mut editor, &target, 0.0);
+    let before = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    assert!(!red(&before));
+
+    write(&edited("    return vec3f(1.0, 0.0, 0.0);"));
+    frame(&gpu, &mut editor, &target, 1.0);
+    let pixels = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    assert!(red(&pixels), "the edited curve paints every pixel red");
+    assert_eq!(editor.message(), "reloaded tonemap_filmic.wxsl");
+    assert!(editor.preview().reload_errors().is_empty());
+
+    write(&edited("    return vec3f(1.0, 0.0;"));
+    frame(&gpu, &mut editor, &target, 2.0);
+    assert!(
+        !editor.preview().reload_errors().is_empty(),
+        "the broken edit is reported"
+    );
+    assert!(editor.message().contains("does not compile"));
+    let errors = editor.preview().reload_errors().join("\n");
+    assert!(
+        errors.contains(&format!(
+            "package::color::tonemap_filmic:{}",
+            original[..body].lines().count() + 1
+        )),
+        "the span names the edited module and line: {errors}"
+    );
+    let pixels = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    assert!(red(&pixels), "the last working curve keeps rendering");
+
+    write(&original);
+    frame(&gpu, &mut editor, &target, 3.0);
+    assert!(editor.preview().reload_errors().is_empty());
+    let pixels = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    assert!(!red(&pixels), "the original curve is back");
+    let _ = std::fs::remove_dir_all(&root);
+}

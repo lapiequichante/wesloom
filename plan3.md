@@ -686,8 +686,22 @@ the cut has no final picture to keep. Tested device-free (every cut of
 both presets schedules, showing every written 2D texture) and on the
 GPU (`stepping_runs_the_frame_one_pass_at_a_time`: frozen frame, albedo
 at the G-buffer pass, depth grey, live again). The deferred preset's
-112 shadow-tile passes make a long list; grouping them is open. Still
-open: hot reload, timings.
+112 shadow-tile passes make a long list; grouping them is open. Hot
+reload: `Editor::watch_shaders(root)` polls the `.wxsl` files under a
+source tree laid out by module path (the editor example watches
+`wxsl-stdlib/shaders` from a checkout — 107 files, the four the build
+script rewrites left out because their text is not the module's) twice
+a second. An edit is checked first — `Renderer::check_library` compiles,
+with no device, every shader the running pass list asks of the material
+against the edited library — then lands through
+`Renderer::set_library`, which drops the variant and pipeline caches; a
+broken edit puts the compiler's span (module, line, caret) in the
+problems panel while the last working library keeps rendering, and is
+retried together with the next edit. Body edits only: a changed
+signature does not re-derive the node (that is the build script's,
+ADR 0020), and effect-owned shaders (`wxsl-frame/shaders`) are static
+text, not library modules. Tested in `an_edited_shader_file_reloads_into_the_preview`
+(the filmic curve edited to red, broken, restored). Still open: timings.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

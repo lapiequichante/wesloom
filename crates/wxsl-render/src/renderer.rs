@@ -609,7 +609,7 @@ impl Renderer {
         materials: &[&Material],
     ) -> Result<(), RenderError> {
         let schedule = graph.schedule()?;
-        let requests = self.missing_variants(&graph, materials);
+        let requests = self.variant_requests(&graph, materials, true);
         // Nothing to wait for: adopting it now is not a stutter, it is the
         // whole swap. This is the second swap between two pipelines, the
         // one the stage-keyed cache makes free.
@@ -631,8 +631,14 @@ impl Renderer {
         Ok(())
     }
 
-    /// Everything `graph` will ask for that is not compiled yet.
-    fn missing_variants(&self, graph: &RenderGraph, materials: &[&Material]) -> Vec<Request> {
+    /// Everything `graph` will ask of `materials`, once each — only what
+    /// is not compiled yet when `missing` is set.
+    fn variant_requests(
+        &self,
+        graph: &RenderGraph,
+        materials: &[&Material],
+        missing: bool,
+    ) -> Vec<Request> {
         let mut requests: Vec<Request> = Vec::new();
         let mut seen = Vec::new();
         let push = |request: Request, seen: &mut Vec<_>, out: &mut Vec<Request>| {
@@ -641,7 +647,7 @@ impl Renderer {
             // ordinary — a shadow pass and a depth prepass will be exactly
             // that — and compiling it twice would be a waste and a
             // progress count that never reaches its total.
-            if self.variants.contains(&key) || seen.contains(&key) {
+            if (missing && self.variants.contains(&key)) || seen.contains(&key) {
                 return;
             }
             seen.push(key);
@@ -799,6 +805,40 @@ impl Renderer {
     /// The shader library imports are resolved against.
     pub fn library(&self) -> &ShaderLibrary {
         &self.library
+    }
+
+    /// Compile, with no device, every shader the running pass list asks
+    /// of `materials` against `library` instead of this renderer's own,
+    /// and return each failure as `label: error` — the check a hot reload
+    /// runs before [`Renderer::set_library`], so a broken edit is reported
+    /// while the last working library keeps rendering (plan3 N9).
+    pub fn check_library(&self, library: &ShaderLibrary, materials: &[&Material]) -> Vec<String> {
+        if let Err(error) = library.check_abi() {
+            return vec![error.to_string()];
+        }
+        self.variant_requests(&self.graph, materials, false)
+            .iter()
+            .filter_map(|request| {
+                let compiled = request.compile(library);
+                compiled
+                    .wgsl
+                    .err()
+                    .map(|error| format!("{}: {error}", compiled.label))
+            })
+            .collect()
+    }
+
+    /// Replace the shader library, dropping every compiled variant and
+    /// pipeline: a variant's key hashes its root source, not what it
+    /// imports, so an edited module would otherwise keep its stale WGSL.
+    /// Once bakes run again. Check first with [`Renderer::check_library`].
+    pub fn set_library(&mut self, library: ShaderLibrary) -> Result<(), RenderError> {
+        library.check_abi()?;
+        self.library = library;
+        self.variants.clear();
+        self.pipelines.clear();
+        self.invalidate_bakes();
+        Ok(())
     }
 
     /// Variant cache hit/miss counts — how often a pipeline or macro switch

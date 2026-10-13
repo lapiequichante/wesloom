@@ -105,6 +105,7 @@ pub mod highlight;
 pub mod palette;
 pub mod pipeline;
 pub mod preview;
+pub mod reload;
 mod stepping;
 pub mod theme;
 pub mod ui;

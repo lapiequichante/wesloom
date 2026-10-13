@@ -41,6 +41,7 @@ use crate::canvas::{self, Canvas};
 use crate::palette::{Match, NodePicker};
 use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
+use crate::reload::ShaderWatch;
 use crate::theme::Theme;
 use crate::ui::{Align, Id, Ui, UiState};
 use crate::widgets;
@@ -170,6 +171,11 @@ pub struct Editor {
     material_uses_document: bool,
     /// Which bottom panel is showing while the pipeline canvas is up.
     pipeline_tab: PipelineTab,
+    /// The shader files hot reload watches, once
+    /// [`Editor::watch_shaders`] has been called.
+    watch: Option<ShaderWatch>,
+    /// When the watch is next polled, on the frame clock.
+    next_poll: f64,
 }
 
 impl Editor {
@@ -229,7 +235,53 @@ impl Editor {
             pipeline: None,
             material_uses_document: false,
             pipeline_tab: PipelineTab::default(),
+            watch: None,
+            next_poll: 0.0,
         })
+    }
+
+    /// Hot reload (plan3 N9): watch the `.wxsl` files under `root` — a
+    /// source tree laid out by module path, such as `wxsl-stdlib/shaders`
+    /// — and apply an edit to the preview within half a second, or put
+    /// its errors in the problems panel. Returns how many files are
+    /// watched: only those whose text is the library's module verbatim.
+    pub fn watch_shaders(&mut self, root: impl AsRef<std::path::Path>) -> usize {
+        let watch = ShaderWatch::new(root.as_ref(), &self.library);
+        let count = watch.len();
+        self.watch = Some(watch);
+        count
+    }
+
+    fn poll_shaders(&mut self, device: &wgpu::Device) {
+        let Some(watch) = self.watch.as_mut() else {
+            return;
+        };
+        let changes = watch.poll();
+        let Some(first) = changes.first() else {
+            return;
+        };
+        let name = first
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let count = changes.len();
+        let landed = self.preview.reload(
+            device,
+            changes
+                .into_iter()
+                .map(|change| (change.module, change.source)),
+        );
+        let what = if count == 1 {
+            name
+        } else {
+            format!("{count} shaders")
+        };
+        self.message = if landed {
+            format!("reloaded {what}")
+        } else {
+            format!("{what} does not compile · see problems")
+        };
     }
 
     /// The graph being edited.
@@ -486,6 +538,10 @@ impl Editor {
                     }
                 }
             }
+        }
+        if time >= self.next_poll {
+            self.next_poll = time + 0.5;
+            self.poll_shaders(device);
         }
         self.preview.render(device, queue, dt, time as f32)?;
 
@@ -2212,7 +2268,7 @@ fn code_panel(
     let inner = ui.panel(rect, None);
     let (tabs_rect, body) = inner.split_top(metrics.row_height);
 
-    let problems = preview.status().errors().len();
+    let problems = preview.status().errors().len() + preview.reload_errors().len();
     let problem_label = if problems == 0 {
         "problems".to_string()
     } else {
@@ -2270,7 +2326,12 @@ fn code_panel(
         CodeTab::Features => features_panel(ui, body, preview, requests),
         CodeTab::Frame => frame_panel(ui, body, preview, requests),
         CodeTab::Problems => {
-            let errors = preview.status().errors();
+            let errors: Vec<&str> = preview
+                .reload_errors()
+                .iter()
+                .chain(preview.status().errors())
+                .map(String::as_str)
+                .collect();
             if errors.is_empty() {
                 ui.label(
                     body,

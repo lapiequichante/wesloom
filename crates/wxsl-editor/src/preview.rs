@@ -13,6 +13,8 @@
 //! it. Those are the two code panels, and they are the whole reason a shader
 //! graph is debuggable at all.
 
+use std::collections::BTreeMap;
+
 use glam::{Mat4, Vec3};
 use wxsl_core::graph::Graph;
 use wxsl_core::lighting;
@@ -165,8 +167,13 @@ pub struct Preview {
     /// that turning the split on needs no access to the UI renderer.
     compare_target: OffscreenTarget,
     compare_texture: TextureId,
-    /// What a B-side renderer is built from.
+    /// What a B-side renderer is built from, and what a hot reload edits.
     library: ShaderLibrary,
+    /// Edited modules a reload refused, kept so the next edit is checked
+    /// together with them rather than against a library missing them.
+    pending: BTreeMap<String, String>,
+    /// Why the last reload was refused; empty once one lands.
+    reload_errors: Vec<String>,
     /// Where the split's edge sits, as a fraction of the preview's width:
     /// A is drawn left of it, B right.
     pub split: f32,
@@ -208,6 +215,8 @@ impl Preview {
             compare_target,
             compare_texture,
             library,
+            pending: BTreeMap::new(),
+            reload_errors: Vec::new(),
             split: 0.5,
             renderer,
             target,
@@ -267,6 +276,57 @@ impl Preview {
     /// Whether the graph compiles, and what stopped it if not.
     pub fn status(&self) -> &PreviewStatus {
         &self.status
+    }
+
+    /// Why the last shader reload was refused, if it was.
+    pub fn reload_errors(&self) -> &[String] {
+        &self.reload_errors
+    }
+
+    /// Hot reload (plan3 N9): replace library modules by edited sources.
+    ///
+    /// Every shader the running pass list asks of the material is compiled
+    /// against the edited library first, with no device. If any fails the
+    /// errors are kept for the problems panel and the last working library
+    /// keeps rendering; otherwise both renderers take it, which drops their
+    /// compiled variants. Returns whether it landed.
+    pub fn reload(
+        &mut self,
+        device: &wgpu::Device,
+        changes: impl IntoIterator<Item = (String, String)>,
+    ) -> bool {
+        self.pending.extend(changes);
+        let mut library = self.library.clone();
+        for (module, source) in &self.pending {
+            library.insert(module.clone(), source.clone());
+        }
+        let materials: Vec<&Material> = self.material.iter().collect();
+        let mut errors = self.renderer.check_library(&library, &materials);
+        if let Some(compare) = self.compare.as_ref() {
+            for error in compare.renderer.check_library(&library, &materials) {
+                if !errors.contains(&error) {
+                    errors.push(error);
+                }
+            }
+        }
+        if errors.is_empty() {
+            let renderers = core::iter::once(&mut self.renderer)
+                .chain(self.compare.as_mut().map(|compare| &mut compare.renderer));
+            for renderer in renderers {
+                if let Err(error) = renderer.set_library(library.clone()) {
+                    errors.push(error.to_string());
+                }
+            }
+        }
+        if !errors.is_empty() {
+            self.reload_errors = errors;
+            return false;
+        }
+        self.library = library;
+        self.pending.clear();
+        self.reload_errors.clear();
+        self.refresh_wgsl(device);
+        true
     }
 
     /// The pipeline the material preview is drawn with.
