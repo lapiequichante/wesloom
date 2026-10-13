@@ -116,10 +116,12 @@ impl Derivation<'_> {
 
     /// Whether the function's body names a fragment-stage-only builtin —
     /// the derivative family (`dpdx`, `dpdy`, `dpdCoarse`, `dpdFine`,
-    /// `fwidth`). Such a node carries the fragment-only constraint
-    /// (plan5 D1): the stage analysis refuses it outside the fragment
-    /// stage, because a derivative is a function of the pixel grid and
-    /// no interpolant can carry one.
+    /// `fwidth`) and the samples whose mip level comes from implicit
+    /// derivatives (`textureSample`, `textureSampleBias`,
+    /// `textureSampleCompare`). Such a node carries the fragment-only
+    /// constraint (plan5 D1): the stage analysis refuses it outside the
+    /// fragment stage, because a derivative is a function of the pixel
+    /// grid and no interpolant can carry one.
     ///
     /// The scan is textual over the declaration's span on purpose: a
     /// word-shape match cannot misread a string that merely mentions the
@@ -133,7 +135,7 @@ impl Derivation<'_> {
             // A `//` outside a string literal is always a comment in
             // WXSL, and node sources do not put derivatives in strings.
             let code = line.split("//").next().unwrap_or("");
-            if ["dpdx", "dpdy", "dpdCoarse", "dpdFine", "fwidth"]
+            if FRAGMENT_ONLY_BUILTINS
                 .iter()
                 .any(|builtin| contains_word(code, builtin))
             {
@@ -663,6 +665,19 @@ fn struct_named<'m>(module: &'m Module, name: &str) -> Option<&'m StructDecl> {
 
 /// Whether `text` names `word` as a whole identifier — `fwidth` yes,
 /// `fwidthish` no.
+/// The builtins only the fragment stage may call: derivatives, and the
+/// samples that take their mip level from implicit derivatives.
+const FRAGMENT_ONLY_BUILTINS: [&str; 8] = [
+    "dpdx",
+    "dpdy",
+    "dpdCoarse",
+    "dpdFine",
+    "fwidth",
+    "textureSample",
+    "textureSampleBias",
+    "textureSampleCompare",
+];
+
 fn contains_word(text: &str, word: &str) -> bool {
     let bytes = text.as_bytes();
     let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
@@ -975,6 +990,32 @@ mod tests {
              }\n",
         );
         assert!(derived.fragment_only, "dpdx in the body is a derivative");
+    }
+
+    #[test]
+    fn an_implicit_lod_sample_is_fragment_only_and_an_explicit_one_is_not() {
+        let sample = |call: &str| {
+            derive(&format!(
+                "// Thing\n\
+                 //\n\
+                 // Read a texture.\n\
+                 fn thing(\n\
+                     tex: texture_2d<f32>,\n\
+                     samp: sampler,\n\
+                     uv: vec2f, // @default 0.0, 0.0\n\
+                 ) -> vec4f {{\n\
+                     return {call};\n\
+                 }}\n"
+            ))
+        };
+        assert!(
+            sample("textureSample(tex, samp, uv)").fragment_only,
+            "the mip level comes from derivatives"
+        );
+        assert!(
+            !sample("textureSampleLevel(tex, samp, uv, 0.0)").fragment_only,
+            "an explicit level runs in any stage"
+        );
     }
 
     #[test]

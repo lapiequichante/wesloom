@@ -159,6 +159,11 @@ pub fn analyze(
                 None => {}
             }
         }
+        // Nothing terminal reaches it: a dangling branch on the canvas is
+        // not compiled, so it must not pull its producers across the cut.
+        if !vertex_need && !fragment_need {
+            continue;
+        }
         let (can_vertex, can_fragment) = can_run_in(graph, registry, node);
         let stage = match graph.stage(node) {
             StageConstraint::Vertex => ShaderStage::Vertex,

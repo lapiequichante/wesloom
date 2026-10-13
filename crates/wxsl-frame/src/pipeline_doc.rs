@@ -2299,8 +2299,8 @@ impl<'a> Compiler<'a> {
                             node: name.clone(),
                             effect: effect.id.to_string(),
                             reason: format!(
-                                "{} — but nothing is wired into `{socket}`",
-                                input.description
+                                "nothing is wired into `{socket}` ({})",
+                                input.description.trim_end_matches('.')
                             ),
                         });
                     }
@@ -2311,8 +2311,8 @@ impl<'a> Compiler<'a> {
                             node: name.clone(),
                             effect: effect.id.to_string(),
                             reason: format!(
-                                "{} — but nothing is wired into `{socket}`",
-                                input.description
+                                "nothing is wired into `{socket}` ({})",
+                                input.description.trim_end_matches('.')
                             ),
                         });
                     };
@@ -2415,8 +2415,9 @@ impl<'a> Compiler<'a> {
                     node: name.clone(),
                     effect: effect.id.to_string(),
                     reason: format!(
-                        "{} — but nothing is wired into its `{}` output",
-                        output.description, output.name
+                        "nothing is wired into its `{}` output ({})",
+                        output.name,
+                        output.description.trim_end_matches('.')
                     ),
                 });
             };

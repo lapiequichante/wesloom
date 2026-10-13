@@ -195,6 +195,33 @@ fn unused_nodes_do_not_reach_the_shader() {
     assert!(!wgsl.contains("sdf_sphere"), "{wgsl}");
 }
 
+#[test]
+fn a_dangling_consumer_does_not_move_what_it_reads() {
+    // The editor crash this pins: wiring the demo's texture colour into a
+    // tonemap whose output went nowhere placed the tonemap in the vertex
+    // stage, which pulled the `textureSample` feeding it across the cut.
+    let registry = wxsl::stdlib::registry();
+    let mut graph = demo_graph();
+    let before = Material::from_graph(&graph, &registry).unwrap();
+    let combine = graph
+        .nodes()
+        .find(|(_, node)| node.def == "convert.combine.vec3f")
+        .map(|(id, _)| id)
+        .expect("the demo combines the sampled colour");
+    let tonemap = graph.add(Node::new("color.tonemap_filmic"));
+    graph
+        .wire(&registry, (combine, "out"), (tonemap, "color"))
+        .unwrap();
+    let after = Material::from_graph(&graph, &registry).unwrap();
+    for &stage in MaterialStage::ALL {
+        assert_eq!(
+            after.shader(stage).source,
+            before.shader(stage).source,
+            "a branch that reaches no terminal changes nothing"
+        );
+    }
+}
+
 /// Every combination of type arguments worth compiling `def` at.
 ///
 /// The uniform ones — every declared parameter resolved to the same type —
