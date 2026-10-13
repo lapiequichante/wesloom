@@ -1398,3 +1398,52 @@ fn the_pass_list_shows_gpu_timings() {
     assert!(lighting > 0.0 && lighting <= frame_time);
     assert!((frame_time - summed).abs() < 1e-3 * frame_time.max(1.0));
 }
+
+#[test]
+fn a_feature_toggled_under_the_document_pipeline_recompiles_it() {
+    // The crash this pins down: the preview running the pipeline canvas's
+    // document (the pipeline dropdown's third row) kept the pass list
+    // compiled against the old plan when a feature was ticked, so the
+    // regenerated lighting pass read a G-buffer channel the pass list did
+    // not bind — a wgpu validation panic, not an error.
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02);
+    };
+    // The document row of the pipeline dropdown, as in
+    // `the_pipeline_dropdown_previews_through_the_document`, then the
+    // features tab's first checkbox, as in the features test.
+    click(&mut editor, Vec2::new(400.0, 19.0), 0.1);
+    click(&mut editor, Vec2::new(400.0, 90.0), 0.2);
+    for step in 0..10 {
+        frame(&gpu, &mut editor, &target, 0.3 + step as f64 * 0.01);
+    }
+    let resources = editor.preview().render_graph().resources().len();
+    click(&mut editor, Vec2::new(220.0, 555.0), 0.5);
+    click(&mut editor, Vec2::new(100.0, 607.0), 0.6);
+    assert_eq!(editor.preview().features(), vec!["subsurface"]);
+    for step in 0..10 {
+        frame(&gpu, &mut editor, &target, 0.7 + step as f64 * 0.01);
+    }
+    assert_eq!(
+        editor.preview().render_graph().resources().len(),
+        resources + 1,
+        "the document's pass list was recompiled with the channel's target"
+    );
+    assert!(editor.preview().status().is_ok());
+}

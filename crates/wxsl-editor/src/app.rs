@@ -1094,6 +1094,11 @@ impl Editor {
             match self.preview.set_features(&names) {
                 Ok(()) => {
                     self.dirty = true;
+                    // A document's pass list was compiled against the old
+                    // plan: its G-buffer lacks (or keeps) the channel.
+                    if let Some(state) = self.pipeline.as_mut() {
+                        state.dirty = true;
+                    }
                     self.message = if names.is_empty() {
                         "features: none".to_string()
                     } else {

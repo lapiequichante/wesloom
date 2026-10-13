@@ -247,6 +247,11 @@ impl Renderer {
     /// frame is compiled). A material whose graph pins a feature's macro
     /// while its pipeline does not carry the channel is the same error
     /// from the other side.
+    ///
+    /// Only a stock pass list is rebuilt. One installed with
+    /// [`Renderer::set_graph`] was compiled against the old plan, so the
+    /// caller recompiles and reinstalls it; a swap still in flight was too,
+    /// so a stock one lands now and any other is dropped.
     pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
         let features = wxsl_core::lighting::feature_requests(names).map_err(|error| {
             RenderError::Lighting {
@@ -275,6 +280,11 @@ impl Renderer {
             });
         }
         self.config.features = features;
+        if let Some(swap) = self.swap.take() {
+            if swap.pipeline.is_some() {
+                self.stock = swap.pipeline;
+            }
+        }
         self.rebuild();
         Ok(())
     }
