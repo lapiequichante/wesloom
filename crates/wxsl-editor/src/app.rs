@@ -106,13 +106,21 @@ pub enum CodeTab {
     Wxsl,
     /// The WGSL the active render path compiled it to.
     Wgsl,
+    /// The pipeline's material features and the G-buffer budget they
+    /// spend (plan3 N9) — the engine panel, not a code view.
+    Features,
     /// Whatever is stopping it.
     Problems,
 }
 
 impl CodeTab {
     /// The tabs, in order.
-    pub const ALL: &'static [CodeTab] = &[CodeTab::Wxsl, CodeTab::Wgsl, CodeTab::Problems];
+    pub const ALL: &'static [CodeTab] = &[
+        CodeTab::Wxsl,
+        CodeTab::Wgsl,
+        CodeTab::Features,
+        CodeTab::Problems,
+    ];
 
     fn index(self) -> usize {
         CodeTab::ALL
@@ -637,10 +645,16 @@ impl Editor {
                 .as_ref()
                 .map(|state| state.errors.as_slice())
                 .unwrap_or(&[]);
-            self.pipeline_tab =
-                pipeline::passes_panel(&mut ui, code, self.pipeline_tab, &self.preview, errors);
+            self.pipeline_tab = pipeline::passes_panel(
+                &mut ui,
+                code,
+                self.pipeline_tab,
+                &self.preview,
+                errors,
+                &mut requests,
+            );
         } else {
-            self.tab = code_panel(&mut ui, code, self.tab, &self.preview);
+            self.tab = code_panel(&mut ui, code, self.tab, &self.preview, &mut requests);
         }
         if pipeline_mode {
             let state = self
@@ -899,6 +913,30 @@ impl Editor {
         if requests.toggle_spin {
             self.preview.spinning = !self.preview.spinning;
         }
+        if let Some(names) = requests.features.take() {
+            // The material is regenerated right after: the plan the
+            // checkboxes widened is the plan it must resolve against, and
+            // the handshake checks both sides by name.
+            match self.preview.set_features(&names) {
+                Ok(()) => {
+                    self.dirty = true;
+                    self.message = if names.is_empty() {
+                        "features: none".to_string()
+                    } else {
+                        format!("features: {}", names.join(", "))
+                    };
+                }
+                Err(error) => self.message = error.to_string(),
+            }
+        }
+        if let Some(label) = requests.mark_pass.take() {
+            self.preview.mark_pass(&label);
+            self.message = format!("run requested: {label}");
+        }
+        if requests.reset_runs {
+            self.preview.reset_runs();
+            self.message = "run counts reset".to_string();
+        }
         if requests.toggle_theme {
             self.ui.theme.toggle_mode();
         }
@@ -954,6 +992,17 @@ pub(crate) struct Requests {
     /// Turn the preview by this many pixels of drag.
     pub(crate) spin_drag: Option<f32>,
     pub(crate) fit: bool,
+    /// The full set of material features the pipeline should carry, as the
+    /// features panel's checkboxes left it (plan3 N9): applied as one
+    /// `set_features`, so a toggle is a pass-list rebuild rather than a
+    /// per-box increment.
+    pub(crate) features: Option<Vec<&'static str>>,
+    /// Run the pass labelled this on the next frame — the policy
+    /// inspector's "run now".
+    pub(crate) mark_pass: Option<String>,
+    /// Make every `once` and `on resize` pass due again — the policy
+    /// inspector's reset.
+    pub(crate) reset_runs: bool,
     /// Show this in the status bar instead of building a message at the
     /// apply site — for a widget (the inspector's generic-type picker) whose
     /// outcome depends on what it did, not just that it ran.
@@ -1743,7 +1792,13 @@ fn inspector_panel(
 }
 
 /// The code panels: what the graph became, and what stopped it.
-fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> CodeTab {
+fn code_panel(
+    ui: &mut Ui<'_>,
+    rect: Rect,
+    tab: CodeTab,
+    preview: &Preview,
+    requests: &mut Requests,
+) -> CodeTab {
     let theme = *ui.theme();
     let metrics = theme.metrics;
     let inner = ui.panel(rect, None);
@@ -1755,19 +1810,27 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
     } else {
         format!("problems ({problems})")
     };
-    let labels = ["WXSL", "WGSL", problem_label.as_str()];
-    let (tabs_rect, meta_rect) = tabs_rect.split_left(280.0 * theme.scale);
+    let labels = ["WXSL", "WGSL", "features", problem_label.as_str()];
+    let (tabs_rect, meta_rect) = tabs_rect.split_left(340.0 * theme.scale);
     let chosen = ui.tabs(Id::new("code.tabs"), tabs_rect, &labels, tab.index());
     let tab = CodeTab::ALL[chosen.min(CodeTab::ALL.len() - 1)];
 
     let lines = match tab {
         CodeTab::Wxsl => preview.wxsl().lines().count(),
         CodeTab::Wgsl => preview.wgsl().lines().count(),
-        CodeTab::Problems => problems,
+        _ => 0,
     };
     let meta = match tab {
         CodeTab::Wxsl => format!("{lines} lines · generated from the graph"),
         CodeTab::Wgsl => format!("{lines} lines · {} stage", preview.display_stage()),
+        CodeTab::Features => {
+            let on = preview.features();
+            if on.is_empty() {
+                "no channels · the plan is the base layout".to_string()
+            } else {
+                format!("{} · the budget bar moves with the plan", on.join(", "))
+            }
+        }
         CodeTab::Problems if problems == 0 => "the graph compiles".to_string(),
         CodeTab::Problems => format!("{problems} to fix"),
     };
@@ -1787,6 +1850,7 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
             preview.wgsl(),
             preview.wgsl_highlight(),
         ),
+        CodeTab::Features => features_panel(ui, body, preview, requests),
         CodeTab::Problems => {
             let errors = preview.status().errors();
             if errors.is_empty() {
@@ -1806,6 +1870,129 @@ fn code_panel(ui: &mut Ui<'_>, rect: Rect, tab: CodeTab, preview: &Preview) -> C
         }
     }
     tab
+}
+
+/// The features panel (plan3 N9): the shipped feature registry as live
+/// checkboxes over the pipeline's channel plan, and the attachment
+/// budget as a bar.
+///
+/// Toggling a box asks for the whole set of checked names at once — a
+/// channel change is a pass-list rebuild, not an increment — and the
+/// editor regenerates the material against the widened plan on the next
+/// frame, which is what makes the *image* move with the plan rather than
+/// the frame failing its handshake check. The bar is the same
+/// bytes-per-sample accounting the pipeline canvas's inspector draws;
+/// here it is the thing the checkboxes spend.
+fn features_panel(ui: &mut Ui<'_>, body: Rect, preview: &Preview, requests: &mut Requests) {
+    let theme = *ui.theme();
+    let metrics = theme.metrics;
+    let features = wxsl_core::lighting::FEATURES;
+    if features.is_empty() {
+        ui.label(
+            body,
+            "no shipped features",
+            theme.palette.text_dim,
+            Align::Center,
+        );
+        return;
+    }
+    let enabled = preview.features();
+    let (bytes, max) = match preview.pipeline_config().plan() {
+        Ok(plan) => (
+            wxsl_render::pipeline::gbuffer_layout_bytes_per_sample(plan.layout()),
+            wxsl_render::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE,
+        ),
+        // The renderer's config is validated when its features are set,
+        // so this arm is honesty rather than expectation.
+        Err(error) => {
+            ui.small_label(body, &error.to_string(), theme.palette.error, Align::Left);
+            return;
+        }
+    };
+
+    // The doc paragraphs are measurable, so the content height is exact.
+    let width = body.width() - metrics.scrollbar_width;
+    let small_row = metrics.small_text_size * 1.4 + metrics.row_gap;
+    let mut content = metrics.row_gap * 2.0 + metrics.row_height;
+    for feature in features {
+        let doc = ui.layout(
+            ui.state.ui_font,
+            feature.doc,
+            TextOptions::new(metrics.small_text_size).wrapped(width),
+        );
+        content += metrics.row_height + doc.size.y + small_row + metrics.row_gap;
+    }
+    let area = ui.scroll_area(Id::new("features.scroll"), body, Vec2::new(width, content));
+    let mut cursor = area.origin().y;
+    let mut next = |height: f32| {
+        let rect = Rect::from_min_size(Vec2::new(body.min.x, cursor), Vec2::new(width, height));
+        cursor += height + metrics.row_gap;
+        rect
+    };
+
+    // The budget bar first: what every checkbox spends against.
+    let budget_row = next(metrics.row_height);
+    let (label_rect, bar_rect) = budget_row.split_right(width * 0.42);
+    ui.small_label(
+        label_rect,
+        &format!("{bytes} / {max} bytes per sample"),
+        theme.palette.text_dim,
+        Align::Left,
+    );
+    ui.draw()
+        .round_rect(bar_rect, metrics.radius, theme.palette.control);
+    let fraction = (bytes as f32 / max as f32).clamp(0.0, 1.0);
+    let filled = Rect::from_min_size(
+        bar_rect.min,
+        Vec2::new(bar_rect.width() * fraction, bar_rect.height()),
+    );
+    ui.draw()
+        .round_rect(filled, metrics.radius, theme.palette.accent);
+
+    // The request is the full set of names the boxes left — a channel
+    // change is one pass-list rebuild, applied as one `set_features`.
+    let mut names: Vec<&'static str> = Vec::new();
+    let mut changed = false;
+    for feature in features {
+        let row = next(metrics.row_height);
+        let mut on = enabled.contains(&feature.name);
+        let response = ui.checkbox(
+            Id::new("features.box").with(Id::new(feature.name).0),
+            row,
+            feature.name,
+            &mut on,
+        );
+        if response.changed {
+            changed = true;
+        }
+        if on {
+            names.push(feature.name);
+        }
+        // The macro a material pins to turn the feature on, and the
+        // channel it asks for — the two halves of the handshake, named.
+        let macro_row = next(small_row);
+        ui.small_label(
+            macro_row,
+            &format!(
+                "macro {} · {}",
+                feature.macro_name,
+                feature.target.precision.name()
+            ),
+            theme.palette.text_dim,
+            Align::Left,
+        );
+        let doc = ui.layout(
+            ui.state.ui_font,
+            feature.doc,
+            TextOptions::new(metrics.small_text_size).wrapped(width),
+        );
+        let doc_rect = next(doc.size.y);
+        ui.draw().text(&doc, doc_rect.min, theme.palette.text_dim);
+    }
+    area.end(ui);
+    if changed {
+        requests.features = Some(names);
+    }
 }
 
 /// What the status bar says about the active document, and whether its

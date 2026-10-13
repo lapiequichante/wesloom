@@ -639,6 +639,17 @@ The items `todo.md` has carried, plus the one decision behind them:
 
 ### N9 — The editor catches up
 
+**In progress (2026-10-13):** the features panel and the policy inspector
+have landed. The material canvas's bottom panel gains a `features` tab:
+`FEATURES` as checkboxes driving `set_features` live over the
+bytes-per-sample bar, with the preview's material now resolved against the
+renderer's own plan so a toggle re-renders instead of failing the
+handshake. The pipeline canvas's passes list shows runs and last-frame
+draws per pass, a `run` button on `on demand` rows (`mark_pass`), and a
+`reset` (`Renderer::reset_runs`, now public). Both are GPU tests in
+`editor_frame`. Still open: the resolved material config with parameter
+sliders, debug views, A/B split, pass stepping, hot reload, timings.
+
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —
 a toolbar, a palette, an inspector, a code panel with three tabs, a

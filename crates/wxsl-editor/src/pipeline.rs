@@ -596,6 +596,7 @@ pub(crate) fn passes_panel(
     tab: PipelineTab,
     preview: &Preview,
     errors: &[String],
+    requests: &mut Requests,
 ) -> PipelineTab {
     let theme = *ui.theme();
     let metrics = theme.metrics;
@@ -626,7 +627,22 @@ pub(crate) fn passes_panel(
         PipelineTab::Problems if errors.is_empty() => "the document compiles".to_string(),
         PipelineTab::Problems => format!("{} to fix", errors.len()),
     };
-    ui.small_label(meta_rect, &meta, theme.palette.text_dim, Align::Right);
+    // The policy inspector's reset (plan3 N9): fresh run bookkeeping, every
+    // `once` and `on resize` pass due again. Beside the counts, on the
+    // passes tab where the runs it clears are shown.
+    if tab == PipelineTab::Passes {
+        let reset_width = ui.measure_ui("reset").x + metrics.padding * 2.0;
+        let (reset_rect, meta_rect) = meta_rect.split_left(reset_width);
+        if ui
+            .button(Id::new("pipeline.reset"), reset_rect, "reset")
+            .clicked
+        {
+            requests.reset_runs = true;
+        }
+        ui.small_label(meta_rect, &meta, theme.palette.text_dim, Align::Right);
+    } else {
+        ui.small_label(meta_rect, &meta, theme.palette.text_dim, Align::Right);
+    }
 
     let body = Rect::from_min_max(body.min + Vec2::new(0.0, metrics.row_gap), body.max);
     match tab {
@@ -658,8 +674,13 @@ pub(crate) fn passes_panel(
                     theme.palette.text_dim,
                     Align::Left,
                 );
-                // (the right piece, the rest): policy hugs the row's edge.
-                let (policy_rect, label_rect) = rest.split_right(metrics.small_text_size * 8.0);
+                // (the right pieces, the rest): the policy inspector's
+                // columns hug the row's edge (plan3 N9) — the policy,
+                // then how many times the pass has actually run and how
+                // many draws it issued last frame, which is the whole
+                // difference between "scheduled" and "did something".
+                let (policy_rect, rest) = rest.split_right(metrics.small_text_size * 8.0);
+                let (counts_rect, label_rect) = rest.split_right(metrics.small_text_size * 10.0);
                 ui.truncated_label(label_rect, &pass.label, theme.palette.text, Align::Left);
                 ui.small_label(
                     policy_rect,
@@ -667,6 +688,32 @@ pub(crate) fn passes_panel(
                     theme.palette.text_dim,
                     Align::Right,
                 );
+                let runs = preview.pass_run_count(&pass.label).unwrap_or(0);
+                let draws = preview.pass_draw_count(&pass.label).unwrap_or(0);
+                ui.small_label(
+                    counts_rect,
+                    &format!("runs {runs} · draws {draws}"),
+                    theme.palette.text_dim,
+                    Align::Right,
+                );
+                // "Run now" is the on-demand policy's other half: a
+                // `once` pass is due by itself, a per-frame pass never
+                // needs asking, and an on-demand one runs exactly when
+                // something marks it.
+                if pass.policy == Policy::OnDemand {
+                    let (button_rect, _counts) =
+                        counts_rect.split_left(metrics.small_text_size * 5.5);
+                    if ui
+                        .button(
+                            Id::new("pipeline.run").with(index as u64),
+                            button_rect,
+                            "run",
+                        )
+                        .clicked
+                    {
+                        requests.mark_pass = Some(pass.label.clone());
+                    }
+                }
             }
             area.end(ui);
         }

@@ -2094,19 +2094,21 @@ fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureVie
     };
     // The full mip chain, box-filtered on the CPU: the floors are seen at
     // grazing angles, and a mip-less checker minified past one texel per
-    // square hatches the ground with moiré.
-    let mut levels = vec![texels];
-    while levels.last().unwrap().len() > 4 {
-        let prev = levels.last().unwrap();
-        let prev_side = (prev.len() as u32 / 4).isqrt() as usize;
+    // square hatches the ground with moiré. The side rides alongside the
+    // texels rather than being re-derived (an integer square root would
+    // spend MSRV the workspace has not adopted).
+    let mut levels = vec![(SIDE as usize, texels)];
+    while levels.last().unwrap().0 > 1 {
+        let (prev_side, prev) = levels.last().unwrap();
+        let (prev_side, prev) = (*prev_side, prev.as_slice());
         let side = (prev_side / 2).max(1);
         let mut next = Vec::with_capacity(side * side * 4);
         for y in 0..side {
             for x in 0..side {
                 for c in 0..4 {
                     let sample = |yy: usize, xx: usize| {
-                        prev[((yy.min(prev_side - 1) * prev_side + xx.min(prev_side - 1)) * 4 + c)
-                            as usize] as u32
+                        prev[(yy.min(prev_side - 1) * prev_side + xx.min(prev_side - 1)) * 4 + c]
+                            as u32
                     };
                     let y2 = y * 2;
                     let x2 = x * 2;
@@ -2118,7 +2120,7 @@ fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureVie
                 }
             }
         }
-        levels.push(next);
+        levels.push((side, next));
     }
     let mip_count = levels.len() as u32;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -2131,8 +2133,8 @@ fn demo_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureVie
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (level, texels) in levels.iter().enumerate() {
-        let side = (texels.len() as u32 / 4).isqrt();
+    for (level, (side, texels)) in levels.iter().enumerate() {
+        let side = *side as u32;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,

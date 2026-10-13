@@ -385,11 +385,12 @@ impl Renderer {
         self.drawn.get(index).copied()
     }
 
-    /// Fresh run bookkeeping for a new pass list: nothing has run, every
-    /// `once` and `on resize` pass is due. The effect-parameter blocks are
-    /// synced here too, because this is the one place every path a new
-    /// pass list arrives by already goes through.
-    fn reset_runs(&mut self) {
+    /// Fresh run bookkeeping: nothing has run, every `once` and
+    /// `on resize` pass is due. Called on a new pass list, and by the
+    /// editor's policy inspector as its reset — the counterpart of
+    /// [`Self::mark_pass`]'s "run now", and the way a `once` bake is made
+    /// due again without replacing the pass list.
+    pub fn reset_runs(&mut self) {
         self.runs = vec![0; self.graph.passes().len()];
         self.last_run = vec![(u64::MAX, (0, 0)); self.graph.passes().len()];
         self.sync_pass_params();

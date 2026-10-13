@@ -248,6 +248,44 @@ impl Preview {
         self.renderer.pass_param(pass, name)
     }
 
+    /// The material features the preview's pipeline carries, by name —
+    /// what the features panel's checkboxes start from (plan3 N9).
+    pub fn features(&self) -> Vec<&'static str> {
+        self.renderer.features()
+    }
+
+    /// Enable material features by name, rebuilding the pass list against
+    /// the widened plan. The caller marks the material dirty afterwards, so
+    /// it is regenerated against the same plan — the handshake both sides
+    /// check.
+    pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
+        self.renderer.set_features(names)
+    }
+
+    /// Ask the pass labelled `label` to run on the next frame — the policy
+    /// inspector's "run now" ([`Renderer::mark_pass`](wxsl_render::Renderer::mark_pass)).
+    pub fn mark_pass(&mut self, label: &str) {
+        self.renderer.mark_pass(label);
+    }
+
+    /// How many times the pass labelled `label` has run since the pass list
+    /// was set — the policy inspector's "runs" column.
+    pub fn pass_run_count(&self, label: &str) -> Option<u32> {
+        self.renderer.pass_run_count(label)
+    }
+
+    /// How many draws the pass labelled `label` issued last frame — the
+    /// policy inspector's "draws" column.
+    pub fn pass_draw_count(&self, label: &str) -> Option<u32> {
+        self.renderer.pass_draw_count(label)
+    }
+
+    /// Fresh run bookkeeping: every `once` and `on resize` pass due again
+    /// — the policy inspector's reset.
+    pub fn reset_runs(&mut self) {
+        self.renderer.reset_runs();
+    }
+
     /// Back to the stock pipeline the material canvas chose.
     ///
     /// What leaving the pipeline canvas means: the two canvases share one
@@ -403,7 +441,13 @@ impl Preview {
             return;
         }
 
-        match Material::from_graph_with_macros(graph, registry, macros) {
+        // Resolved against the renderer's own plan — its lighting set and
+        // feature channels — because a material's G-buffer module is
+        // generated for that layout and the frame checks the handshake by
+        // name (plan3 N9: the features panel can change the plan live).
+        let mut config = wxsl_render::material::MaterialConfig::with_macros(macros.clone());
+        config.features = self.renderer.pipeline_config().features.clone();
+        match Material::with_lighting(graph, registry, &config, self.renderer.lighting()) {
             Ok(material) => {
                 self.wxsl = material.wxsl(self.renderer.display_stage()).to_string();
                 self.wxsl_highlight = highlight::highlight(&self.wxsl);

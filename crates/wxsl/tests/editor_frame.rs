@@ -657,3 +657,127 @@ fn the_pipeline_canvas_edits_the_pipeline_live() {
         "the stock pass list came back with the material canvas"
     );
 }
+
+/// The features panel (plan3 N9): a checkbox toggles the pipeline's
+/// channel live — the plan widens, the budget bar's numbers move with it,
+/// and the material is regenerated against the new plan rather than the
+/// frame failing its handshake check.
+#[test]
+fn a_features_checkbox_widens_the_plan_and_the_budget_bar_moves() {
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    frame(&gpu, &mut editor, &target, 0.016);
+    assert!(
+        editor.preview().features().is_empty(),
+        "a new editor carries no feature channels"
+    );
+    let bytes = |editor: &Editor| {
+        wxsl::render::pipeline::gbuffer_layout_bytes_per_sample(
+            editor
+                .preview()
+                .pipeline_config()
+                .plan()
+                .expect("the renderer's plan is valid")
+                .layout(),
+        )
+    };
+    let before = bytes(&editor);
+
+    // The click points are the layout's own arithmetic at scale 1: the
+    // code panel's tab strip is the first row of the bottom panel's inner
+    // rect (y = 800 - 24 - 240 + 8 = 544..566), the tabs occupy its first
+    // 340 px in four equal cells, so "features" (index 2) centres at
+    // x ≈ 220; the checkbox row is the first feature row under the budget
+    // bar (y ≈ 596..618).
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02);
+    };
+
+    click(&mut editor, Vec2::new(220.0, 555.0), 0.1);
+    click(&mut editor, Vec2::new(100.0, 607.0), 0.2);
+    assert_eq!(
+        editor.preview().features(),
+        vec!["subsurface"],
+        "one click on the checkbox enables the channel"
+    );
+    assert!(
+        bytes(&editor) > before,
+        "the budget bar's bytes must move with the plan: {} then {}",
+        before,
+        bytes(&editor)
+    );
+    // The regenerated material resolved against the widened plan, which is
+    // the handshake both sides check by name — and the preview still runs.
+    assert!(
+        editor.preview().status().is_ok(),
+        "the material recompiled against the new plan: {:?}",
+        editor.preview().status()
+    );
+
+    // And back off: the channel leaves, the bytes return.
+    click(&mut editor, Vec2::new(220.0, 555.0), 0.3);
+    click(&mut editor, Vec2::new(100.0, 607.0), 0.4);
+    assert!(editor.preview().features().is_empty());
+    assert_eq!(bytes(&editor), before);
+    assert!(editor.preview().status().is_ok());
+}
+
+/// The policy inspector's reset (plan3 N9): fresh run bookkeeping, every
+/// pass due again — the `once` policy's observable half. The "run now"
+/// button rides the same request path for `on demand` passes, which the
+/// stock presets carry none of; `mark_pass` itself is the execution-policy
+/// tests' ground.
+#[test]
+fn the_policy_inspectors_reset_makes_every_pass_due_again() {
+    use wxsl::editor::CanvasMode;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    editor.set_canvas_mode(CanvasMode::Pipeline);
+    frame(&gpu, &mut editor, &target, 0.016);
+    frame(&gpu, &mut editor, &target, 0.032);
+    frame(&gpu, &mut editor, &target, 0.048);
+    let tonemap = editor.preview().pass_run_count("tonemap");
+    assert_eq!(tonemap, Some(3), "a per-frame pass runs once per frame");
+
+    // The reset button sits at the left of the passes panel's meta row —
+    // the same first row of the bottom panel's inner rect as the material
+    // canvas's tabs (y = 544..566), left of the right-aligned counts.
+    editor.handle_event(UiEvent::PointerMoved(Vec2::new(305.0, 555.0)));
+    frame(&gpu, &mut editor, &target, 0.064);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+    });
+    frame(&gpu, &mut editor, &target, 0.072);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
+    // The request applies at the end of the frame the click landed in, so
+    // it is the *next* frame that runs against fresh bookkeeping.
+    frame(&gpu, &mut editor, &target, 0.08);
+    frame(&gpu, &mut editor, &target, 0.096);
+    assert_eq!(
+        editor.preview().pass_run_count("tonemap"),
+        Some(1),
+        "the reset cleared the bookkeeping and the pass ran once more"
+    );
+}
