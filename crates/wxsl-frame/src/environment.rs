@@ -827,7 +827,8 @@ impl Environment {
             exposure: self.exposure,
             previous_time: self.previous_time,
             origin: self.origin.as_vec3().to_array(),
-            _padding: 0.0,
+            // The host that binds an environment says how deep it is.
+            environment_levels: 1,
         }
     }
 

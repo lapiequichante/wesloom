@@ -1,4 +1,5 @@
-@group(3) @binding(0) var depth_image: texture_depth_2d;
+import package::wxsl::bindings::point_sampler;
+@group(3) @binding(0) var depth_image: texture_2d<f32>;
 @group(3) @binding(1) var previous: texture_2d<f32>;
 
 @vertex
@@ -9,6 +10,6 @@ fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
 @fragment
 fn fragment(@builtin(position) p: vec4f) -> @location(0) vec2f {
     let pixel = vec2i(p.xy);
-    let depth = textureLoad(depth_image, pixel, 0);
+    let depth = textureSampleLevel(depth_image, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(depth_image)), 0.0).x;
     return vec2f(select(textureLoad(previous, pixel, 0).r, depth, depth < 1.0), 1.0);
 }

@@ -101,7 +101,7 @@ Carried from plan3 (all still open there):
 | ~~M10~~ | relative-to-eye, host half — *landed (ADR 0074)*: the floating origin and its `f64` helpers are in `wxsl-frame`, and `Scene.origin` is in the generated host layout, so a C++ host fills it like any other field | shared half, as planned |
 | ~~M11~~ | the code editor — *landed* | wgpu-only, unaffected |
 | N9 | the editor catches up | wgpu-only, unaffected; its palette work absorbs the stdlib's growth |
-| N10 | WebGL2 is a target | **shares B1's neutral vocabulary** — the ES 3.0 column is a third mapping over the same enums, and naga's wgsl-in/glsl-out hangs off the shared compiler; B1 lands with N10's needs in view even if the port waits |
+| ~~N10~~ | WebGL2 is a target — *landed (ADR 0075)*: a fallback `Profile` rather than a third column of enums; compute stays native | shared half, as planned: the profile, the instance-texture ABI macro and every `Downlevel` are in `wxsl-frame`/`wxsl-core`, and a Dawn bundle carries `frame.profile`, so the C++ renderer runs the same fallback (and builds for wasm) |
 | N8 | release readiness | the document-format decision now has a second customer: the C ABI ships the same JSON, so "what a shipped application embeds" (Rust *or* C++) is decided once, in B2's window |
 
 ## Proposals

@@ -1,5 +1,6 @@
+import package::wxsl::bindings::point_sampler;
 @group(3) @binding(0) var background_depth: texture_2d<f32>;
-@group(3) @binding(1) var opaque_depth: texture_depth_2d;
+@group(3) @binding(1) var opaque_depth: texture_2d<f32>;
 @group(3) @binding(2) var normal_layers: texture_2d_array<f32>;
 @group(3) @binding(3) var optical_layers: texture_2d_array<f32>;
 
@@ -14,7 +15,7 @@ fn fragment(@builtin(position) p: vec4f) -> @location(0) f32 {
     let front = textureLoad(normal_layers, pixel, i32(params.layer), 0);
     let material = textureLoad(optical_layers, pixel, i32(params.layer), 0);
     if dot(front.xyz, front.xyz) < 0.5 || material.w <= 0.0
-        || front.w >= textureLoad(opaque_depth, pixel, 0) {
+        || front.w >= textureSampleLevel(opaque_depth, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(opaque_depth)), 0.0).x {
         return textureLoad(background_depth, pixel, 0).r;
     }
     return front.w;

@@ -17,6 +17,7 @@ use wxsl_core::scene::Scene;
 use wxsl_frame::effect::{Effect, EffectRegistry};
 use wxsl_frame::pass::PassKind;
 use wxsl_frame::pipeline::{PipelineConfig, TargetConfig};
+use wxsl_frame::profile::Profile;
 use wxsl_frame::setup::RenderSetup;
 use wxsl_frame::types::TextureFormat;
 
@@ -141,6 +142,9 @@ struct Config {
     lighting_models: Vec<String>,
     features: Vec<String>,
     macros: MacroSet,
+    /// What the host's device can run (ADR 0075); absent is the full
+    /// profile, so every request written before it reads as it did.
+    profile: Profile,
 }
 
 impl Default for Config {
@@ -150,6 +154,7 @@ impl Default for Config {
             lighting_models: vec!["wxsl.pbr".into()],
             features: Vec::new(),
             macros: MacroSet::new(),
+            profile: Profile::FULL,
         }
     }
 }
@@ -178,6 +183,7 @@ impl Config {
             lighting,
             features,
             macros: self.macros,
+            profile: self.profile,
         };
         config.plan().map_err(invalid)?;
         Ok(config)
@@ -262,8 +268,10 @@ fn pipeline_impl(bytes: &[u8]) -> Result<Response> {
     let mut used = BTreeMap::new();
     for pass in graph.passes() {
         if let PassKind::Screen { effect: id } | PassKind::Compute { effect: id } = &pass.kind {
+            // As the device runs it: a lowered compute effect is the
+            // screen effect its pass now is.
             let effect = effects
-                .get(id)
+                .get_on(config.profile, id)
                 .ok_or_else(|| compile_error(format!("unknown effect `{id}`")))?;
             used.insert(effect.id, effect_metadata(&effect));
         }
@@ -311,7 +319,7 @@ fn shader_impl(bytes: &[u8]) -> Result<Response> {
         }
         (None, Some(id)) => {
             let effect = effects
-                .get(id)
+                .get_on(config.profile, id)
                 .ok_or_else(|| invalid(format!("unknown effect `{id}`")))?;
             let (path, source) = effect.module_source(&config.lighting, &config.features);
             modules.insert(path, source.as_ref());
@@ -329,7 +337,9 @@ fn shader_impl(bytes: &[u8]) -> Result<Response> {
                 .map(|param| (param.name.to_string(), param.default))
                 .collect();
             response.params = layout.filled(&defaults);
-            (path, effect.shader_macros(&request.macros))
+            let mut macros = effect.shader_macros(&request.macros);
+            macros.overlay(&config.profile.macros());
+            (path, macros)
         }
         _ => {
             return Err(invalid(
@@ -369,7 +379,7 @@ fn material_impl(bytes: &[u8]) -> Result<Response> {
     let mut authored = request.material;
     authored.features = config.features;
     let resolved = authored.resolve(&config.lighting).map_err(compile_error)?;
-    let shader = codegen::generate(
+    let mut shader = codegen::generate(
         &request.graph,
         &registry,
         &CodegenOptions {
@@ -379,6 +389,9 @@ fn material_impl(bytes: &[u8]) -> Result<Response> {
         },
     )
     .map_err(compile_error)?;
+    // The device profile's pins, over anything the graph says (ADR 0075);
+    // folded into the variant key with the rest of the macros.
+    shader.macros.overlay(&config.profile.macros());
     resolved
         .check_feature_demands(&shader.macros)
         .map_err(compile_error)?;

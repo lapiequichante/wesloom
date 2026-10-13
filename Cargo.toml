@@ -33,6 +33,10 @@ lalrpop = { version = "0.22", default-features = false }
 lalrpop-util = { version = "0.22", default-features = false }
 # GPU API for wxsl-render (ADR 0005).
 wgpu = "30.0.1"
+# The shader translator wgpu itself runs, for the corpus gate's GLSL ES
+# column (ADR 0075). Test-only: the same version wgpu pins, never a
+# library dependency.
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 bitflags = "2"
 glam = { version = "0.33", features = ["bytemuck"] }

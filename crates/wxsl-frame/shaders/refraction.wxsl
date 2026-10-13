@@ -1,10 +1,10 @@
 // Original bounded layered-depth ray marcher. Technique references: ADR 0067.
 // Normal/depth uses full precision: half-float device depth cannot distinguish
 // nearby interfaces. Colour is linear throughout; display encoding is downstream.
-import package::wxsl::bindings::{camera, scene, environment_lut_sampler};
+import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
 
 @group(3) @binding(0) var scene_image: texture_2d<f32>;
-@group(3) @binding(1) var scene_depth: texture_depth_2d;
+@group(3) @binding(1) var scene_depth: texture_2d<f32>;
 @group(3) @binding(2) var environment: texture_cube<f32>;
 @group(3) @binding(3) var normal_layers: texture_2d_array<f32>;
 @group(3) @binding(4) var optical_layers: texture_2d_array<f32>;
@@ -96,14 +96,14 @@ fn trace(origin: vec3f, ray: vec3f, inside: bool) -> Hit {
         let pixel = vec2i(projected.xy * size);
         var nearest = Hit(-1, current, pixel, 1e10);
         for (var layer = 0; layer <= layers; layer += 1) {
-            var depth = textureLoad(scene_depth, pixel, 0);
+            var depth = textureSampleLevel(scene_depth, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(scene_depth)), 0.0).x;
             if layer < layers {
                 let nd = surface(layer, projected.xy);
                 if dot(nd.xyz, nd.xyz) < 0.5 { continue; }
                 depth = nd.w;
             }
             if depth >= 1.0 { continue; }
-            var previous_depth = textureLoad(scene_depth, vec2i(previous_uv * size), 0);
+            var previous_depth = textureSampleLevel(scene_depth, point_sampler, (vec2f(vec2i(previous_uv * size)) + 0.5) / vec2f(textureDimensions(scene_depth)), 0.0).x;
             if layer < layers {
                 let nd = surface(layer, previous_uv);
                 if dot(nd.xyz, nd.xyz) < 0.5 {
@@ -137,7 +137,7 @@ fn trace(origin: vec3f, ray: vec3f, inside: bool) -> Hit {
                 let mid = (lo + hi) * 0.5;
                 let uv = project(mid).xy;
                 let px = vec2i(uv * size);
-                var z = textureLoad(scene_depth, px, 0);
+                var z = textureSampleLevel(scene_depth, point_sampler, (vec2f(px) + 0.5) / vec2f(textureDimensions(scene_depth)), 0.0).x;
                 if layer < layers { z = surface(layer, uv).w; }
                 let gap = separation(mid, uv, z);
                 if sign_lo * gap <= 0.0 {
@@ -150,7 +150,7 @@ fn trace(origin: vec3f, ray: vec3f, inside: bool) -> Hit {
             let point = (lo + hi) * 0.5;
             let distance = length(point - origin);
             let uv = project(point).xy;
-            var z = textureLoad(scene_depth, vec2i(uv * size), 0);
+            var z = textureSampleLevel(scene_depth, point_sampler, (vec2f(vec2i(uv * size)) + 0.5) / vec2f(textureDimensions(scene_depth)), 0.0).x;
             if layer < layers { z = surface(layer, uv).w; }
             // A layer ordinal can change identity at a silhouette. A sign
             // change across that discontinuity is not a geometric hit.

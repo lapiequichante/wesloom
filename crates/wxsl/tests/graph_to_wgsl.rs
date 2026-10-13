@@ -20,6 +20,8 @@ use wxsl::core::node::{
 use wxsl::render::material::Material;
 use wxsl::render::variants;
 
+mod glsl_es;
+
 /// The demo graph, as shipped.
 fn demo_graph() -> Graph {
     let json = include_str!("../assets/pbr_cube.wxsl.json");
@@ -28,15 +30,27 @@ fn demo_graph() -> Graph {
 
 /// Compile a material to WGSL for `stage`, or return the diagnostic.
 fn compile(material: &Material, stage: MaterialStage) -> Result<String, String> {
+    compile_with(material, stage, &MacroSet::new())
+}
+
+/// [`compile`] with `pins` bound over the material's macros — what a
+/// renderer's device profile does (ADR 0075).
+fn compile_with(
+    material: &Material,
+    stage: MaterialStage,
+    pins: &MacroSet,
+) -> Result<String, String> {
     let library = wxsl::stdlib_library();
     let shader = material.shader(stage);
+    let mut macros = shader.macros.clone();
+    macros.overlay(pins);
     // The generated module declares its own macros, so the material source
     // is the only thing to mount alongside the library (ADR 0011).
     let extra = [(
         codegen::MATERIAL_MODULE,
         Cow::Borrowed(shader.source.as_str()),
     )];
-    variants::compile(&library, &extra, codegen::MATERIAL_MODULE, &shader.macros)
+    variants::compile(&library, &extra, codegen::MATERIAL_MODULE, &macros)
         .map_err(|error| error.to_string())
 }
 
@@ -499,6 +513,7 @@ fn every_node_in_the_library_compiles_for_every_stage() {
     let mut checked_resource_inputs = 0usize;
     let mut skipped: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
+    let mut es_failures: Vec<String> = Vec::new();
 
     for def in registry.iter() {
         // The output node is the sink every graph below already has, and a
@@ -542,6 +557,19 @@ fn every_node_in_the_library_compiles_for_every_stage() {
                         continue;
                     }
                 };
+                // The GLSL ES column (ADR 0075): every stage again, under
+                // the macros a WebGL2 renderer pins.
+                for stage in MaterialStage::ALL.iter().copied() {
+                    match compile_with(&material, stage, &glsl_es::webgl2_macros()) {
+                        Ok(wgsl) => es_failures.extend(glsl_es::translate(
+                            &format!("{label} on the {stage} stage"),
+                            &wgsl,
+                        )),
+                        Err(diagnostic) => es_failures.push(format!(
+                            "{label} on the {stage} stage, downlevel:\n{diagnostic}"
+                        )),
+                    }
+                }
                 for stage in MaterialStage::ALL {
                     match compile(&material, *stage) {
                         Ok(wgsl) => {
@@ -579,6 +607,12 @@ fn every_node_in_the_library_compiles_for_every_stage() {
         failures.len(),
         checked + failures.len(),
         failures.join("\n\n")
+    );
+    assert!(
+        es_failures.is_empty(),
+        "{} node stages do not translate to GLSL ES 3.00 (ADR 0075):\n\n{}",
+        es_failures.len(),
+        es_failures.join("\n\n")
     );
     // Guard against the test silently covering nothing.
     assert!(checked > 400, "only {checked} compilations ran");

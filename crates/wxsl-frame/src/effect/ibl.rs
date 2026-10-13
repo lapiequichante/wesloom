@@ -1,5 +1,11 @@
 //! Original environment bake effects and a neutral face-pass recipe (ADR 0062).
-use super::{Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader};
+//!
+//! The prefilters are native-only under ADR 0075: they query
+//! `textureNumLevels`, which GLSL ES 3.00 cannot say. The background runs
+//! everywhere.
+use super::{
+    Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader,
+};
 use crate::{
     graph::RenderGraph,
     pass::{Attachment, Dimension, Extent, PassDesc, Policy, Read, ResourceDesc, ResourceId},
@@ -54,6 +60,7 @@ pub const BACKGROUND: Effect = Effect {
         path: "package::wxsl::environment_background",
         wxsl: include_str!("../../shaders/environment_background.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Append a depth-aware background to an opaque linear-colour chain.
@@ -94,6 +101,7 @@ pub const EQUIRECT_TO_CUBE: Effect = Effect {
             include_str!("../../shaders/equirect_to_cube.wxsl")
         ),
     },
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// Cosine-weighted environment convolution; stores irradiance divided by PI.
@@ -112,6 +120,7 @@ pub const DIFFUSE: Effect = Effect {
             include_str!("../../shaders/ibl_diffuse.wxsl")
         ),
     },
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// GGX prefiltered radiance, the environment half of the split-sum approximation.
@@ -136,6 +145,7 @@ pub const SPECULAR: Effect = Effect {
             include_str!("../../shaders/ibl_specular.wxsl")
         ),
     },
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// Copy a cube level or box-filter it into a half-size face.
@@ -160,6 +170,7 @@ pub const RESAMPLE: Effect = Effect {
             include_str!("../../shaders/ibl_resample.wxsl")
         ),
     },
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// Stable outputs from [`append_bake`]. Reads of these resources order consumers

@@ -9,6 +9,14 @@ cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/scene \
 target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/pbr --out target/dawn-images/pbr --verify
 target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/scene --out target/dawn-images/scene --verify
 target/dawn-render/renderer_smoke target/dawn-assets/pbr
+# The fallback profiles (ADR 0075): instance rows from textures, and for
+# webgl2 the LUT baked by its fragment arm. Same comparator, same thresholds.
+for profile in webgl2 compat; do
+    cargo run -p wxsl-ffi --example bake_docs -- --out "target/dawn-assets/pbr-$profile" \
+        --reference --profile "$profile"
+    target/dawn-render/pbr_cube_cpp --headless --assets "target/dawn-assets/pbr-$profile" \
+        --out "target/dawn-images/pbr-$profile" --verify
+done
 cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/shadow-atlas \
     --shadow-atlas --reference --width 320 --height 240
 target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/shadow-atlas \

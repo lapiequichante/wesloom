@@ -12,6 +12,7 @@ pub mod graph;
 pub mod pass;
 pub mod pipeline;
 pub mod pipeline_doc;
+pub mod profile;
 pub mod setup;
 pub mod types;
 

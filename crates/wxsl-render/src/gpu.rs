@@ -7,6 +7,7 @@
 //! back with no surface, no window and no compositor.
 
 use crate::error::RenderError;
+use crate::Profile;
 
 /// The optional `wgpu` features this crate asks an adapter for.
 ///
@@ -80,14 +81,46 @@ impl DeviceCaps {
 
     /// Whether the vertex stage can read a storage buffer.
     ///
-    /// The instance transforms live in one, so this is not optional in
-    /// practice — but it is worth being able to *say* that a backend cannot
-    /// run this renderer instead of failing at the first draw. The WebGPU
-    /// baseline satisfies it; WebGL does not, and is not a target.
+    /// The instance transforms live in one on the full profile; without it
+    /// they move into data textures (ADR 0075), which is what
+    /// [`DeviceCaps::profile`] says.
     pub fn has_vertex_storage(&self) -> bool {
         self.downlevel
             .flags
             .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+    }
+
+    /// The profile this device runs under (ADR 0075): its limits, and the
+    /// adapter's own word on compute and vertex storage.
+    pub fn profile(&self) -> Profile {
+        let flags = self.downlevel.flags;
+        let limits = profile_of_limits(&self.limits);
+        Profile {
+            compute: limits.compute && flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS),
+            storage_buffers: limits.storage_buffers
+                && flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE),
+        }
+    }
+}
+
+/// The profile a device was created under, read off its limits — what
+/// [`crate::Renderer::new`] uses, since it holds a device and no adapter.
+///
+/// Limits are enough: a WebGL2 or GLES 3.0 adapter reports no compute
+/// workgroups and no storage buffers, and so does any device created with
+/// [`wgpu::Limits::downlevel_webgl2_defaults`] — which is how a native
+/// machine tests the fallback (ADR 0075).
+pub fn device_profile(device: &wgpu::Device) -> Profile {
+    profile_of_limits(&device.limits())
+}
+
+fn profile_of_limits(limits: &wgpu::Limits) -> Profile {
+    Profile {
+        compute: limits.max_compute_workgroups_per_dimension > 0
+            && limits.max_storage_textures_per_shader_stage > 0,
+        // Instance rows, previous rows and a material's attributes: three
+        // read-only arrays in each of the two stages that read them.
+        storage_buffers: limits.max_storage_buffers_per_shader_stage >= 3,
     }
 }
 
@@ -128,10 +161,19 @@ impl GpuContext {
         // adapter lacks fails the whole request, and every one of these is
         // something we can do without.
         let granted = WANTED_FEATURES & adapter.features();
+        // WebGPU's default limits where the adapter has them; otherwise —
+        // WebGL2, GLES — what it has, and the renderer reads the profile
+        // off them (ADR 0075).
+        let required_limits = if wgpu::Limits::default().check_limits(&adapter.limits()) {
+            wgpu::Limits::default()
+        } else {
+            adapter.limits()
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("wxsl"),
                 required_features: granted,
+                required_limits,
                 ..Default::default()
             })
             .await
@@ -150,6 +192,35 @@ impl GpuContext {
     pub async fn headless() -> Result<Self, RenderError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::new(instance, None).await
+    }
+
+    /// A headless context that can do exactly what WebGL2 can: the
+    /// adapter's device, created with [`wgpu::Limits::downlevel_webgl2_defaults`]
+    /// and no optional features. Every storage buffer and compute pipeline
+    /// is then a validation error, as in a browser, and the renderer runs
+    /// the fallback profile (ADR 0075) — how a native machine tests it.
+    pub async fn headless_webgl2() -> Result<Self, RenderError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .map_err(|_| RenderError::NoAdapter)?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("wxsl webgl2-equivalent"),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                ..Default::default()
+            })
+            .await
+            .map_err(RenderError::NoDevice)?;
+        let caps = DeviceCaps::of(&adapter, &device);
+        Ok(GpuContext {
+            instance,
+            adapter,
+            device,
+            queue,
+            caps,
+        })
     }
 
     /// Block until the GPU has finished everything submitted so far.

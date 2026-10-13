@@ -46,6 +46,7 @@ pub(crate) const INSPECT: Effect = Effect {
         path: "package::editor::inspect",
         wxsl: include_str!("../shaders/inspect.wxsl"),
     },
+    downlevel: wxsl_render::effect::Downlevel::Portable,
 };
 
 /// Draw one depth resource, its near range spread.
@@ -75,6 +76,7 @@ pub(crate) const INSPECT_DEPTH: Effect = Effect {
         path: "package::editor::inspect_depth",
         wxsl: include_str!("../shaders/inspect_depth.wxsl"),
     },
+    downlevel: wxsl_render::effect::Downlevel::Portable,
 };
 
 /// Which inspect effect can draw `desc`, if either can: a 2D texture whose

@@ -579,10 +579,19 @@ impl RenderGraph {
                 ResourceShape::Texture {
                     format, dimension, ..
                 } => PassBinding::Texture {
-                    sample_type: format
-                        .to_wgpu()
-                        .sample_type(None, None)
-                        .unwrap_or(wgpu::TextureSampleType::Float { filterable: true }),
+                    // A depth texture a pass reads is read as plain floats
+                    // through `textureLoad`: a `texture_depth_2d` becomes a
+                    // shadow sampler in GLSL, which has no way to read the
+                    // value back (ADR 0075). Comparison sampling stays the
+                    // frame group's, on the shadow atlas.
+                    sample_type: if format.to_wgpu().is_depth_stencil_format() {
+                        wgpu::TextureSampleType::Float { filterable: false }
+                    } else {
+                        format
+                            .to_wgpu()
+                            .sample_type(None, None)
+                            .unwrap_or(wgpu::TextureSampleType::Float { filterable: true })
+                    },
                     view_dimension: view_dimension(dimension),
                 },
                 ResourceShape::Buffer { size, .. } => PassBinding::Buffer {

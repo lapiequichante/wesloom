@@ -181,6 +181,10 @@ pub const MATERIAL_INSTANCE_STRUCT: &str = "MaterialInstance";
 /// is, so the two arrays are one row apiece for the same object and
 /// neither has to know the other's width (ADR 0024).
 pub const MATERIAL_INSTANCE_VAR: &str = "wxsl_instance_attributes";
+/// Name of the generated function returning one row of
+/// [`MATERIAL_INSTANCE_VAR`] — what every per-instance read calls, so it
+/// reads the same under both instance shapes (ADR 0075).
+pub const MATERIAL_INSTANCE_FN: &str = "material_instance";
 
 /// One `@location` of an entry-point IO struct fixed by the ABI.
 ///
@@ -441,6 +445,7 @@ pub const MATERIAL_PARAMS_VAR: &str = "material";
 pub const RESERVED_NAMES: &[&str] = &[
     MATERIAL_ATTRIBUTES_VAR,
     MATERIAL_INSTANCE_VAR,
+    MATERIAL_INSTANCE_FN,
     INSTANCE_INDEX_FIELD,
     MATERIAL_PARAMS_VAR,
     MATERIAL_PARAMS_STRUCT,
@@ -525,6 +530,13 @@ pub const BINDING_ENVIRONMENT_DIFFUSE: u32 = 9;
 pub const BINDING_ENVIRONMENT_SPECULAR: u32 = 10;
 /// Projected RGB/alpha spotlight masks, as a host-owned 2D-array texture.
 pub const BINDING_LIGHT_COOKIES: u32 = 11;
+/// A nearest, non-filtering sampler: how a pass reads one depth texel
+/// (ADR 0075). Depth resources reach the pass group as `texture_2d<f32>`
+/// and are sampled at texel centres through this, which returns exactly
+/// the texel. A GL backend needs a real NEAREST sampler on the unit: a
+/// depth texture with GL's default filter is incomplete, and a bare
+/// `texelFetch` from it reads zero.
+pub const BINDING_POINT_SAMPLER: u32 = 12;
 
 /// [`GROUP_FRAME`] binding of the instance transforms as they were *last
 /// frame* — the array the velocity stage's previous-frame transform reads,
@@ -761,6 +773,11 @@ pub fn abi_macros() -> Vec<MacroDef> {
             MacroValue::Flag(false),
             "Read the previous frame's clock, so a time-driven graph answers for where it was.",
         ),
+        MacroDef::new(
+            FEATURE_INSTANCE_TEXTURE,
+            MacroValue::Flag(false),
+            "Read instance rows from data textures, for devices without storage buffers.",
+        ),
     ]
 }
 
@@ -797,6 +814,27 @@ pub const FEATURE_RELATIVE_TO_EYE: &str = "wxsl_relative_to_eye";
 /// one switch over the whole graph is the only version of that an author
 /// cannot forget half of.
 pub const FEATURE_PREVIOUS_FRAME: &str = "wxsl_previous_frame";
+/// Feature flag: instance rows are read from data textures rather than
+/// storage buffers (see [`abi_macros`]).
+///
+/// The downlevel shape of [`BINDING_INSTANCES`],
+/// [`BINDING_PREVIOUS_INSTANCES`] and [`BINDING_INSTANCE_ATTRIBUTES`]
+/// (ADR 0075): WebGL2 and GLES 3.0 have no storage buffers, so the same
+/// bytes go into `rgba32uint` textures [`INSTANCE_TEXTURE_WIDTH`] texels
+/// wide, and generated loaders fetch a row by `@builtin(instance_index)`.
+/// Readers never see the difference — they call `instance_row`,
+/// `previous_instance_row` and the material's `material_instance`. Not a
+/// material's choice: the renderer sets it from its device profile, over
+/// whatever a graph pins.
+pub const FEATURE_INSTANCE_TEXTURE: &str = "wxsl_instance_texture";
+
+/// Width, in `rgba32uint` texels, of an instance-row texture under
+/// [`FEATURE_INSTANCE_TEXTURE`]. Rows are packed end to end, so row `i`
+/// of a `t`-texel row starts at texel `i * t`, at `(texel % width, texel /
+/// width)`. One line is 16 KiB, a whole multiple of every copy alignment.
+/// The loaders read the width back from the texture, so only hosts use
+/// this.
+pub const INSTANCE_TEXTURE_WIDTH: u32 = 1024;
 
 // ---------------------------------------------------------------------------
 // The UI pass
@@ -1671,6 +1709,12 @@ pub const BAKE_VALUE_FN: &str = "wxsl_bake_value";
 /// The compute entry point of a generated bake module: one dispatch over
 /// the bake target, evaluating [`BAKE_VALUE_FN`] at each texel centre.
 pub const BAKE_ENTRY: &str = "wxsl_bake";
+/// Vertex entry of a bake's fragment arm (ADR 0075): a fullscreen triangle
+/// over the table, for a device without compute.
+pub const BAKE_VERTEX_ENTRY: &str = "wxsl_bake_vs";
+/// Fragment entry of a bake's fragment arm: [`BAKE_VALUE_FN`] at the
+/// fragment's texel centre, written as the colour attachment.
+pub const BAKE_FRAGMENT_ENTRY: &str = "wxsl_bake_fs";
 /// The write-only storage texture a bake module writes, at binding 0 of
 /// [`GROUP_PASS`] — the shape every `EffectOutputShape::StorageTexture`
 /// output takes, and the only one a bake declares.

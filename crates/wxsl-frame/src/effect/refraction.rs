@@ -1,6 +1,8 @@
 //! Back-to-front optical transmission and opt-in precision tracing (ADR 0068).
 
-use super::{Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader};
+use super::{
+    Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader,
+};
 use crate::graph::RenderGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, PassDesc, PassState, Read, ResourceDesc,
@@ -70,6 +72,7 @@ pub const BOUNDS: Effect = Effect {
         path: "package::wxsl::refraction_bounds",
         wxsl: include_str!("../../shaders/refraction_bounds.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Opt-in precision path. Never appended by the default recipe (ADR 0068).
@@ -94,6 +97,7 @@ pub const RESOLVE: Effect = Effect {
         path: "package::wxsl::refraction",
         wxsl: include_str!("../../shaders/refraction.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Seed the composed background's nearest depth from the opaque pass.
@@ -112,6 +116,7 @@ pub const SCENE_DEPTH: Effect = Effect {
         path: "package::wxsl::refraction_scene_depth",
         wxsl: include_str!("../../shaders/refraction_scene_depth.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// One entry/exit pair over the already composed, farther scene.
@@ -140,6 +145,7 @@ pub const COMPOSE: Effect = Effect {
         path: "package::wxsl::refraction_layer",
         wxsl: include_str!("../../shaders/refraction_layer.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Nearest depth accompanying a composed front/back pair.
@@ -166,6 +172,7 @@ pub const COMPOSE_DEPTH: Effect = Effect {
         path: "package::wxsl::refraction_layer_depth",
         wxsl: include_str!("../../shaders/refraction_layer_depth.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Append the baseline optical recipe. Inputs must be linear

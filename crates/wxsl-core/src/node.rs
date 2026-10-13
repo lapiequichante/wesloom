@@ -588,9 +588,14 @@ impl Value {
             Value::Bool(v) => Some(v.to_string()),
             Value::I32(v) => Some(format!("{v}i")),
             Value::U32(v) => Some(format!("{v}u")),
+            // Suffixed, like the integers: an unsuffixed `0.5` is an
+            // abstract float, and naga leaves a builtin call whose
+            // arguments are all abstract — `mix(0.0, 1.0, 0.5)` — without a
+            // concrete type, which no device accepts.
             Value::F32(v) => {
                 let mut out = String::new();
                 write_f32(&mut out, *v)?;
+                out.push('f');
                 Some(out)
             }
             Value::Vec2(v) => components("vec2f", v),
@@ -2067,7 +2072,7 @@ mod tests {
 
     #[test]
     fn value_literals_are_wgsl_shaped() {
-        assert_eq!(Value::F32(1.0).wxsl_literal().unwrap(), "1.0");
+        assert_eq!(Value::F32(1.0).wxsl_literal().unwrap(), "1.0f");
         assert_eq!(Value::I32(-2).wxsl_literal().unwrap(), "-2i");
         assert_eq!(Value::U32(7).wxsl_literal().unwrap(), "7u");
         assert_eq!(Value::Bool(true).wxsl_literal().unwrap(), "true");

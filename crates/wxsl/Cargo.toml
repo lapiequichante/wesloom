@@ -22,6 +22,13 @@ winit = { workspace = true }
 image = { workspace = true, features = ["hdr"] }
 wgpu = { workspace = true }
 glam = { workspace = true }
+naga = { workspace = true }
+
+# The browser example's glue (ADR 0075); the same versions wgpu's web
+# backends already pull in.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Location", "console"] }
 
 [features]
 default = ["render", "stdlib"]
@@ -30,11 +37,18 @@ editor = ["dep:wxsl-editor", "render"]
 stdlib = ["dep:wxsl-stdlib"]
 # glTF/GLB geometry import, for scenes whose meshes come from a file.
 gltf = ["render", "wxsl-render/gltf"]
+# WebGL2 as the browser fallback behind WebGPU (ADR 0075); wasm32 only.
+webgl = ["render", "wxsl-render/webgl"]
 
 [[example]]
 name = "pbr_cube"
 # The demo needs the renderer and the node library; without them there is
 # nothing to run, so cargo skips it instead of failing to build.
+required-features = ["render", "stdlib"]
+
+[[example]]
+name = "web"
+# The demo cube in a browser, WebGPU or WebGL2 (ADR 0075); natively, a window.
 required-features = ["render", "stdlib"]
 
 [[example]]
@@ -45,6 +59,16 @@ required-features = ["editor", "stdlib"]
 
 [[test]]
 name = "graph_to_wgsl"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "downlevel"
+# The fallback profile on a real device (ADR 0075); skips with no adapter.
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "downlevel_corpus"
+# The GLSL ES 3.00 column of the corpus gate (ADR 0075): no device.
 required-features = ["render", "stdlib"]
 
 [[test]]

@@ -31,6 +31,7 @@ use wxsl_frame::{
         Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, Policy, Read, ResourceDesc,
     },
     pipeline::{PipelineConfig, StockPipeline, TargetConfig},
+    profile::Profile,
     types::{Color, TextureFormat},
 };
 use wxsl_render::{
@@ -147,6 +148,13 @@ fn slot(shape: SlotShape, target: TargetConfig) -> Json {
     value
 }
 
+/// Instance rows packed for an `rgba32uint` texture (ADR 0075): the file
+/// and the texture's size.
+fn texels(root: &Path, name: &str, rows: &[u8], stride: usize) -> Result<Json, Box<dyn Error>> {
+    let (bytes, size) = wxsl_core::resources::texel_rows(rows, stride);
+    Ok(json!({"file": save(root, &format!("{name}.texels.bin"), bytes)?, "size": size}))
+}
+
 fn compile_effect(
     root: &Path,
     effect: Effect,
@@ -154,10 +162,17 @@ fn compile_effect(
     set: &LightingSet,
     config: &PipelineConfig,
 ) -> Result<Json, Box<dyn Error>> {
-    let request = EffectRequest::new(effect.clone(), &config.macros, set, &config.features);
+    // As the bundle's device runs it: a compute effect without compute is
+    // its fragment arm, and every module binds the profile's pins (ADR 0075).
+    let effect = effect.on(&config.profile).into_owned();
+    let pins = config.profile.macros();
+    let request =
+        EffectRequest::new(effect.clone(), &config.macros, set, &config.features).pinned(&pins);
     let wgsl = request.compile(library).1?;
     let (path, source) = effect.module_source(set, &config.features);
-    let runtime_request = json!({"root": path, "macros": effect.shader_macros(&config.macros),
+    let mut macros = effect.shader_macros(&config.macros);
+    macros.overlay(&pins);
+    let runtime_request = json!({"root": path, "macros": macros,
         "library": {"modules": {path: source}}});
     let defaults = effect
         .parameters
@@ -193,6 +208,7 @@ const INDIRECT: Effect = Effect {
         path: "package::test::indirect_arguments",
         wxsl: include_str!("../../wxsl/tests/probe/indirect.wxsl"),
     },
+    downlevel: wxsl_frame::effect::Downlevel::NativeOnly,
 };
 
 fn device_probes(format: TextureFormat) -> Vec<(String, wxsl_frame::graph::RenderGraph)> {
@@ -361,6 +377,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut hdri_path = None;
     let mut width = 800;
     let mut height = 600;
+    let mut profile = Profile::FULL;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -387,12 +404,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ))
             }
             "--width" => width = args.next().ok_or("--width needs a value")?.parse()?,
+            // The device the bundle is for (ADR 0075): `webgl2` packs
+            // instance rows into textures and lowers compute to fragments;
+            // `compat` (a Dawn compatibility device) only the former.
+            "--profile" => {
+                profile = match args.next().as_deref() {
+                    Some("full") => Profile::FULL,
+                    Some("webgl2") => Profile::WEBGL2,
+                    Some("compat") => Profile {
+                        compute: true,
+                        storage_buffers: false,
+                    },
+                    other => return Err(format!("unknown profile {other:?}").into()),
+                }
+            }
             "--height" => height = args.next().ok_or("--height needs a value")?.parse()?,
             _ => return Err(format!("unknown argument `{arg}`").into()),
         }
     }
     if width == 0 || height == 0 {
         return Err("target dimensions must be nonzero".into());
+    }
+    if !profile.is_full() && (probes || refraction) {
+        return Err(
+            "--probes and --refraction exercise native-only passes; use --profile full".into(),
+        );
     }
     if shadow_atlas && (scene_path.is_some() || graph_path.is_some() || sample.is_some()) {
         return Err("--shadow-atlas supplies its own scene and material".into());
@@ -510,6 +546,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut config =
         PipelineConfig::new(TargetConfig::new(width, height, TextureFormat::Rgba8Unorm));
     config.features = lighting::feature_requests(&features)?;
+    config.profile = profile;
     let mut model_names = scene
         .materials
         .iter()
@@ -530,8 +567,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect::<Result<Vec<_>, _>>()?,
     )?;
-    let wire_config =
-        json!({"target": config.target, "features": features, "lighting_models": model_names});
+    let wire_config = json!({"target": config.target, "features": features,
+        "lighting_models": model_names, "profile": profile});
     let registry = wxsl_stdlib::registry();
     let mut library = ShaderLibrary::new();
     library.insert_all(wxsl_stdlib::MODULES.iter().copied());
@@ -575,10 +612,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         "frame": {"views": save(&root, "views.bin", bytemuck::cast_slice(&env.views()))?,
             "scene": save(&root, "scene.bin", bytemuck::bytes_of(&env.uniform()))?,
             "instances": save(&root, "instances.bin", bytemuck::cast_slice(&transforms))?,
+            "profile": profile,
             "light_count": abi::MAX_LIGHTS, "lut_size": abi::ENVIRONMENT_LUT_SIZE},
         "checker": save(&root, "checker.bin", &checker)?, "checker_size": [64, 64],
         "draws": scene.instances.iter().map(|i| json!({"mesh": i.mesh, "material": i.material})).collect::<Vec<_>>(),
     });
+    if !profile.storage_buffers {
+        // No storage buffers: the rows go up as `rgba32uint` textures, packed
+        // here by the one function the wgpu host uses too.
+        manifest["frame"]["instance_texels"] = texels(
+            &root,
+            "instances",
+            bytemuck::cast_slice(&transforms),
+            size_of::<InstanceTransform>(),
+        )?;
+    }
     let mut meshes = Vec::new();
     let mut cpu_meshes = Vec::new();
     for (index, entry) in scene.meshes.iter().enumerate() {
@@ -650,9 +698,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let metadata: Json = serde_json::from_slice(&result.json)?;
             stages.insert(stage.name(), json!({"wgsl": save(&root, &format!("material{index}.{}.wgsl", stage.name()), &result.wgsl)?, "fragment_entry": metadata["data"]["fragment_entry"], "request": request, "signature": metadata["data"]["signature"], "variant_key": metadata["data"]["variant_key"]}));
         }
-        materials.push(json!({"name": entry.name, "interface": interface,
+        let mut exported = json!({"name": entry.name, "interface": interface,
             "params": save(&root, &format!("material{index}.params.bin"), interface.params.filled(&interface.defaults))?,
-            "attributes": save(&root, &format!("material{index}.attributes.bin"), &rows)?, "stages": stages}));
+            "attributes": save(&root, &format!("material{index}.attributes.bin"), &rows)?, "stages": stages});
+        if !profile.storage_buffers {
+            exported["attribute_texels"] = texels(
+                &root,
+                &format!("material{index}.attributes"),
+                &rows,
+                layout.size() as usize,
+            )?;
+        }
+        materials.push(exported);
         native_materials.push(material);
     }
     manifest["materials"] = json!(materials);
@@ -942,7 +999,13 @@ fn render_reference(
     library: ShaderLibrary,
     hdri: Option<&(u32, u32, Vec<[f32; 3]>)>,
 ) -> Result<(), Box<dyn Error>> {
-    let gpu = pollster::block_on(GpuContext::headless())?;
+    // A WebGL2 bundle's reference comes from a WebGL2-equivalent device, so
+    // the wgpu half ran the same fallbacks the bundle asks Dawn for.
+    let gpu = if config.profile == Profile::WEBGL2 {
+        pollster::block_on(GpuContext::headless_webgl2())?
+    } else {
+        pollster::block_on(GpuContext::headless())?
+    };
     println!("reference adapter: {}", gpu.adapter.get_info().name);
     let target = OffscreenTarget::new(&gpu.device, config.target.width, config.target.height);
     let mut renderer = Renderer::new(

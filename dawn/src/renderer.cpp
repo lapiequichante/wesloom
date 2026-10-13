@@ -59,6 +59,7 @@ gpu::TextureFormat format(const std::string &name) {
                          {"r16float", F::R16Float},
                          {"rg16float", F::RG16Float},
                          {"r32uint", F::R32Uint},
+                         {"rgba32uint", F::RGBA32Uint},
                          {"rgba8uint", F::RGBA8Uint},
                          {"rgba8sint", F::RGBA8Sint},
                          {"depth16unorm", F::Depth16Unorm},
@@ -197,6 +198,9 @@ struct MaterialGpu {
   gpu::BindGroupLayout layout;
   gpu::BindGroup group;
   gpu::Buffer params, attributes;
+  // The attributes as an rgba32uint texture, when the bundle's profile has
+  // no storage buffers (ADR 0075).
+  gpu::TextureView attribute_texels;
   std::map<std::string, gpu::ShaderModule> shaders;
 };
 struct ErrorState {
@@ -216,9 +220,13 @@ struct Renderer::Impl {
   gpu::Limits limits;
   gpu::BindGroupLayout frame_layout, empty_layout;
   gpu::Buffer camera, scene, transforms, empty_attributes;
+  // The bundle's device profile (ADR 0075): instance rows from textures when
+  // it has no storage buffers, the LUT baked by fragments when no compute.
+  bool row_textures = false, lut_by_fragment = false;
+  gpu::TextureView transform_texels, empty_attribute_texels;
   gpu::Texture lut, checker, fallback;
   gpu::TextureView lut_view, checker_view, fallback_view, environment_placeholder, cookie_view;
-  gpu::Sampler checker_sampler, lut_sampler, shadow_sampler;
+  gpu::Sampler checker_sampler, lut_sampler, shadow_sampler, point_sampler;
   std::vector<MaterialGpu> materials;
   std::vector<gpu::Buffer> vertices, indices;
   std::vector<Resource> pool;
@@ -502,6 +510,25 @@ struct Renderer::Impl {
     queue.WriteTexture(&destination, rgba.data(), rgba.size(), &layout, &extent);
     cookie_view = value.view;
   }
+  // Rows the exporter packed for an rgba32uint texture (`texel_rows`).
+  gpu::TextureView texels(const Json &spec) {
+    const uint32_t w = spec.at("size")[0], h = spec.at("size")[1];
+    Resource value = resource({{"texture", {{"format", "rgba32uint"}, {"dimension", "d2"},
+                                            {"usage", "COPY_DST | TEXTURE_BINDING"},
+                                            {"size", {w, h, 1}}}}});
+    const auto bytes = read(root, spec.at("file"));
+    if (bytes.size() != size_t(w) * h * 16)
+      throw std::runtime_error("instance texel upload size mismatch");
+    gpu::TexelCopyTextureInfo to;
+    to.texture = value.texture;
+    to.aspect = gpu::TextureAspect::All;
+    gpu::TexelCopyBufferLayout layout;
+    layout.bytesPerRow = w * 16;
+    layout.rowsPerImage = h;
+    const gpu::Extent3D extent{w, h, 1};
+    queue.WriteTexture(&to, bytes.data(), bytes.size(), &layout, &extent);
+    return value.view;
+  }
   Resource resource(const Json &shape) {
     Resource result;
     result.shape = shape;
@@ -571,22 +598,37 @@ struct Renderer::Impl {
       throw std::runtime_error("environment scale must be finite and positive");
     environment_scale = scale;
     if (!current.is_null() && !current.empty()) {
-      const auto bytes = read(root, data.at("frame").at("scene"));
-      WxslSceneUniform uniform;
-      std::memcpy(&uniform, bytes.data(), sizeof(uniform));
-      uniform.environment_enabled = current.at("graph").value("environment_maps", Json(nullptr)).is_null() ? 0.0f : 1.0f;
-      uniform.environment_scale = scale;
-      queue.WriteBuffer(scene, 0, &uniform, sizeof(uniform));
+      write_scene();
     }
   }
+  // The frame's scene uniform with the environment facts only the bound
+  // pipeline knows: whether it has maps, their units and their depth.
+  void write_scene() {
+    const auto bytes = read(root, data.at("frame").at("scene"));
+    WxslSceneUniform uniform;
+    std::memcpy(&uniform, bytes.data(), sizeof(uniform));
+    const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
+    uniform.environment_enabled = maps.is_null() ? 0.0f : 1.0f;
+    uniform.environment_scale =
+        environment_scale.value_or(current.at("graph").value("environment_scale", 1.0f));
+    // GLSL ES 3.00 cannot query a cube's levels, so the ABI reads them here.
+    uniform.environment_levels =
+        maps.is_null() ? 1u : resolve(maps.at(1).get<uint32_t>()).texture.GetMipLevelCount();
+    queue.WriteBuffer(scene, 0, &uniform, sizeof(uniform));
+  }
   void init() {
+    const auto profile = data.at("frame").value("profile", Json::object());
+    row_textures = !profile.value("storage_buffers", true);
+    lut_by_fragment = !profile.value("compute", true);
     empty_layout = layout({});
     std::vector<gpu::BindGroupLayoutEntry> entries;
     for (const auto binding : {WXSL_BINDING_CAMERA, WXSL_BINDING_SCENE, WXSL_BINDING_INSTANCES,
                                WXSL_BINDING_INSTANCE_ATTRIBUTES, WXSL_BINDING_PREVIOUS_INSTANCES}) {
       const bool uniform = binding == WXSL_BINDING_CAMERA || binding == WXSL_BINDING_SCENE;
-      auto entry = layout_entry(
-          binding, {{"kind", uniform ? "uniform" : "buffer"}, {"read_only", true}, {"size", 0}});
+      auto entry = !uniform && row_textures
+          ? layout_entry(binding, {{"kind", "texture"}, {"sample_type", "uint"}, {"dimension", "d2"}})
+          : layout_entry(binding, {{"kind", uniform ? "uniform" : "buffer"},
+                                   {"read_only", true}, {"size", 0}});
       entry.visibility = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
       entry.buffer.hasDynamicOffset = binding == WXSL_BINDING_CAMERA;
       if (binding == WXSL_BINDING_CAMERA)
@@ -621,7 +663,14 @@ struct Renderer::Impl {
         {{"kind", "texture"}, {"sample_type", "float"}, {"dimension", "d2_array"}});
     entry.visibility = gpu::ShaderStage::Fragment;
     entries.push_back(entry);
+    // Depth texels are read through a nearest sampler (ADR 0075).
+    entry = {};
+    entry.binding = WXSL_BINDING_POINT_SAMPLER;
+    entry.visibility = gpu::ShaderStage::Fragment;
+    entry.sampler.type = gpu::SamplerBindingType::NonFiltering;
+    entries.push_back(entry);
     frame_layout = layout(entries);
+    point_sampler = device.CreateSampler();
     const auto views = read(root, data.at("frame").at("views"));
     if (views.size() % sizeof(WxslCameraUniform) != 0)
       throw std::runtime_error("camera upload stride mismatch");
@@ -639,6 +688,11 @@ struct Renderer::Impl {
     transforms = buffer(read(root, data.at("frame").at("instances")), gpu::BufferUsage::Storage,
                         sizeof(WxslInstanceTransform));
     empty_attributes = buffer({}, gpu::BufferUsage::Storage);
+    if (row_textures) {
+      transform_texels = texels(data.at("frame").at("instance_texels"));
+      // One zero line: what a material declaring no attributes binds.
+      empty_attribute_texels = texels_zero();
+    }
     Resource value = resource({{"texture",
                                 {{"format", "rgba8unorm"},
                                  {"dimension", "d2"},
@@ -676,7 +730,8 @@ struct Renderer::Impl {
     value = resource({{"texture",
                        {{"format", "rgba16float"},
                         {"dimension", "d2"},
-                        {"usage", "STORAGE_BINDING | TEXTURE_BINDING"},
+                        {"usage", lut_by_fragment ? "RENDER_ATTACHMENT | TEXTURE_BINDING"
+                                                  : "STORAGE_BINDING | TEXTURE_BINDING"},
                         {"size", {lut_size, lut_size, 1}}}}});
     lut = value.texture;
     lut_view = value.view;
@@ -727,6 +782,8 @@ struct Renderer::Impl {
       material.layout = layout(descriptors);
       material.group = group(material.layout, bindings);
       material.attributes = buffer(read(root, row.at("attributes")), gpu::BufferUsage::Storage);
+      if (row_textures)
+        material.attribute_texels = texels(row.at("attribute_texels"));
       for (auto stage = row.at("stages").begin(); stage != row.at("stages").end(); ++stage)
         material.shaders[stage.key()] = shader(stage.value().at("wgsl"));
       materials.push_back(std::move(material));
@@ -748,6 +805,12 @@ struct Renderer::Impl {
       clear.End();
     }
     const auto &bake = data.at("effects").at("wxsl.brdf_lut");
+    if (bake.at("kind").contains("screen")) {
+      bake_lut_by_fragment(encoder, bake);
+      auto command = encoder.Finish();
+      queue.Submit(1, &command);
+      return;
+    }
     auto bake_layout = layout({layout_entry(
         0, {{"kind", "storage_texture"}, {"format", "rgba16float"}, {"dimension", "d2"}})});
     gpu::BindGroupEntry binding;
@@ -774,6 +837,44 @@ struct Renderer::Impl {
     compute.End();
     auto command = encoder.Finish();
     queue.Submit(1, &command);
+  }
+  gpu::TextureView texels_zero() {
+    Resource value = resource({{"texture", {{"format", "rgba32uint"}, {"dimension", "d2"},
+                                            {"usage", "COPY_DST | TEXTURE_BINDING"},
+                                            {"size", {WXSL_INSTANCE_TEXTURE_WIDTH, 1, 1}}}}});
+    return value.view;
+  }
+  // The LUT bake's fragment arm (ADR 0075): a fullscreen triangle into the
+  // table. The arm binds nothing, so the pipeline layout is the shader's.
+  void bake_lut_by_fragment(gpu::CommandEncoder &encoder, const Json &bake) {
+    const auto entries = bake.at("kind").at("screen");
+    const auto vertex = entries.at("vertex_entry").get<std::string>(),
+               fragment = entries.at("fragment_entry").get<std::string>();
+    const auto module = shader(bake.at("wgsl"));
+    gpu::ColorTargetState target;
+    target.format = gpu::TextureFormat::RGBA16Float;
+    gpu::FragmentState fs;
+    fs.module = module;
+    fs.entryPoint = {fragment.data(), fragment.size()};
+    fs.targetCount = 1;
+    fs.targets = &target;
+    gpu::RenderPipelineDescriptor descriptor;
+    descriptor.vertex.module = module;
+    descriptor.vertex.entryPoint = {vertex.data(), vertex.size()};
+    descriptor.fragment = &fs;
+    auto pipeline = device.CreateRenderPipeline(&descriptor);
+    gpu::RenderPassColorAttachment color;
+    color.view = lut_view;
+    color.loadOp = gpu::LoadOp::Clear;
+    color.storeOp = gpu::StoreOp::Store;
+    color.clearValue = {0, 0, 0, 0};
+    gpu::RenderPassDescriptor pass;
+    pass.colorAttachmentCount = 1;
+    pass.colorAttachments = &color;
+    auto render = encoder.BeginRenderPass(&pass);
+    render.SetPipeline(pipeline);
+    render.Draw(3);
+    render.End();
   }
   Resource &resolve(uint32_t resource, uint32_t history = 0) {
     const auto &allocation = current.at("schedule").at("allocations").at(resource);
@@ -822,8 +923,15 @@ struct Renderer::Impl {
                material < materials.size() ? materials[material].attributes : empty_attributes}}}) {
       gpu::BindGroupEntry entry;
       entry.binding = index;
-      entry.buffer = value;
-      entry.size = index == WXSL_BINDING_CAMERA ? sizeof(WxslCameraUniform) : value.GetSize();
+      if (row_textures && index != WXSL_BINDING_CAMERA && index != WXSL_BINDING_SCENE) {
+        // The same rows, packed into textures (ADR 0075).
+        entry.textureView = index != WXSL_BINDING_INSTANCE_ATTRIBUTES ? transform_texels
+                            : material < materials.size() ? materials[material].attribute_texels
+                                                          : empty_attribute_texels;
+      } else {
+        entry.buffer = value;
+        entry.size = index == WXSL_BINDING_CAMERA ? sizeof(WxslCameraUniform) : value.GetSize();
+      }
       entries.push_back(entry);
     }
     gpu::BindGroupEntry entry;
@@ -845,6 +953,10 @@ struct Renderer::Impl {
     entry = {};
     entry.binding = WXSL_BINDING_LIGHT_COOKIES;
     entry.textureView = cookie_view;
+    entries.push_back(entry);
+    entry = {};
+    entry.binding = WXSL_BINDING_POINT_SAMPLER;
+    entry.sampler = point_sampler;
     entries.push_back(entry);
     const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
     for (size_t index = 0; index < 2; ++index) {
@@ -971,12 +1083,6 @@ struct Renderer::Impl {
       throw std::runtime_error(name + " requires float32_blendable");
     if (current != next) {
       current = next;
-      const auto scene_bytes = read(root, data.at("frame").at("scene"));
-      WxslSceneUniform uniform;
-      std::memcpy(&uniform, scene_bytes.data(), sizeof(uniform));
-      uniform.environment_enabled = current.at("graph").value("environment_maps", Json(nullptr)).is_null() ? 0.0f : 1.0f;
-      uniform.environment_scale = environment_scale.value_or(current.at("graph").value("environment_scale", 1.0f));
-      queue.WriteBuffer(scene, 0, &uniform, sizeof(uniform));
       pool.clear();
       ran.clear();
       run_counts.clear();
@@ -988,6 +1094,7 @@ struct Renderer::Impl {
                            {"dimension", "d2"},
                            {"usage", "COPY_SRC | RENDER_ATTACHMENT"},
                            {"size", {width(), height(), 1}}}}});
+      write_scene();
     }
     for (uint32_t n = 0; n < count; ++n) {
       auto encoder = device.CreateCommandEncoder();
@@ -1087,6 +1194,9 @@ struct Renderer::Impl {
             colors.push_back(entry);
           }
           gpu::RenderPassDepthStencilAttachment depth;
+          // Finite even when loading: a browser's WebGPU rejects the
+          // undefined (NaN) default that native Dawn ignores.
+          depth.depthClearValue = 1.0f;
           gpu::RenderPassDescriptor descriptor;
           descriptor.label = {label.data(), label.size()};
           descriptor.colorAttachmentCount = colors.size();

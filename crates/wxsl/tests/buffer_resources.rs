@@ -74,6 +74,7 @@ fn compute_written_indirect_arguments_render_the_same_geometry_as_a_direct_draw(
             path: "package::test::indirect_arguments",
             wxsl: include_str!("probe/indirect.wxsl"),
         },
+        downlevel: wxsl::render::effect::Downlevel::NativeOnly,
     });
     let mut graph = RenderGraph::new(target.format());
     let args = graph.resource(ResourceDesc::buffer("arguments", 20));

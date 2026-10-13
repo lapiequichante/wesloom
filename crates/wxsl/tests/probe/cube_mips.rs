@@ -30,6 +30,7 @@ pub const VIEW: Effect = Effect {
         path: "package::test::cube_mips",
         wxsl: include_str!("cube_mips.wxsl"),
     },
+    downlevel: wxsl_render::effect::Downlevel::Portable,
 };
 
 pub fn color(face: u32, mip: u32) -> Color {

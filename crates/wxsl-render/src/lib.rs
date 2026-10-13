@@ -85,6 +85,9 @@ pub mod variants;
 
 /// Shared effect declarations and their owned shader sources (ADR 0048).
 pub use wxsl_frame::effect;
+/// What a device can run, and the fallbacks the shared half picks for it
+/// (ADR 0075).
+pub use wxsl_frame::profile::{self, Profile};
 
 // Re-exported so a dependant can name a `wgpu::Device` or a `glam::Mat4`
 // without having to pin the same versions itself — and so that "which wgpu
@@ -95,7 +98,7 @@ pub use wgpu;
 pub use bindings::{BindingLayouts, MaterialBindings};
 pub use draw::{DrawItem, DrawList, InstanceAttributes};
 pub use effect::{
-    Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectOutputShape,
+    Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectOutputShape,
     EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE, BLOOM_X, BLOOM_X_MODULE, BLOOM_Y,
     BLOOM_Y_MODULE, BRDF_LUT, BRDF_LUT_MODULE, DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE,
     RAMP_FILL, RAMP_MODULE, RAMP_VIEW, RAMP_VIEW_MODULE,
@@ -104,7 +107,7 @@ pub use environment::{
     Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,
 };
 pub use error::RenderError;
-pub use gpu::{DeviceCaps, GpuContext, OffscreenTarget};
+pub use gpu::{device_profile, DeviceCaps, GpuContext, OffscreenTarget};
 pub use graph::{PassBinding, RenderGraph, ResourcePool, Schedule};
 pub use library::ShaderLibrary;
 pub use material::Material;

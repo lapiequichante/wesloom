@@ -163,6 +163,9 @@ is computed at the one call site that has the frame group in scope.
 
 ## Consequences
 
+- (ADR 0075) The LUT bake has a fragment arm over the same integral
+  (`brdf_integrate.wxsl`); a renderer without compute bakes through it.
+
 * The `once` bake is infrastructure rather than a demonstration, and the
   gallery's `brdf-lut` demo still shows the pass form of it.
 * A pipeline that does not end in the `tonemap` effect presents linear

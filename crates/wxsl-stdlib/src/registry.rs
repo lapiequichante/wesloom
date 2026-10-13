@@ -667,7 +667,9 @@ pub fn vector_nodes() -> Vec<NodeDefinition> {
                  `math.safe_normalize` where that is possible.",
             )
             .generic_param(shared(ValueType::VECTORS))
-            .input(generic_splat("v", 0.0))
+            // Not zero: an unwired input is a constant, and a constant
+            // zero-length `normalize` is a shader no device accepts.
+            .input(generic_splat("v", 1.0))
             .output(generic_socket("out"))
             .expr("normalize({v})"),
         NodeDefinition::builder("vector.reflect", "Reflect")

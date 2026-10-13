@@ -88,6 +88,8 @@ pub const DOF_NEAR_MODULE: &str = "package::wxsl::dof_near";
 pub const TONEMAP_MODULE: &str = "package::wxsl::tonemap";
 /// Module path the BRDF-LUT bake's shader is mounted under.
 pub const BRDF_LUT_MODULE: &str = "package::wxsl::brdf_lut";
+/// Module path the LUT bake's fragment arm is mounted under (ADR 0075).
+pub const BRDF_LUT_FRAGMENT_MODULE: &str = "package::wxsl::brdf_lut_fragment";
 /// Module path the LUT viewer's shader is mounted under.
 pub const LUT_VIEW_MODULE: &str = "package::wxsl::lut_view";
 /// Module path the baseline peel-window update is mounted under.
@@ -286,6 +288,32 @@ impl EffectShader {
     }
 }
 
+/// How an effect runs on a device without compute or storage buffers
+/// (ADR 0075). Every effect states it — compute is allowed, but each
+/// compute effect says at landing time what WebGL2 and GL get instead.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Downlevel {
+    /// Runs as declared on every profile: a screen effect over textures,
+    /// checked by the GLSL ES column of the corpus gate.
+    Portable,
+    /// Needs what a downlevel device lacks — compute, storage, a depth
+    /// `textureLoad` — and is refused by name when a pipeline that names
+    /// it is compiled for one.
+    NativeOnly,
+    /// A compute effect's fragment arm: the same inputs and parameters,
+    /// its one storage-texture output written instead as the colour
+    /// attachment of a fullscreen pass. The pipeline compiler lowers the
+    /// compute pass into that screen pass under the same label.
+    Fragment {
+        /// Vertex entry point (a fullscreen triangle).
+        vertex_entry: &'static str,
+        /// Fragment entry point, writing what the compute entry stored.
+        fragment_entry: &'static str,
+        /// The arm's shader, mounted like any effect's.
+        shader: EffectShader,
+    },
+}
+
 /// An effect, as data: what it reads and writes, the shader it runs, the
 /// entry points a `wgpu` pipeline is built from.
 ///
@@ -318,6 +346,8 @@ pub struct Effect {
     pub parameters: &'static [EffectParameter],
     /// Where the shader text comes from.
     pub shader: EffectShader,
+    /// What a device without compute or storage runs instead.
+    pub downlevel: Downlevel,
 }
 
 impl Effect {
@@ -410,6 +440,7 @@ impl Effect {
                 // there would be a module importing itself.
                 module: codegen::SCREEN_MODULE,
             },
+            downlevel: Downlevel::Portable,
         })
     }
 
@@ -481,6 +512,16 @@ impl Effect {
                 wxsl: Arc::from(generated.source),
                 module: abi::BAKE_MODULE,
             },
+            // Generated beside the compute arm from the same value function.
+            downlevel: Downlevel::Fragment {
+                vertex_entry: abi::BAKE_VERTEX_ENTRY,
+                fragment_entry: abi::BAKE_FRAGMENT_ENTRY,
+                shader: EffectShader::Graph {
+                    graph: Arc::new(graph.clone()),
+                    wxsl: Arc::from(generated.fragment_source),
+                    module: abi::BAKE_MODULE,
+                },
+            },
         })
     }
 
@@ -496,6 +537,30 @@ impl Effect {
     /// socket.
     pub fn declares(&self, socket: &str) -> bool {
         self.inputs.iter().any(|input| input.name == socket)
+    }
+
+    /// The effect as a device with `profile` runs it: itself, or — on a
+    /// profile without compute — its fragment arm, a screen effect under
+    /// the same id with the same inputs and parameters and no storage
+    /// outputs (ADR 0075). Backends call this wherever they turn a pass's
+    /// effect id into a pipeline, so the two arms are never both live.
+    pub fn on(&self, profile: &crate::profile::Profile) -> std::borrow::Cow<'_, Effect> {
+        match &self.downlevel {
+            Downlevel::Fragment {
+                vertex_entry,
+                fragment_entry,
+                shader,
+            } if !profile.compute => std::borrow::Cow::Owned(Effect {
+                kind: EffectKind::Screen {
+                    vertex_entry,
+                    fragment_entry,
+                },
+                outputs: &[],
+                shader: shader.clone(),
+                ..self.clone()
+            }),
+            _ => std::borrow::Cow::Borrowed(self),
+        }
     }
 
     /// Whether this is a compute effect — and so whether the pass running
@@ -615,6 +680,7 @@ pub const DEFERRED_LIGHTING: Effect = Effect {
     outputs: &[],
     parameters: &[],
     shader: EffectShader::Lighting,
+    downlevel: Downlevel::Portable,
 };
 
 /// Bloom: glow for the bright parts of an image, the proof that effects
@@ -661,6 +727,7 @@ pub const BLOOM: Effect = Effect {
         path: BLOOM_MODULE,
         wxsl: include_str!("../shaders/bloom.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The horizontal half of a separable bloom. Thresholds linear radiance and
@@ -701,6 +768,7 @@ pub const BLOOM_X: Effect = Effect {
         path: BLOOM_X_MODULE,
         wxsl: include_str!("../shaders/bloom_x.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The vertical half of a separable bloom, and the composite. Two images —
@@ -738,6 +806,7 @@ pub const BLOOM_Y: Effect = Effect {
         path: BLOOM_Y_MODULE,
         wxsl: include_str!("../shaders/bloom_y.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 // The bloom pyramid's four passes. They are the *shape* a `pass.bloom`
@@ -787,6 +856,7 @@ pub const BLOOM_EXTRACT: Effect = Effect {
         path: BLOOM_EXTRACT_MODULE,
         wxsl: include_str!("../shaders/bloom_extract.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// One level of a bloom pyramid's descent: the plain 2×2 box mean that
@@ -813,6 +883,7 @@ pub const BLOOM_DOWN: Effect = Effect {
         path: BLOOM_DOWN_MODULE,
         wxsl: include_str!("../shaders/bloom_down.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// One level of a bloom pyramid's ascent: bilinear the level below back
@@ -847,6 +918,7 @@ pub const BLOOM_UP: Effect = Effect {
         path: BLOOM_UP_MODULE,
         wxsl: include_str!("../shaders/bloom_up.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The foot of a bloom pyramid, and the composite: add the assembled glow
@@ -883,6 +955,7 @@ pub const BLOOM_COMBINE: Effect = Effect {
         path: BLOOM_COMBINE_MODULE,
         wxsl: include_str!("../shaders/bloom_combine.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 // The depth-of-field chain's three passes — a `pass.dof` document node
@@ -943,6 +1016,7 @@ pub const DOF_COC: Effect = Effect {
         path: DOF_COC_MODULE,
         wxsl: include_str!("../shaders/dof_coc.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The depth-of-field far-field blur: behind the focus plane, blur by the
@@ -980,6 +1054,7 @@ pub const DOF_FAR: Effect = Effect {
         path: DOF_FAR_MODULE,
         wxsl: include_str!("../shaders/dof_far.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The depth-of-field near-field composite: dilate the near field's discs
@@ -1023,6 +1098,7 @@ pub const DOF_NEAR: Effect = Effect {
         path: DOF_NEAR_MODULE,
         wxsl: include_str!("../shaders/dof_near.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Tonemap: the display transform, as the last pass of every stock
@@ -1058,6 +1134,7 @@ pub const TONEMAP: Effect = Effect {
         path: TONEMAP_MODULE,
         wxsl: include_str!("../shaders/tonemap.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The split-sum environment-BRDF LUT, baked by a compute effect — the
@@ -1083,7 +1160,23 @@ pub const BRDF_LUT: Effect = Effect {
     parameters: &[],
     shader: EffectShader::Source {
         path: BRDF_LUT_MODULE,
-        wxsl: include_str!("../shaders/brdf_lut.wxsl"),
+        wxsl: concat!(
+            include_str!("../shaders/brdf_integrate.wxsl"),
+            include_str!("../shaders/brdf_lut.wxsl")
+        ),
+    },
+    // The same integral as a fullscreen pass into the LUT, for WebGL2 and
+    // GL; `the_lut_bakes_the_same_through_either_arm` holds them equal.
+    downlevel: Downlevel::Fragment {
+        vertex_entry: "bake_lut_vs",
+        fragment_entry: "bake_lut_fs",
+        shader: EffectShader::Source {
+            path: BRDF_LUT_FRAGMENT_MODULE,
+            wxsl: concat!(
+                include_str!("../shaders/brdf_integrate.wxsl"),
+                include_str!("../shaders/brdf_lut_fragment.wxsl")
+            ),
+        },
     },
 };
 
@@ -1110,6 +1203,7 @@ pub const LUT_VIEW: Effect = Effect {
         path: LUT_VIEW_MODULE,
         wxsl: include_str!("../shaders/lut_view.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Module path the ramp fill's shader is mounted under.
@@ -1140,6 +1234,8 @@ pub const RAMP_FILL: Effect = Effect {
         path: RAMP_MODULE,
         wxsl: include_str!("../shaders/ramp.wxsl"),
     },
+    // Fills a storage buffer: compute and storage, by definition.
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// The buffer reader: a screen effect that draws a storage buffer as one
@@ -1165,6 +1261,8 @@ pub const RAMP_VIEW: Effect = Effect {
         path: RAMP_VIEW_MODULE,
         wxsl: include_str!("../shaders/ramp_view.wxsl"),
     },
+    // Reads a storage buffer in the fragment stage.
+    downlevel: Downlevel::NativeOnly,
 };
 
 /// Module path the TAA resolve's shader is mounted under.
@@ -1220,6 +1318,7 @@ pub const TAA: Effect = Effect {
         path: TAA_MODULE,
         wxsl: include_str!("../shaders/taa.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Motion blur: sample back along each fragment's own screen motion — the
@@ -1260,6 +1359,7 @@ pub const MOTION_BLUR: Effect = Effect {
         path: MOTION_BLUR_MODULE,
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The baseline peel's window update. `pass.peel` expands into it; it is
@@ -1298,6 +1398,7 @@ pub const PEEL_BOUNDS: Effect = Effect {
         path: PEEL_BOUNDS_MODULE,
         wxsl: include_str!("../shaders/peel_bounds.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The native peel's window update, from the MAX-blended depth pair.
@@ -1329,6 +1430,7 @@ pub const PEEL_DEPTH_BOUNDS: Effect = Effect {
         path: PEEL_DEPTH_BOUNDS_MODULE,
         wxsl: include_str!("../shaders/peel_depth_bounds.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Front and back accumulators over the opaque colour.
@@ -1366,6 +1468,7 @@ pub const PEEL_COMPOSITE: Effect = Effect {
         path: PEEL_COMPOSITE_MODULE,
         wxsl: include_str!("../shaders/peel_composite.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Fold one front layer under the front accumulator. Not a palette node.
@@ -1397,6 +1500,7 @@ pub const PEEL_UNDER: Effect = Effect {
         path: PEEL_UNDER_MODULE,
         wxsl: include_str!("../shaders/peel_under.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// Fold one back layer over the back accumulator. Not a palette node.
@@ -1428,6 +1532,7 @@ pub const PEEL_OVER: Effect = Effect {
         path: PEEL_OVER_MODULE,
         wxsl: include_str!("../shaders/peel_over.wxsl"),
     },
+    downlevel: Downlevel::Portable,
 };
 
 /// The effects a renderer knows how to run, and a pipeline document may
@@ -1507,10 +1612,24 @@ impl EffectRegistry {
              (the shipped effects live under `wxsl.`); put it in a package of its own",
             effect.id,
         );
+        // ADR 0075's rule, at registration: compute is allowed, but a
+        // compute effect says what a device without it runs instead.
+        assert!(
+            !(effect.is_compute() && effect.downlevel == Downlevel::Portable),
+            "compute effect `{}` declares `Downlevel::Portable`; give it a \
+             `Downlevel::Fragment` arm or name it `Downlevel::NativeOnly`",
+            effect.id,
+        );
         match self.effects.iter().position(|known| known.id == effect.id) {
             Some(at) => self.effects[at] = effect,
             None => self.effects.push(effect),
         }
+    }
+
+    /// The effect `id` names, as a device with `profile` runs it
+    /// ([`Effect::on`]) — what a backend asks when it builds the pass.
+    pub fn get_on(&self, profile: crate::profile::Profile, id: &str) -> Option<Effect> {
+        self.get(id).map(|effect| effect.on(&profile).into_owned())
     }
 
     /// A builder form of [`EffectRegistry::add`].

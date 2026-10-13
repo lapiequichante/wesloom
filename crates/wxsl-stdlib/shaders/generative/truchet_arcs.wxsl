@@ -12,7 +12,7 @@ fn truchet_arcs(
     width: f32,   // Arc stroke width, in cell units. @default 0.1
 ) -> f32 {
     let scaled = uv * max(cells, vec2f(1.0));
-    let cell = vec3i(scaled.x, scaled.y, 0);
+    let cell = vec2i(floor(scaled));
     var h = bitcast<u32>(cell.x) * 374761393u + bitcast<u32>(cell.y) * 668265263u;
     h = (h ^ (h >> 13u)) * 1274126177u;
     h = h ^ (h >> 16u);

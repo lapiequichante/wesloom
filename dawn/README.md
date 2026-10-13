@@ -122,6 +122,29 @@ then dispatch CI with `gpu=true`. Missing adapters fail the harness; the job
 does not run pull-request code on a persistent runner. Local success does not
 prove the remote runner is provisioned.
 
+## Fallback profiles and the browser (ADR 0075)
+
+`bake_docs --profile webgl2|compat` exports a bundle whose `frame.profile`
+has no compute, no storage buffers, or neither. The renderer then binds
+instance rows as `rgba32uint` textures and bakes the BRDF LUT with
+fragments. `run_renderer_smoke.sh` verifies both profiles against wgpu.
+Effects that are native only (the IBL prefilters, the ramp pair) are
+refused at export.
+
+```sh
+bash dawn/tests/build_wasm.sh target/dawn-assets/pbr   # Emscripten + emdawnwebgpu
+python3 -m http.server -d target/dawn-web 8766
+node dawn/tests/web_smoke.mjs http://localhost:8766/ out.png --until 'exit 0'
+```
+
+The wasm build is WebGPU only, because emdawnwebgpu has no GL backend. It
+verifies in the page, against the bundle's references. Point it at a
+`--profile webgl2` bundle to run the fallback shapes over WebGPU.
+`web_smoke.mjs` drives headless Chrome over CDP (Node 22+) and also smokes
+the wgpu `web` example (`?webgl` for WebGL2). `wxsl-ffi` does not build for
+wasm, because it needs `panic=unwind`, so the runtime compiler (B4) stays
+native.
+
 ## Generated layouts
 
 Edit `wxsl-core::host`, not `include/wxsl_host.h`. Then regenerate:

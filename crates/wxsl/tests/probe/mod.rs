@@ -69,6 +69,18 @@ pub fn gpu() -> Option<GpuContext> {
     }
 }
 
+/// A WebGL2-equivalent context (ADR 0075), or `None` when this machine has
+/// no usable adapter.
+pub fn webgl2_gpu() -> Option<GpuContext> {
+    match pollster::block_on(GpuContext::headless_webgl2()) {
+        Ok(context) => Some(context),
+        Err(error) => {
+            eprintln!("skipping GPU test: {error}");
+            None
+        }
+    }
+}
+
 /// No lights, no ambient: the surface's emissive is the whole image.
 pub fn unlit() -> Environment {
     Environment {

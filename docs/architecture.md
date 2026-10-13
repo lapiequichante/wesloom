@@ -160,12 +160,20 @@ line that hands the node library's WXSL to the renderer.
 | `stdlib` | **on** | `wxsl-stdlib` (base nodes) | — |
 | `editor` | off | `wxsl-editor` (visual node editor) | `render` |
 | `gltf` | off | glTF/GLB geometry import (`wxsl_render::gltf`) | `render` |
+| `webgl` | off | wgpu's WebGL2 backend on `wasm32` (ADR 0075) | `render` |
 
 A headless runtime that just loads and runs a pre-authored graph can use
 `default-features = false, features = ["render"]` — no GUI toolkit anywhere
 in its dependency tree. A build with nothing but `wxsl-core` (e.g. an
 offline graph validator/exporter) uses `default-features = false` with no
 features at all.
+
+The device decides the **profile**, not a feature (ADR 0075). A device
+without compute or storage buffers (WebGL2, GLES 3.0, old GL, some Dawn
+compatibility devices) runs the same documents through fallbacks. Instance
+rows come from data textures, compute effects with a `Fragment` arm run as
+screen passes, and native-only effects are refused by name. `webgl` only
+adds the backend.
 
 ## Data flow: authoring to pixels
 

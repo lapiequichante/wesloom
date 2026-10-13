@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11 and M10 (ADR 0074). The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11, M10 (ADR 0074) and N10 (ADR 0075). The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -810,6 +810,27 @@ web column.
 
 ### N10 — WebGL2 is a target
 
+**Done (2026-10-13, ADR 0075), with the plan amended:** compute stays.
+WebGPU and the native backends keep every compute effect; WebGL2, GLES 3.0
+and old GL are a fallback `Profile` (`wxsl-frame`) that each renderer reads
+from its device (wgpu's limits, or a Dawn bundle's `frame.profile`). The
+instance shape is neither of the two below: rows become `rgba32uint` data
+textures under the `wxsl_instance_texture` ABI macro, with generated
+loaders, because attributes would have spent eight slots on N2's two
+matrices. Every effect declares a `Downlevel`. The BRDF LUT and generated
+bakes have fragment arms over a shared integral, and a compute pass lowers
+to a screen pass. The IBL prefilters and the ramp pair are native-only and
+refused by name. Pass-group depth is read as float through a point sampler.
+The ES column is `downlevel_corpus` plus `graph_to_wgsl`'s node sweep.
+`downlevel` renders on a WebGL2-limits device and matches the full device
+exactly. Both renderers build for wasm: `examples/web.rs` (wgpu, WebGL2 or
+WebGPU) and `dawn/tests/build_wasm.sh` (Emscripten, WebGPU only, since Dawn
+has no GL backend in the browser). Both were drawn in headless Chrome
+through `dawn/tests/web_smoke.mjs`. The browser check runs the web
+example, not the full gallery. Buffer effects in the fallback stay
+refused rather than lowered to a UBO or ping-pong. `wxsl-ffi` does not
+build for wasm, because it needs `panic=unwind`.
+
 The decision plan.md deferred — "WebGL is not a target, so
 `VERTEX_STORAGE` is a cost only if that ever changes" — has been made:
 it changed. WebGL2 is a target, which reopens that accepted cost on
@@ -907,7 +928,7 @@ none of it knows or cares which backend is underneath.
     they slot in wherever a pause wants filling. N9's panels are the
     cheapest visible wins on this list — everything they show already
     exists.
-11. **N10** — the *ADR* lands before N2, because the instance-shape
+11. ~~**N10**~~ — *landed (ADR 0075)*; the *ADR* lands before N2, because the instance-shape
     decision gates the previous-frame matrix, and the downlevel corpus
     gate runs alongside from the start; the port itself follows P8,
     before M8 and N2 spend more of the budget the third column prices.

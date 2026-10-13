@@ -45,6 +45,7 @@ const DISTANCE: Effect = Effect {
         path: "package::gallery::probe_distance",
         wxsl: include_str!("probe_distance.wxsl"),
     },
+    downlevel: wxsl::render::effect::Downlevel::Portable,
 };
 const FLIP: Effect = Effect {
     id: "gallery.probe_flip",
@@ -61,6 +62,7 @@ const FLIP: Effect = Effect {
         path: "package::gallery::probe_flip",
         wxsl: include_str!("probe_flip.wxsl"),
     },
+    downlevel: wxsl::render::effect::Downlevel::Portable,
 };
 const FLIP_DISTANCE: Effect = Effect {
     id: "gallery.probe_flip_distance",
@@ -1234,6 +1236,7 @@ import package::wxsl::bindings::environment_lut_sampler;
                     path: "package::gallery::test_wall",
                     wxsl: BAKE,
                 },
+                downlevel: wxsl::render::effect::Downlevel::Portable,
             });
         }
         let mut graph = wxsl::render::graph::RenderGraph::new(target.format());
@@ -1314,6 +1317,7 @@ import package::wxsl::bindings::environment_lut_sampler;
                 path: "package::gallery::test_probe_query",
                 wxsl: QUERY,
             },
+            downlevel: wxsl::render::effect::Downlevel::Portable,
         });
         let mut graph = wxsl::render::graph::RenderGraph::new(target.format());
         let reads = [

@@ -320,6 +320,7 @@ fn peeled_torus_normals_alternate_entry_exit_on_all_four_interfaces() {
         inputs: &[EffectInput { name: "image", kind: EffectInputKind::Image, description: "normal/depth array", history: 0 }], outputs: &[],
         parameters: &[EffectParameter { name: "layer", default: Value::U32(0) }],
         shader: EffectShader::Source { path: "test::optical_facing", wxsl: "import package::wxsl::bindings::{camera};\n@group(3) @binding(0) var image: texture_2d_array<f32>;\n@vertex fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { return vec4f(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0); }\n@fragment fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f { let n = textureLoad(image, vec2i(p.xy), i32(params.layer), 0); if dot(n.xyz, n.xyz) < 0.5 { return vec4f(0.5, 0.5, 0.5, 1.0); } let uv = p.xy / vec2f(textureDimensions(image)); let h = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, n.w, 1.0); let facing = dot(n.xyz, normalize(camera.position.xyz - h.xyz / h.w)); return select(vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 0.0, 0.0, 1.0), (facing > 0.0)); }" },
+        downlevel: wxsl::render::effect::Downlevel::Portable,
     });
     let mut graph = h.renderer.render_graph().clone();
     let normals = graph.resource_by_label("optical normals").unwrap();

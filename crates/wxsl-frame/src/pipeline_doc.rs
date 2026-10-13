@@ -66,14 +66,14 @@ use wxsl_core::pipeline as doc;
 use wxsl_core::scene::{self, TagExpr};
 
 use crate::effect::{
-    Effect, EffectInputKind, EffectRegistry, PEEL_BOUNDS, PEEL_COMPOSITE, PEEL_DEPTH_BOUNDS,
-    PEEL_OVER, PEEL_UNDER,
+    Downlevel, Effect, EffectInputKind, EffectOutputShape, EffectRegistry, PEEL_BOUNDS,
+    PEEL_COMPOSITE, PEEL_DEPTH_BOUNDS, PEEL_OVER, PEEL_UNDER,
 };
 use crate::graph::RenderGraph;
 use crate::pass::{
-    Attachment, DepthAttachment, DrawSource, Extent, LayerFilter, PassDesc, PassState, PassView,
-    Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ViewportRect, ALPHA_OVER,
-    DEPTH_FORMAT, MAX_BLEND, PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
+    Attachment, DepthAttachment, DrawSource, Extent, LayerFilter, PassDesc, PassKind, PassState,
+    PassView, Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ViewportRect,
+    ALPHA_OVER, DEPTH_FORMAT, MAX_BLEND, PREMULTIPLIED_OVER, PREMULTIPLIED_UNDER,
 };
 #[cfg(test)]
 use crate::pipeline::StockPipeline;
@@ -117,6 +117,17 @@ pub enum PipelineError {
         effect: String,
         /// The ids that exist.
         known: Vec<String>,
+    },
+    /// A pass runs an effect the pipeline's device profile cannot run: it
+    /// declared itself native-only, or it is a compute effect with no
+    /// fragment arm (ADR 0075).
+    NativeOnly {
+        /// The pass, as the compiled pass list labels it.
+        pass: String,
+        /// The effect it runs.
+        effect: String,
+        /// The profile it was compiled for.
+        profile: crate::profile::Profile,
     },
     /// `resource.color` names a size that is neither `viewport` nor
     /// `WxH` pixels.
@@ -366,6 +377,15 @@ impl core::fmt::Display for PipelineError {
                 "pass `{node}` runs `{effect}`, which is not an effect this \
                  renderer knows (it knows: {})",
                 known.join(", ")
+            ),
+            PipelineError::NativeOnly {
+                pass,
+                effect,
+                profile,
+            } => write!(
+                f,
+                "pass `{pass}` runs `{effect}`, which is native-only: a device \
+                 with the `{profile}` profile cannot run it (ADR 0075)"
             ),
             PipelineError::UnknownSize { node, size } => write!(
                 f,
@@ -730,7 +750,34 @@ impl<'a> Compiler<'a> {
             }
         }
         self.finish(presents)?;
+        self.check_profile()?;
         Ok(self.graph)
+    }
+
+    /// Refuse, by pass, every effect the profile cannot run — after every
+    /// expansion, so a `pass.peel` or a `pass.dof` is caught by the effect
+    /// it expands into rather than by a list of node kinds (ADR 0075).
+    fn check_profile(&self) -> Result<(), PipelineError> {
+        if self.config.profile.is_full() {
+            return Ok(());
+        }
+        for pass in self.graph.passes() {
+            let (PassKind::Screen { effect } | PassKind::Compute { effect }) = &pass.kind else {
+                continue;
+            };
+            if self
+                .effects
+                .get(effect)
+                .is_some_and(|known| known.downlevel == Downlevel::NativeOnly)
+            {
+                return Err(PipelineError::NativeOnly {
+                    pass: pass.label.clone(),
+                    effect: effect.clone(),
+                    profile: self.config.profile,
+                });
+            }
+        }
+        Ok(())
     }
 
     // -- resources --------------------------------------------------------
@@ -2440,6 +2487,30 @@ impl<'a> Compiler<'a> {
                 self.graph.make_stable_storage(*resource);
             }
         }
+        // A device without compute runs the effect's fragment arm: the same
+        // reads, its one storage texture written as the colour attachment
+        // of a screen pass under the same label (ADR 0075).
+        if !self.config.profile.compute {
+            if let (Downlevel::Fragment { .. }, [output], [target]) =
+                (&effect.downlevel, effect.outputs, writes.as_slice())
+            {
+                if output.shape == EffectOutputShape::StorageTexture {
+                    let attachment = self.color_attachment(*target);
+                    self.graph.pass(
+                        PassDesc::screen(name, effect.id)
+                            .with_color(attachment)
+                            .with_reads(reads)
+                            .with_policy(policy),
+                    );
+                    return Ok(());
+                }
+            }
+            return Err(PipelineError::NativeOnly {
+                pass: name,
+                effect: effect.id.to_string(),
+                profile: self.config.profile,
+            });
+        }
         let mut pass = PassDesc::compute(name, effect.id).with_reads(reads);
         for resource in writes {
             pass = pass.with_write(resource);
@@ -2790,6 +2861,7 @@ mod tests {
             lighting: full,
             features: Vec::new(),
             macros: wxsl_core::macros::MacroSet::new(),
+            profile: Default::default(),
         };
         let document = stock_document(StockPipeline::Deferred);
         let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -2809,6 +2881,7 @@ mod tests {
             lighting: LightingSet::default(),
             features,
             macros: wxsl_core::macros::MacroSet::new(),
+            profile: Default::default(),
         };
         let document = stock_document(StockPipeline::Deferred);
         let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -2840,6 +2913,7 @@ mod tests {
             lighting: LightingSet::default(),
             features: vec![clashing],
             macros: wxsl_core::macros::MacroSet::new(),
+            profile: Default::default(),
         };
         match compile(
             &stock_document(StockPipeline::Deferred),
@@ -4192,6 +4266,123 @@ mod tests {
         // target, a `once` compute bake writing it, a view presenting it.
         // Fixed size is the setting the hand-built list needed
         // `Extent::Fixed` for; `once` is the policy setting.
+        let (graph, registry, effects) = lut_document();
+        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
+        let desc = compiled
+            .resources()
+            .iter()
+            .find(|desc| desc.label == "brdf lut")
+            .expect("the lut is declared");
+        assert_eq!(
+            desc.shape,
+            ResourceShape::Texture {
+                extent: Extent::Fixed {
+                    width: 64,
+                    height: 64
+                },
+                dimension: Dimension::D2,
+                layers: 1,
+                mip_levels: 1,
+                format: TextureFormat::Rgba16Float,
+                usage: TextureUsages::empty(),
+            }
+        );
+        // `once` promoted the target to stable storage — the scheduler's
+        // rule for a pass that skips frames, derived by the compiler.
+        assert_eq!(desc.persistence, Persistence::Persistent { history: 0 });
+        compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn a_compute_pass_lowers_to_its_fragment_arm_without_compute() {
+        // ADR 0075: the same document, compiled for WebGL2. The bake keeps
+        // its label, its policy and its target — now as a screen pass's
+        // colour attachment — and the view is untouched.
+        let (graph, registry, effects) = lut_document();
+        let webgl2 = PipelineConfig {
+            profile: crate::profile::Profile::WEBGL2,
+            ..config()
+        };
+        let compiled = compile(&graph, &registry, &effects, &webgl2).expect("lowers");
+        let bake = compiled
+            .passes()
+            .iter()
+            .find(|pass| pass.label == "lut bake")
+            .expect("the bake keeps its label");
+        assert!(
+            matches!(&bake.kind, PassKind::Screen { effect } if effect == "wxsl.brdf_lut"),
+            "{:?}",
+            bake.kind
+        );
+        assert_eq!(bake.policy, Policy::Once);
+        let lut = compiled
+            .resources()
+            .iter()
+            .position(|desc| desc.label == "brdf lut")
+            .expect("the lut is declared");
+        assert_eq!(bake.color.len(), 1);
+        assert_eq!(bake.color[0].resource.index(), lut);
+        assert!(!compiled
+            .passes()
+            .iter()
+            .any(|pass| matches!(pass.kind, PassKind::Compute { .. })));
+        compiled.schedule().expect("schedules");
+    }
+
+    #[test]
+    fn a_native_only_effect_is_refused_by_name_on_a_downlevel_profile() {
+        // The ramp fills a storage buffer: there is nothing to lower it to.
+        let effects = EffectRegistry::shipped()
+            .with(crate::effect::RAMP_FILL)
+            .with(crate::effect::RAMP_VIEW);
+        let registry = document_registry(&effects);
+        let mut graph = wxsl_core::pipeline::document("ramp");
+        let buffer = graph.add(
+            Node::new(doc::RESOURCE_BUFFER)
+                .with_label("ramp")
+                .with_setting(doc::SETTING_BYTES, "1024"),
+        );
+        let fill = graph.add(
+            Node::new(format!("{}wxsl.ramp_fill", doc::PASS_COMPUTE_PREFIX)).with_label("fill"),
+        );
+        let view = graph.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_label("view")
+                .with_setting(doc::SETTING_EFFECT, "wxsl.ramp_view"),
+        );
+        let present = graph.add_node(doc::PRESENT);
+        for (from, to) in [
+            ((buffer, "buffer"), (fill, "ramp")),
+            ((buffer, "buffer"), (view, "buffer")),
+            ((view, "color"), (present, "surface")),
+        ] {
+            graph.wire(&registry, from, to).expect("ramp wiring");
+        }
+        // Compiles for a full device: the refusal below is the profile's.
+        compile(&graph, &registry, &effects, &config()).expect("compiles on a full device");
+        let webgl2 = PipelineConfig {
+            profile: crate::profile::Profile::WEBGL2,
+            ..config()
+        };
+        match compile(&graph, &registry, &effects, &webgl2) {
+            Err(error @ PipelineError::NativeOnly { .. }) => {
+                let PipelineError::NativeOnly { pass, effect, .. } = &error else {
+                    unreachable!()
+                };
+                assert_eq!(pass, "fill");
+                assert_eq!(effect, "wxsl.ramp_fill");
+                assert!(error.to_string().contains("webgl2"), "{error}");
+            }
+            other => panic!("expected the ramp refused by name, got {other:?}"),
+        }
+    }
+
+    /// The brdf-lut gallery demo as a document, with its registries.
+    fn lut_document() -> (
+        wxsl_core::graph::Graph,
+        wxsl_core::node::NodeRegistry,
+        EffectRegistry,
+    ) {
         let effects = EffectRegistry::shipped()
             .with(crate::effect::BRDF_LUT)
             .with(LUT_VIEW);
@@ -4221,30 +4412,7 @@ mod tests {
         ] {
             graph.wire(&registry, from, to).expect("lut wiring");
         }
-        let compiled = compile(&graph, &registry, &effects, &config()).expect("compiles");
-        let desc = compiled
-            .resources()
-            .iter()
-            .find(|desc| desc.label == "brdf lut")
-            .expect("the lut is declared");
-        assert_eq!(
-            desc.shape,
-            ResourceShape::Texture {
-                extent: Extent::Fixed {
-                    width: 64,
-                    height: 64
-                },
-                dimension: Dimension::D2,
-                layers: 1,
-                mip_levels: 1,
-                format: TextureFormat::Rgba16Float,
-                usage: TextureUsages::empty(),
-            }
-        );
-        // `once` promoted the target to stable storage — the scheduler's
-        // rule for a pass that skips frames, derived by the compiler.
-        assert_eq!(desc.persistence, Persistence::Persistent { history: 0 });
-        compiled.schedule().expect("schedules");
+        (graph, registry, effects)
     }
 
     #[test]

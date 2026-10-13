@@ -250,6 +250,24 @@ impl BufferLayout {
                 .expect("a laid-out field is never a resource");
             let _ = writeln!(out, "    {}: {ty},", field.name);
         }
+        // A uniform block's size is a multiple of 16 on the host; WGSL only
+        // rounds a struct to its widest member, and a GL device without
+        // `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` (WebGL2) refuses the
+        // difference. Trailing words say it in the struct (ADR 0075). A
+        // storage row is never padded: its size is already WGSL's own.
+        let end = self
+            .fields
+            .last()
+            .map_or(0, |field| field.offset + field.size);
+        let natural = self
+            .fields
+            .iter()
+            .filter_map(|field| field.ty.buffer_align())
+            .max()
+            .map_or(0, |align| round_up(align, end));
+        for word in 0..(self.size.saturating_sub(natural) / 4) {
+            let _ = writeln!(out, "    _pad{word}: u32,");
+        }
         out.push_str("}\n");
         out
     }
@@ -374,6 +392,114 @@ impl BufferLayout {
         }
         out
     }
+}
+
+/// How many `rgba32uint` texels one row of `stride` bytes spans under
+/// [`abi::FEATURE_INSTANCE_TEXTURE`]: the stride rounded up to whole
+/// 16-byte texels, and never zero.
+pub fn texels_per_row(stride: u32) -> u32 {
+    stride.div_ceil(16).max(1)
+}
+
+/// The WGSL function reading one row of a struct out of a `texture_2d<u32>`
+/// that holds its storage-layout bytes (ADR 0075): the downlevel twin of
+/// `array[index]`, for a device with no storage buffers.
+///
+/// `fields` are the struct's members in declaration order with their
+/// storage-layout offsets, so the constructor call is the struct's own and
+/// every field comes back from exactly the bytes the host wrote — the same
+/// bytes a storage buffer would hold, padded per row to whole texels
+/// ([`texel_rows`]). Generated from the layout, never written by hand,
+/// for the reason [`BufferLayout`] exists.
+pub fn texel_loader(
+    function: &str,
+    struct_name: &str,
+    texture: &str,
+    fields: &[(&str, ValueType, u32)],
+    stride: u32,
+) -> String {
+    let texels = texels_per_row(stride);
+    let word = |index: u32| {
+        format!(
+            "t{}.{}",
+            index / 4,
+            ["x", "y", "z", "w"][index as usize % 4]
+        )
+    };
+    let words = |first: u32, count: u32| {
+        (first..first + count)
+            .map(word)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let vector = |offset: u32, count: u32| {
+        if count == 4 && offset % 16 == 0 {
+            format!("bitcast<vec4f>(t{})", offset / 16)
+        } else {
+            format!(
+                "bitcast<vec{count}f>(vec{count}u({}))",
+                words(offset / 4, count)
+            )
+        }
+    };
+    let mut out = String::new();
+    let _ = writeln!(out, "fn {function}(index: u32) -> {struct_name} {{");
+    let _ = writeln!(out, "    let width = textureDimensions({texture}).x;");
+    let _ = writeln!(out, "    let first = index * {texels}u;");
+    for texel in 0..texels {
+        let _ = writeln!(
+            out,
+            "    let t{texel} = textureLoad({texture}, vec2u((first + {texel}u) % width, (first + {texel}u) / width), 0);"
+        );
+    }
+    let values: Vec<String> = fields
+        .iter()
+        .map(|&(name, ty, offset)| match ty {
+            ValueType::Bool | ValueType::U32 => word(offset / 4),
+            ValueType::I32 => format!("bitcast<i32>({})", word(offset / 4)),
+            ValueType::F32 => format!("bitcast<f32>({})", word(offset / 4)),
+            ValueType::Vec2 => vector(offset, 2),
+            ValueType::Vec3 => vector(offset, 3),
+            ValueType::Vec4 => vector(offset, 4),
+            // Storage matrices are column vectors at 16-byte strides.
+            ValueType::Mat3 => format!(
+                "mat3x3f({})",
+                (0..3)
+                    .map(|column| vector(offset + 16 * column, 3))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ValueType::Mat4 => format!(
+                "mat4x4f({})",
+                (0..4)
+                    .map(|column| vector(offset + 16 * column, 4))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            other => panic!("field `{name}` of `{struct_name}` is a {other}, not a buffer value"),
+        })
+        .collect();
+    let _ = writeln!(out, "    return {struct_name}({});", values.join(", "));
+    out.push_str("}\n");
+    out
+}
+
+/// Storage-layout rows of `stride` bytes, repacked for an instance-row
+/// texture: each row padded to whole texels ([`texels_per_row`]), the run
+/// padded to whole lines of [`abi::INSTANCE_TEXTURE_WIDTH`] texels. Returns
+/// the bytes and the texture's `[width, height]` — never empty, since a
+/// zero-sized texture is a validation error.
+pub fn texel_rows(bytes: &[u8], stride: usize) -> (Vec<u8>, [u32; 2]) {
+    let texels = texels_per_row(stride as u32) as usize;
+    let rows = bytes.len().checked_div(stride).unwrap_or(0);
+    let width = abi::INSTANCE_TEXTURE_WIDTH as usize;
+    let height = (rows * texels).div_ceil(width).max(1);
+    let mut out = vec![0u8; width * height * 16];
+    for row in 0..rows {
+        let start = row * texels * 16;
+        out[start..start + stride].copy_from_slice(&bytes[row * stride..(row + 1) * stride]);
+    }
+    (out, [width as u32, height as u32])
 }
 
 /// Widest alignment first, then by name.
@@ -1229,5 +1355,51 @@ mod tests {
         assert_ne!(one.signature(), other.signature());
         assert!(MaterialInterface::default().material_group_is_empty());
         assert!(!one.material_group_is_empty());
+    }
+
+    #[test]
+    fn a_texel_loader_reads_every_field_from_its_own_words() {
+        let layout = BufferLayout::storage(
+            [],
+            [
+                (WxslIdent::new("tint").expect("valid"), ValueType::Vec3),
+                (WxslIdent::new("weight").expect("valid"), ValueType::F32),
+                (WxslIdent::new("id").expect("valid"), ValueType::U32),
+            ],
+        );
+        let fields: Vec<(&str, ValueType, u32)> = layout
+            .fields()
+            .iter()
+            .map(|field| (field.name.as_str(), field.ty, field.offset))
+            .collect();
+        // vec3f at 0, then the two scalars (by name: `id`, `weight`) at
+        // 12 and 16; the vector's
+        // alignment rounds the row to 32 bytes, two texels.
+        assert_eq!(layout.size(), 32);
+        let loader = texel_loader("row", "Row", "rows", &fields, layout.size());
+        assert!(loader.contains("let first = index * 2u;"), "{loader}");
+        assert!(loader.contains("let t1 ="), "{loader}");
+        assert!(!loader.contains("let t2 ="), "{loader}");
+        assert!(
+            loader.contains(
+                "return Row(bitcast<vec3f>(vec3u(t0.x, t0.y, t0.z)), t0.w, bitcast<f32>(t1.x));"
+            ),
+            "{loader}"
+        );
+    }
+
+    #[test]
+    fn texel_rows_pad_each_row_and_the_run_to_whole_lines() {
+        let bytes: Vec<u8> = (0..40).collect();
+        let (texels, [width, height]) = texel_rows(&bytes, 20);
+        assert_eq!(width, abi::INSTANCE_TEXTURE_WIDTH);
+        assert_eq!(height, 1);
+        assert_eq!(texels.len(), width as usize * 16);
+        // The second row starts at the second row's first texel, 32 bytes in.
+        assert_eq!(&texels[0..20], &bytes[0..20]);
+        assert_eq!(&texels[20..32], &[0; 12]);
+        assert_eq!(&texels[32..52], &bytes[20..40]);
+        // An empty frame is still a texture.
+        assert_eq!(texel_rows(&[], 128).1, [abi::INSTANCE_TEXTURE_WIDTH, 1]);
     }
 }

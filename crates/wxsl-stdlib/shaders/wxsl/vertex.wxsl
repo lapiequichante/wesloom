@@ -9,7 +9,7 @@ import package::wxsl::bindings::{
     eye_position,
     frame_time,
     instance_normal_matrix,
-    instances,
+    instance_row,
     world_origin,
 };
 import package::wxsl::surface::SurfaceContext;
@@ -50,7 +50,7 @@ struct VertexContext {
 // Build the vertex-stage context. `wxsl_core::abi::CONTEXT_FIELDS` plus
 // `VERTEX_ONLY_FIELDS` is the Rust half of the struct above.
 fn vertex_context(input: VertexIn) -> VertexContext {
-    let world = instances[input.instance].model * vec4f(input.position, 1.0);
+    let world = instance_row(input.instance).model * vec4f(input.position, 1.0);
     let normal_matrix = instance_normal_matrix(input.instance);
     let normal = normalize(normal_matrix * input.normal);
     let tangent = normalize(normal_matrix * input.tangent.xyz);
@@ -77,7 +77,7 @@ fn vertex_context(input: VertexIn) -> VertexContext {
 // that needs the derivative of the displacement, which a graph does not
 // hand over, and a wrong normal is worse than the undisplaced one.
 fn transform_vertex_offset(input: VertexIn, offset: vec3f) -> VertexOut {
-    let world = instances[input.instance].model * vec4f(input.position + offset, 1.0);
+    let world = instance_row(input.instance).model * vec4f(input.position + offset, 1.0);
     let normal_matrix = instance_normal_matrix(input.instance);
     let normal = normalize(normal_matrix * input.normal);
     let tangent = normalize(normal_matrix * input.tangent.xyz);

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wxsl Dawn — web</title>
+  <style>
+    body { margin: 0; padding: 16px; background: #111; color: #ddd; font: 14px ui-monospace, monospace; }
+    #status { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="status"></div>
+  <script>
+    // The offline Dawn renderer, verifying the preloaded bundle against its
+    // wgpu references on the browser's WebGPU (ADR 0075).
+    const status = document.getElementById("status");
+    const say = (text) => { console.log(text); status.textContent += text + "\n"; };
+    var Module = {
+      arguments: ["--headless", "--assets", "/assets", "--out", "/out", "--verify"],
+      print: say,
+      printErr: say,
+      onExit: (code) => say("exit " + code),
+    };
+  </script>
+  <script src="pbr_cube_cpp.js"></script>
+</body>
+</html>

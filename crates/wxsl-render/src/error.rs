@@ -61,6 +61,18 @@ pub enum RenderError {
         /// The effect id the pass named.
         effect: String,
     },
+    /// A pass runs an effect this renderer's device profile cannot run: a
+    /// native-only effect, or a compute pass on a device without compute
+    /// that was not lowered to its fragment arm — a hand-built pass list,
+    /// or a document compiled for another profile (ADR 0075).
+    NativeOnly {
+        /// The pass's label.
+        pass: String,
+        /// The effect it runs.
+        effect: String,
+        /// The renderer's profile.
+        profile: crate::Profile,
+    },
     /// A pass list could not be ordered, validated or allocated.
     Graph(crate::graph::GraphError),
     /// A background pipeline swap will never finish: the thread compiling
@@ -261,6 +273,16 @@ impl fmt::Display for RenderError {
                 f,
                 "a screen pass runs `{effect}`, which is not an effect this renderer \
                  knows — register it with `Renderer::add_effect`"
+            ),
+            RenderError::NativeOnly {
+                pass,
+                effect,
+                profile,
+            } => write!(
+                f,
+                "pass `{pass}` runs `{effect}`, which a device with the `{profile}` \
+                 profile cannot run; compile the document with the renderer's \
+                 `pipeline_config()` so it lowers or refuses it (ADR 0075)"
             ),
             RenderError::Graph(error) => write!(f, "cannot run the pass list: {error}"),
             RenderError::SwapAbandoned => {

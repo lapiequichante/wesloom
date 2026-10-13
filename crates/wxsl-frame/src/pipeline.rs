@@ -152,6 +152,10 @@ pub struct PipelineConfig {
     /// `wxsl_peel_native` change a `pass.peel` expansion (ADR 0047). Empty
     /// is every pipeline that has no peel.
     pub macros: MacroSet,
+    /// What the device can run (ADR 0075). The full profile — the
+    /// default — falls back on nothing; a downlevel one lowers compute
+    /// effects to their fragment arms and refuses native-only ones by name.
+    pub profile: crate::profile::Profile,
 }
 
 impl PipelineConfig {
@@ -163,6 +167,7 @@ impl PipelineConfig {
             lighting: LightingSet::default(),
             features: Vec::new(),
             macros: MacroSet::new(),
+            profile: crate::profile::Profile::FULL,
         }
     }
 
@@ -757,6 +762,7 @@ mod tests {
                         features: Vec::new(),
                         target,
                         macros: wxsl_core::macros::MacroSet::new(),
+                        profile: Default::default(),
                     })
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));

@@ -22,7 +22,7 @@ import package::wxsl::bindings::{
     eye_position,
     frame_time,
     previous_frame_time,
-    previous_instances,
+    previous_instance_row,
     world_origin,
 };
 import package::wxsl::surface::SurfaceContext;
@@ -56,10 +56,10 @@ struct VelocityOut {
 }
 
 // The upper 3x3 of a *previous* instance row's normal matrix — the twin of
-// `instance_normal_matrix`, reading `previous_instances` for the one stage
+// `instance_normal_matrix`, reading the previous rows for the one stage
 // whose previous context needs a basis from the frame that has passed.
 fn previous_normal_matrix(index: u32) -> mat3x3f {
-    let normal_matrix = previous_instances[index].normal_matrix;
+    let normal_matrix = previous_instance_row(index).normal_matrix;
     return mat3x3f(
         normal_matrix[0].xyz,
         normal_matrix[1].xyz,
@@ -77,7 +77,7 @@ fn previous_normal_matrix(index: u32) -> mat3x3f {
 // the precision work that makes the mode *useful* is M10's, and until
 // then the flag and the velocity stage have no consumer in common).
 fn previous_vertex_context(input: VertexIn) -> VertexContext {
-    let world = previous_instances[input.instance].model * vec4f(input.position, 1.0);
+    let world = previous_instance_row(input.instance).model * vec4f(input.position, 1.0);
     let normal_matrix = previous_normal_matrix(input.instance);
     let normal = normalize(normal_matrix * input.normal);
     let tangent = normalize(normal_matrix * input.tangent.xyz);
@@ -99,7 +99,7 @@ fn previous_vertex_context(input: VertexIn) -> VertexContext {
 // space first — the same displacement convention `transform_vertex_offset`
 // uses, so the two frames see the same displaced surface.
 fn previous_clip_position(input: VertexIn, offset: vec3f) -> vec4f {
-    let world = previous_instances[input.instance].model * vec4f(input.position + offset, 1.0);
+    let world = previous_instance_row(input.instance).model * vec4f(input.position + offset, 1.0);
     return camera.previous_view_proj * world;
 }
 

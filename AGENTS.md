@@ -147,6 +147,7 @@ a requirement to run every test for every change:
 - WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
 - editor/UI behavior: `cargo test -p wxsl --features editor --test editor_frame`
 - visual/pipeline smoke test: `cargo run -p wxsl --example pbr_cube -- --headless`
+- WebGL2/GL fallback profile (ADR 0075): `cargo test -p wxsl --test downlevel_corpus` (GLSL ES column, no device), then `cargo test -p wxsl --test downlevel` (WebGL2-limits device); wasm: `cargo check -p wxsl --features editor,webgl --target wasm32-unknown-unknown`, browser: `node dawn/tests/web_smoke.mjs` (see `dawn/README.md`)
 
 GPU tests may skip when no adapter is available; a skip is not evidence that
 the GPU path passed. Changes to shared layouts or ABI tables deserve both a

@@ -501,6 +501,11 @@ pub struct BakeOptions {
 pub struct GeneratedBake {
     /// The WXSL source of the root module.
     pub source: String,
+    /// The fragment arm (ADR 0075): the same header and value function,
+    /// entered from [`abi::BAKE_VERTEX_ENTRY`] and
+    /// [`abi::BAKE_FRAGMENT_ENTRY`] and writing the table as a colour
+    /// attachment, for a device without compute.
+    pub fragment_source: String,
     /// The macro values this source was generated at — the flag macros go
     /// to the compiler as conditional-translation bindings, as for any
     /// generated module.
@@ -664,7 +669,7 @@ pub fn generate_bake(
         size[1].div_ceil(abi::BAKE_WORKGROUP_SIZE),
         1,
     ];
-    let source = bake_module(
+    let (source, fragment_source) = bake_module(
         graph,
         decl,
         &macros,
@@ -679,6 +684,7 @@ pub fn generate_bake(
     let source_hash = stable_hash(source.as_bytes());
     Ok(GeneratedBake {
         source,
+        fragment_source,
         macros,
         entry: abi::BAKE_ENTRY,
         workgroups,
@@ -699,14 +705,15 @@ struct BakedValue<'a> {
 
 /// The whole generated bake module: header, imports, macros, the write-only
 /// target, the value function over the bake domain, and the dispatch that
-/// fills the table.
+/// fills the table — and beside it the fragment arm, which shares all but
+/// the target and the entry points (ADR 0075).
 fn bake_module(
     graph: &Graph,
     decl: &crate::graph::BakeDecl,
     macros: &MacroSet,
     imports: &BTreeMap<ModulePath, Vec<WxslIdent>>,
     value: BakedValue<'_>,
-) -> String {
+) -> (String, String) {
     let BakedValue {
         body: cone_body,
         expr: value,
@@ -732,26 +739,49 @@ fn bake_module(
     };
     let (width, height) = (size[0], size[1]);
 
-    let mut out = String::with_capacity(1024);
-    write_header(&mut out, graph, macros, imports);
+    let mut shared = String::with_capacity(1024);
+    write_header(&mut shared, graph, macros, imports);
     let _ = writeln!(
-        out,
+        shared,
         "// Bake `{texture}`: {width}x{height}, {format}.",
         texture = decl.texture.trim(),
     );
+    let _ = writeln!(shared, "\nfn {}(uv: vec2f) -> vec4f {{", abi::BAKE_VALUE_FN,);
+    // The cone's statements, already emitted in dependency order.
+    shared.push_str(cone_body);
+    let _ = writeln!(shared, "    return {padded};");
+    shared.push_str("}\n");
+
+    let mut fragment = shared.clone();
+    // A fragment's position is its texel's centre, so `uv` is the compute
+    // arm's to the bit.
+    let _ = write!(
+        fragment,
+        "
+@vertex
+fn {}(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {{
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}}
+
+@fragment
+fn {}(@builtin(position) position: vec4f) -> @location(0) vec4f {{
+    return {}(position.xy / vec2f({width}.0, {height}.0));
+}}
+",
+        abi::BAKE_VERTEX_ENTRY,
+        abi::BAKE_FRAGMENT_ENTRY,
+        abi::BAKE_VALUE_FN,
+    );
+
+    let mut out = shared;
     let _ = writeln!(
         out,
-        "@group({}) @binding(0) var {}: texture_storage_2d<{format}, write>;",
+        "\n@group({}) @binding(0) var {}: texture_storage_2d<{format}, write>;",
         abi::GROUP_PASS,
         abi::BAKE_TARGET_VAR,
     );
-
-    let _ = writeln!(out, "\nfn {}(uv: vec2f) -> vec4f {{", abi::BAKE_VALUE_FN,);
-    // The cone's statements, already emitted in dependency order.
-    out.push_str(cone_body);
-    let _ = writeln!(out, "    return {padded};");
-    out.push_str("}\n");
-
     let _ = write!(
         out,
         "
@@ -770,7 +800,7 @@ fn {}(@builtin(global_invocation_id) id: vec3u) {{
         abi::BAKE_TARGET_VAR,
         abi::BAKE_VALUE_FN,
     );
-    out
+    (out, fragment)
 }
 
 /// The whole generated screen module: header, imports, macros, the graph's
@@ -1212,6 +1242,18 @@ impl Emitter<'_> {
                 self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_FN);
             }
             self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
+            // The stages that read pass-group depth sample it at texel
+            // centres through the frame's point sampler (ADR 0075).
+            if matches!(
+                self.options.stage,
+                abi::MaterialStage::PEEL_FRONT
+                    | abi::MaterialStage::PEEL_BACK
+                    | abi::MaterialStage::PEEL_DEPTH
+                    | abi::MaterialStage::PEEL_RESOLVE
+                    | abi::MaterialStage::REFRACTION_DEPTH
+            ) {
+                self.request_import("package::wxsl::bindings", "point_sampler");
+            }
             match self.options.stage.output() {
                 abi::StageOutput::Color | abi::StageOutput::PeelResolve => {
                     // The dispatch and the whole shading function come from
@@ -1592,8 +1634,8 @@ impl Emitter<'_> {
                     geometry.instance().field(name.as_str()).and_then(|_| {
                         geometry.instance().read_expr(
                             &format!(
-                                "{}[{}.{}]",
-                                abi::MATERIAL_INSTANCE_VAR,
+                                "{}({}.{})",
+                                abi::MATERIAL_INSTANCE_FN,
                                 abi::MATERIAL_ATTRIBUTES_VAR,
                                 abi::INSTANCE_INDEX_FIELD,
                             ),
@@ -1722,7 +1764,7 @@ impl Emitter<'_> {
         } = self;
         let mut out = String::with_capacity(2048);
         write_header(&mut out, graph, macros, &imports);
-        write_declarations(&mut out, &interface);
+        write_declarations(&mut out, &interface, macros);
 
         // The material function takes what the geometry supplied as a
         // second argument, and only when there is any: a graph that
@@ -1913,7 +1955,7 @@ fn write_header(
 /// with `@align`/`@size` attributes, because the field order was chosen so
 /// that WGSL's own rules put every field exactly where the layout says.
 /// Two statements of the same offsets would be two places to disagree.
-fn write_declarations(out: &mut String, interface: &MaterialInterface) {
+fn write_declarations(out: &mut String, interface: &MaterialInterface, macros: &MacroSet) {
     if interface.material_group_is_empty()
         && interface.user.is_none()
         && interface.geometry.is_empty()
@@ -1953,7 +1995,7 @@ fn write_declarations(out: &mut String, interface: &MaterialInterface) {
             user.struct_name,
         );
     }
-    write_geometry_declarations(out, &interface.geometry);
+    write_geometry_declarations(out, &interface.geometry, macros);
 }
 
 /// Emit what the geometry supplies: the struct the material function
@@ -1967,7 +2009,12 @@ fn write_declarations(out: &mut String, interface: &MaterialInterface) {
 /// offsets by hand-written code that cannot know it grew. Two arrays,
 /// one instance index, and neither has to know the other's width
 /// (ADR 0024).
-fn write_geometry_declarations(out: &mut String, geometry: &GeometryInterface) {
+///
+/// The attribute array has the frame's two shapes (ADR 0075): a storage
+/// array, or under `wxsl_instance_texture` a `texture_2d<u32>` with a loader
+/// generated from the same layout. Both arms define `material_instance`,
+/// which is all a read in the material function calls.
+fn write_geometry_declarations(out: &mut String, geometry: &GeometryInterface, macros: &MacroSet) {
     if geometry.is_empty() {
         return;
     }
@@ -1992,13 +2039,50 @@ fn write_geometry_declarations(out: &mut String, geometry: &GeometryInterface) {
                 .instance()
                 .wgsl_struct(abi::MATERIAL_INSTANCE_STRUCT),
         );
+        let flag = abi::FEATURE_INSTANCE_TEXTURE;
+        // A module's `@if` reads its own macros; the header declares every
+        // macro the material was generated at, which is usually this one.
+        if macros.get(flag).is_none() {
+            let _ = writeln!(out, "@macro const {flag}: bool = false;");
+        }
         let _ = writeln!(
             out,
-            "@group({}) @binding({}) var<storage, read> {}: array<{}>;",
+            "@if(!{flag})\n@group({}) @binding({}) var<storage, read> {}: array<{}>;",
             abi::GROUP_FRAME,
             abi::BINDING_INSTANCE_ATTRIBUTES,
             abi::MATERIAL_INSTANCE_VAR,
             abi::MATERIAL_INSTANCE_STRUCT,
+        );
+        let _ = writeln!(
+            out,
+            "@if(!{flag})\nfn {}(index: u32) -> {} {{\n    return {}[index];\n}}",
+            abi::MATERIAL_INSTANCE_FN,
+            abi::MATERIAL_INSTANCE_STRUCT,
+            abi::MATERIAL_INSTANCE_VAR,
+        );
+        let texels = format!("{}_texels", abi::MATERIAL_INSTANCE_VAR);
+        let _ = writeln!(
+            out,
+            "@if({flag})\n@group({}) @binding({}) var {texels}: texture_2d<u32>;",
+            abi::GROUP_FRAME,
+            abi::BINDING_INSTANCE_ATTRIBUTES,
+        );
+        let layout = geometry.instance();
+        let fields: Vec<(&str, ValueType, u32)> = layout
+            .fields()
+            .iter()
+            .map(|field| (field.name.as_str(), field.ty, field.offset))
+            .collect();
+        let _ = write!(
+            out,
+            "@if({flag})\n{}",
+            crate::resources::texel_loader(
+                abi::MATERIAL_INSTANCE_FN,
+                abi::MATERIAL_INSTANCE_STRUCT,
+                &texels,
+                &fields,
+                layout.size(),
+            )
         );
     }
 }
@@ -2133,19 +2217,19 @@ fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
             "\nstruct WxslOpticalLayer {\n    @location(0) normal_depth: vec4f,\n    @location(1) transmission_ior: vec4f,\n}\n"
         }
         abi::MaterialStage::PEEL_FRONT | abi::MaterialStage::PEEL_DEPTH | abi::MaterialStage::REFRACTION_DEPTH => {
-            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_2d<f32>;\n\
              @group(3) @binding(1) var wxsl_peel_bounds: texture_2d<f32>;\n"
         }
         abi::MaterialStage::PEEL_BACK => {
-            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+            "\n@group(3) @binding(0) var wxsl_scene_depth: texture_2d<f32>;\n\
              @group(3) @binding(1) var wxsl_peel_bounds: texture_2d<f32>;\n\
-             @group(3) @binding(2) var wxsl_peel_front: texture_depth_2d;\n"
+             @group(3) @binding(2) var wxsl_peel_front: texture_2d<f32>;\n"
         }
         abi::MaterialStage::PEEL_RESOLVE => {
             "\nstruct WxslPeelColors {\n    \
              @location(0) front: vec4f,\n    \
              @location(1) back: vec4f,\n}\n\
-             \n@group(3) @binding(0) var wxsl_scene_depth: texture_depth_2d;\n\
+             \n@group(3) @binding(0) var wxsl_scene_depth: texture_2d<f32>;\n\
              @group(3) @binding(1) var wxsl_peel_pair: texture_2d<f32>;\n"
         }
         _ => return,
@@ -2160,7 +2244,7 @@ fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
 fn peel_window(epsilon: &str) -> String {
     format!("    let wxsl_peel_z = vertex.clip_position.z;\n    \
      let wxsl_peel_px = vec2i(vertex.clip_position.xy);\n    \
-     let wxsl_peel_scene_z = textureLoad(wxsl_scene_depth, wxsl_peel_px, 0);\n    \
+     let wxsl_peel_scene_z = textureSampleLevel(wxsl_scene_depth, point_sampler, (vec2f(wxsl_peel_px) + 0.5) / vec2f(textureDimensions(wxsl_scene_depth)), 0.0).x;\n    \
      let wxsl_peel_window = textureLoad(wxsl_peel_bounds, wxsl_peel_px, 0);\n    \
      if wxsl_peel_z >= wxsl_peel_scene_z || wxsl_peel_z <= wxsl_peel_window.r + {epsilon} || wxsl_peel_z >= wxsl_peel_window.g - {epsilon} {{\n        \
      discard;\n    }}\n")
@@ -2438,7 +2522,7 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             let window = peel_window("1e-5");
             let back = match stage == abi::MaterialStage::PEEL_BACK {
                 true => {
-                    "    let wxsl_peeled_front = textureLoad(wxsl_peel_front, wxsl_peel_px, 0);\n    \
+                    "    let wxsl_peeled_front = textureSampleLevel(wxsl_peel_front, point_sampler, (vec2f(wxsl_peel_px) + 0.5) / vec2f(textureDimensions(wxsl_peel_front)), 0.0).x;\n    \
                      if wxsl_peeled_front < 0.999 && wxsl_peel_z <= wxsl_peeled_front + 1e-5 {\n        \
                      discard;\n    }\n"
                 }
@@ -2473,7 +2557,7 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             "-> WxslPeelColors {{\n{prologue}    \
              let wxsl_peel_z = vertex.clip_position.z;\n    \
              let wxsl_peel_px = vec2i(vertex.clip_position.xy);\n    \
-             let wxsl_peel_scene_z = textureLoad(wxsl_scene_depth, wxsl_peel_px, 0);\n    \
+             let wxsl_peel_scene_z = textureSampleLevel(wxsl_scene_depth, point_sampler, (vec2f(wxsl_peel_px) + 0.5) / vec2f(textureDimensions(wxsl_scene_depth)), 0.0).x;\n    \
              if wxsl_peel_z >= wxsl_peel_scene_z {{ discard; }}\n    \
              let wxsl_peel_pair_v = textureLoad(wxsl_peel_pair, wxsl_peel_px, 0);\n    \
              let wxsl_peel_front_z = 1.0 - wxsl_peel_pair_v.r;\n    \
@@ -3021,7 +3105,7 @@ mod tests {
 
         let shader = generate_default(&graph, &registry);
         assert!(
-            shader.source.contains("let n3_out: f32 = ctx.time * 3.0;"),
+            shader.source.contains("let n3_out: f32 = ctx.time * 3.0f;"),
             "{}",
             shader.source
         );
@@ -3051,7 +3135,7 @@ mod tests {
 
         let shader = generate_default(&graph, &registry);
         assert!(
-            shader.source.contains("let n1_out: vec3f = vec3f(0.5);"),
+            shader.source.contains("let n1_out: vec3f = vec3f(0.5f);"),
             "{}",
             shader.source
         );
@@ -3136,7 +3220,7 @@ mod tests {
             .unwrap();
         let shader = generate_default(&scalar_graph, &registry);
         assert!(
-            shader.source.contains(": f32 = 1.0 + 2.0;"),
+            shader.source.contains(": f32 = 1.0f + 2.0f;"),
             "{}",
             shader.source
         );
@@ -3170,7 +3254,7 @@ mod tests {
 
         let shader = generate_default(&graph, &registry);
         assert!(
-            shader.source.contains("let n1_out: f32 = -(-1.0);"),
+            shader.source.contains("let n1_out: f32 = -(-1.0f);"),
             "{}",
             shader.source
         );
@@ -3462,7 +3546,7 @@ mod tests {
         );
         // The cone, computed inside the value function...
         assert!(
-            generated.source.contains("0.5 * n1_out"),
+            generated.source.contains("0.5f * n1_out"),
             "{}",
             generated.source
         );

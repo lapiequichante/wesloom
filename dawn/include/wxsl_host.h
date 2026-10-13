@@ -86,7 +86,7 @@ typedef struct WxslSceneUniform {
     float exposure;
     float previous_time;
     float origin[3];
-    float _padding;
+    uint32_t environment_levels;
 } WxslSceneUniform;
 WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12608, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
@@ -100,7 +100,7 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 12580, "SceneUniform.time
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 12584, "SceneUniform.exposure offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 12588, "SceneUniform.previous_time offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, origin) == 12592, "SceneUniform.origin offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, _padding) == 12604, "SceneUniform._padding offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_levels) == 12604, "SceneUniform.environment_levels offset");
 typedef struct WxslInstanceTransform {
     float model[4][4];
     float normal_matrix[4][4];
@@ -192,10 +192,12 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_SHADOW_SAMPLER 5u
 #define WXSL_BINDING_ENVIRONMENT_LUT 6u
 #define WXSL_BINDING_LIGHT_COOKIES 11u
+#define WXSL_BINDING_POINT_SAMPLER 12u
+#define WXSL_INSTANCE_TEXTURE_WIDTH 1024u
 #define WXSL_BINDING_ENVIRONMENT_DIFFUSE 9u
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "8010583698407423506"
+#define WXSL_HOST_LAYOUT_ID "10887100410495500099"
 #undef WXSL_LAYOUT_ASSERT
 #endif

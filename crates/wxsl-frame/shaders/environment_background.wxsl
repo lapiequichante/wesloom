@@ -1,7 +1,7 @@
-import package::wxsl::bindings::{camera, scene, environment_lut_sampler};
+import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
 
 @group(3) @binding(0) var color_image: texture_2d<f32>;
-@group(3) @binding(1) var depth_image: texture_depth_2d;
+@group(3) @binding(1) var depth_image: texture_2d<f32>;
 @group(3) @binding(2) var radiance_image: texture_cube<f32>;
 
 struct VertexOutput {
@@ -21,7 +21,7 @@ fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4f {
     let uv = input.uv;
-    if textureLoad(depth_image, vec2i(uv * vec2f(textureDimensions(depth_image))), 0) < 1.0 {
+    if textureSampleLevel(depth_image, point_sampler, (vec2f(vec2i(uv * vec2f(textureDimensions(depth_image)))) + 0.5) / vec2f(textureDimensions(depth_image)), 0.0).x < 1.0 {
         return textureLoad(color_image, vec2i(uv * vec2f(textureDimensions(color_image))), 0);
     }
     let xy = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);

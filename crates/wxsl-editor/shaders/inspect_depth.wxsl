@@ -3,10 +3,12 @@
 //! Standard depth crowds everything near the camera against 1, so the
 //! view spreads the last twentieth of the range: near is bright, far is
 //! dark, and what nothing covered (depth 1) is black.
+import package::wxsl::bindings::point_sampler;
+
 
 import package::color::linear_to_srgb::linear_to_srgb;
 
-@group(3) @binding(0) var image: texture_depth_2d;
+@group(3) @binding(0) var image: texture_2d<f32>;
 
 @vertex
 fn inspect_depth_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -19,7 +21,7 @@ fn inspect_depth_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec
 fn inspect_depth_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let size = vec2f(textureDimensions(image));
     let texel = vec2i(min(position.xy * size / params.view_size, size - vec2f(1.0)));
-    let depth = textureLoad(image, texel, 0);
+    let depth = textureSampleLevel(image, point_sampler, (vec2f(texel) + 0.5) / vec2f(textureDimensions(image)), 0.0).x;
     let shade = clamp((1.0 - depth) * 20.0, 0.0, 1.0);
     return vec4f(linear_to_srgb(vec3f(shade)), 1.0);
 }

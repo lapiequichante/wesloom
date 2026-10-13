@@ -187,6 +187,7 @@ pub const SOURCE: Effect = Effect {
         path: "package::test::ibl_source",
         wxsl: include_str!("ibl_source.wxsl"),
     },
+    downlevel: wxsl_render::effect::Downlevel::Portable,
 };
 pub const VIEW: Effect = Effect {
     id: "test.ibl_view",
@@ -213,6 +214,7 @@ pub const VIEW: Effect = Effect {
         path: "package::test::ibl_view",
         wxsl: include_str!("ibl_view.wxsl"),
     },
+    downlevel: wxsl_render::effect::Downlevel::Portable,
 };
 pub fn effects() -> [Effect; 6] {
     [

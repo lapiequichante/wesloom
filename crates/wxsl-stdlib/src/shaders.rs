@@ -383,9 +383,11 @@ mod tests {
             .collect();
         assert_eq!(
             frame,
-            vec![abi::GROUP_FRAME; 9],
-            "camera, scene, object, the previous-frame object, and the \
-             environment-BRDF table, its sampler, two environment cubes and spotlight cookies (ADRs 0063, 0073)"
+            vec![abi::GROUP_FRAME; 12],
+            "camera, scene, object, the previous-frame object — each of those \
+             two in its storage and its texel shape (ADR 0075) — and the \
+             environment-BRDF table, its sampler, two environment cubes, spotlight cookies (ADRs 0063, 0073) \
+             and the depth point sampler"
         );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its

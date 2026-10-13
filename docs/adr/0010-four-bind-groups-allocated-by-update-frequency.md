@@ -85,7 +85,9 @@ application can check its layout before `wgpu` validation does.
   allocation. **This is now what ships**
   ([ADR 0021](0021-a-declarative-render-graph-and-a-scene-document.md)): a
   frame draws a list rather than one object, WebGL was never a target, and
-  the slot allocation is unchanged exactly as predicted here.
+  the slot allocation is unchanged exactly as predicted here. WebGL2 later
+  became a fallback ([ADR 0075](0075-webgl2-and-gl-are-a-fallback-profile.md)),
+  served by the same bindings holding `rgba32uint` textures instead.
 
 ## Consequences
 

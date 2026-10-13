@@ -159,17 +159,19 @@ impl Renderer {
     ) -> Result<Self, RenderError> {
         library.check_abi()?;
         let stock = StockPipeline::default();
-        let config = PipelineConfig::new(target);
+        let mut config = PipelineConfig::new(target);
+        // What the device can run decides the fallbacks, once (ADR 0075).
+        config.profile = crate::gpu::device_profile(device);
         let graph = stock.graph(&config);
         let schedule = graph.schedule()?;
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
         let pass_count = graph.passes().len();
         let mut renderer = Renderer {
-            bindings: FrameBindings::new(device),
+            bindings: FrameBindings::new(device, config.profile),
             layouts: BindingLayouts::new(),
             library,
-            variants: ShaderVariants::new(),
+            variants: ShaderVariants::with_pins(config.profile.macros()),
             pipelines: PipelineCache::new(),
             pool,
             graph: graph.into(),
@@ -307,6 +309,12 @@ impl Renderer {
     /// [`Renderer::set_graph`].
     pub fn pipeline_config(&self) -> &PipelineConfig {
         &self.config
+    }
+
+    /// The device profile this renderer runs under (ADR 0075), read off
+    /// its device's limits at creation.
+    pub fn profile(&self) -> crate::Profile {
+        self.config.profile
     }
 
     /// The screen effects this renderer can run.
@@ -483,7 +491,7 @@ impl Renderer {
                 PassKind::Screen { effect } | PassKind::Compute { effect } => effect,
                 PassKind::Geometry { .. } => continue,
             };
-            let Some(known) = self.effects.get(effect_id) else {
+            let Some(known) = self.effects.get_on(self.config.profile, effect_id) else {
                 // `compile_frame` reports the unknown effect by name; the
                 // parameter blocks are not the place for it.
                 continue;
@@ -603,10 +611,11 @@ impl Renderer {
     pub fn set_graph(&mut self, graph: impl Into<RenderGraph>) -> Result<(), RenderError> {
         let graph = graph.into();
         for pass in graph.passes() {
+            self.check_profile(pass)?;
             if !pass.parameters.is_empty() {
                 let effect = match &pass.kind {
                     PassKind::Screen { effect } | PassKind::Compute { effect } => {
-                        self.effects.get(effect)
+                        self.effects.get_on(self.config.profile, effect)
                     }
                     PassKind::Geometry { .. } => None,
                 };
@@ -625,6 +634,29 @@ impl Renderer {
         self.stock = None;
         self.swap = None;
         self.reset_runs();
+        Ok(())
+    }
+
+    /// Refuse a pass the device profile cannot run (ADR 0075): what the
+    /// document compiler already refuses, checked again here for pass
+    /// lists built by hand or compiled for another profile.
+    fn check_profile(&self, pass: &crate::pass::PassDesc) -> Result<(), RenderError> {
+        let profile = self.config.profile;
+        let (PassKind::Screen { effect } | PassKind::Compute { effect }) = &pass.kind else {
+            return Ok(());
+        };
+        let native_only = self
+            .effects
+            .get(effect.as_str())
+            .is_some_and(|known| known.downlevel == crate::effect::Downlevel::NativeOnly);
+        let unlowered = matches!(pass.kind, PassKind::Compute { .. }) && !profile.compute;
+        if (native_only && !profile.is_full()) || unlowered {
+            return Err(RenderError::NativeOnly {
+                pass: pass.label.clone(),
+                effect: effect.clone(),
+                profile,
+            });
+        }
         Ok(())
     }
 
@@ -735,7 +767,7 @@ impl Renderer {
                     // `compile_frame` is where the named error fires. A
                     // *known* one is requested once per macro set, which
                     // is what a swap waits on.
-                    if let Some(known) = self.effects.get(effect) {
+                    if let Some(known) = self.effects.get_on(self.config.profile, effect) {
                         for material in materials {
                             push(
                                 Request::Effect(EffectRequest::new(
@@ -984,12 +1016,12 @@ impl Renderer {
                         .material(device, &self.library, material, *stage)?;
                 }
                 PassKind::Screen { effect } | PassKind::Compute { effect } => {
-                    let known =
-                        self.effects
-                            .get(effect)
-                            .ok_or_else(|| RenderError::UnknownEffect {
-                                effect: effect.clone(),
-                            })?;
+                    let known = self
+                        .effects
+                        .get_on(self.config.profile, effect)
+                        .ok_or_else(|| RenderError::UnknownEffect {
+                            effect: effect.clone(),
+                        })?;
                     self.variants.effect(
                         device,
                         &self.library,
@@ -1052,6 +1084,9 @@ impl Renderer {
             return Ok(());
         }
         let effect = crate::effect::BRDF_LUT;
+        if !self.config.profile.compute {
+            return self.bake_environment_lut_in_fragments(device, queue, &effect);
+        }
         let EffectKind::Compute { entry, workgroups } = effect.kind else {
             unreachable!("the shipped LUT bake is a compute effect");
         };
@@ -1109,6 +1144,83 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(abi::GROUP_PASS, &group, &[]);
             pass.dispatch_workgroups(workgroups[0], workgroups[1], workgroups[2]);
+        }
+        queue.submit([encoder.finish()]);
+        self.bindings.mark_environment_baked();
+        Ok(())
+    }
+
+    /// The same bake through the effect's fragment arm, for a device
+    /// without compute (ADR 0075): one fullscreen triangle into the
+    /// table, each fragment storing the texel the compute invocation at
+    /// its coordinate would have. The arm binds nothing, so the pipeline's
+    /// layout is the shader's own — empty.
+    fn bake_environment_lut_in_fragments(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        effect: &crate::effect::Effect,
+    ) -> Result<(), RenderError> {
+        let arm = effect.on(&self.config.profile).into_owned();
+        let EffectKind::Screen {
+            vertex_entry,
+            fragment_entry,
+        } = arm.kind
+        else {
+            unreachable!("the shipped LUT bake declares a fragment arm");
+        };
+        let variant = self.variants.effect(
+            device,
+            &self.library,
+            arm,
+            &wxsl_core::macros::MacroSet::new(),
+            &self.config.lighting,
+            &self.config.features,
+        )?;
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("wxsl environment bake"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &variant.module,
+                entry_point: Some(vertex_entry),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &variant.module,
+                entry_point: Some(fragment_entry),
+                targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let view = self.bindings.environment_lut_view();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("wxsl environment bake"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("wxsl environment bake"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
         self.bindings.mark_environment_baked();
@@ -1269,6 +1381,7 @@ impl Renderer {
             ..
         } = self;
         let pass_params = &self.pass_params;
+        let profile = self.config.profile;
 
         // A pass drawing *into* the shadow maps must not also have them
         // bound, so which of the two frame groups it gets is decided from
@@ -1315,6 +1428,7 @@ impl Renderer {
                     layouts,
                     pipelines,
                     effects,
+                    profile,
                     &plan,
                     request.draws,
                     pass,
@@ -1346,7 +1460,7 @@ impl Renderer {
         let mut plan = FramePlan::default();
         for (index, pass) in self.graph.passes().iter().enumerate() {
             if let PassKind::Screen { effect } | PassKind::Compute { effect } = &pass.kind {
-                if let Some(known) = self.effects.get(effect) {
+                if let Some(known) = self.effects.get_on(self.config.profile, effect) {
                     known
                         .initial_parameters(&pass.parameters)
                         .map_err(|reason| RenderError::EffectParameter {
@@ -1507,12 +1621,12 @@ impl Renderer {
                     // own (the debug-normal view, the shadow lookup), so
                     // it is compiled under the same set. An effect that
                     // ships its own source is not (see `effect_macros`).
-                    let known =
-                        self.effects
-                            .get(effect)
-                            .ok_or_else(|| RenderError::UnknownEffect {
-                                effect: effect.clone(),
-                            })?;
+                    let known = self
+                        .effects
+                        .get_on(self.config.profile, effect)
+                        .ok_or_else(|| RenderError::UnknownEffect {
+                            effect: effect.clone(),
+                        })?;
                     let macros = draws
                         .items()
                         .first()
@@ -1559,6 +1673,7 @@ fn record_pass(
     layouts: &mut BindingLayouts,
     pipelines: &mut PipelineCache,
     effects: &EffectRegistry,
+    profile: crate::Profile,
     plan: &FramePlan,
     draws: &DrawList<'_>,
     pass: &RecordedPass<'_>,
@@ -1672,11 +1787,12 @@ fn record_pass(
                 })?;
             // The entry points are the effect's, not the ABI's: the
             // pipeline is built from whichever module the effect mounted.
-            let known = effects
-                .get(effect)
-                .ok_or_else(|| RenderError::UnknownEffect {
-                    effect: effect.clone(),
-                })?;
+            let known =
+                effects
+                    .get_on(profile, effect)
+                    .ok_or_else(|| RenderError::UnknownEffect {
+                        effect: effect.clone(),
+                    })?;
             let EffectKind::Screen {
                 vertex_entry,
                 fragment_entry,

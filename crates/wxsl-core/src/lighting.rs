@@ -1629,7 +1629,7 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
     );
 
     out.push_str(
-        "import package::wxsl::bindings::{camera, eye_position, scene, world_origin};
+        "import package::wxsl::bindings::{camera, eye_position, point_sampler, scene, world_origin};
 ",
     );
     out.push_str(

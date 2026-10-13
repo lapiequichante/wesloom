@@ -27,12 +27,12 @@ use wxsl::render::material::MaterialConfig;
 use wxsl::render::wgpu;
 use wxsl::render::{
     Camera, DrawItem, EffectRegistry, Environment, Light, Material, MaterialBindings, Mesh,
-    PipelineConfig, Renderer, TargetConfig,
+    Renderer, TargetConfig,
 };
 
 mod probe;
 
-use probe::{gpu, render_list_in, SIZE};
+use probe::{gpu, render_list_in, webgl2_gpu, SIZE};
 
 /// The texture name the demo material's declaration goes by — the same
 /// string in the material's `bakes` declaration, the pipeline's
@@ -154,7 +154,14 @@ fn material_and_table(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        // Written by the bake: as storage by the compute arm, as an
+        // attachment by the fragment arm a device without compute runs
+        // (ADR 0075). The host owns the table, so the host asks.
+        usage: if renderer.profile().compute {
+            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+        },
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -196,7 +203,7 @@ fn setup(gpu: &GpuContext, policy: &str) -> (OffscreenTarget, Renderer) {
         &document,
         &wxsl::render::document_registry(renderer.effects()),
         renderer.effects(),
-        &PipelineConfig::new(renderer.target()),
+        renderer.pipeline_config(),
     )
     .expect("the bake document compiles");
     renderer.set_graph(graph).expect("the bake pass list runs");
@@ -270,6 +277,34 @@ fn toggling_the_bake_changes_cost_but_not_image() {
     assert!(
         varies > (SIZE * SIZE) as usize / 10,
         "the scene is not one flat colour: {varies} varied pixels"
+    );
+}
+
+#[test]
+fn a_bake_runs_through_its_fragment_arm_on_a_webgl2_device() {
+    // ADR 0075: the generated bake has a fragment arm beside its compute
+    // one, the same value function at the same texel centres. A device
+    // without compute runs it as a screen pass into the imported table,
+    // and the picture is the compute device's.
+    let (Some(full), Some(webgl2)) = (gpu(), webgl2_gpu()) else {
+        return;
+    };
+    let frames: Vec<Vec<u8>> = [&full, &webgl2]
+        .into_iter()
+        .map(|gpu| {
+            let (target, mut renderer) = setup(gpu, "once");
+            let (material, bindings) = material_and_table(gpu, &mut renderer, true);
+            let mesh = Mesh::plane(&gpu.device, 2.0);
+            let draws = frame(&mesh, &material, &bindings);
+            render_list_in(gpu, &mut renderer, &target, &draws, &lit()).expect("bakes");
+            assert_eq!(renderer.pass_run_count("roughness bake"), Some(1));
+            render_list_in(gpu, &mut renderer, &target, &draws, &lit()).expect("shades")
+        })
+        .collect();
+    let difference = mean_difference(&frames[0], &frames[1]);
+    assert!(
+        difference < 0.002,
+        "the fragment arm's table shades differently: {difference}"
     );
 }
 

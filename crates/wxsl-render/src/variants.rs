@@ -98,12 +98,29 @@ pub struct CacheStats {
 pub struct ShaderVariants {
     entries: HashMap<VariantKey, Arc<ShaderVariant>>,
     stats: CacheStats,
+    /// Macros the device profile pins over every variant (ADR 0075).
+    pins: MacroSet,
 }
 
 impl ShaderVariants {
     /// An empty cache.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty cache whose every variant compiles with `pins` bound over
+    /// its own macros — the device profile's (ADR 0075), which no graph
+    /// can override.
+    pub fn with_pins(pins: MacroSet) -> Self {
+        ShaderVariants {
+            pins,
+            ..Self::default()
+        }
+    }
+
+    /// The macros pinned over every variant.
+    pub fn pins(&self) -> &MacroSet {
+        &self.pins
     }
 
     /// The variant of `material` for `stage`, compiling it if it is not
@@ -115,9 +132,8 @@ impl ShaderVariants {
         material: &Material,
         stage: MaterialStage,
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        let key = Self::material_key(material, stage);
-        let request = MaterialRequest::new(material, stage);
-        self.get_or_compile(device, key, || request.compile(library))
+        let request = MaterialRequest::new(material, stage).pinned(&self.pins);
+        self.get_or_compile(device, request.key, || request.compile(library))
     }
 
     /// The key `material`'s `stage` would be cached under, without
@@ -178,9 +194,8 @@ impl ShaderVariants {
         set: &LightingSet,
         features: &[ChannelRequest],
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        let key = Self::effect_key(&effect, macros, set, features);
-        let request = EffectRequest::new(effect, macros, set, features);
-        self.get_or_compile(device, key, || request.compile(library))
+        let request = EffectRequest::new(effect, macros, set, features).pinned(&self.pins);
+        self.get_or_compile(device, request.key, || request.compile(library))
     }
 
     /// The key the variant for `effect` is cached under.
@@ -287,7 +302,27 @@ pub struct MaterialRequest {
     pub macros: MacroSet,
 }
 
+/// `macros` with `pins` bound over them, and `key` with the pins folded in
+/// — unchanged when there are none, so a full-profile cache keys exactly
+/// as before.
+fn pin(mut key: VariantKey, macros: &MacroSet, pins: &MacroSet) -> (VariantKey, MacroSet) {
+    if pins.is_empty() {
+        return (key, macros.clone());
+    }
+    let mut pinned = macros.clone();
+    pinned.overlay(pins);
+    key.identity = stable_hash(format!("{}|{}", key.identity, pins.signature()).as_bytes());
+    (key, pinned)
+}
+
 impl MaterialRequest {
+    /// The same request with `pins` bound over its macros, and folded into
+    /// its key — see [`ShaderVariants::with_pins`].
+    pub fn pinned(mut self, pins: &MacroSet) -> Self {
+        (self.key, self.macros) = pin(self.key, &self.macros, pins);
+        self
+    }
+
     /// What compiling `material`'s `stage` needs.
     pub fn new(material: &Material, stage: MaterialStage) -> Self {
         let shader = material.shader(stage);
@@ -366,6 +401,13 @@ impl EffectRequest {
             source,
             macros: effect_macros(&effect, macros),
         }
+    }
+
+    /// The same request with `pins` bound over its macros, and folded into
+    /// its key — see [`ShaderVariants::with_pins`].
+    pub fn pinned(mut self, pins: &MacroSet) -> Self {
+        (self.key, self.macros) = pin(self.key, &self.macros, pins);
+        self
     }
 
     /// Run the WXSL compiler, off any thread.

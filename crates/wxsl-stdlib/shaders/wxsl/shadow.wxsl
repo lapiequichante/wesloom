@@ -205,10 +205,14 @@ fn compare_receiver_plane(
             let coord = clamp(base + vec2i(x, y), low, high);
             let centre = (vec2f(coord) + vec2f(0.5)) * texel;
             let reference = depth + dot(gradient, centre - uv);
-            let stored = textureLoad(shadow_maps, coord, 0);
+            // One texel's comparison: the filtering comparison sampler at
+            // the texel's exact centre weighs only that texel. A second,
+            // non-comparison sampler on the atlas has no GLSL spelling —
+            // a GL texture unit holds one sampler (ADR 0075).
+            let lit = textureSampleCompareLevel(shadow_maps, shadow_sampler, centre, reference);
             let weight = select(1.0 - fraction.x, fraction.x, x == 1)
                 * select(1.0 - fraction.y, fraction.y, y == 1);
-            result = result + select(0.0, 1.0, reference <= stored) * weight;
+            result = result + lit * weight;
         }
     }
     return result;

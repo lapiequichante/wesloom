@@ -25,6 +25,9 @@ gltf = { workspace = true, optional = true }
 default = []
 # Read geometry from glTF/GLB files (`crate::gltf`).
 gltf = ["dep:gltf"]
+# On wasm32, also compile wgpu's WebGL2 backend, the fallback profile for a
+# browser without WebGPU (ADR 0075). WebGPU is wgpu's default web backend.
+webgl = ["wgpu/webgl"]
 
 [build-dependencies]
 wxsl-core = { workspace = true }

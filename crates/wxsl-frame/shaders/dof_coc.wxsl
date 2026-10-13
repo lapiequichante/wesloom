@@ -19,8 +19,10 @@
 //! far plane, whose circle of confusion is the largest there is; the
 //! blur passes clamp radii, so the background blurs as hard as the
 //! effect allows and no harder.
+import package::wxsl::bindings::point_sampler;
 
-@group(3) @binding(0) var depth_image: texture_depth_2d;
+
+@group(3) @binding(0) var depth_image: texture_2d<f32>;
 
 @vertex
 fn dof_coc_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -54,6 +56,6 @@ fn circle_of_confusion(depth_m: f32) -> f32 {
 @fragment
 fn dof_coc_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let pixel = vec2i(position.xy);
-    let depth = textureLoad(depth_image, pixel, 0);
+    let depth = textureSampleLevel(depth_image, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(depth_image)), 0.0).x;
     return vec4f(circle_of_confusion(linearize(depth)), 0.0, 0.0, 1.0);
 }

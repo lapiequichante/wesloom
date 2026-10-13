@@ -3,6 +3,7 @@
 use crate::pass::PassView;
 use std::collections::BTreeMap;
 use wxsl_core::abi;
+use wxsl_core::resources::{texel_rows, texels_per_row};
 
 pub use wxsl_frame::environment::*;
 
@@ -101,11 +102,14 @@ pub struct FrameBindings {
     views: wgpu::Buffer,
     view_stride: u32,
     scene: wgpu::Buffer,
-    instances: wgpu::Buffer,
+    /// Whether instance rows live in textures rather than storage
+    /// buffers — the profile's call (ADR 0075).
+    row_textures: bool,
+    instances: RowStore,
     /// The same rows as last frame had them (`abi::BINDING_PREVIOUS_INSTANCES`)
     /// — the velocity stage's second transform, filled beside the current
     /// ones and grown with them.
-    previous_instances: wgpu::Buffer,
+    previous_instances: RowStore,
     capacity: usize,
     /// The shadow maps currently bound, and where they came from — the
     /// pool's generation and slot — so that rebinding the same texture is
@@ -115,6 +119,9 @@ pub struct FrameBindings {
     /// What [`ShadowMaps::Detached`] binds instead.
     shadow_placeholder: wgpu::TextureView,
     shadow_sampler: wgpu::Sampler,
+    /// Nearest and non-filtering: how a pass reads a depth texel
+    /// (`abi::BINDING_POINT_SAMPLER`, ADR 0075).
+    point_sampler: wgpu::Sampler,
     /// Kept alive because the views above may be of it.
     _shadow_fallback: wgpu::Texture,
     /// The environment-BRDF table, baked once into this texture by the
@@ -130,6 +137,9 @@ pub struct FrameBindings {
     environment_lut_baked: bool,
     environment_source: Option<(u64, [usize; 2])>,
     environment_scale: Option<f32>,
+    /// Mip levels of the bound specular cube, for the scene uniform:
+    /// GLSL ES 3.00 cannot ask the texture (ADR 0075).
+    environment_levels: u32,
     environment_maps: [wgpu::TextureView; 2],
     environment_placeholder: wgpu::TextureView,
     cookie_view: wgpu::TextureView,
@@ -144,7 +154,7 @@ pub struct FrameBindings {
 
 /// One attribute row shape's buffer and frame bind groups.
 struct InstanceGroup {
-    buffer: wgpu::Buffer,
+    buffer: RowStore,
     /// In rows, not bytes.
     capacity: usize,
     stride: usize,
@@ -170,7 +180,8 @@ pub enum ShadowMaps {
 
 impl FrameBindings {
     /// Create the buffers, layout and bind group.
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, profile: crate::Profile) -> Self {
+        let row_textures = !profile.storage_buffers;
         // One uniform per view, each at an offset the hardware will accept
         // as a dynamic one.
         let alignment = device.limits().min_uniform_buffer_offset_alignment;
@@ -189,17 +200,19 @@ impl FrameBindings {
             mapped_at_creation: false,
         });
         let capacity = INITIAL_INSTANCE_CAPACITY;
-        let instances = instance_buffer(
+        let instances = RowStore::new(
             device,
             "wxsl instances",
             size_of::<InstanceTransform>(),
             capacity,
+            row_textures,
         );
-        let previous_instances = instance_buffer(
+        let previous_instances = RowStore::new(
             device,
             "wxsl previous instances",
             size_of::<InstanceTransform>(),
             capacity,
+            row_textures,
         );
 
         // A one-texel atlas, cleared to nothing and never rendered into:
@@ -238,6 +251,10 @@ impl FrameBindings {
             compare: Some(wgpu::CompareFunction::Less),
             ..Default::default()
         });
+        let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("wxsl point sampler"),
+            ..Default::default()
+        });
 
         let environment_lut = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("wxsl environment brdf lut"),
@@ -249,9 +266,14 @@ impl FrameBindings {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // The format the bake's `texture_storage_2d` declares.
+            // The format the bake's `texture_storage_2d` declares — written
+            // as an attachment instead by the fragment arm (ADR 0075).
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: if profile.compute {
+                wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            },
             view_formats: &[],
         });
         let environment_lut_view =
@@ -308,14 +330,20 @@ impl FrameBindings {
         let buffer = |binding: u32, storage: bool, dynamic: bool| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: if storage {
-                    wgpu::BufferBindingType::Storage { read_only: true }
-                } else {
-                    wgpu::BufferBindingType::Uniform
-                },
-                has_dynamic_offset: dynamic,
-                min_binding_size: None,
+            ty: if storage && row_textures {
+                RowStore::TEXTURE_BINDING
+            } else if storage {
+                wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: dynamic,
+                    min_binding_size: None,
+                }
+            } else {
+                wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: dynamic,
+                    min_binding_size: None,
+                }
             },
             count: None,
         };
@@ -335,12 +363,7 @@ impl FrameBindings {
                 wgpu::BindGroupLayoutEntry {
                     binding: abi::BINDING_PREVIOUS_INSTANCES,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+                    ..buffer(abi::BINDING_PREVIOUS_INSTANCES, true, false)
                 },
                 // Always here, whether or not the material being drawn
                 // declares anything: a frame group whose shape changed
@@ -391,12 +414,19 @@ impl FrameBindings {
                 },
                 cube_layout(abi::BINDING_ENVIRONMENT_DIFFUSE),
                 cube_layout(abi::BINDING_ENVIRONMENT_SPECULAR),
+                wgpu::BindGroupLayoutEntry {
+                    binding: abi::BINDING_POINT_SAMPLER,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
             ],
         });
         let mut bindings = FrameBindings {
             views,
             view_stride,
             scene,
+            row_textures,
             instances,
             previous_instances,
             capacity,
@@ -404,6 +434,7 @@ impl FrameBindings {
             shadow_view,
             shadow_placeholder,
             shadow_sampler,
+            point_sampler,
             _shadow_fallback: shadow_fallback,
             environment_lut,
             environment_lut_view,
@@ -413,6 +444,7 @@ impl FrameBindings {
             environment_lut_baked: false,
             environment_source: None,
             environment_scale: None,
+            environment_levels: 1,
             environment_maps: [
                 environment_placeholder.clone(),
                 environment_placeholder.clone(),
@@ -522,6 +554,7 @@ impl FrameBindings {
             return;
         }
         self.environment_source = source;
+        self.environment_levels = maps.map_or(1, |maps| maps[1].texture().mip_level_count());
         self.environment_maps = match maps {
             Some(maps) => [maps[0].clone(), maps[1].clone()],
             None => [
@@ -541,7 +574,7 @@ impl FrameBindings {
     fn build_group(
         &self,
         device: &wgpu::Device,
-        attributes: &wgpu::Buffer,
+        attributes: &RowStore,
         shadows: ShadowMaps,
     ) -> wgpu::BindGroup {
         let shadow_view = match shadows {
@@ -568,15 +601,15 @@ impl FrameBindings {
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_INSTANCES,
-                    resource: self.instances.as_entire_binding(),
+                    resource: self.instances.resource(),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_PREVIOUS_INSTANCES,
-                    resource: self.previous_instances.as_entire_binding(),
+                    resource: self.previous_instances.resource(),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_INSTANCE_ATTRIBUTES,
-                    resource: attributes.as_entire_binding(),
+                    resource: attributes.resource(),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_SHADOW_MAPS,
@@ -585,6 +618,10 @@ impl FrameBindings {
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_SHADOW_SAMPLER,
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_POINT_SAMPLER,
+                    resource: wgpu::BindingResource::Sampler(&self.point_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_LIGHT_COOKIES,
@@ -638,7 +675,13 @@ impl FrameBindings {
             }
             None => rows.max(INITIAL_INSTANCE_CAPACITY),
         };
-        let buffer = instance_buffer(device, "wxsl instance attributes", stride, grown);
+        let buffer = RowStore::new(
+            device,
+            "wxsl instance attributes",
+            stride,
+            grown,
+            self.row_textures,
+        );
         let bound = self.build_group(device, &buffer, ShadowMaps::Bound);
         let detached = self.build_group(device, &buffer, ShadowMaps::Detached);
         self.groups.insert(
@@ -664,17 +707,19 @@ impl FrameBindings {
             capacity *= 2;
         }
         self.capacity = capacity;
-        self.instances = instance_buffer(
+        self.instances = RowStore::new(
             device,
             "wxsl instances",
             size_of::<InstanceTransform>(),
             capacity,
+            self.row_textures,
         );
-        self.previous_instances = instance_buffer(
+        self.previous_instances = RowStore::new(
             device,
             "wxsl previous instances",
             size_of::<InstanceTransform>(),
             capacity,
+            self.row_textures,
         );
         self.rebuild_groups(device);
     }
@@ -712,17 +757,21 @@ impl FrameBindings {
             0.0
         };
         scene.environment_scale = self.environment_scale.unwrap_or(1.0);
+        scene.environment_levels = self.environment_levels;
         queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
 
         self.grow_instances(device, transforms.len());
+        let row = size_of::<InstanceTransform>();
         if !transforms.is_empty() {
-            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(transforms));
+            self.instances
+                .write(queue, bytemuck::cast_slice(transforms), row);
         }
         // The previous frame's rows, always written: a draw that declared
         // no previous transform contributes its current one, so the array
         // is never a frame behind what its consumer assumes.
         if !previous.is_empty() {
-            queue.write_buffer(&self.previous_instances, 0, bytemuck::cast_slice(previous));
+            self.previous_instances
+                .write(queue, bytemuck::cast_slice(previous), row);
         }
 
         for (key, set) in rows.sets() {
@@ -733,7 +782,9 @@ impl FrameBindings {
             let Some(group) = self.groups.get(key) else {
                 continue;
             };
-            queue.write_buffer(&group.buffer, 0, set.bytes());
+            group
+                .buffer
+                .write(queue, set.bytes(), set.layout().size() as usize);
         }
     }
 
@@ -787,19 +838,91 @@ fn cube_layout(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn instance_buffer(
-    device: &wgpu::Device,
-    label: &str,
-    stride: usize,
-    capacity: usize,
-) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
+/// Where one array of instance rows lives: a storage buffer, or — on a
+/// profile without storage buffers — an `rgba32uint` texture holding the
+/// same bytes, which the ABI's generated loaders fetch by instance index
+/// (`abi::FEATURE_INSTANCE_TEXTURE`, ADR 0075).
+#[derive(Clone)]
+enum RowStore {
+    Buffer(wgpu::Buffer),
+    Texture(wgpu::Texture, wgpu::TextureView),
+}
+
+impl RowStore {
+    /// The layout entry type of a texture-backed row array.
+    const TEXTURE_BINDING: wgpu::BindingType = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Uint,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+
+    fn new(
+        device: &wgpu::Device,
+        label: &str,
+        stride: usize,
+        capacity: usize,
+        texture: bool,
+    ) -> Self {
         // Never zero: a zero-sized binding is a validation error, and an
         // empty frame — or a material that declares no attributes — is a
         // perfectly ordinary thing for an editor to draw.
-        size: (capacity.max(1) * stride.max(4)) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+        let capacity = capacity.max(1);
+        if !texture {
+            return RowStore::Buffer(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (capacity * stride.max(4)) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let texels = texels_per_row(stride as u32) as usize * capacity;
+        let width = abi::INSTANCE_TEXTURE_WIDTH;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height: texels.div_ceil(width as usize).max(1) as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        RowStore::Texture(texture, view)
+    }
+
+    /// Write `bytes`, rows of `stride` bytes, from the first row.
+    fn write(&self, queue: &wgpu::Queue, bytes: &[u8], stride: usize) {
+        match self {
+            RowStore::Buffer(buffer) => queue.write_buffer(buffer, 0, bytes),
+            RowStore::Texture(texture, _) => {
+                let (texels, [width, height]) = texel_rows(bytes, stride);
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &texels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 16),
+                        rows_per_image: Some(height),
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+    }
+
+    fn resource(&self) -> wgpu::BindingResource<'_> {
+        match self {
+            RowStore::Buffer(buffer) => buffer.as_entire_binding(),
+            RowStore::Texture(_, view) => wgpu::BindingResource::TextureView(view),
+        }
+    }
 }

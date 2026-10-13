@@ -144,7 +144,9 @@ either a lie or a translator nobody asked for.
 * **Keep the per-object dynamic offset** (ADR 0010's choice). Rejected: it
   costs a bind-group rebind per draw and cannot be written by a compute
   pass. The capability it gives up — read-only storage in the vertex stage —
-  only matters on WebGL, which is not a target.
+  only matters on WebGL, which is not a target. (WebGL2 became a fallback
+  profile in [ADR 0075](0075-webgl2-and-gl-are-a-fallback-profile.md): the
+  same rows, read from data textures there; the storage buffer stays.)
 * **Deriving the pass list from a *node graph* now.** That is M4 of the
   plan, and it needs the texture value types M3 introduces. Passes are data
   first; a graph that produces that data is then a small step.
