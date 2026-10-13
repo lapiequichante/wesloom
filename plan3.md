@@ -655,11 +655,18 @@ closes a setting over its values (stage, policy, sort, layers, blend,
 precision, imported, refraction quality) and both inspectors draw it as a
 dropdown, `effect` listing the registry's screen effects; the toolbar's
 pipeline is a dropdown whose third row previews the material through the
-pipeline canvas's document, and the mesh is one too. Debug views have
-their shader half — `wxsl_debug_view` and `debug_views()` in the
-generated lighting pass — but no menu, no curve-free display pass and no
-test yet. Still open beyond that: A/B split, pass stepping, hot reload,
-timings.
+pipeline canvas's document, and the mesh is one too. Debug views: the
+generated lighting pass returns one channel under `wxsl_debug_view`
+(`debug_views()`: six base views, then every feature/model channel, ids
+stable as features toggle), the toolbar's `view` dropdown pins it on the
+preview's material (greyed under forward or when the plan lacks the
+channel), and the tonemap's new `curve` parameter (0 = clamp and encode
+only) is the curve-free display — a parameter rather than a derived
+pipeline, so a view costs one material/lighting recompile and no pass
+list change. Done-when met: `the_subsurface_debug_view_isolates_the_channel`
+shows the stored 0.5 strength unlit and unbent (mutation-checked against
+the curve), and the corpus gate compiles the pass under every view.
+Still open: A/B split, pass stepping, hot reload, timings.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

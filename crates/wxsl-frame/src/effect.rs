@@ -1048,7 +1048,12 @@ pub const TONEMAP: Effect = Effect {
         history: 0,
     }],
     outputs: &[],
-    parameters: &[],
+    parameters: &[EffectParameter {
+        name: "curve",
+        // 1 applies the filmic curve; 0 only clamps and encodes, which is
+        // what a debug view needs to show stored data unbent (plan3 N9).
+        default: Value::F32(1.0),
+    }],
     shader: EffectShader::Source {
         path: TONEMAP_MODULE,
         wxsl: include_str!("../shaders/tonemap.wxsl"),
@@ -1945,16 +1950,12 @@ mod tests {
             !wxsl.contains("const THRESHOLD"),
             "the const this retired stays retired"
         );
+        // The tonemap's one knob is its debug-view switch (plan3 N9).
+        assert_eq!(TONEMAP.parameters.len(), 1);
+        assert_eq!(TONEMAP.parameters[0].name, "curve");
         // Every other shipped effect declares no knobs, so nothing about
         // them moves.
-        for effect in [
-            DEFERRED_LIGHTING,
-            TONEMAP,
-            BRDF_LUT,
-            LUT_VIEW,
-            RAMP_FILL,
-            RAMP_VIEW,
-        ] {
+        for effect in [DEFERRED_LIGHTING, BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW] {
             assert!(
                 effect.parameters.is_empty(),
                 "`{}` grew knobs silently",
@@ -1980,8 +1981,8 @@ mod tests {
         assert_eq!(BLOOM.param_layout().size(), 16);
         // And an effect with no parameters generates nothing at all, so
         // its module compiles byte-for-byte as it did.
-        assert!(TONEMAP.params_header().is_empty());
-        assert!(TONEMAP.param_layout().is_empty());
+        assert!(LUT_VIEW.params_header().is_empty());
+        assert!(LUT_VIEW.param_layout().is_empty());
     }
 
     #[test]

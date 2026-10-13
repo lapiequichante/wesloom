@@ -481,3 +481,38 @@ fn the_generated_material_module_compiles_for_every_stage_and_telling_set() {
         }
     }
 }
+
+/// The editor's debug views (plan3 N9): the lighting pass compiles under
+/// every view id the plan offers, the subsurface channel's included — a
+/// view's arm reads a target only when the plan carries it.
+#[test]
+fn the_lighting_pass_compiles_under_every_debug_view() {
+    let features = lighting::feature_requests(&["subsurface"]).expect("subsurface ships");
+    let set = lighting::default_set().expect("the default set");
+    let plan = set
+        .plan(&features)
+        .expect("subsurface fits the default set");
+    let source = lighting::lighting_pass_source(&set, &features);
+    let mut modules = library();
+    let root = abi::LIGHTING_PASS_MODULE;
+    modules.insert(root, source);
+    let views: Vec<_> = lighting::debug_views()
+        .into_iter()
+        .filter(|view| view.available(&plan))
+        .collect();
+    assert!(views.iter().any(|view| view.channel == Some("subsurface")));
+    for view in views {
+        let mut bindings = wxsl_lang::Bindings::new();
+        bindings.insert(
+            lighting::DEBUG_VIEW_MACRO.to_string(),
+            wxsl_lang::Value::Int(i64::from(view.id)),
+        );
+        wxsl_lang::compile(&modules, root, &bindings).unwrap_or_else(|diagnostics| {
+            panic!(
+                "the lighting pass under the `{}` view does not compile:\n{}",
+                view.label,
+                diagnostics.render(&|path| modules.get(path).map(str::to_string))
+            )
+        });
+    }
+}

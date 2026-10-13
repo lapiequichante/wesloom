@@ -244,9 +244,14 @@ fn defaults_render_as_authored_and_a_retuned_effect_keeps_its_values() {
         renderer.pass_param("bloom", "strength"),
         Some(Value::F32(0.85))
     );
-    // An effect with no knobs has no block to ask about.
+    // The tonemap's one knob (plan3 N9's debug-view switch) starts with
+    // the curve on, and a knob it does not declare is not there to ask
+    // about.
+    assert_eq!(
+        renderer.pass_param("tonemap", "curve"),
+        Some(Value::F32(1.0))
+    );
     assert_eq!(renderer.pass_param("tonemap", "strength"), None);
-    assert!(renderer.pass_parameter_layout("tonemap").is_none());
 
     // A pass list replaced by the same document — what a document edit
     // compiles to when nothing changed — keeps the tuned value under the

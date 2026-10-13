@@ -160,7 +160,7 @@ impl Renderer {
         let mut pool = ResourcePool::new();
         pool.configure(device, &schedule, target);
         let pass_count = graph.passes().len();
-        Ok(Renderer {
+        let mut renderer = Renderer {
             bindings: FrameBindings::new(device),
             layouts: BindingLayouts::new(),
             library,
@@ -179,7 +179,11 @@ impl Renderer {
             pass_params: HashMap::new(),
             imports: Vec::new(),
             config,
-        })
+        };
+        // The stock pass list's effects may declare parameters (the
+        // tonemap's `curve`): their blocks exist from the first frame.
+        renderer.sync_pass_params();
+        Ok(renderer)
     }
 
     /// Enable a different set of lighting models for the deferred path,

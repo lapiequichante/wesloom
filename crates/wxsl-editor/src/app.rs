@@ -28,6 +28,7 @@
 use glam::Vec2;
 use wxsl_core::abi;
 use wxsl_core::graph::{Graph, NodeId};
+use wxsl_core::lighting;
 use wxsl_core::macros::MacroDef;
 use wxsl_core::node::{NodeRegistry, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
@@ -930,10 +931,24 @@ impl Editor {
         }
         if let Some(pipeline) = requests.pipeline {
             self.material_uses_document = false;
+            // Forward has no lighting pass to return a channel from.
+            if pipeline == StockPipeline::Forward && self.preview.debug_view() != 0 {
+                requests.debug_view = Some(0);
+            }
             self.preview.set_pipeline(device, pipeline);
             self.message = match self.preview.swap_progress() {
                 Some(progress) => format!("pipeline: {pipeline} ({progress})"),
                 None => format!("pipeline: {pipeline}"),
+            };
+        }
+        if let Some(view) = requests.debug_view {
+            // A material macro the lighting pass inherits: the material
+            // is regenerated, and the lighting pass with it.
+            self.preview.set_debug_view(view);
+            self.dirty = true;
+            self.message = match lighting::debug_views().iter().find(|v| v.id == view) {
+                Some(found) => format!("view: {}", found.label),
+                None => "view: shaded".to_string(),
             };
         }
         if let Some(mesh) = requests.mesh {
@@ -1027,6 +1042,8 @@ pub(crate) struct Requests {
     pub(crate) pipeline: Option<StockPipeline>,
     /// Preview the material through the pipeline canvas's document.
     pub(crate) use_document: bool,
+    /// Show this G-buffer debug view (0 shades again).
+    pub(crate) debug_view: Option<i32>,
     pub(crate) mesh: Option<MeshKind>,
     pub(crate) backend: Option<MsdfBackend>,
     /// Switch which canvas the panels point at.
@@ -1245,6 +1262,39 @@ fn toolbar_panel(
                 Some(pipeline) => requests.pipeline = Some(*pipeline),
                 None => requests.use_document = true,
             }
+        }
+
+        // The G-buffer debug views: the lighting pass returns one channel
+        // instead of shading, so they need a pipeline that has one — a
+        // view the plan does not carry is listed, greyed.
+        let deferred = uses_document || preview.pipeline() == StockPipeline::Deferred;
+        let views = preview.debug_views();
+        let mut labels = vec!["view: shaded".to_string()];
+        labels.extend(
+            views
+                .iter()
+                .map(|(view, _)| format!("view: {}", view.label)),
+        );
+        let mut options: Vec<(&str, bool)> = vec![(labels[0].as_str(), true)];
+        options.extend(
+            views
+                .iter()
+                .zip(&labels[1..])
+                .map(|((_, available), label)| (label.as_str(), deferred && *available)),
+        );
+        let mut selected = views
+            .iter()
+            .position(|(view, _)| view.id == preview.debug_view())
+            .map_or(0, |index| index + 1);
+        let rect = dropdown_rect(ui, &mut cursor, &labels);
+        if ui
+            .dropdown(Id::new("toolbar.view"), rect, &options, &mut selected)
+            .changed
+        {
+            requests.debug_view = Some(match selected {
+                0 => 0,
+                index => views[index - 1].0.id,
+            });
         }
     }
     let labels: Vec<String> = MeshKind::ALL

@@ -15,8 +15,9 @@
 
 use glam::{Mat4, Vec3};
 use wxsl_core::graph::Graph;
-use wxsl_core::macros::MacroSet;
-use wxsl_core::node::{NodeRegistry, ValueType};
+use wxsl_core::lighting;
+use wxsl_core::macros::{MacroSet, MacroValue};
+use wxsl_core::node::{NodeRegistry, Value, ValueType};
 use wxsl_render::gpu::OffscreenTarget;
 use wxsl_render::ui::draw::TextureId;
 use wxsl_render::ui::UiRenderer;
@@ -27,6 +28,10 @@ use wxsl_render::{
 };
 
 use crate::highlight::{self, Run};
+
+/// The label the stock presets give their tonemap pass, whose `curve` a
+/// debug view switches off.
+const TONEMAP_PASS: &str = "tonemap";
 
 /// How the preview is doing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -100,6 +105,9 @@ pub struct Preview {
     /// visits to the pipeline canvas — the renderer holds it while it
     /// holds a stock pass list, and *not* while a document is installed.
     stock: StockPipeline,
+    /// The G-buffer debug view the lighting pass returns instead of
+    /// shading, by [`lighting::DebugView`] id; 0 shades (plan3 N9).
+    debug_view: i32,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
     angle: f32,
@@ -154,6 +162,7 @@ impl Preview {
             status: PreviewStatus::Empty,
             swapping: false,
             stock: StockPipeline::default(),
+            debug_view: 0,
             spinning: true,
             angle: 0.6,
         })
@@ -290,6 +299,43 @@ impl Preview {
     /// — the policy inspector's reset.
     pub fn reset_runs(&mut self) {
         self.renderer.reset_runs();
+    }
+
+    /// The preview's last frame, read back as RGBA8 rows — for a test
+    /// that checks what a debug view shows.
+    pub fn read_rgba8(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+        self.target.read_rgba8(device, queue)
+    }
+
+    /// The debug view the preview shows, 0 when it shades.
+    pub fn debug_view(&self) -> i32 {
+        self.debug_view
+    }
+
+    /// Every debug view, and whether the running plan carries what it
+    /// reads — what the toolbar's view menu lists.
+    pub fn debug_views(&self) -> Vec<(lighting::DebugView, bool)> {
+        let plan = self
+            .renderer
+            .lighting()
+            .plan(&self.renderer.pipeline_config().features)
+            .ok();
+        lighting::debug_views()
+            .into_iter()
+            .map(|view| {
+                let available = plan.as_ref().is_some_and(|plan| view.available(plan));
+                (view, available)
+            })
+            .collect()
+    }
+
+    /// Show a G-buffer debug view, or shade again with 0.
+    ///
+    /// The view is a material macro the lighting pass inherits, so the
+    /// caller marks the material dirty afterwards; the tonemap's curve
+    /// follows at the next frame, so the view shows the stored value.
+    pub fn set_debug_view(&mut self, id: i32) {
+        self.debug_view = id;
     }
 
     /// The material the preview last compiled, for the inspector's
@@ -490,6 +536,11 @@ impl Preview {
         // name (plan3 N9: the features panel can change the plan live).
         let mut config = wxsl_render::material::MaterialConfig::with_macros(macros.clone());
         config.features = self.renderer.pipeline_config().features.clone();
+        if self.debug_view != 0 {
+            config
+                .macros
+                .set(lighting::DEBUG_VIEW_MACRO, MacroValue::Int(self.debug_view));
+        }
         match Material::with_lighting(graph, registry, &config, self.renderer.lighting()) {
             Ok(material) => {
                 self.wxsl = material.wxsl(self.renderer.display_stage()).to_string();
@@ -610,6 +661,16 @@ impl Preview {
         if self.swapping && self.renderer.swap_progress().is_none() {
             self.swapping = false;
             self.refresh_wgsl(device);
+        }
+        // Kept in step every frame rather than at the toggle: a pipeline
+        // swap or a document install can bring a fresh tonemap pass.
+        let curve = Value::F32(if self.debug_view == 0 { 1.0 } else { 0.0 });
+        if self
+            .renderer
+            .pass_param(TONEMAP_PASS, "curve")
+            .is_some_and(|current| current != curve)
+        {
+            self.renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
         }
         let Some(material) = self.material.as_ref() else {
             return Ok(());

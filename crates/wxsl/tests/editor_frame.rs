@@ -943,3 +943,111 @@ fn the_pipeline_dropdown_previews_through_the_document() {
     );
     assert!(editor.preview().status().is_ok());
 }
+
+/// The G-buffer debug views (plan3 N9): with the subsurface channel in the
+/// plan and the material writing a strength of one half, the toolbar's
+/// `subsurface` view shows that stored value and nothing else — every
+/// covered pixel the same encoded red, no light, no curve — and `shaded`
+/// brings the lighting back.
+#[test]
+fn the_subsurface_debug_view_isolates_the_channel() {
+    use wxsl::core::macros::MacroValue;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let click = |editor: &mut Editor, point: Vec2, time: f64| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        frame(&gpu, editor, &target, time);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+        frame(&gpu, editor, &target, time + 0.01);
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+        });
+        frame(&gpu, editor, &target, time + 0.02);
+    };
+    let settle = |editor: &mut Editor, time: f64| {
+        for step in 0..30 {
+            frame(&gpu, editor, &target, time + 0.01 * step as f64);
+            if editor.preview().swap_progress().is_none() && step >= 3 {
+                break;
+            }
+        }
+    };
+
+    // The subsurface channel (the features tab's first checkbox, as in
+    // the features test), the material's pin of it, then deferred.
+    click(&mut editor, Vec2::new(220.0, 555.0), 0.1);
+    click(&mut editor, Vec2::new(100.0, 607.0), 0.2);
+    assert_eq!(editor.preview().features(), vec!["subsurface"]);
+    let graph = editor.graph_mut();
+    graph.set_macro("wxsl_subsurface", MacroValue::Flag(true));
+    graph.set_macro("wxsl_subsurface_strength", MacroValue::Float(0.5));
+    click(&mut editor, Vec2::new(400.0, 19.0), 0.3);
+    click(&mut editor, Vec2::new(400.0, 68.0), 0.4);
+    settle(&mut editor, 0.5);
+    assert_eq!(
+        editor.preview().pipeline(),
+        wxsl::render::StockPipeline::Deferred
+    );
+    assert!(editor.preview().status().is_ok());
+
+    // The view menu sits right of the pipeline one (x ≈ 494..686); its
+    // rows are 22 px from y ≈ 35: shaded, the six base views, then
+    // subsurface, the first feature channel.
+    let view_menu = Vec2::new(590.0, 19.0);
+    click(&mut editor, view_menu, 1.0);
+    click(&mut editor, Vec2::new(590.0, 200.0), 1.1);
+    settle(&mut editor, 1.2);
+    let shown = wxsl::core::lighting::debug_views()
+        .into_iter()
+        .find(|view| view.id == editor.preview().debug_view());
+    assert_eq!(
+        shown.and_then(|view| view.channel),
+        Some("subsurface"),
+        "the eighth row is the subsurface view"
+    );
+    assert!(
+        editor.preview().status().is_ok(),
+        "{:?}",
+        editor.preview().status()
+    );
+
+    let pixels = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    let background = [pixels[0], pixels[1], pixels[2]];
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    let mut red = 0;
+    for texel in pixels.chunks_exact(4) {
+        // Nothing lit: no channel rises above the clear colour but the
+        // stored strength's red, at the mesh's edges blended with it.
+        assert!(
+            texel[1] <= background[1] + 2 && texel[2] <= background[2] + 2,
+            "a lit pixel under the subsurface view: {texel:?} over {background:?}"
+        );
+        if near(texel[0], 128) && texel[1] <= 2 && texel[2] <= 2 {
+            red += 1;
+        }
+    }
+    assert!(
+        red > 5_000,
+        "the cube shows the stored 0.5 unbent ({red} pixels)"
+    );
+
+    // And back: shading returns, with its light.
+    click(&mut editor, view_menu, 2.0);
+    click(&mut editor, Vec2::new(590.0, 46.0), 2.1);
+    settle(&mut editor, 2.2);
+    assert_eq!(editor.preview().debug_view(), 0);
+    let pixels = editor.preview().read_rgba8(&gpu.device, &gpu.queue);
+    let lit = pixels
+        .chunks_exact(4)
+        .filter(|texel| texel[1] > background[1] + 16)
+        .count();
+    assert!(lit > 1_000, "shading lights the cube again ({lit} pixels)");
+}
