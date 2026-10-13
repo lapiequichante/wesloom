@@ -1315,3 +1315,43 @@ fn an_edited_shader_file_reloads_into_the_preview() {
     assert!(!red(&pixels), "the original curve is back");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Pass timings (plan3 N9): with timestamp queries the pipeline canvas's
+/// pass list carries each pass's GPU time a few frames in, and the frame's
+/// total is their sum.
+#[test]
+fn the_pass_list_shows_gpu_timings() {
+    use wxsl::editor::CanvasMode;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    if !editor.preview().timed() {
+        println!("skipping: the device writes no timestamps");
+        return;
+    }
+    editor.set_canvas_mode(CanvasMode::Pipeline);
+    for step in 0..40 {
+        frame(&gpu, &mut editor, &target, 0.05 * step as f64);
+        if step > 4
+            && editor.preview().swap_progress().is_none()
+            && editor.preview().pass_time("deferred lighting").is_some()
+        {
+            break;
+        }
+    }
+    let preview = editor.preview();
+    let lighting = preview
+        .pass_time("deferred lighting")
+        .expect("the lighting pass is timed");
+    let frame_time = preview.frame_time().expect("the frame is timed");
+    let summed: f32 = preview
+        .render_graph()
+        .passes()
+        .iter()
+        .filter_map(|pass| preview.pass_time(&pass.label))
+        .sum();
+    assert!(lighting > 0.0 && lighting <= frame_time);
+    assert!((frame_time - summed).abs() < 1e-3 * frame_time.max(1.0));
+}

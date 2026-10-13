@@ -639,7 +639,7 @@ The items `todo.md` has carried, plus the one decision behind them:
 
 ### N9 — The editor catches up
 
-**In progress (2026-10-13):** the features panel and the policy inspector
+**Done (2026-10-13):** the features panel and the policy inspector
 have landed. The material canvas's bottom panel gains a `features` tab:
 `FEATURES` as checkboxes driving `set_features` live over the
 bytes-per-sample bar, with the preview's material now resolved against the
@@ -701,7 +701,22 @@ retried together with the next edit. Body edits only: a changed
 signature does not re-derive the node (that is the build script's,
 ADR 0020), and effect-owned shaders (`wxsl-frame/shaders`) are static
 text, not library modules. Tested in `an_edited_shader_file_reloads_into_the_preview`
-(the filmic curve edited to red, broken, restored). Still open: timings.
+(the filmic curve edited to red, broken, restored). Pass timings: the
+`TIMESTAMP_QUERY` feature `gpu.rs` always asked for is finally used —
+`Renderer::set_pass_timing` puts a begin/end timestamp on every pass at
+twice its declaration index, the next frame resolves them in its own
+submission (Metal writes counter samples late, and a resolve in the
+same command buffer read zeros and the previous frame's values), and
+the readback maps without waiting, so `pass_time(label)` and
+`frame_time()` trail the picture by a few frames and never stall it; no
+frame records timestamps while one is in flight, and a pass its policy
+skipped has no time. The editor turns it on for the preview: a column
+in the pipeline canvas's pass list, the frame's total in its meta line
+and the frame tab's. A device without the feature says "no timestamps"
+— the WebGL2 column's honest absence. Tested on the GPU in
+`pass_timings_follow_what_ran` (the once bake timed in frame one only)
+and `the_pass_list_shows_gpu_timings`. N9 is done; grouping the shadow
+tiles in the stepping list is the one loose end.
 
 The engine gained policies, buffers, feature channels and a channel plan
 in the last stretch; the editor's chrome still shows only what M6 knew —

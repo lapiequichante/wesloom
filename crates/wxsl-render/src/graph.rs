@@ -360,6 +360,7 @@ impl RenderGraph {
         // *caller's* state, so its lifetime rides on this call's borrow of
         // `params`, not on the pass description's.
         params: &(dyn Fn(&PassDesc) -> Option<(&'s wgpu::Buffer, u32)> + 's),
+        timestamps: Option<(&wgpu::QuerySet, usize)>,
         mut body: F,
     ) -> Result<(), RenderError>
     where
@@ -422,6 +423,12 @@ impl RenderGraph {
                         })
                 })
                 .transpose()?;
+            // Begin and end timestamps at twice the declaration index, for
+            // the passes the query set has room for (plan3 N9).
+            let index_u32 = index as u32;
+            let timestamp_writes = timestamps
+                .filter(|(_, capacity)| index < *capacity)
+                .map(|(query_set, _)| (query_set, index_u32 * 2));
             let recorded = RecordedPass {
                 indirect_buffer,
                 desc: pass,
@@ -436,7 +443,13 @@ impl RenderGraph {
                 PassKind::Compute { .. } => {
                     let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some(&pass.label),
-                        timestamp_writes: None,
+                        timestamp_writes: timestamp_writes.map(|(query_set, first)| {
+                            wgpu::ComputePassTimestampWrites {
+                                query_set,
+                                beginning_of_pass_write_index: Some(first),
+                                end_of_pass_write_index: Some(first + 1),
+                            }
+                        }),
                     });
                     body(&recorded, PassEncoder::Compute(&mut compute))?;
                 }
@@ -491,7 +504,13 @@ impl RenderGraph {
                         label: Some(&pass.label),
                         color_attachments: &color_attachments,
                         depth_stencil_attachment: depth_attachment,
-                        timestamp_writes: None,
+                        timestamp_writes: timestamp_writes.map(|(query_set, first)| {
+                            wgpu::RenderPassTimestampWrites {
+                                query_set,
+                                beginning_of_pass_write_index: Some(first),
+                                end_of_pass_write_index: Some(first + 1),
+                            }
+                        }),
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });

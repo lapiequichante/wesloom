@@ -2302,7 +2302,10 @@ fn code_panel(
                 step.passes.len(),
                 step.shown.as_deref().unwrap_or("the frame")
             ),
-            None => "live · step to freeze the frame".to_string(),
+            None => format!(
+                "live · {} · step to freeze the frame",
+                pipeline::gpu_time_text(preview)
+            ),
         },
         CodeTab::Problems if problems == 0 => "the graph compiles".to_string(),
         CodeTab::Problems => format!("{problems} to fix"),

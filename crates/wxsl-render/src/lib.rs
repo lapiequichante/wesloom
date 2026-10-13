@@ -78,6 +78,7 @@ pub mod pipeline_doc;
 pub mod renderer;
 pub mod setup;
 pub mod swap;
+mod timing;
 pub mod types;
 pub mod ui;
 pub mod variants;

@@ -53,6 +53,7 @@ use crate::pass::ResourceId;
 use crate::pass::{DrawSource, LayerFilter, PassKind, PassView, Policy, SortOrder};
 use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
 use crate::swap::{PipelineSwap, Request, SwapProgress};
+use crate::timing::PassTimer;
 use crate::variants::{CacheStats, EffectRequest, MaterialRequest, ShaderVariant, ShaderVariants};
 
 /// What to render, for [`Renderer::render`].
@@ -127,6 +128,10 @@ pub struct Renderer {
     /// it. Unlike the pool's own textures these survive a reallocation,
     /// because they were never the pool's to lose.
     imports: Vec<(String, wgpu::TextureView)>,
+    /// Per-pass GPU timings, once asked for with
+    /// [`Renderer::set_pass_timing`] on a device that can write
+    /// timestamps (plan3 N9).
+    timer: Option<PassTimer>,
 }
 
 /// One pass's effect parameters: the layout the descriptor declared, the
@@ -178,6 +183,7 @@ impl Renderer {
             demanded: HashSet::new(),
             pass_params: HashMap::new(),
             imports: Vec::new(),
+            timer: None,
             config,
         };
         // The stock pass list's effects may declare parameters (the
@@ -389,12 +395,61 @@ impl Renderer {
         self.drawn.get(index).copied()
     }
 
+    /// Measure every pass's GPU time with timestamp queries, or stop.
+    /// Returns whether timings are on: a device without
+    /// `TIMESTAMP_QUERY` has none to give (WebGPU may withhold it; WebGL2
+    /// has no equivalent), and reports that rather than zeros.
+    pub fn set_pass_timing(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        on: bool,
+    ) -> bool {
+        self.timer = if on {
+            PassTimer::new(device, queue, self.graph.passes().len())
+        } else {
+            None
+        };
+        self.timer.is_some()
+    }
+
+    /// The GPU time, in milliseconds, of the pass labelled `label` in the
+    /// last frame read back — a frame or two behind the picture, because
+    /// the readback never waits. `None` when timing is off, the pass did
+    /// not run in that frame, or nothing has been read back yet. Passes
+    /// sharing a label are summed.
+    pub fn pass_time(&self, label: &str) -> Option<f32> {
+        let timings = self.timer.as_ref()?.timings();
+        self.graph
+            .passes()
+            .iter()
+            .zip(timings)
+            .filter(|(pass, _)| pass.label == label)
+            .filter_map(|(_, time)| *time)
+            .reduce(|sum, time| sum + time)
+    }
+
+    /// The GPU time of every timed pass of the last frame read back, in
+    /// milliseconds, summed — `None` when nothing has been read back.
+    pub fn frame_time(&self) -> Option<f32> {
+        self.timer
+            .as_ref()?
+            .timings()
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(|sum, time| sum + time)
+    }
+
     /// Fresh run bookkeeping: nothing has run, every `once` and
     /// `on resize` pass is due. Called on a new pass list, and by the
     /// editor's policy inspector as its reset — the counterpart of
     /// [`Self::mark_pass`]'s "run now", and the way a `once` bake is made
     /// due again without replacing the pass list.
     pub fn reset_runs(&mut self) {
+        if let Some(timer) = self.timer.as_mut() {
+            timer.clear();
+        }
         self.runs = vec![0; self.graph.passes().len()];
         self.last_run = vec![(u64::MAX, (0, 0)); self.graph.passes().len()];
         self.sync_pass_params();
@@ -1065,6 +1120,18 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         self.poll_swap(device)?;
         self.bake_environment_lut(device, queue)?;
+        // A pass list that outgrew the query set gets a bigger one.
+        let passes = self.graph.passes().len();
+        if self
+            .timer
+            .as_ref()
+            .is_some_and(|timer| timer.capacity() < passes)
+        {
+            self.timer = PassTimer::new(device, queue, passes);
+        }
+        if let Some(timer) = self.timer.as_mut() {
+            timer.collect(device, queue);
+        }
         // Last frame's draw counts are last frame's; this frame's are
         // what the compile below selects.
         self.drawn = vec![0; self.graph.passes().len()];
@@ -1188,6 +1255,7 @@ impl Renderer {
             graph,
             schedule,
             effects,
+            timer,
             ..
         } = self;
         let pass_params = &self.pass_params;
@@ -1200,6 +1268,8 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("wxsl frame"),
         });
+        let timestamps = timer.as_ref().and_then(PassTimer::queries);
+        let timed = timestamps.is_some();
         graph.record(
             device,
             &mut encoder,
@@ -1215,6 +1285,7 @@ impl Renderer {
                         .map(|buffer| (buffer, block.layout.size()))
                 })
             },
+            timestamps.map(|queries| (queries, timer.as_ref().map_or(0, PassTimer::capacity))),
             |pass, encoder| {
                 let shadows = if environment_maps
                     .is_some_and(|maps| pass.desc.written().any(|id| maps.contains(&id)))
@@ -1243,6 +1314,9 @@ impl Renderer {
             },
         )?;
         queue.submit([encoder.finish()]);
+        if let (true, Some(timer)) = (timed, timer.as_mut()) {
+            timer.written(&run);
+        }
         Ok(())
     }
 

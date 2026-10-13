@@ -177,6 +177,9 @@ pub struct Preview {
     /// Where the split's edge sits, as a fraction of the preview's width:
     /// A is drawn left of it, B right.
     pub split: f32,
+    /// Whether the renderer measures pass timings: the device writes
+    /// timestamps.
+    timed: bool,
     /// Whether the mesh turns on its own.
     pub spinning: bool,
     angle: f32,
@@ -200,11 +203,12 @@ impl Preview {
         library: ShaderLibrary,
     ) -> Result<Self, RenderError> {
         let target = OffscreenTarget::new(device, Self::SIZE, Self::SIZE);
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             device,
             library.clone(),
             TargetConfig::new(Self::SIZE, Self::SIZE, target.format()),
         )?;
+        let timed = renderer.set_pass_timing(device, queue, true);
         let texture = ui.register_texture(device, target.view());
         let compare_target = OffscreenTarget::new(device, Self::SIZE, Self::SIZE);
         let compare_texture = ui.register_texture(device, compare_target.view());
@@ -243,6 +247,7 @@ impl Preview {
             swapping: false,
             stock: StockPipeline::default(),
             debug_view: 0,
+            timed,
             spinning: true,
             angle: 0.6,
         })
@@ -437,6 +442,23 @@ impl Preview {
     /// policy inspector's "draws" column.
     pub fn pass_draw_count(&self, label: &str) -> Option<u32> {
         self.renderer.pass_draw_count(label)
+    }
+
+    /// The GPU time of the pass labelled `label`, in milliseconds, a few
+    /// frames behind — `None` without timestamp queries or before the
+    /// first readback (plan3 N9).
+    pub fn pass_time(&self, label: &str) -> Option<f32> {
+        self.renderer.pass_time(label)
+    }
+
+    /// The GPU time of the whole last frame read back, in milliseconds.
+    pub fn frame_time(&self) -> Option<f32> {
+        self.renderer.frame_time()
+    }
+
+    /// Whether the device writes timestamps, so pass timings exist at all.
+    pub fn timed(&self) -> bool {
+        self.timed
     }
 
     /// Fresh run bookkeeping: every `once` and `on resize` pass due again

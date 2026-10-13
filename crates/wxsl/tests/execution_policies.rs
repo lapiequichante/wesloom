@@ -246,3 +246,74 @@ fn the_document_policy_setting_reaches_the_pass_list() {
     // And it schedules.
     compiled.schedule().expect("the once-view graph schedules");
 }
+
+/// Pass timings (plan3 N9): a timed pass reports its GPU time from the
+/// frame read back, a pass its policy skipped reports none, and timing
+/// off reports nothing at all.
+#[test]
+fn pass_timings_follow_what_ran() {
+    let Some(gpu) = gpu() else { return };
+    let target = OffscreenTarget::new(&gpu.device, probe::SIZE, probe::SIZE);
+    let mut renderer = wxsl::render::Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        target_config(target.format()),
+    )
+    .expect("renderer");
+    renderer.add_effect(BRDF_LUT);
+    renderer.add_effect(LUT_VIEW);
+    renderer
+        .set_graph(lut_graph(Policy::Once))
+        .expect("schedules");
+    if !renderer.set_pass_timing(&gpu.device, &gpu.queue, true) {
+        println!("skipping: the device writes no timestamps");
+        return;
+    }
+    let draws = DrawList::new();
+    let render = |renderer: &mut wxsl::render::Renderer| {
+        let environment = unlit();
+        // Reading the pixels back waits for the frame, so its timings are
+        // mapped by the next one.
+        render_list_in(&gpu, renderer, &target, &draws, &environment).expect("the frame renders");
+    };
+
+    render(&mut renderer);
+    assert_eq!(
+        renderer.pass_time("lut view"),
+        None,
+        "nothing read back yet"
+    );
+    // The first frame read back is frame one, where both passes ran.
+    for _ in 0..8 {
+        if renderer.frame_time().is_some() {
+            break;
+        }
+        render(&mut renderer);
+    }
+    let bake = renderer
+        .pass_time("lut bake")
+        .expect("the bake ran in frame one");
+    let view = renderer
+        .pass_time("lut view")
+        .expect("the view ran in frame one");
+    assert!(bake > 0.0 && view > 0.0, "a pass that ran took time");
+    let frame = renderer.frame_time().expect("a frame was read back");
+    assert!((frame - (bake + view)).abs() < 1e-4);
+    // Every later frame skipped the once bake.
+    for _ in 0..8 {
+        render(&mut renderer);
+        if renderer.pass_time("lut bake").is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        renderer.pass_time("lut bake"),
+        None,
+        "a skipped pass has no time"
+    );
+    assert!(renderer.pass_time("lut view").is_some());
+
+    renderer.set_pass_timing(&gpu.device, &gpu.queue, false);
+    assert_eq!(renderer.pass_time("lut view"), None);
+    assert_eq!(renderer.frame_time(), None);
+}

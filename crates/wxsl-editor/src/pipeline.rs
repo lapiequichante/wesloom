@@ -608,6 +608,16 @@ fn config_features(preview: &Preview) -> String {
     }
 }
 
+/// The frame's GPU time for a meta line: summed pass timings, or why
+/// there are none (plan3 N9).
+pub(crate) fn gpu_time_text(preview: &Preview) -> String {
+    match preview.frame_time() {
+        Some(time) => format!("gpu {time:.2} ms"),
+        None if preview.timed() => "gpu …".to_string(),
+        None => "no timestamps".to_string(),
+    }
+}
+
 /// The bottom panel while the pipeline canvas is up: the compiled pass
 /// list, and the compile errors.
 ///
@@ -645,9 +655,10 @@ pub(crate) fn passes_panel(
         .count();
     let meta = match tab {
         PipelineTab::Passes => format!(
-            "{} passes · {} per frame · running",
+            "{} passes · {} per frame · {}",
             passes.len(),
-            per_frame
+            per_frame,
+            gpu_time_text(preview)
         ),
         PipelineTab::Problems if errors.is_empty() => "the document compiles".to_string(),
         PipelineTab::Problems => format!("{} to fix", errors.len()),
@@ -705,6 +716,7 @@ pub(crate) fn passes_panel(
                 // many draws it issued last frame, which is the whole
                 // difference between "scheduled" and "did something".
                 let (policy_rect, rest) = rest.split_right(metrics.small_text_size * 8.0);
+                let (time_rect, rest) = rest.split_right(metrics.small_text_size * 5.0);
                 let (counts_rect, label_rect) = rest.split_right(metrics.small_text_size * 10.0);
                 ui.truncated_label(label_rect, &pass.label, theme.palette.text, Align::Left);
                 ui.small_label(
@@ -721,6 +733,16 @@ pub(crate) fn passes_panel(
                     theme.palette.text_dim,
                     Align::Right,
                 );
+                // Its GPU time (plan3 N9), blank when it did not run in
+                // the frame read back.
+                if let Some(time) = preview.pass_time(&pass.label) {
+                    ui.small_label(
+                        time_rect,
+                        &format!("{time:.2} ms"),
+                        theme.palette.text_dim,
+                        Align::Right,
+                    );
+                }
                 // "Run now" is the on-demand policy's other half: a
                 // `once` pass is due by itself, a per-frame pass never
                 // needs asking, and an on-demand one runs exactly when
