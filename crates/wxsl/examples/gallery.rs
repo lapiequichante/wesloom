@@ -41,12 +41,29 @@
 //! In the window: `Left`/`Right` (or `[`/`]`) step through the demos,
 //! `1`–`9` jumps, `Space` pauses the clock, `Esc` quits. The title bar
 //! and the console name the demo and what it runs.
+//!
+//! In a browser (WebGPU; ADR 0075), starting on `?demo=<name>`, by
+//! default `glass-probes`:
+//!
+//! ```sh
+//! cargo build -p wxsl --example gallery --features webgl --target wasm32-unknown-unknown --release
+//! wasm-bindgen --target web --out-dir target/gallery-web --no-typescript \
+//!     target/wasm32-unknown-unknown/release/examples/gallery.wasm
+//! cp crates/wxsl/examples/gallery.html target/gallery-web/index.html
+//! python3 -m http.server -d target/gallery-web 8000
+//! ```
 
+// The screenshot and command-line paths are native-only.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 use std::error::Error;
 use std::f32::consts::FRAC_PI_2;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// `std::time::Instant` panics on the web; this one reads the page's clock.
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::{Mat4, Vec3};
 use winit::application::ApplicationHandler;
@@ -100,6 +117,34 @@ KEYS (windowed):
     Esc or Q               quit
 ";
 
+#[cfg(target_arch = "wasm32")]
+const WEB_HDR: &[u8] = include_bytes!("../../../resources/hdri/lakeside_sunrise_1k.hdr");
+
+/// The windowed gallery in a page (ADR 0075): `?demo=<name>` picks the
+/// first demo, `glass-probes` by default. The demos need a full profile
+/// (the IBL prefilters are native-only), so this wants WebGPU.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use winit::platform::web::EventLoopExtWebSys;
+    std::panic::set_hook(Box::new(|info| say(&format!("panic: {info}"))));
+    let search = web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .unwrap_or_default();
+    let name = search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("demo="))
+        .unwrap_or("glass-probes")
+        .to_string();
+    let demos = demos();
+    let start = demos.iter().position(|demo| demo.name == name).unwrap_or(0);
+    let options = Options::parse(std::iter::empty()).expect("the defaults parse");
+    let event_loop = EventLoop::new().expect("an event loop");
+    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.spawn_app(App::new(options, demos, start));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::parse(std::env::args().skip(1))?;
     if options.help {
@@ -165,6 +210,9 @@ struct Options {
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut options = Options {
+            #[cfg(target_arch = "wasm32")]
+            ibl_source: "lakeside_sunrise_1k.hdr".into(),
+            #[cfg(not(target_arch = "wasm32"))]
             ibl_source: {
                 let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../resources/hdri/lakeside_sunrise_1k.hdr");
@@ -2631,7 +2679,12 @@ impl Stage {
                 &[[0.0; 3]],
             )?
         } else {
+            #[cfg(not(target_arch = "wasm32"))]
             let reader = image::ImageReader::open(ibl_source)?.with_guessed_format()?;
+            // A page has no file system: the default HDR travels in the module.
+            #[cfg(target_arch = "wasm32")]
+            let reader =
+                image::ImageReader::new(std::io::Cursor::new(WEB_HDR)).with_guessed_format()?;
             if reader.format() != Some(image::ImageFormat::Hdr) {
                 return Err("--ibl-source expects a Radiance .hdr image or sky".into());
             }
@@ -3794,9 +3847,52 @@ struct App {
     previous_camera: Option<Camera>,
     cursor: Option<(f64, f64)>,
     drag: Option<MouseButton>,
+    /// The web's device arrives asynchronously; it lands here first.
+    #[cfg(target_arch = "wasm32")]
+    pending: std::rc::Rc<std::cell::RefCell<Option<Result<State, Box<dyn Error>>>>>,
+    #[cfg(target_arch = "wasm32")]
+    launched: bool,
+}
+
+/// Say something where a terminal, or a page and a headless browser, can
+/// read it.
+fn say(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&text.into());
+        if let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("status"))
+        {
+            element.set_text_content(Some(text));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{text}");
 }
 
 impl App {
+    fn new(options: Options, demos: Vec<Demo>, start: usize) -> Self {
+        App {
+            cameras: vec![None; demos.len()],
+            previous_camera: None,
+            cursor: None,
+            drag: None,
+            options,
+            demos,
+            current: start,
+            state: None,
+            started: Instant::now(),
+            paused_at: None,
+            error: None,
+            last_frame: None,
+            #[cfg(target_arch = "wasm32")]
+            pending: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            launched: false,
+        }
+    }
+
     fn elapsed(&self) -> f32 {
         self.paused_at
             .unwrap_or_else(|| self.started.elapsed().as_secs_f32())
@@ -3815,14 +3911,14 @@ impl App {
                 )
             })
             .unwrap_or_default();
-        println!(
+        say(&format!(
             "[{}/{}] {} — {}  |  pipeline: {}  |  {stats}",
             self.current + 1,
             self.demos.len(),
             demo.name,
             demo.blurb,
             demo.pipeline.name(),
-        );
+        ));
         if let Some(state) = self.state.as_ref() {
             state
                 .window
@@ -3851,7 +3947,7 @@ impl App {
         let time = self.elapsed();
         let step = self
             .last_frame
-            .replace(std::time::Instant::now())
+            .replace(Instant::now())
             .map_or(1.0 / 60.0, |last| {
                 last.elapsed().as_secs_f32().clamp(1.0 / 240.0, 0.1)
             });
@@ -3893,7 +3989,7 @@ impl App {
             time,
             step,
         ) {
-            eprintln!("cannot render: {error}");
+            say(&format!("cannot render: {error}"));
         } else {
             self.previous_camera = Some(camera);
         }
@@ -3925,6 +4021,27 @@ fn configure_surface(state: &mut State, width: u32, height: u32) {
 }
 
 impl ApplicationHandler for App {
+    #[cfg(target_arch = "wasm32")]
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.launched {
+            return;
+        }
+        self.launched = true;
+        let window = match self.create_window(event_loop) {
+            Ok(window) => window,
+            Err(error) => return say(&format!("cannot start: {error}")),
+        };
+        let slot = std::rc::Rc::clone(&self.pending);
+        let ibl_source = self.options.ibl_source.clone();
+        let quality = self.options.refraction_quality;
+        wasm_bindgen_futures::spawn_local(async move {
+            let state = build_state(Arc::clone(&window), &ibl_source, quality).await;
+            *slot.borrow_mut() = Some(state);
+            window.request_redraw();
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -3948,6 +4065,8 @@ impl ApplicationHandler for App {
         _window: WindowId,
         event: WindowEvent,
     ) {
+        #[cfg(target_arch = "wasm32")]
+        self.adopt_pending();
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -4024,50 +4143,51 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn create_state(&mut self, event_loop: &ActiveEventLoop) -> Result<State, Box<dyn Error>> {
+    fn create_window(&self, event_loop: &ActiveEventLoop) -> Result<Arc<Window>, Box<dyn Error>> {
         let (width, height) = self.options.size.unwrap_or((1280, 720));
-        let window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("wxsl gallery")
-                    .with_inner_size(winit::dpi::LogicalSize::new(width, height)),
-            )?,
-        );
-
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(Arc::clone(&window))?;
-        let gpu = pollster::block_on(GpuContext::new(instance, Some(&surface)))?;
-
-        // A non-sRGB surface format: the shading function encodes sRGB
-        // itself, and every effect downstream sees the frame's own
-        // encoding.
-        let capabilities = surface.get_capabilities(&gpu.adapter);
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|format| !format.is_srgb())
-            .unwrap_or_else(|| {
-                eprintln!("warning: no linear surface format available; colours will be bright");
-                capabilities.formats[0]
-            });
-
-        let size = window.inner_size();
-        let mut stage = Stage::new(
-            gpu,
-            TargetConfig::new(size.width, size.height, format),
-            &self.options.ibl_source,
-        )?;
-        stage.refraction_quality = self.options.refraction_quality;
-        apply(&self.demos[self.current], &mut stage.renderer)?;
-        let mut state = State {
-            window,
-            surface,
-            stage,
-            format,
+        let attributes = Window::default_attributes()
+            .with_title("wxsl gallery")
+            .with_inner_size(winit::dpi::LogicalSize::new(width, height));
+        #[cfg(target_arch = "wasm32")]
+        let attributes = {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            attributes.with_append(true)
         };
+        Ok(Arc::new(event_loop.create_window(attributes)?))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn create_state(&mut self, event_loop: &ActiveEventLoop) -> Result<State, Box<dyn Error>> {
+        let window = self.create_window(event_loop)?;
+        let state = pollster::block_on(build_state(
+            window,
+            &self.options.ibl_source,
+            self.options.refraction_quality,
+        ))?;
+        self.prepare(state)
+    }
+
+    /// Show the current demo on a freshly built state.
+    fn prepare(&self, mut state: State) -> Result<State, Box<dyn Error>> {
+        apply(&self.demos[self.current], &mut state.stage.renderer)?;
+        let size = state.window.inner_size();
         configure_surface(&mut state, size.width, size.height);
         Ok(state)
+    }
+
+    /// Take the state the web's asynchronous start left behind, once.
+    #[cfg(target_arch = "wasm32")]
+    fn adopt_pending(&mut self) {
+        let Some(result) = self.pending.borrow_mut().take() else {
+            return;
+        };
+        match result.and_then(|state| self.prepare(state)) {
+            Ok(state) => {
+                self.state = Some(state);
+                self.announce();
+            }
+            Err(error) => say(&format!("cannot start: {error}")),
+        }
     }
 
     fn on_key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
@@ -4114,23 +4234,55 @@ impl App {
     }
 }
 
+/// The device, the surface and the stage, for a window that exists.
+async fn build_state(
+    window: Arc<Window>,
+    ibl_source: &str,
+    refraction_quality: RefractionQuality,
+) -> Result<State, Box<dyn Error>> {
+    let descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    #[cfg(not(target_arch = "wasm32"))]
+    let instance = wgpu::Instance::new(descriptor);
+    // WebGPU if the browser can make an adapter, WebGL2 if not.
+    #[cfg(target_arch = "wasm32")]
+    let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
+    let surface = instance.create_surface(Arc::clone(&window))?;
+    let gpu = GpuContext::new(instance, Some(&surface)).await?;
+
+    // A non-sRGB surface format: the shading function encodes sRGB
+    // itself, and every effect downstream sees the frame's own
+    // encoding.
+    let capabilities = surface.get_capabilities(&gpu.adapter);
+    let format = capabilities
+        .formats
+        .iter()
+        .copied()
+        .find(|format| !format.is_srgb())
+        .unwrap_or_else(|| {
+            eprintln!("warning: no linear surface format available; colours will be bright");
+            capabilities.formats[0]
+        });
+
+    let size = window.inner_size();
+    let mut stage = Stage::new(
+        gpu,
+        TargetConfig::new(size.width.max(1), size.height.max(1), format),
+        ibl_source,
+    )?;
+    stage.refraction_quality = refraction_quality;
+    Ok(State {
+        window,
+        surface,
+        stage,
+        format,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn run_windowed(options: Options, demos: Vec<Demo>, start: usize) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App {
-        cameras: vec![None; demos.len()],
-        previous_camera: None,
-        cursor: None,
-        drag: None,
-        options,
-        demos,
-        current: start,
-        state: None,
-        started: Instant::now(),
-        paused_at: None,
-        error: None,
-        last_frame: None,
-    };
+    let mut app = App::new(options, demos, start);
     event_loop.run_app(&mut app)?;
     match app.error {
         Some(error) => Err(error),

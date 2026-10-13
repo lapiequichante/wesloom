@@ -28,6 +28,7 @@ naga = { workspace = true }
 # backends already pull in.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-futures = "0.4"
+web-time = "1"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Location", "console"] }
 
 [features]
