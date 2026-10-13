@@ -2010,6 +2010,7 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
         // Every gallery camera is fixed, so the velocity stage sees
         // object motion only — and `None` says exactly that.
         previous_camera: None,
+        origin: Default::default(),
     }
 }
 

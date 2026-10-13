@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use bytemuck::Zeroable;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{DMat4, DVec3, Mat4, Vec2, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
 
@@ -675,6 +675,22 @@ pub struct Environment {
     /// frame" is a fact about the sequence of frames, and getting it out
     /// of step is silent.
     pub previous_camera: Option<Camera>,
+    /// Where this frame's coordinates are measured from, in the absolute
+    /// world, in `f64` — the floating origin (plan3 M10).
+    ///
+    /// Every position the environment holds (the camera, its previous
+    /// frame, the lights) and every draw transform is *relative* to it.
+    /// Zero, the default, is the absolute world and every frame before
+    /// the field. A scene far from the origin keeps its own positions in
+    /// `f64` and lets [`Environment::look_from`] put the origin on the
+    /// eye: model matrices are then pre-translated by the camera in `f64`
+    /// ([`Environment::local_transform`]) and the view matrix carries no
+    /// translation, so no large number ever becomes an `f32`. A material
+    /// compiled with [`abi::FEATURE_RELATIVE_TO_EYE`] then sees small
+    /// positions throughout; one without it still reads the absolute
+    /// world, through the `f32` copy of this in the scene uniform, and
+    /// pays that precision only in its shading, never in its geometry.
+    pub origin: DVec3,
 }
 
 impl Default for Environment {
@@ -688,11 +704,36 @@ impl Default for Environment {
             time: 0.0,
             previous_time: 0.0,
             previous_camera: None,
+            origin: DVec3::ZERO,
         }
     }
 }
 
 impl Environment {
+    /// Put the camera at `eye`, looking at `target`, both absolute, and
+    /// move the floating origin onto the eye — relative-to-eye rendering's
+    /// host half (plan3 M10). The camera's own translation is then zero,
+    /// so the view matrix has none. Draw transforms, lights and the
+    /// previous camera must be expressed against the new origin, through
+    /// [`Environment::local_transform`] and [`Environment::local_point`].
+    pub fn look_from(&mut self, eye: DVec3, target: DVec3) {
+        self.origin = eye;
+        self.camera.eye = Vec3::ZERO;
+        self.camera.target = (target - eye).as_vec3();
+    }
+
+    /// An absolute `f64` position, measured from [`Environment::origin`].
+    pub fn local_point(&self, absolute: DVec3) -> Vec3 {
+        (absolute - self.origin).as_vec3()
+    }
+
+    /// An absolute `f64` object-to-world transform, pre-translated by
+    /// [`Environment::origin`] before it becomes an `f32` — the form a
+    /// draw's transform takes in a rebased frame.
+    pub fn local_transform(&self, absolute: DMat4) -> Mat4 {
+        (DMat4::from_translation(-self.origin) * absolute).as_mat4()
+    }
+
     /// Move the clock to `time`, remembering what it was.
     ///
     /// A method rather than a field an application sets twice, because
@@ -785,6 +826,8 @@ impl Environment {
             time: self.time,
             exposure: self.exposure,
             previous_time: self.previous_time,
+            origin: self.origin.as_vec3().to_array(),
+            _padding: 0.0,
         }
     }
 
@@ -1037,7 +1080,7 @@ mod tests {
         assert_eq!(size_of::<ShadowTileUniform>(), 96);
         assert_eq!(
             size_of::<SceneUniform>(),
-            MAX_LIGHTS * 112 + abi::MAX_SHADOW_TILES * 96 + 48,
+            MAX_LIGHTS * 112 + abi::MAX_SHADOW_TILES * 96 + 64,
             "scene uniform layout drifted from bindings.wxsl"
         );
         assert!(

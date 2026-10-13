@@ -84,6 +84,7 @@ pub fn unlit() -> Environment {
         time: 0.0,
         previous_time: 0.0,
         previous_camera: None,
+        origin: Default::default(),
     }
 }
 

@@ -1447,3 +1447,199 @@ fn a_feature_toggled_under_the_document_pipeline_recompiles_it() {
     );
     assert!(editor.preview().status().is_ok());
 }
+
+/// The code editor (plan3 M11): a function typed into the `function` tab
+/// and saved with Ctrl+S is a node in the same session — registered,
+/// offered by the palette, wired into the graph and compiled into the
+/// material — and a syntax error typed into it afterwards is reported on
+/// its own line while the last good node keeps working; undo takes it back.
+#[test]
+fn a_function_written_in_the_editor_becomes_a_node() {
+    use wxsl::render::ui::input::Modifiers;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    let mut time = 0.0;
+    let mut tick = |editor: &mut Editor| {
+        time += 0.016;
+        frame(&gpu, editor, &target, time);
+    };
+    tick(&mut editor);
+    tick(&mut editor);
+    let click = |editor: &mut Editor, point: Vec2, tick: &mut dyn FnMut(&mut Editor)| {
+        editor.handle_event(UiEvent::PointerMoved(point));
+        tick(editor);
+        for pressed in [true, false] {
+            editor.handle_event(UiEvent::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+            });
+            tick(editor);
+        }
+    };
+    let key = |editor: &mut Editor, key: Key, modifiers: Modifiers| {
+        editor.handle_event(UiEvent::ModifiersChanged(modifiers));
+        for pressed in [true, false] {
+            editor.handle_event(UiEvent::Key {
+                key,
+                pressed,
+                repeat: false,
+            });
+        }
+        editor.handle_event(UiEvent::ModifiersChanged(Modifiers::NONE));
+    };
+    let command = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+
+    // The bottom panel's tab strip at scale 1: six cells of ~84 px from
+    // x = 8, "function" last; the editor fills the panel under its bar.
+    click(&mut editor, Vec2::new(470.0, 555.0), &mut tick);
+    click(&mut editor, Vec2::new(600.0, 690.0), &mut tick);
+    assert!(
+        editor.is_typing(),
+        "a click in the buffer gives it the keyboard"
+    );
+
+    // Replace the template, one typed line per frame. Enter indents the
+    // next line itself, so the lines are typed without their own.
+    key(&mut editor, Key::Char('a'), command);
+    // Its own frame: text arriving beside a command chord is the chord's.
+    tick(&mut editor);
+    let source = [
+        "// Glow",
+        "//",
+        "// A colour doubled, written in the editor.",
+        "",
+        "fn glow(",
+        "color: vec3f, // @default 1.0, 0.5, 0.25",
+        ") -> vec3f {",
+        "return color * 2.0;",
+        "}",
+    ];
+    for line in source {
+        for character in line.chars() {
+            editor.handle_event(UiEvent::Text(character));
+        }
+        key(&mut editor, Key::Enter, Modifiers::NONE);
+        tick(&mut editor);
+    }
+    key(&mut editor, Key::Char('s'), command);
+    tick(&mut editor);
+    assert!(
+        editor.registry().contains("user.glow"),
+        "saving registers the node: {}\n{}",
+        editor.message(),
+        editor.functions().current().buffer.text()
+    );
+    assert!(
+        editor.message().contains("user.glow"),
+        "{}",
+        editor.message()
+    );
+    assert!(editor.functions().current().marks.is_empty());
+    assert!(
+        editor
+            .registry()
+            .categories_in(editor.graph().domain())
+            .contains(&"user"),
+        "the palette offers it under its package"
+    );
+
+    // Use it: the material compiles the function the editor wrote.
+    let registry = editor.registry().clone();
+    let output = editor
+        .graph()
+        .nodes()
+        .find(|(_, node)| node.def == wxsl::core::abi::SURFACE_OUTPUT_ID)
+        .map(|(id, _)| id)
+        .expect("the demo graph has an output");
+    let glow = editor.graph_mut().add_node("user.glow");
+    editor.graph_mut().disconnect(
+        &registry,
+        &wxsl::core::graph::SocketRef {
+            node: output,
+            socket: "emissive".to_string(),
+        },
+    );
+    editor
+        .graph_mut()
+        .wire(&registry, (glow, "out"), (output, "emissive"))
+        .expect("a vec3f is an emissive");
+    tick(&mut editor);
+    assert!(
+        editor.preview().status().is_ok(),
+        "the graph using the new node compiles: {:?}",
+        editor.preview().status()
+    );
+    assert!(editor.preview().wxsl().contains("glow"));
+
+    // Break line 8 ("return color * 2.0;") and save: the error is on that
+    // line, and the node that last saved keeps the preview running.
+    key(
+        &mut editor,
+        Key::Up,
+        Modifiers {
+            logo: true,
+            ..Modifiers::NONE
+        },
+    );
+    for _ in 0..7 {
+        key(&mut editor, Key::Down, Modifiers::NONE);
+    }
+    key(&mut editor, Key::End, Modifiers::NONE);
+    key(&mut editor, Key::Left, Modifiers::NONE);
+    tick(&mut editor);
+    for character in " +".chars() {
+        editor.handle_event(UiEvent::Text(character));
+    }
+    tick(&mut editor);
+    let text = editor.functions().current().buffer.text().to_string();
+    assert_eq!(
+        text.lines().nth(7).map(str::trim),
+        Some("return color * 2.0 +;")
+    );
+    key(&mut editor, Key::Char('s'), command);
+    tick(&mut editor);
+    let marks = &editor.functions().current().marks;
+    assert_eq!(
+        marks.first().map(|mark| mark.line),
+        Some(7),
+        "the syntax error is reported on its own line: {marks:?}"
+    );
+    assert!(
+        editor.message().starts_with("line 8:"),
+        "{}",
+        editor.message()
+    );
+    assert!(
+        editor.preview().status().is_ok(),
+        "the last good node still runs"
+    );
+
+    // Undo takes the typing back, and the buffer saves cleanly again.
+    key(&mut editor, Key::Char('z'), command);
+    tick(&mut editor);
+    assert_eq!(
+        editor
+            .functions()
+            .current()
+            .buffer
+            .text()
+            .lines()
+            .nth(7)
+            .map(str::trim),
+        Some("return color * 2.0;")
+    );
+    key(&mut editor, Key::Char('s'), command);
+    tick(&mut editor);
+    assert!(editor.functions().current().marks.is_empty());
+
+    // Escape leaves the buffer, and the single-key shortcuts come back.
+    key(&mut editor, Key::Escape, Modifiers::NONE);
+    tick(&mut editor);
+    assert!(!editor.is_typing());
+}

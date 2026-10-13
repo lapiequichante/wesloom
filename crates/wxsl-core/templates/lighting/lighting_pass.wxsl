@@ -55,11 +55,13 @@ fn ${FRAGMENT_ENTRY}(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // rather than full of zeroes.
     let basis = tangent_basis(unpacked.surface.normal);
     var ctx: SurfaceContext;
-    ctx.world_position = world_position;
+    // `world_position` is buffer space; the context is measured from
+    // wherever the material's frame of reference says (M10).
+    ctx.world_position = world_position - world_origin();
     ctx.world_normal = unpacked.surface.normal;
     ctx.world_tangent = basis[0];
     ctx.world_bitangent = basis[1];
-    ctx.view_direction = normalize(camera.position - world_position);
+    ctx.view_direction = normalize(eye_position() - ctx.world_position);
     ctx.uv = uv;
     ctx.time = scene.time;
 

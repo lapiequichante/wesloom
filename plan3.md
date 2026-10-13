@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047. The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11 and M10 (ADR 0074). The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -20,7 +20,7 @@ earlier plans' items did.
 
 | From | Still open | Reshaped by |
 |---|---|---|
-| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040, its motion half with ADR 0046 —, ~~M8 (peeling)~~ — landed, ADR 0047 —, ~~M9 (bake)~~ — landed, ADR 0045 —, M10 (relative-to-eye), M11 (code editor) | plan2's P3/P4 — passes and effects are data now |
+| plan.md | ~~M7 (screen domain)~~ — landed, ADR 0040, its motion half with ADR 0046 —, ~~M8 (peeling)~~ — landed, ADR 0047 —, ~~M9 (bake)~~ — landed, ADR 0045 —, ~~M10 (relative-to-eye)~~ — landed, ADR 0074 —, ~~M11 (code editor)~~ — landed | plan2's P3/P4 — passes and effects are data now |
 | plan2 | ~~P5 (pipeline canvas)~~ — landed, ADR 0043 —, ~~P7 (material config)~~ — landed, ADR 0038 —, ~~P8 (identity/contracts)~~ — landed, ADR 0044 | P10–P12 — the vocabulary they were waiting for exists |
 | ADRs 0034–0037 | the deferred halves each ADR named, less ~~N1~~ — landed, ADR 0039 —, less ~~N3~~ — landed, ADR 0041 —, less ~~N4~~ — landed, ADR 0042 | queued below as N-items with the ADR that owes them |
 
@@ -586,7 +586,27 @@ and C ABI/Dawn smoke tests. A missing GPU adapter is a skip, not validation.
 
 ### M11 — The code editor
 
-Unblocked at any time; the plan.md write-up stands unchanged:
+**Done (2026-10-13):** the bottom panel's `function` tab is a code
+editor. `buffer::TextBuffer` is the text model — a `String` and byte
+offsets like `text_field`, grown lines, a goal column, a selection across
+lines, smart home, word moves, indent/outdent, auto-indent and per-buffer
+snapshot undo that coalesces a typed word — pure and tested without a
+device; `Ui::code_editor` draws it over the read-only panel's gutter and
+highlighting with a caret, pointer selection, scroll-to-caret, an
+editor-internal clipboard, and diagnostics as a gutter dot, a tinted line
+and an underline. Saving (Ctrl+S, or the `save` button) runs
+`function::derive` — parse, `node_from_source` at
+`package::user::<fn>`, resolve against the preview's library — then
+mounts the module through hot reload's checked door and registers
+`user.<fn>`: the palette offers it under `user` in the same session, and
+a graph already using it recompiles. A failed save leaves the last good
+node running and the diagnostics on their lines. Done-when met in
+`a_function_written_in_the_editor_becomes_a_node` (typed, saved, wired
+into the demo graph and compiled; line 8 broken and reported as line 8;
+undone and saved again). No ADR: the text model is the existing one.
+Buffers live for the session; nothing is written to disk.
+
+The original write-up:
 
 * Multi-line editing in the immediate-mode layer — cursor, selection,
   keyboard navigation, scroll-to-cursor, per-buffer undo (the editor has
@@ -604,6 +624,17 @@ Unblocked at any time; the plan.md write-up stands unchanged:
 * ADR: probably none; a different text model for `ui` would want one.
 
 ### M10 — Relative-to-eye rendering
+
+**Done (2026-10-13, ADR 0074):** the frame is rebased onto an `f64`
+floating origin, `Environment::origin`; `look_from` puts it on the eye
+and `local_transform`/`local_point` pre-translate in `f64`, all in
+`wxsl-frame`. `Scene.origin` tells the shader, so `world_origin()` is
+`-scene.origin` for an unflagged material and the camera for a flagged
+one; the deferred lighting pass now measures its reconstructed position
+from it too (it was wrong under the flag before). `frame_of_reference.rs`
+renders a plane at 10^7 rebased under the probe, forward and deferred
+pipelines within 3/255 of the near-origin frame, while the naive `f32`
+frame is wrecked.
 
 The ABI hook landed in M5 and is tested; what remains is the host half:
 model matrices pre-translated by the camera on the CPU in `f64`, and the
@@ -871,7 +902,7 @@ none of it knows or cares which backend is underneath.
    dispatch plumbing is codegen)*: the subsurface model over the feature
    channel. **N7** (lighting scale) — feature work on top of a finished
    frame.
-10. **M11**, **M10**, **N9** — the editor's code editor, the precision
+10. ~~**M11**~~, ~~**M10**~~ — *landed*, M10 with ADR 0074 —, ~~**N9**~~ — the editor's code editor, the precision
     host work, and the editor catching up; all unblocked at any time, so
     they slot in wherever a pause wants filling. N9's panels are the
     cheapest visible wins on this list — everything they show already

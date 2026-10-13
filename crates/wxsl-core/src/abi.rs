@@ -780,13 +780,13 @@ pub const FEATURE_RECEIVE_SHADOWS: &str = "wxsl_receive_shadows";
 /// stage was open rather than retrofitted once many materials read
 /// `world_position`: with the flag on, `SurfaceContext::world_position` is
 /// camera-relative and the eye is at the origin. `world_origin()` in
-/// `bindings.wxsl` is the one explicit way back to absolute space, and the
-/// only two things that take it are a point light's falloff and the shadow
-/// lookup.
+/// `bindings.wxsl` is the one explicit way back to the frame's buffer
+/// space, and the only things that take it are a light's falloff, the
+/// shadow lookup and the deferred pass's reconstructed position.
 ///
-/// What the flag does *not* yet buy is the precision it exists for: that
-/// needs model matrices pre-translated by the camera in `f64` on the host,
-/// which is a milestone of its own.
+/// The precision it exists for needs the host half too: the frame rebased
+/// onto an `f64` floating origin on the eye (`Environment::look_from`,
+/// ADR 0074), so no large number ever reaches an `f32`.
 pub const FEATURE_RELATIVE_TO_EYE: &str = "wxsl_relative_to_eye";
 /// Feature flag: time-driven nodes read the previous frame's clock (see
 /// [`abi_macros`]).

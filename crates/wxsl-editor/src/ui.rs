@@ -29,6 +29,7 @@ use wxsl_render::ui::text::{FontId, GlyphCache, TextLayout, TextOptions};
 use wxsl_render::ui::Atlas;
 use wxsl_render::RenderError;
 
+use crate::buffer::TextBuffer;
 use crate::highlight::Run;
 use crate::theme::Theme;
 
@@ -235,6 +236,12 @@ pub struct UiState {
     interaction: Interaction,
     focus: Option<Id>,
     editing: Option<TextEdit>,
+    /// Whether the focused widget is a [`Ui::code_editor`], whose caret
+    /// lives in its own buffer rather than in `editing`.
+    typing_code: bool,
+    /// What copy and cut in a code editor put, and paste takes — the
+    /// editor's own, since the platform's needs a dependency (ADR 0013).
+    clipboard: String,
     scroll: HashMap<Id, Vec2>,
     drag_origin: HashMap<Id, f32>,
     color_picker: Option<Id>,
@@ -283,6 +290,8 @@ impl UiState {
             interaction: Interaction::default(),
             focus: None,
             editing: None,
+            typing_code: false,
+            clipboard: String::new(),
             scroll: HashMap::new(),
             drag_origin: HashMap::new(),
             color_picker: None,
@@ -307,15 +316,24 @@ impl UiState {
         });
     }
 
+    /// Give a code editor keyboard focus; its caret is its buffer's.
+    pub fn focus_code(&mut self, id: Id) {
+        self.focus = Some(id);
+        self.editing = None;
+        self.typing_code = true;
+    }
+
     /// Drop keyboard focus.
     pub fn clear_focus(&mut self) {
         self.focus = None;
         self.editing = None;
+        self.typing_code = false;
     }
 
-    /// Whether a text field is being edited.
+    /// Whether a text field or a code editor is being typed into — when
+    /// the editor's single-key shortcuts stand down.
     pub fn is_editing(&self) -> bool {
-        self.editing.is_some()
+        self.editing.is_some() || self.typing_code
     }
 
     /// Whether the colour swatch `id` has its picker showing.
@@ -1231,63 +1249,306 @@ impl<'a> Ui<'a> {
                 Align::Right,
             );
             let text_x = origin.x + gutter + theme.metrics.padding;
-            if runs.is_empty() {
-                let line_rect =
-                    Rect::from_min_size(Vec2::new(text_x, y), Vec2::new(content.x, line_height));
-                self.mono_label(line_rect, line, theme.palette.text, Align::Left);
-                continue;
-            }
-            let start = line_starts[row];
-            let end = start + line.len();
-            let from = runs.partition_point(|run| run.range.end <= start);
-            let mut cursor = 0usize;
-            for run in runs[from..].iter().take_while(|run| run.range.start < end) {
-                let seg_start = run.range.start.max(start) - start;
-                let seg_end = run.range.end.min(end) - start;
-                if seg_start > cursor {
-                    draw_code_run(
-                        self,
-                        line,
-                        cursor,
-                        seg_start,
-                        text_x,
-                        y,
-                        line_height,
-                        advance,
-                        content.x,
-                        theme.palette.text,
-                    );
-                }
-                draw_code_run(
-                    self,
-                    line,
-                    seg_start,
-                    seg_end,
-                    text_x,
-                    y,
-                    line_height,
-                    advance,
-                    content.x,
-                    run.kind.color(&theme.palette),
-                );
-                cursor = seg_end;
-            }
-            if cursor < line.len() {
+            self.code_line(
+                line,
+                line_starts[row],
+                runs,
+                Vec2::new(text_x, y),
+                Vec2::new(advance, line_height),
+                content.x,
+            );
+        }
+        area.end(self);
+    }
+
+    /// One line of a code panel, coloured by whichever of `runs` cover it.
+    ///
+    /// `start` is the line's byte offset into the text the runs index;
+    /// `cell` is one character's advance and the line height.
+    fn code_line(
+        &mut self,
+        line: &str,
+        start: usize,
+        runs: &[Run],
+        at: Vec2,
+        cell: Vec2,
+        width: f32,
+    ) {
+        let theme = self.state.theme;
+        let (text_x, y, advance, line_height) = (at.x, at.y, cell.x, cell.y);
+        if runs.is_empty() {
+            let line_rect = Rect::from_min_size(at, Vec2::new(width, line_height));
+            self.mono_label(line_rect, line, theme.palette.text, Align::Left);
+            return;
+        }
+        let end = start + line.len();
+        let from = runs.partition_point(|run| run.range.end <= start);
+        let mut cursor = 0usize;
+        for run in runs[from..].iter().take_while(|run| run.range.start < end) {
+            let seg_start = run.range.start.max(start) - start;
+            let seg_end = run.range.end.min(end) - start;
+            if seg_start > cursor {
                 draw_code_run(
                     self,
                     line,
                     cursor,
-                    line.len(),
+                    seg_start,
                     text_x,
                     y,
                     line_height,
                     advance,
-                    content.x,
+                    width,
                     theme.palette.text,
                 );
             }
+            draw_code_run(
+                self,
+                line,
+                seg_start,
+                seg_end,
+                text_x,
+                y,
+                line_height,
+                advance,
+                width,
+                run.kind.color(&theme.palette),
+            );
+            cursor = seg_end;
+        }
+        if cursor < line.len() {
+            draw_code_run(
+                self,
+                line,
+                cursor,
+                line.len(),
+                text_x,
+                y,
+                line_height,
+                advance,
+                width,
+                theme.palette.text,
+            );
+        }
+    }
+
+    /// An editable code panel over `buffer` (plan3 M11): the read-only
+    /// panel's gutter and highlighting, plus a caret, a selection, the
+    /// pointer and keyboard editing [`TextBuffer`] implements, and
+    /// `marks` — compiler diagnostics — drawn on their own lines: a dot in
+    /// the gutter, the line tinted, the column underlined.
+    ///
+    /// Monospaced, so hit-testing is arithmetic over the advance and the
+    /// line height ([`code_hit`]) and only the visible rows are laid out.
+    /// `changed` reports an edit to the text; the caret moving alone does
+    /// not count.
+    pub fn code_editor(
+        &mut self,
+        id: Id,
+        rect: Rect,
+        buffer: &mut TextBuffer,
+        runs: &[Run],
+        marks: &[LineMark],
+    ) -> Response {
+        let theme = self.state.theme;
+        let advance = self.mono_advance();
+        let line_height = (theme.metrics.mono_text_size * 1.45).max(1.0);
+        let lines = buffer.line_count();
+        // Room for the numbers, and a marker column before them.
+        let marker = advance * 1.5;
+        let gutter = marker + advance * digit_count(lines).max(2) as f32 + theme.metrics.padding;
+        let text_left = gutter + theme.metrics.padding;
+        let widest = buffer
+            .text()
+            .split('\n')
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
+        let content = Vec2::new(
+            text_left + advance * (widest + 1) as f32 + theme.metrics.padding,
+            lines as f32 * line_height + line_height,
+        );
+
+        let mut response = self.interact(id, rect);
+        let has_focus = |state: &UiState| state.focus == Some(id) && state.typing_code;
+        let offset = self.state.scroll.get(&id).copied().unwrap_or(Vec2::ZERO);
+        let origin = rect.min - offset;
+        let hit = |point: Vec2, buffer: &TextBuffer| {
+            let (line, column) = code_hit(
+                point - origin - Vec2::new(text_left, 0.0),
+                advance,
+                line_height,
+            );
+            buffer.offset(line, column)
+        };
+
+        let mut moved = false;
+        if response.pressed {
+            if !has_focus(self.state) {
+                self.state.focus_code(id);
+            }
+            let at = hit(self.input.pointer_or_zero(), buffer);
+            if response.double_clicked {
+                buffer.select_word_at(at);
+            } else {
+                buffer.set_cursor(at, self.input.modifiers().shift);
+            }
+        } else if response.dragging && self.input.pointer_delta() != Vec2::ZERO {
+            buffer.set_cursor(hit(self.input.pointer_or_zero(), buffer), true);
+            moved = true;
+        }
+        if has_focus(self.state) && self.input.pressed(MouseButton::Left) && !response.hovered {
+            self.state.clear_focus();
+        }
+        let focused = has_focus(self.state);
+        if focused {
+            let revision = buffer.revision();
+            // A command chord's character is a shortcut, not text — some
+            // platforms deliver both.
+            let chord = self
+                .input
+                .keys()
+                .iter()
+                .any(|press| press.modifiers.command() && !press.modifiers.alt);
+            if !chord && !self.input.text().is_empty() {
+                buffer.insert(self.input.text());
+                moved = true;
+            }
+            let page = ((rect.height() / line_height) as usize).saturating_sub(1);
+            let mut clipboard = std::mem::take(&mut self.state.clipboard);
+            for press in self.input.keys() {
+                if press.key == Key::Escape {
+                    self.state.clear_focus();
+                    break;
+                }
+                let outcome = buffer.key(press, page, &mut clipboard);
+                moved |= outcome.moved || outcome.edited;
+            }
+            self.state.clipboard = clipboard;
+            response.changed = buffer.revision() != revision;
+        }
+
+        // Keep the caret in view after anything that moved it.
+        if moved {
+            let (line, column) = buffer.line_column(buffer.cursor());
+            let caret = Vec2::new(
+                text_left + advance * column as f32,
+                line as f32 * line_height,
+            );
+            let mut offset = offset;
+            let view = rect.size();
+            if caret.y < offset.y {
+                offset.y = caret.y;
+            } else if caret.y + line_height > offset.y + view.y {
+                offset.y = caret.y + line_height - view.y;
+            }
+            if caret.x < offset.x + text_left {
+                offset.x = (caret.x - text_left).max(0.0);
+            } else if caret.x + advance * 2.0 > offset.x + view.x {
+                offset.x = caret.x + advance * 2.0 - view.x;
+            }
+            self.state.scroll.insert(id, offset);
+        }
+
+        if focused {
+            self.state
+                .draw
+                .rect(rect, theme.palette.control.with_alpha(0.35));
+        }
+        let area = self.scroll_area(id, rect, content);
+        let origin = area.origin();
+        let first = ((area.offset.y / line_height).floor() as usize).saturating_sub(1);
+        let visible = (rect.height() / line_height).ceil() as usize + 2;
+        let last = (first + visible).min(lines);
+        let selection = buffer.selection();
+        let text = buffer.text();
+        for row in first..last {
+            let range = buffer.line_range(row);
+            let line = &text[range.clone()];
+            let y = origin.y + row as f32 * line_height;
+            let text_x = origin.x + text_left;
+            let row_rect = Rect::from_min_size(
+                Vec2::new(origin.x, y),
+                Vec2::new(content.x.max(rect.width()), line_height),
+            );
+            let mark = marks.iter().find(|mark| mark.line == row);
+            if mark.is_some() {
+                self.state
+                    .draw
+                    .rect(row_rect, theme.palette.error.with_alpha(0.14));
+            }
+            if let Some(selected) = selection.as_ref() {
+                let from = selected.start.max(range.start);
+                // A selection running on past the line covers its newline.
+                let to = selected.end.min(range.end);
+                if selected.start <= range.end && selected.end >= range.start && from <= to {
+                    let start = line[..from - range.start].chars().count();
+                    let end = line[..to - range.start].chars().count()
+                        + usize::from(selected.end > range.end);
+                    let highlight = Rect::from_min_size(
+                        Vec2::new(text_x + advance * start as f32, y),
+                        Vec2::new(advance * (end - start) as f32, line_height),
+                    );
+                    self.state
+                        .draw
+                        .rect(highlight, theme.palette.accent.with_alpha(0.35));
+                }
+            }
+            if let Some(mark) = mark {
+                let column = mark.column.min(line.chars().count());
+                let length = line.chars().count().saturating_sub(column).max(1);
+                let underline = Rect::from_min_size(
+                    Vec2::new(text_x + advance * column as f32, y + line_height - 2.0),
+                    Vec2::new(
+                        advance * length as f32,
+                        theme.metrics.outline_width.max(1.5),
+                    ),
+                );
+                self.state.draw.rect(underline, theme.palette.error);
+                let dot = Rect::from_center_size(
+                    Vec2::new(origin.x + marker * 0.5 + 2.0, y + line_height * 0.5),
+                    Vec2::splat(advance * 0.7),
+                );
+                self.state
+                    .draw
+                    .round_rect(dot, advance * 0.35, theme.palette.error);
+            }
+            let number_rect = Rect::from_min_size(
+                Vec2::new(origin.x + marker, y),
+                Vec2::new(gutter - marker, line_height),
+            );
+            let number_color = if mark.is_some() {
+                theme.palette.error
+            } else {
+                theme.palette.text_dim
+            };
+            self.mono_label(
+                number_rect,
+                &(row + 1).to_string(),
+                number_color,
+                Align::Right,
+            );
+            self.code_line(
+                line,
+                range.start,
+                runs,
+                Vec2::new(text_x, y),
+                Vec2::new(advance, line_height),
+                content.x,
+            );
+        }
+        if focused && (self.input.time() * 2.0).fract() < 0.6 {
+            let (line, column) = buffer.line_column(buffer.cursor());
+            let caret = Rect::from_min_size(
+                Vec2::new(
+                    origin.x + text_left + advance * column as f32,
+                    origin.y + line as f32 * line_height,
+                ),
+                Vec2::new(theme.metrics.outline_width.max(1.5), line_height),
+            );
+            self.state.draw.rect(caret, theme.palette.text);
         }
         area.end(self);
+        response
     }
 
     /// The advance of one monospaced character, at the code text size.
@@ -1368,6 +1629,26 @@ impl ScrollArea {
     pub fn end(self, ui: &mut Ui<'_>) {
         ui.state.draw.pop_clip();
     }
+}
+
+/// A compiler diagnostic's place in a [`Ui::code_editor`]'s buffer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineMark {
+    /// 0-based line.
+    pub line: usize,
+    /// 0-based character column the problem starts at.
+    pub column: usize,
+    /// What is wrong there.
+    pub message: String,
+}
+
+/// The line and character column a point lands on in a monospaced code
+/// panel, measured from its text origin — nearest caret position, so a
+/// click on a character's right half lands after it.
+pub fn code_hit(local: Vec2, advance: f32, line_height: f32) -> (usize, usize) {
+    let line = (local.y / line_height).floor().max(0.0) as usize;
+    let column = (local.x / advance).round().max(0.0) as usize;
+    (line, column)
 }
 
 /// Where a text layout's origin goes inside `rect`, for an alignment.

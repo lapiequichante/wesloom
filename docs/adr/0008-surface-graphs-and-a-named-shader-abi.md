@@ -198,7 +198,8 @@ origin, and `world_origin()` in `bindings.wxsl` is the one explicit way
 back to absolute space — the two places that need it, a point light's
 falloff and the shadow lookup, take it. The flag is correct today and not
 yet *useful*: the precision it exists for needs model matrices
-pre-translated on the host in `f64`.
+pre-translated on the host in `f64` — which ADR 0074 lands, as a
+floating origin the whole frame is rebased onto.
 
 `wxsl_previous_frame` makes every time-driven node read the previous
 frame's clock at once. A velocity stage needs the vertex offset evaluated

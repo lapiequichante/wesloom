@@ -283,6 +283,12 @@ impl Preview {
         &self.status
     }
 
+    /// The shader library the preview compiles against — the shipped one
+    /// plus every module hot reload or a saved function mounted.
+    pub fn library(&self) -> &ShaderLibrary {
+        &self.library
+    }
+
     /// Why the last shader reload was refused, if it was.
     pub fn reload_errors(&self) -> &[String] {
         &self.reload_errors
@@ -1224,6 +1230,7 @@ pub fn preview_environment(time: f32) -> Environment {
         // previous frame *of*.
         previous_time: time,
         previous_camera: None,
+        origin: Default::default(),
     }
 }
 

@@ -85,8 +85,10 @@ typedef struct WxslSceneUniform {
     float time;
     float exposure;
     float previous_time;
+    float origin[3];
+    float _padding;
 } WxslSceneUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12592, "SceneUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12608, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, shadow_tiles) == 1792, "SceneUniform.shadow_tiles offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 12544, "SceneUniform.ambient_sky offset");
@@ -97,6 +99,8 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_count) == 12576, "SceneUnifo
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, time) == 12580, "SceneUniform.time offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 12584, "SceneUniform.exposure offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 12588, "SceneUniform.previous_time offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, origin) == 12592, "SceneUniform.origin offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, _padding) == 12604, "SceneUniform._padding offset");
 typedef struct WxslInstanceTransform {
     float model[4][4];
     float normal_matrix[4][4];
@@ -192,6 +196,6 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "8811270282758616560"
+#define WXSL_HOST_LAYOUT_ID "8010583698407423506"
 #undef WXSL_LAYOUT_ASSERT
 #endif

@@ -53,6 +53,7 @@ fn sky_only() -> Environment {
         time: 0.0,
         previous_time: 0.0,
         previous_camera: None,
+        origin: Default::default(),
     }
 }
 

@@ -38,6 +38,7 @@ use wxsl_render::ui::{Atlas, Font, InputState, MsdfBackend, MsdfGenerator, UiRen
 use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
+use crate::function::{self, FunctionSource, Functions};
 use crate::palette::{Match, NodePicker};
 use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
@@ -115,6 +116,9 @@ pub enum CodeTab {
     Frame,
     /// Whatever is stopping it.
     Problems,
+    /// A function being written, which saving turns into a node (plan3
+    /// M11).
+    Function,
 }
 
 impl CodeTab {
@@ -125,6 +129,7 @@ impl CodeTab {
         CodeTab::Features,
         CodeTab::Frame,
         CodeTab::Problems,
+        CodeTab::Function,
     ];
 
     fn index(self) -> usize {
@@ -179,6 +184,8 @@ pub struct Editor {
     /// Space went down as a shortcut and the pointer has not moved since:
     /// releasing it toggles the spin. Moving pans the canvas instead.
     space_tap: bool,
+    /// The function buffers of the code editor (plan3 M11).
+    functions: Functions,
 }
 
 impl Editor {
@@ -241,6 +248,7 @@ impl Editor {
             watch: None,
             next_poll: 0.0,
             space_tap: false,
+            functions: Functions::default(),
         })
     }
 
@@ -286,6 +294,75 @@ impl Editor {
         } else {
             format!("{what} does not compile · see problems")
         };
+    }
+
+    /// The function buffers the code editor holds (plan3 M11).
+    pub fn functions(&self) -> &Functions {
+        &self.functions
+    }
+
+    /// The function buffers, for a caller that wants to open or fill one.
+    pub fn functions_mut(&mut self) -> &mut Functions {
+        &mut self.functions
+    }
+
+    /// Whether a text field or the code editor has the keyboard — when an
+    /// application should pass its own shortcuts (save, quit) through to
+    /// the editor rather than act on them.
+    pub fn is_typing(&self) -> bool {
+        self.ui.is_editing()
+    }
+
+    /// Save the function buffer the code panel shows (plan3 M11): derive
+    /// its node, mount its module in the preview's library, and register
+    /// the node, so the palette offers it in this session. A graph already
+    /// using the node recompiles against the new text. On failure the
+    /// compiler's diagnostics land on their lines in the buffer and
+    /// nothing changes. Returns whether it took.
+    pub fn save_function(&mut self, device: &wgpu::Device) -> bool {
+        let source = self.functions.current().buffer.text().to_string();
+        let derived = function::derive(&source, self.preview.library());
+        let (path, definition) = match derived {
+            Ok(derived) => derived,
+            Err(marks) => {
+                self.message = match marks.first() {
+                    Some(mark) => format!("line {}: {}", mark.line + 1, mark.message),
+                    None => "the function does not compile".to_string(),
+                };
+                self.functions.current_mut().record(Err(marks));
+                return false;
+            }
+        };
+        // Through hot reload's door: every shader the running pass list
+        // asks of the material is checked against the library with the
+        // module in it, so a graph already using the node cannot be
+        // broken by the save.
+        if !self.preview.reload(device, [(path.clone(), source)]) {
+            let errors = self.preview.reload_errors().join("\n");
+            self.message = "the function breaks the graph · see problems".to_string();
+            self.functions
+                .current_mut()
+                .record(Err(vec![crate::ui::LineMark {
+                    line: 0,
+                    column: 0,
+                    message: errors,
+                }]));
+            return false;
+        }
+        let id = definition.id.clone();
+        let label = definition.label.clone();
+        self.registry.register(definition);
+        self.library
+            .insert(path, self.functions.current().buffer.text().to_string());
+        if self.graph.nodes().any(|(_, node)| node.def == id) {
+            self.dirty = true;
+        }
+        self.message = format!(
+            "saved {label} as {id} · in the palette under {}",
+            function::PACKAGE
+        );
+        self.functions.current_mut().record(Ok(id));
+        true
     }
 
     /// The graph being edited.
@@ -740,7 +817,14 @@ impl Editor {
                 &mut requests,
             );
         } else {
-            self.tab = code_panel(&mut ui, code, self.tab, &self.preview, &mut requests);
+            self.tab = code_panel(
+                &mut ui,
+                code,
+                self.tab,
+                &self.preview,
+                &mut self.functions,
+                &mut requests,
+            );
         }
         if pipeline_mode {
             let state = self
@@ -1087,6 +1171,9 @@ impl Editor {
         if requests.toggle_spin {
             self.preview.spinning = !self.preview.spinning;
         }
+        if requests.save_function {
+            self.save_function(device);
+        }
         if let Some(names) = requests.features.take() {
             // The material is regenerated right after: the plan the
             // checkboxes widened is the plan it must resolve against, and
@@ -1221,6 +1308,8 @@ pub(crate) struct Requests {
     /// Turn the preview by this many pixels of drag.
     pub(crate) spin_drag: Option<f32>,
     pub(crate) fit: bool,
+    /// Save the function buffer showing, making it a node (plan3 M11).
+    pub(crate) save_function: bool,
     /// Lay the canvas's nodes out again, then fit.
     pub(crate) tidy: bool,
     /// The full set of material features the pipeline should carry, as the
@@ -2305,6 +2394,7 @@ fn code_panel(
     rect: Rect,
     tab: CodeTab,
     preview: &Preview,
+    functions: &mut Functions,
     requests: &mut Requests,
 ) -> CodeTab {
     let theme = *ui.theme();
@@ -2318,8 +2408,15 @@ fn code_panel(
     } else {
         format!("problems ({problems})")
     };
-    let labels = ["WXSL", "WGSL", "features", "frame", problem_label.as_str()];
-    let (tabs_rect, meta_rect) = tabs_rect.split_left(420.0 * theme.scale);
+    let labels = [
+        "WXSL",
+        "WGSL",
+        "features",
+        "frame",
+        problem_label.as_str(),
+        "function",
+    ];
+    let (tabs_rect, meta_rect) = tabs_rect.split_left(84.0 * labels.len() as f32 * theme.scale);
     let chosen = ui.tabs(Id::new("code.tabs"), tabs_rect, &labels, tab.index());
     let tab = CodeTab::ALL[chosen.min(CodeTab::ALL.len() - 1)];
 
@@ -2353,6 +2450,7 @@ fn code_panel(
         },
         CodeTab::Problems if problems == 0 => "the graph compiles".to_string(),
         CodeTab::Problems => format!("{problems} to fix"),
+        CodeTab::Function => function_meta(functions.current()),
     };
     ui.small_label(meta_rect, &meta, theme.palette.text_dim, Align::Right);
 
@@ -2372,6 +2470,7 @@ fn code_panel(
         ),
         CodeTab::Features => features_panel(ui, body, preview, requests),
         CodeTab::Frame => frame_panel(ui, body, preview, requests),
+        CodeTab::Function => function_panel(ui, body, functions, requests),
         CodeTab::Problems => {
             let errors: Vec<&str> = preview
                 .reload_errors()
@@ -2396,6 +2495,72 @@ fn code_panel(
         }
     }
     tab
+}
+
+/// The function tab's meta line: where the caret's diagnostic says the
+/// problem is, else what the last save made of the buffer.
+fn function_meta(source: &FunctionSource) -> String {
+    let (line, _) = source.buffer.line_column(source.buffer.cursor());
+    let at_caret = source.marks.iter().find(|mark| mark.line == line);
+    match (at_caret, source.marks.first(), &source.node) {
+        (Some(mark), _, _) | (None, Some(mark), _) => {
+            format!("line {}: {}", mark.line + 1, mark.message)
+        }
+        (None, None, Some(node)) if !source.is_modified() => {
+            format!("saved as {node} · in the palette")
+        }
+        (None, None, Some(node)) => format!("{node} · edited · save to update the node"),
+        (None, None, None) => "save (Ctrl+S) to make it a node".to_string(),
+    }
+}
+
+/// The function panel (plan3 M11): a buffer list, new and save, and the
+/// code editor over the buffer showing — diagnostics in its gutter.
+fn function_panel(ui: &mut Ui<'_>, body: Rect, functions: &mut Functions, requests: &mut Requests) {
+    let theme = *ui.theme();
+    let metrics = theme.metrics;
+    let gap = metrics.row_gap;
+    let (bar, editor) = body.split_top(metrics.row_height);
+    let editor = Rect::from_min_max(editor.min + Vec2::new(0.0, gap), editor.max);
+
+    let names: Vec<String> = functions
+        .buffers
+        .iter()
+        .map(|source| {
+            if source.is_modified() && source.node.is_some() {
+                format!("{} *", source.name())
+            } else {
+                source.name()
+            }
+        })
+        .collect();
+    let options: Vec<(&str, bool)> = names.iter().map(|name| (name.as_str(), true)).collect();
+    let (list_rect, rest) = bar.split_left(180.0 * theme.scale);
+    let mut current = functions.current;
+    ui.dropdown(Id::new("function.list"), list_rect, &options, &mut current);
+    functions.current = current.min(functions.buffers.len() - 1);
+    let mut cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
+    for (id, label) in [("function.new", "new"), ("function.save", "save")] {
+        let width = (ui.measure_ui(label).x + metrics.padding * 2.0).max(48.0);
+        let (rect, rest) = cursor.split_left(width);
+        cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
+        let fill = (id == "function.save" && functions.current().is_modified())
+            .then_some(theme.palette.accent);
+        if ui.button_colored(Id::new(id), rect, label, fill).clicked {
+            match id {
+                "function.new" => functions.open_new(),
+                _ => requests.save_function = true,
+            }
+        }
+    }
+
+    let id = Id::new("function.editor").with(functions.current as u64);
+    let source = functions.current_mut();
+    let runs = source.runs().to_vec();
+    ui.code_editor(id, editor, &mut source.buffer, &runs, &source.marks);
+    if ui.state.focus() == Some(id) && ui.input.command_pressed(Key::Char('s')) {
+        requests.save_function = true;
+    }
 }
 
 /// The frame panel (plan3 N9): pass stepping.

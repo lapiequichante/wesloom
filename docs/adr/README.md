@@ -90,6 +90,7 @@ is signal, don't delete it.
 | [0072](0072-integrate-rectangular-area-lights-with-shadowed-quadrature.md) | Integrate rectangular area lights with shadowed quadrature | Accepted |
 
 | [0073](0073-project-spotlight-cookies-through-the-frame-group.md) | Project spotlight cookies through the frame group | Accepted |
+| [0074](0074-rebase-each-frame-onto-an-f64-floating-origin.md) | Rebase each frame onto an f64 floating origin | Accepted, amends 0008 and 0050 |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

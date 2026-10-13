@@ -99,6 +99,7 @@ fn environment(aspect: f32) -> Environment {
         time: 1.0,
         previous_time: 1.0,
         previous_camera: None,
+        origin: Default::default(),
     }
 }
 

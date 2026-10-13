@@ -31,6 +31,9 @@
 //! `P` material/pipeline canvas · `F`/`D` render path · `M` preview mesh ·
 //! `G` MSDF backend · `A` add a node · `R` frame the graph · `Space` pause
 //! the spin · `Ctrl+S` save · `Delete` remove the selection · `Esc` quit.
+//! In the bottom panel's `function` tab (plan3 M11) the code editor has the
+//! keyboard: `Ctrl+S` there saves the function as a `user.*` node, `Ctrl+Z`
+//! undoes, and `Esc` leaves the editor rather than the application.
 //!
 //! The pipeline canvas (plan3 P5) opens on the deferred preset and compiles
 //! on every edit onto the same renderer the preview runs — so dropping a
@@ -92,9 +95,11 @@ KEYS:
     A            add a node at the middle of the canvas
     R            frame the whole graph
     Space        pause the preview's spin (tap; held, it pans)
-    Ctrl+S       save the active document
+    Ctrl+S       save the active document (in the function tab's code
+                 editor: save the function as a user.* node)
+    Ctrl+Z       undo in the code editor (Ctrl+Shift+Z redo)
     Delete       delete the selected nodes
-    Esc          quit
+    Esc          quit (in the code editor: leave it)
 
 POINTER:
     drag a node             move it (the whole selection moves)
@@ -859,7 +864,14 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(focused) => self.send(UiEvent::FocusChanged(focused)),
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
-                if pressed {
+                // While the code editor or a text field has the keyboard,
+                // Escape and Ctrl+S are the editor's: leave the field, save
+                // the function being written.
+                let typing = self
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.editor.is_typing());
+                if pressed && !typing {
                     if let WinitKey::Named(NamedKey::Escape) = event.logical_key {
                         event_loop.exit();
                         return;

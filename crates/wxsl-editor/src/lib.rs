@@ -61,7 +61,9 @@
 //! | Module | Holds |
 //! |---|---|
 //! | [`app`] | [`Editor`]: the panels, the frame, and the shortcuts |
+//! | [`buffer`] | the code editor's text model: caret, selection, lines, undo |
 //! | [`canvas`] | the pan/zoom node canvas: layout, links, hit-testing, dragging |
+//! | [`function`] | functions written in the editor, derived into `user.*` nodes on save |
 //! | [`highlight`] | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
 //! | [`palette`] | searching the node library |
 //! | [`pipeline`] | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
@@ -91,16 +93,20 @@
 //!
 //! # What the editor does not do
 //!
-//! Worth knowing before reaching for it: there is no undo history, no
-//! clipboard (that needs a platform dependency this crate does not have), no
-//! tabs over several *materials*, and no box selection. (The pipeline canvas
+//! Worth knowing before reaching for it: there is no undo history for the
+//! graph (the code editor's buffers have their own, plan3 M11), no platform
+//! clipboard (that needs a platform dependency this crate does not have; the
+//! code editor's copy and paste stay inside the editor), no tabs over
+//! several *materials*, and no box selection. (The pipeline canvas
 //! is a second document with its own state, not a tab.) None of these are
 //! hard; they are simply not there yet.
 
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod buffer;
 pub mod canvas;
+pub mod function;
 pub mod highlight;
 pub mod palette;
 pub mod pipeline;

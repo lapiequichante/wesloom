@@ -137,8 +137,11 @@ and pipeline switching), `draw` (draw lists and transforms), `mesh`
 re-export the shared APIs; `pipeline_doc` adapts its compiled graph to the
 wgpu recording wrapper.
 
-**`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `canvas`
-(the pan/zoom node canvas: layout, links, hit-testing, dragging), `highlight`
+**`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `buffer`
+(the code editor's text model: caret, selection, lines, per-buffer undo),
+`canvas` (the pan/zoom node canvas: layout, links, hit-testing, dragging),
+`function` (functions written in the editor, derived by `node_from_source`
+into `user.*` nodes when saved — plan3 M11), `highlight`
 (colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer), `palette`
 (searching the node library), `pipeline` (the second canvas: the pipeline
 document, compiled live onto the same renderer — ADR 0043), `preview` (the
@@ -438,6 +441,10 @@ camera, lights, ambient, exposure, time. Every draw's transform goes into
 one storage buffer in the frame group, indexed by
 `@builtin(instance_index)`, so a draw's position in the list is its row.
 See [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
+Every position a frame uploads is measured from `Environment::origin`, an
+`f64` floating origin the host can put on the eye (`look_from`,
+`local_transform`), so a scene far from the origin never becomes a large
+`f32` — [ADR 0074](adr/0074-rebase-each-frame-onto-an-f64-floating-origin.md).
 
 ## What a graph is responsible for
 

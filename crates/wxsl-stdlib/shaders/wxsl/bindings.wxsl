@@ -33,18 +33,20 @@ ${HOST_LAYOUTS}
 @group(0) @binding(8) var<storage, read> previous_instances: array<Instance>;
 // Where every world-space position in the shader ABI is measured from.
 //
-// Zero normally. Under `wxsl_relative_to_eye` it is the camera, so that
-// `world_position` stays small however far from the origin the scene sits
-// — an f32 loses a millimetre of resolution somewhere past 10^4 units, and
-// the fix is to never let the number get big rather than to widen it.
+// Measured in the frame's buffer space: the host may rebase every
+// position it uploads onto an f64 floating origin (`scene.origin`, M10),
+// pre-translating model matrices by the camera so that no large number
+// reaches an f32. Normally that leaves the absolute world, whose origin
+// sits at `-scene.origin` — zero when the host does not rebase. Under
+// `wxsl_relative_to_eye` it is the camera, so that `world_position` stays
+// small however far from the origin the scene sits — an f32 loses a
+// millimetre of resolution somewhere past 10^4 units, and the fix is to
+// never let the number get big rather than to widen it.
 //
-// This is the "explicit absolute origin" a node needs in order to read
-// absolute world space at all in that mode: `world_position +
-// world_origin()`. Everything in this ABI that has to work in absolute
-// space — a point light's falloff, a shadow lookup — does exactly that,
-// which is why the flag is correct today. What it is not yet is *useful*:
-// the precision only arrives once model matrices are pre-translated by the
-// camera in f64 on the host, which is M10's half of the job.
+// `world_position + world_origin()` is buffer space, which is where every
+// light, shadow matrix and camera lives; everything in this ABI that has
+// to work there — a point light's falloff, a shadow lookup — does exactly
+// that.
 @macro const wxsl_relative_to_eye: bool = false;
 
 @if(wxsl_relative_to_eye)
@@ -54,7 +56,7 @@ fn world_origin() -> vec3f {
 
 @if(!wxsl_relative_to_eye)
 fn world_origin() -> vec3f {
-    return vec3f(0.0, 0.0, 0.0);
+    return -scene.origin;
 }
 
 // Where the eye is, in the same frame as `world_position` — and therefore

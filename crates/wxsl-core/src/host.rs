@@ -156,6 +156,11 @@ pub fn structures() -> Vec<Structure> {
                 field("time", "time", F32),
                 field("exposure", "exposure", F32),
                 field("previous_time", "previous_time", F32),
+                // The f64 floating origin's f32 shadow: every position in
+                // this frame's buffers is measured from it (M10). Zero is
+                // the absolute world, and every frame before the field.
+                field("origin", "origin", Vector(3)),
+                field("_padding", "_pad0", F32),
             ],
         },
         Structure {
@@ -586,7 +591,7 @@ mod tests {
             ("CameraUniform", 224),
             ("LightUniform", 112),
             ("ShadowTileUniform", 96),
-            ("SceneUniform", 16 * 112 + 112 * 96 + 48),
+            ("SceneUniform", 16 * 112 + 112 * 96 + 64),
             ("InstanceTransform", 128),
             ("Vertex", 48),
             ("UiInstance", 68),

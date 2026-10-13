@@ -57,6 +57,7 @@ fn environment(previous: Option<Camera>, time: f32) -> Environment {
         time,
         previous_time: time,
         previous_camera: previous,
+        origin: Default::default(),
     };
     environment.advance(time + STEP);
     environment

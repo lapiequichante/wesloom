@@ -1,6 +1,6 @@
-//! The two ABI hooks M5 landed while the vertex stage was open, and which
-//! nothing yet consumes: where world space is measured from, and which
-//! frame's clock a time-driven node reads.
+//! The two ABI hooks M5 landed while the vertex stage was open: where
+//! world space is measured from (with its host half, the floating origin
+//! of ADR 0074), and which frame's clock a time-driven node reads.
 //!
 //! Both are macro flags on the hand-written ABI rather than anything a
 //! graph can see, and both exist now because retrofitting them once many
@@ -9,13 +9,13 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use glam::{Mat4, Vec3};
+use glam::{DMat4, DVec3, Mat4, Vec3};
 use wxsl::core::abi;
 use wxsl::core::graph::Graph;
 use wxsl::core::macros::{MacroSet, MacroValue};
 use wxsl::core::node::ValueType;
 use wxsl::render::material::Material;
-use wxsl::render::{Camera, DrawItem, Environment};
+use wxsl::render::{Camera, DrawItem, Environment, StockPipeline};
 
 mod probe;
 use probe::{close, gpu, pixel, quantized, render_list_in, Harness, SIZE};
@@ -81,6 +81,7 @@ fn at(previous: f32, now: f32) -> Environment {
         time: previous,
         previous_time: previous,
         previous_camera: None,
+        origin: Default::default(),
     };
     environment.advance(now);
     environment
@@ -136,8 +137,7 @@ fn measuring_world_space_from_the_eye_changes_no_pixel_near_the_origin() {
     // tolerance.
     //
     // The other half — a scene at 10^7 units rendering without jitter —
-    // needs model matrices pre-translated on the host in `f64`, and is
-    // not this milestone's.
+    // is `a_scene_far_from_the_origin_renders_as_it_does_near_it`.
     let Some(gpu) = gpu() else { return };
     let mut harness = Harness::new(gpu);
     let mut graph = Graph::new("lit");
@@ -166,4 +166,109 @@ fn measuring_world_space_from_the_eye_changes_no_pixel_near_the_origin() {
     let plain = shade_in(&mut harness, &absolute, &environment);
     let moved = shade_in(&mut harness, &relative, &environment);
     assert_eq!(plain, moved, "relative-to-eye changed the image");
+}
+
+/// The lit plane of the test above, placed at `offset` in the absolute
+/// world, drawn either rebased onto the eye in `f64` or naively, as
+/// absolute `f32`s.
+fn far_frame(harness: &mut Harness, material: &Material, offset: DVec3, rebased: bool) -> Vec<u8> {
+    let eye = offset + DVec3::new(0.0, 0.0, 3.0);
+    let light = offset + DVec3::new(0.6, 0.4, 0.8);
+    let model = DMat4::from_translation(offset) * DMat4::from_rotation_x(FRAC_PI_2.into());
+    let mut environment = at(0.0, 0.0);
+    environment.ambient_sky = Vec3::splat(0.1);
+    let transform = if rebased {
+        environment.look_from(eye, offset);
+        environment.local_transform(model)
+    } else {
+        environment.camera.eye = eye.as_vec3();
+        environment.camera.target = offset.as_vec3();
+        model.as_mat4()
+    };
+    let light = if rebased {
+        environment.local_point(light)
+    } else {
+        light.as_vec3()
+    };
+    environment.lights = vec![wxsl::render::Light::point(light, Vec3::ONE, 3.0)];
+    let item = DrawItem::new(&harness.mesh, material).with_transform(transform);
+    let draws = wxsl::render::single_draw(item);
+    render_list_in(
+        &harness.gpu,
+        &mut harness.renderer,
+        &harness.target,
+        &draws,
+        &environment,
+    )
+    .expect("the frame renders")
+}
+
+/// The largest channel difference between two frames.
+fn widest(a: &[u8], b: &[u8]) -> u8 {
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_scene_far_from_the_origin_renders_as_it_does_near_it() {
+    // M10's other half. At 10^7 an f32 has a whole unit between
+    // neighbours, so the naive frame — camera, model and light as absolute
+    // f32s — snaps a two-unit plane onto that grid and is wrecked. Rebased
+    // onto the eye in f64 (`Environment::look_from`), the same scene is
+    // the near-origin frame again, under both stock pipelines: the
+    // deferred one reconstructs positions from depth in buffer space and
+    // has to measure them from `world_origin()` like everything else.
+    let Some(gpu) = gpu() else { return };
+    let mut harness = Harness::new(gpu);
+    let mut graph = Graph::new("lit");
+    graph.add_node(abi::SURFACE_OUTPUT_ID);
+    let relative = Material::from_graph_with_macros(
+        &graph,
+        &harness.registry,
+        &with_flag(abi::FEATURE_RELATIVE_TO_EYE),
+    )
+    .expect("the graph compiles");
+    let far = DVec3::new(1.0e7, 0.0, -1.0e7);
+    // Not a round number, so nothing about the far frame is exact by luck.
+    let nudged = far + DVec3::new(0.37, 0.0, 0.0213);
+
+    for pipeline in [
+        None,
+        Some(StockPipeline::Forward),
+        Some(StockPipeline::Deferred),
+    ] {
+        if let Some(pipeline) = pipeline {
+            harness.renderer.set_pipeline(pipeline);
+        }
+        let near = far_frame(&mut harness, &relative, DVec3::ZERO, true);
+        let unmoved = far_frame(&mut harness, &relative, DVec3::ZERO, false);
+        // Not an equality: the view matrix is built from another eye, so
+        // it rounds differently, and the deferred pass reconstructs
+        // positions through its inverse.
+        assert!(
+            widest(&near, &unmoved) <= 3,
+            "{pipeline:?}: rebasing at the origin changed the image by {}",
+            widest(&near, &unmoved)
+        );
+        assert!(
+            near.chunks(4).any(|texel| texel[..3] != near[..3]),
+            "{pipeline:?}: the near frame should show the plane against the clear"
+        );
+        for offset in [far, nudged] {
+            let rebased = far_frame(&mut harness, &relative, offset, true);
+            assert!(
+                widest(&near, &rebased) <= 3,
+                "{pipeline:?}: at {offset} the rebased frame drifted by {}",
+                widest(&near, &rebased)
+            );
+        }
+        let naive = far_frame(&mut harness, &relative, far, false);
+        assert!(
+            widest(&near, &naive) > 32,
+            "{pipeline:?}: the naive f32 frame should have been wrecked, or this test proves nothing"
+        );
+    }
 }
