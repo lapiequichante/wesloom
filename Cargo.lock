@@ -2957,6 +2957,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "image",
+ "naga",
  "pollster",
  "serde",
  "serde_json",

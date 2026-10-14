@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11, M10 (ADR 0074), N10 (ADR 0075) and N7 (ADRs 0066, 0071–0073, 0076). The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11, M10 (ADR 0074), N10 (ADR 0075), N7 (ADRs 0066, 0071–0073, 0076) and N8 (ADRs 0049, 0077). The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -657,6 +657,16 @@ acceptance criterion.
 
 ### N8 — Release readiness
 
+**Done (2026-10-14, ADR 0077; the format decision is ADR 0049's).** The
+gate is `crates/wxsl-ffi/tests/release_gate.rs`. It reaches only the C
+ABI's `api`, so nothing from `wxsl-render` or `wgpu` is linked. It crosses
+both profiles, the default and the widest lighting set, and no feature or
+each feature. Every preset is compiled to a plan, then every effect and
+every material stage the plan names, for every shipped material and model.
+Each result is validated by naga with no optional capabilities, plus a
+GLSL ES 3.00 translation under WebGL2. 424 shaders take about six seconds.
+A mistyped line in `tonemap.wxsl` failed all 16 configurations that run it.
+
 The items `todo.md` has carried, plus the one decision behind them:
 
 * **The document format story.** `serde_json` is a development
@@ -942,7 +952,7 @@ none of it knows or cares which backend is underneath.
     decision gates the previous-frame matrix, and the downlevel corpus
     gate runs alongside from the start; the port itself follows P8,
     before M8 and N2 spend more of the budget the third column prices.
-12. **N8** — the release gate and format decision run alongside from the
+12. ~~**N8**~~ — *landed (ADRs 0049, 0077)*; the release gate and format decision run alongside from the
     start.
 
 This order finishes the *authoring* story first (config, screen domain,

@@ -29,6 +29,7 @@ wxsl-render = { workspace = true }
 glam = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
+naga = { workspace = true }
 image = { workspace = true, features = ["hdr"] }
 
 [lints.rust]
