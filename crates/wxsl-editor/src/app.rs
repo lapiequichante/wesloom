@@ -47,6 +47,8 @@ use crate::palette::{Match, NodePicker};
 use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
 use crate::reload::ShaderWatch;
+use crate::scene::{SceneChanges, SceneDoc};
+use crate::scene_mode::{self, SceneMode};
 use crate::theme::Theme;
 use crate::ui::{Align, Id, LineMark, Ui, UiState};
 use crate::widgets;
@@ -192,6 +194,8 @@ pub struct Editor {
     functions: Functions,
     /// Undo and redo (ADR 0081).
     history: History,
+    /// The open scene and the scene mode's state (ADR 0082).
+    scene: SceneMode,
 }
 
 impl Editor {
@@ -256,6 +260,7 @@ impl Editor {
             space_tap: false,
             functions: Functions::default(),
             history: History::default(),
+            scene: SceneMode::default(),
         })
     }
 
@@ -470,6 +475,11 @@ impl Editor {
                 undo: self.history.undo_depth(),
                 redo: self.history.redo_depth(),
             },
+            Query::Scene => Answer::Scene {
+                scene: self.scene.doc.as_ref().map(|doc| doc.document.clone()),
+                selected: self.scene.selected,
+                material: self.scene.slot,
+            },
         }
     }
 
@@ -479,6 +489,14 @@ impl Editor {
         let mut history = std::mem::take(&mut self.history);
         let result = history.execute(self, command, gesture);
         self.history = history;
+        if result.is_ok()
+            && matches!(
+                command,
+                Command::OpenScene { .. } | Command::ImportGltf { .. }
+            )
+        {
+            self.scene.frame_next = true;
+        }
         // An undone add or a removal leaves no selected ghost behind.
         let graph = &self.graph;
         self.canvas.selection.retain(|id| graph.node(*id).is_some());
@@ -544,13 +562,14 @@ impl Editor {
                     .dirty = true;
                 self.message = "pipeline canvas — the document compiles on every edit".to_string();
             }
-            CanvasMode::Material if self.material_uses_document => {
-                self.message = "material canvas — pipeline: the document".to_string();
+            CanvasMode::Material | CanvasMode::Scene if self.material_uses_document => {
+                self.message = format!("{} — pipeline: the document", mode.name());
             }
-            CanvasMode::Material => {
+            CanvasMode::Material | CanvasMode::Scene => {
                 self.preview.restore_stock();
                 self.message = format!(
-                    "material canvas — pipeline: {}",
+                    "{} — pipeline: {}",
+                    mode.name(),
                     self.preview.pipeline().name()
                 );
             }
@@ -713,7 +732,37 @@ impl Editor {
             self.next_poll = time + 0.5;
             self.poll_shaders(device);
         }
-        self.preview.render(device, queue, dt, time as f32)?;
+        // The scene first: a scene naming a lighting model the renderer
+        // lacks widens its set, and the material is rebuilt against it.
+        if self
+            .scene
+            .sync(device, queue, &mut self.preview, &self.registry)
+        {
+            let macros = self.graph.macros().clone();
+            self.preview
+                .rebuild(device, &self.graph, &self.registry, &macros);
+        }
+        let viewport = self.last_canvas_rect;
+        match self.scene.resources() {
+            Some(resources) if self.mode == CanvasMode::Scene && !viewport.is_empty() => {
+                self.preview.set_size(
+                    device,
+                    &mut self.renderer,
+                    viewport.width().round() as u32,
+                    viewport.height().round() as u32,
+                );
+                let environment = self
+                    .scene
+                    .environment(viewport.width() / viewport.height(), time as f32);
+                self.preview
+                    .render_scene(device, queue, &resources.draw_list(), &environment)?;
+            }
+            _ => {
+                self.preview
+                    .set_size(device, &mut self.renderer, Preview::SIZE, Preview::SIZE);
+                self.preview.render(device, queue, dt, time as f32)?;
+            }
+        }
 
         self.ui.draw.clear();
         let screen = Rect::from_min_size(Vec2::ZERO, self.input.size());
@@ -748,9 +797,19 @@ impl Editor {
         // panels whose content is mode's own (the palette's rows, the
         // bottom panel's tabs).
         let pipeline_mode = self.mode == CanvasMode::Pipeline;
+        let scene_mode = self.mode == CanvasMode::Scene;
         let mut requests = Requests::default();
 
-        let canvas_response = if pipeline_mode {
+        let canvas_response = if scene_mode {
+            scene_mode::viewport(
+                &mut ui,
+                canvas_rect,
+                &mut self.scene,
+                &self.preview,
+                &mut requests,
+            );
+            canvas::CanvasResponse::default()
+        } else if pipeline_mode {
             let state = self
                 .pipeline
                 .as_mut()
@@ -844,7 +903,9 @@ impl Editor {
                 self.registry.len(),
             )
         };
-        if pipeline_mode {
+        if scene_mode {
+            scene_mode::outliner_panel(&mut ui, palette, &mut self.scene, &mut requests);
+        } else if pipeline_mode {
             let state = self
                 .pipeline
                 .as_mut()
@@ -870,7 +931,9 @@ impl Editor {
             );
         }
 
-        if pipeline_mode {
+        if scene_mode {
+            scene_mode::inspector_panel(&mut ui, inspector, &self.scene, &mut requests);
+        } else if pipeline_mode {
             let state = self
                 .pipeline
                 .as_mut()
@@ -946,13 +1009,24 @@ impl Editor {
                 self.modified,
             );
         } else {
-            let document = StatusBarDocument {
-                text: format!(
-                    "{} nodes · {} links",
-                    self.graph.node_count(),
-                    self.graph.edges().len(),
-                ),
-                healthy: self.preview.status().is_ok(),
+            let document = match (scene_mode, self.scene.doc.as_ref()) {
+                (true, Some(doc)) => StatusBarDocument {
+                    text: format!(
+                        "{} instances · {} materials · {} meshes",
+                        doc.document.instances.len(),
+                        doc.document.materials.len(),
+                        doc.document.meshes.len(),
+                    ),
+                    healthy: self.scene.error.is_none(),
+                },
+                _ => StatusBarDocument {
+                    text: format!(
+                        "{} nodes · {} links",
+                        self.graph.node_count(),
+                        self.graph.edges().len(),
+                    ),
+                    healthy: self.preview.status().is_ok(),
+                },
             };
             status_bar(
                 &mut ui,
@@ -1039,7 +1113,7 @@ impl Editor {
             if ui.input.key_pressed_plain(Key::Char('g')) {
                 requests.backend = Some(self.backend.toggled());
             }
-            if ui.input.key_pressed_plain(Key::Char('a')) {
+            if ui.input.key_pressed_plain(Key::Char('a')) && !scene_mode {
                 let at = canvas_rect.center();
                 requests.add_at = Some(if pipeline_mode {
                     self.pipeline
@@ -1201,7 +1275,9 @@ impl Editor {
             self.set_canvas_mode(mode);
         }
         if requests.fit {
-            if pipeline_mode {
+            if scene_mode {
+                self.scene.frame();
+            } else if pipeline_mode {
                 let state = self
                     .pipeline
                     .as_mut()
@@ -1297,10 +1373,12 @@ impl Editor {
                 Ok(()) => {
                     self.dirty = true;
                     // A document's pass list was compiled against the old
-                    // plan: its G-buffer lacks (or keeps) the channel.
+                    // plan: its G-buffer lacks (or keeps) the channel. So
+                    // were the scene's materials.
                     if let Some(state) = self.pipeline.as_mut() {
                         state.dirty = true;
                     }
+                    self.scene.pending.reload = true;
                     self.message = if names.is_empty() {
                         "features: none".to_string()
                     } else {
@@ -1321,7 +1399,7 @@ impl Editor {
         if requests.toggle_theme {
             self.ui.theme.toggle_mode();
         }
-        if requests.fit {
+        if requests.fit && !scene_mode {
             self.canvas
                 .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
         }
@@ -1380,6 +1458,9 @@ impl Host for Editor {
         name: &str,
         value: wxsl_core::node::Value,
     ) -> Result<(), String> {
+        if let Some(slot) = self.scene.slot {
+            self.scene.params.push((slot, name.to_string(), value));
+        }
         self.preview
             .set_material_param(name, value)
             .map_err(|error| error.to_string())
@@ -1388,13 +1469,113 @@ impl Host for Editor {
     fn changed(&mut self, document: Document, rebuild: bool) {
         self.modified = true;
         match document {
-            Document::Material => self.dirty |= rebuild,
+            Document::Material => {
+                self.dirty |= rebuild;
+                // The canvas edits a copy of a scene material: write it
+                // back, and recompile that one material in the scene.
+                if let (Some(slot), Some(doc)) = (self.scene.slot, self.scene.doc.as_mut()) {
+                    if let Some(entry) = doc.document.materials.get_mut(slot) {
+                        entry.graph = self.graph.clone();
+                        if rebuild {
+                            self.scene.pending.materials.insert(slot);
+                        }
+                    }
+                }
+            }
             Document::Pipeline => {
                 if let Some(state) = self.pipeline.as_mut() {
                     state.dirty |= rebuild;
                 }
             }
         }
+    }
+
+    fn scene(&self) -> Option<&SceneDoc> {
+        self.scene.doc.as_ref()
+    }
+
+    fn scene_mut(&mut self) -> (&mut Option<SceneDoc>, &NodeRegistry) {
+        (&mut self.scene.doc, &self.registry)
+    }
+
+    fn scene_changed(&mut self, changes: SceneChanges) {
+        self.modified = true;
+        self.scene.pending.merge(changes);
+        let (instances, materials) = self.scene.doc.as_ref().map_or((0, 0), |doc| {
+            (doc.document.instances.len(), doc.document.materials.len())
+        });
+        if self.scene.selected.is_some_and(|index| index >= instances) {
+            self.scene.selected = None;
+        }
+        // The material canvas follows the scene's copy of what it edits,
+        // or gets its own graph back when that material is gone.
+        match self.scene.slot {
+            Some(slot) if slot < materials => {
+                let graph =
+                    &self.scene.doc.as_ref().expect("counted").document.materials[slot].graph;
+                if *graph != self.graph {
+                    self.graph = graph.clone();
+                    self.dirty = true;
+                }
+            }
+            Some(_) => self.open_slot(None),
+            None => {}
+        }
+    }
+
+    fn material_slot(&self) -> Option<usize> {
+        self.scene.slot
+    }
+
+    fn open_slot(&mut self, slot: Option<usize>) {
+        if slot == self.scene.slot {
+            return;
+        }
+        match slot {
+            Some(index) => {
+                let Some(graph) = self
+                    .scene
+                    .doc
+                    .as_ref()
+                    .and_then(|doc| doc.document.materials.get(index))
+                    .map(|entry| entry.graph.clone())
+                else {
+                    return;
+                };
+                let previous = std::mem::replace(&mut self.graph, graph);
+                if self.scene.slot.is_none() {
+                    self.scene.loose = Some(previous);
+                }
+            }
+            None => {
+                if let Some(loose) = self.scene.loose.take() {
+                    self.graph = loose;
+                }
+            }
+        }
+        self.scene.slot = slot;
+        self.canvas.selection.clear();
+        self.dirty = true;
+        self.first_frame = true;
+    }
+
+    fn select_instance(&mut self, instance: Option<usize>) -> Result<(), CommandError> {
+        let doc = self.scene.doc.as_ref().ok_or(CommandError::NoScene)?;
+        let material = match instance {
+            Some(index) => Some(
+                doc.document
+                    .instances
+                    .get(index)
+                    .ok_or(CommandError::NoSuchInstance(index))?
+                    .material,
+            ),
+            None => None,
+        };
+        self.scene.selected = instance;
+        if material.is_some() {
+            self.open_slot(material);
+        }
+        Ok(())
     }
 }
 
@@ -1623,7 +1804,7 @@ fn toolbar_panel(
         rect
     };
 
-    if mode == CanvasMode::Material {
+    if mode != CanvasMode::Pipeline {
         // The stock pipelines, then whatever the pipeline canvas holds:
         // the material previews through that document, live.
         let (uses_document, document_name) = document;

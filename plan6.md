@@ -337,6 +337,53 @@ ADR and its own plan if the demand is real.
 * Every action goes through M0 commands (`scene.select`,
   `scene.set_transform`, `scene.import`, …).
 
+**Landed (2026-10-14, ADR 0082):**
+
+- `SceneResources` moved to `wxsl_render::scene` (re-exported as
+  `wxsl::scene`), with `mesh_data`, `load_resolved`, `set_material` and
+  `set_instances`, so the editor uses the same loader as an application.
+- `CanvasMode::Scene`: the preview's renderer draws the scene at the
+  viewport's size, through the pipeline the toolbar picks. Drag orbits,
+  the wheel zooms, `R` frames the selection.
+  - The outliner shows the node hierarchy, or the instances matching a
+    name or tag filter.
+  - The inspector shows the instance's name, transform and material, the
+    material's tags, `render_order` and `max_layers`, and the lights.
+- Picking: a ray against world bounds, then triangles, with no device.
+  A click selects an instance and opens its material in the material
+  canvas. Edits there are written back and recompile that one material
+  in the scene.
+- Commands:
+  - `open_scene`, `import_gltf` (which appends to an open scene),
+    `close_scene` and `save_scene`;
+  - `select_instance`;
+  - `set_transform`, `set_instance_material`, `set_instance_name`;
+  - `set_material_tags`, `set_render_order`, `set_max_layers`;
+  - `set_light` and `remove_instances`;
+  - `Query::Scene`.
+
+  The scene is a third snapshot document, its imported geometry shared
+  behind `Arc`.
+- The renderer takes the scene's own lighting set, which keeps sheen and
+  similar layered scenes within the G-buffer budget, and gets its own set
+  back when the scene closes.
+- The `editor` example has `--scene <FILE>`, accepts dropped files, and
+  saves the scene with `Ctrl+S` in the scene mode.
+- Tests:
+  - picking, merging, transform decomposition and every scene command's
+    round trip, without a device;
+  - in `editor_frame`, the sheen scene drawn, picked by a click, its
+    material edited and undone;
+  - DamagedHelmet imported, with a second file appended and the append
+    undone.
+- Not yet done:
+  - transform gizmos;
+  - lights and cameras in the viewport;
+  - the refraction tier for `refractive` materials (the viewer routes
+    them, the editor draws them opaque);
+  - saving an imported scene, which `save_scene` refuses by name;
+  - per-instance attribute values.
+
 ### E2 — Scene debugging
 
 Extends pass stepping (N9) from a material to a whole scene.

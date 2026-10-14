@@ -48,7 +48,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// Indices rather than names on the wire: an instance points at a mesh and a
 /// material by position, which is one lookup and cannot be misspelled.
 /// [`Scene::validate`] is what catches an index that points nowhere.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(
     feature = "serde",
@@ -344,7 +344,7 @@ impl fmt::Display for SceneError {
 impl std::error::Error for SceneError {}
 
 /// One mesh in a scene, by name and by where its geometry comes from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MeshEntry {
     /// Name, for the editor and for diagnostics.
@@ -427,7 +427,7 @@ pub enum MeshSource {
 /// ([ADR 0038](../../../docs/adr/0038-a-materials-configuration-is-one-value.md)).
 /// It is `flatten`ed on the wire, so a document written before the
 /// consolidation still loads: the fields sit where they always did.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MaterialEntry {
     /// Name, for the editor and for diagnostics.
@@ -498,7 +498,7 @@ impl MaterialEntry {
 }
 
 /// One thing to draw: geometry, a material, and where it is.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Instance {
     /// Name, for the editor and for diagnostics.

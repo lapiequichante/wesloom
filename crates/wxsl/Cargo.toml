@@ -14,7 +14,6 @@ wxsl-core = { workspace = true }
 wxsl-render = { workspace = true, optional = true }
 wxsl-editor = { workspace = true, optional = true }
 wxsl-stdlib = { workspace = true, optional = true }
-image = { workspace = true, optional = true }
 wxsl-gltf = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -40,10 +39,10 @@ editor = ["dep:wxsl-editor", "render"]
 stdlib = ["dep:wxsl-stdlib"]
 # Decode PNG and JPEG images, for scene textures given as files or encoded
 # bytes (ADR 0079).
-images = ["render", "dep:image"]
+images = ["render", "wxsl-render/images"]
 # glTF/GLB import: geometry for `file` meshes, and with `stdlib` whole
 # scenes through `wxsl::asset` (ADR 0080).
-gltf = ["render", "wxsl-render/gltf", "images", "dep:wxsl-gltf"]
+gltf = ["render", "wxsl-render/gltf", "images", "dep:wxsl-gltf", "wxsl-editor?/gltf"]
 # WebGL2 as the browser fallback behind WebGPU (ADR 0075); wasm32 only.
 webgl = ["render", "wxsl-render/webgl"]
 

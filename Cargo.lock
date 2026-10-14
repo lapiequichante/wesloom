@@ -2949,6 +2949,7 @@ dependencies = [
  "serde_json",
  "wgpu",
  "wxsl-core",
+ "wxsl-gltf",
  "wxsl-lang",
  "wxsl-render",
 ]
@@ -3014,6 +3015,7 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "image",
  "ttf-parser",
  "wgpu",
  "wxsl-core",

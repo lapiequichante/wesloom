@@ -85,6 +85,7 @@ pub mod pass;
 pub mod pipeline;
 pub mod pipeline_doc;
 pub mod renderer;
+pub mod scene;
 pub mod setup;
 pub mod swap;
 mod timing;

@@ -59,25 +59,34 @@ pub enum CanvasMode {
     Material,
     /// The pipeline document, compiled live onto the same renderer.
     Pipeline,
+    /// The open scene, rendered through the same renderer, with its
+    /// outliner and inspector (ADR 0082).
+    Scene,
 }
 
 impl CanvasMode {
     /// The modes, in toolbar order.
-    pub const ALL: &'static [CanvasMode] = &[CanvasMode::Material, CanvasMode::Pipeline];
+    pub const ALL: &'static [CanvasMode] = &[
+        CanvasMode::Material,
+        CanvasMode::Pipeline,
+        CanvasMode::Scene,
+    ];
 
     /// The name the toolbar button shows.
     pub fn name(self) -> &'static str {
         match self {
             CanvasMode::Material => "material",
             CanvasMode::Pipeline => "pipeline",
+            CanvasMode::Scene => "scene",
         }
     }
 
-    /// The other one.
+    /// The `p` key's toggle: between the material and pipeline canvases,
+    /// and from the scene back to the material.
     pub fn other(self) -> Self {
         match self {
             CanvasMode::Material => CanvasMode::Pipeline,
-            CanvasMode::Pipeline => CanvasMode::Material,
+            CanvasMode::Pipeline | CanvasMode::Scene => CanvasMode::Material,
         }
     }
 }

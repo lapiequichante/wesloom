@@ -355,7 +355,9 @@ The application gives the renderer three things:
 - **a target view.**
 
 The renderer never holds a scene. Converting a scene document into a draw
-list is the facade's job (`wxsl::scene::SceneResources`). Batching and
+list is `wxsl_render::scene::SceneResources`'s job, a loader beside the
+renderer that the facade re-exports as `wxsl::scene`
+([ADR 0082](adr/0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md)). Batching and
 culling belong on that side too.
 
 **Bind groups** are allocated by update frequency
@@ -406,11 +408,16 @@ the real pipelines ([ADRs 0013](adr/0013-the-editor-draws-itself-with-wxsl-rende
 It is windowing-agnostic: it takes `UiEvent`s and records into an encoder.
 `examples/editor.rs` is the winit glue.
 
-It has two canvas modes over one renderer:
+It has three canvas modes over one renderer:
 
 - **the material graph;**
 - **the pipeline document,** compiled live on every edit
-  ([ADR 0043](adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md)).
+  ([ADR 0043](adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md));
+- **the scene:** a `.scene.json` or an imported glTF file in a viewport,
+  with an outliner and an inspector. A click picks an instance on the CPU
+  and opens its material in the material canvas, whose edits recompile
+  that material in the scene
+  ([ADR 0082](adr/0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md)).
 
 It also offers pass stepping, resource inspection and shader hot reload.
 

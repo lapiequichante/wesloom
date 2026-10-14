@@ -25,3 +25,10 @@ glam = { workspace = true }
 # (ADR 0081).
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The scene mode's `import_gltf` command (ADR 0082); without it the command
+# is refused by name.
+wxsl-gltf = { workspace = true, optional = true }
+
+[features]
+default = []
+gltf = ["dep:wxsl-gltf", "wxsl-render/gltf", "wxsl-render/images"]

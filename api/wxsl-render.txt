@@ -306,6 +306,8 @@ impl core::convert::From<wxsl_core::error::CodegenError> for wxsl_render::error:
 pub fn wxsl_render::error::RenderError::from(wxsl_core::error::CodegenError) -> Self
 impl core::convert::From<wxsl_frame::graph::GraphError> for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::GraphError) -> Self
+impl core::convert::From<wxsl_render::error::RenderError> for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
 impl core::error::Error for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
 impl core::fmt::Debug for wxsl_render::error::RenderError
@@ -839,6 +841,79 @@ impl core::marker::UnsafeUnpin for wxsl_render::renderer::Renderer
 impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::renderer::Renderer
 impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::renderer::Renderer
 pub fn wxsl_render::renderer::single_draw<'a>(wxsl_render::draw::DrawItem<'a>) -> wxsl_render::draw::DrawList<'a>
+pub mod wxsl_render::scene
+pub enum wxsl_render::scene::LoadError
+pub wxsl_render::scene::LoadError::Bindings
+pub wxsl_render::scene::LoadError::Bindings::error: wxsl_render::error::RenderError
+pub wxsl_render::scene::LoadError::Bindings::material: alloc::string::String
+pub wxsl_render::scene::LoadError::Incompatible(alloc::vec::Vec<wxsl_frame::setup::Incompatibility>)
+pub wxsl_render::scene::LoadError::Invalid(alloc::vec::Vec<wxsl_core::scene::SceneError>)
+pub wxsl_render::scene::LoadError::Material
+pub wxsl_render::scene::LoadError::Material::error: wxsl_render::error::RenderError
+pub wxsl_render::scene::LoadError::Material::material: alloc::string::String
+pub wxsl_render::scene::LoadError::Render(wxsl_render::error::RenderError)
+pub wxsl_render::scene::LoadError::Texture
+pub wxsl_render::scene::LoadError::Texture::reason: alloc::string::String
+pub wxsl_render::scene::LoadError::Texture::texture: alloc::string::String
+impl core::convert::From<wxsl_render::error::RenderError> for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
+impl core::error::Error for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_render::scene::LoadError
+impl core::marker::Send for wxsl_render::scene::LoadError
+impl core::marker::Sync for wxsl_render::scene::LoadError
+impl core::marker::Unpin for wxsl_render::scene::LoadError
+impl core::marker::UnsafeUnpin for wxsl_render::scene::LoadError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::scene::LoadError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_render::scene::LoadError
+pub enum wxsl_render::scene::SceneImage
+pub wxsl_render::scene::SceneImage::Encoded(alloc::vec::Vec<u8>)
+pub wxsl_render::scene::SceneImage::Rgba8
+pub wxsl_render::scene::SceneImage::Rgba8::height: u32
+pub wxsl_render::scene::SceneImage::Rgba8::pixels: alloc::vec::Vec<u8>
+pub wxsl_render::scene::SceneImage::Rgba8::width: u32
+impl core::clone::Clone for wxsl_render::scene::SceneImage
+pub fn wxsl_render::scene::SceneImage::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_render::scene::SceneImage
+pub fn wxsl_render::scene::SceneImage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_render::scene::SceneImage
+impl core::marker::Send for wxsl_render::scene::SceneImage
+impl core::marker::Sync for wxsl_render::scene::SceneImage
+impl core::marker::Unpin for wxsl_render::scene::SceneImage
+impl core::marker::UnsafeUnpin for wxsl_render::scene::SceneImage
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::scene::SceneImage
+impl core::panic::unwind_safe::UnwindSafe for wxsl_render::scene::SceneImage
+pub struct wxsl_render::scene::SceneResources
+impl wxsl_render::scene::SceneResources
+pub fn wxsl_render::scene::SceneResources::bindings_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::bindings::MaterialBindings>
+pub fn wxsl_render::scene::SceneResources::create_bindings(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::renderer::Renderer) -> core::result::Result<(), wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::draw_list(&self) -> wxsl_render::draw::DrawList<'_>
+pub fn wxsl_render::scene::SceneResources::instance_attributes_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::draw::InstanceAttributes>
+pub fn wxsl_render::scene::SceneResources::instance_count(&self) -> usize
+pub fn wxsl_render::scene::SceneResources::load(&wgpu::api::device::Device, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, core::option::Option<&std::path::Path>) -> core::result::Result<Self, wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::load_imported(&wgpu::api::device::Device, &wxsl_gltf::ImportedScene, &wxsl_core::node::NodeRegistry, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<Self, wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::load_resolved(&wgpu::api::device::Device, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, core::option::Option<&std::path::Path>, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest], &[wxsl_render::mesh::MeshData]) -> core::result::Result<Self, wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::load_with_lighting(&wgpu::api::device::Device, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, core::option::Option<&std::path::Path>, &wxsl_core::lighting::LightingSet) -> core::result::Result<Self, wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::load_with_plan(&wgpu::api::device::Device, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, core::option::Option<&std::path::Path>, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<Self, wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::materials(&self) -> &[wxsl_render::material::Material]
+pub fn wxsl_render::scene::SceneResources::meshes(&self) -> &[wxsl_render::mesh::Mesh]
+pub fn wxsl_render::scene::SceneResources::set_images(&mut self, alloc::vec::Vec<wxsl_render::scene::SceneImage>)
+pub fn wxsl_render::scene::SceneResources::set_instances(&mut self, &wxsl_core::scene::Scene) -> core::result::Result<(), wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::set_material(&mut self, &wgpu::api::device::Device, &mut wxsl_render::renderer::Renderer, usize, &wxsl_core::scene::MaterialEntry, &wxsl_core::node::NodeRegistry, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<(), wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::upload(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> core::result::Result<(), wxsl_render::scene::LoadError>
+impl core::marker::Freeze for wxsl_render::scene::SceneResources
+impl core::marker::Send for wxsl_render::scene::SceneResources
+impl core::marker::Sync for wxsl_render::scene::SceneResources
+impl core::marker::Unpin for wxsl_render::scene::SceneResources
+impl core::marker::UnsafeUnpin for wxsl_render::scene::SceneResources
+impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::scene::SceneResources
+impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::scene::SceneResources
+pub fn wxsl_render::scene::environment(&wxsl_core::scene::Scene, f32) -> core::option::Option<wxsl_frame::environment::Environment>
+pub fn wxsl_render::scene::mesh_data(&str, &wxsl_core::scene::MeshSource, core::option::Option<&std::path::Path>, &[wxsl_render::mesh::MeshData]) -> core::result::Result<wxsl_render::mesh::MeshData, wxsl_render::scene::LoadError>
 pub mod wxsl_render::setup
 pub use wxsl_render::setup::<<wxsl_frame::setup::*>>
 pub mod wxsl_render::swap
@@ -3128,6 +3203,8 @@ impl core::convert::From<wxsl_core::error::CodegenError> for wxsl_render::error:
 pub fn wxsl_render::error::RenderError::from(wxsl_core::error::CodegenError) -> Self
 impl core::convert::From<wxsl_frame::graph::GraphError> for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::GraphError) -> Self
+impl core::convert::From<wxsl_render::error::RenderError> for wxsl_render::scene::LoadError
+pub fn wxsl_render::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
 impl core::error::Error for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
 impl core::fmt::Debug for wxsl_render::error::RenderError

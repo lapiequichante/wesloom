@@ -4,7 +4,11 @@
 //! new ones from the library, and watch the material, the WXSL it generates
 //! and the WGSL that compiles to, all update as you go. A second canvas
 //! ([`CanvasMode::Pipeline`]) edits the *pipeline* the preview runs through — the
-//! document compiled live onto the same renderer.
+//! document compiled live onto the same renderer. A third
+//! ([`CanvasMode::Scene`]) opens a whole scene, a `.scene.json` or an
+//! imported glTF file, in a viewport with an outliner and an inspector; a
+//! click picks an instance and opens its material in the material canvas
+//! ([ADR 0082](../../../docs/adr/0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md)).
 //!
 //! The editor **draws itself with `wxsl-render`**
 //! ([ADR 0013](../../../docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)):
@@ -70,6 +74,8 @@
 //! | `palette` | searching the node library |
 //! | `pipeline` | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
 //! | `preview` | the offscreen material preview, and the compiled WXSL and WGSL |
+//! | `scene` | the open scene, its commands, picking and the orbit camera, without a device |
+//! | `scene_mode` | the scene on the GPU, and the viewport, outliner and inspector ([`CanvasMode::Scene`]) |
 //! | `ui` | the immediate-mode layer: identity, interaction, widgets |
 //! | `widgets` | editors for the values a socket can carry, and the colour picker |
 //! | `theme` | colours and metrics |
@@ -135,6 +141,8 @@ mod palette;
 mod pipeline;
 mod preview;
 mod reload;
+mod scene;
+mod scene_mode;
 mod stepping;
 mod theme;
 mod ui;

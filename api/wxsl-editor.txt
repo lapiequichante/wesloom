@@ -13,6 +13,10 @@ pub wxsl_editor::Answer::Nodes
 pub wxsl_editor::Answer::Nodes::nodes: alloc::vec::Vec<wxsl_editor::NodeSummary>
 pub wxsl_editor::Answer::Passes
 pub wxsl_editor::Answer::Passes::passes: alloc::vec::Vec<wxsl_editor::PassSummary>
+pub wxsl_editor::Answer::Scene
+pub wxsl_editor::Answer::Scene::material: core::option::Option<usize>
+pub wxsl_editor::Answer::Scene::scene: core::option::Option<wxsl_core::scene::Scene>
+pub wxsl_editor::Answer::Scene::selected: core::option::Option<usize>
 pub wxsl_editor::Answer::Source
 pub wxsl_editor::Answer::Source::wgsl: alloc::string::String
 pub wxsl_editor::Answer::Source::wxsl: alloc::string::String
@@ -40,6 +44,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::Answer
 pub enum wxsl_editor::CanvasMode
 pub wxsl_editor::CanvasMode::Material
 pub wxsl_editor::CanvasMode::Pipeline
+pub wxsl_editor::CanvasMode::Scene
 impl wxsl_editor::CanvasMode
 pub const wxsl_editor::CanvasMode::ALL: &'static [wxsl_editor::CanvasMode]
 pub fn wxsl_editor::CanvasMode::name(self) -> &'static str
@@ -68,6 +73,7 @@ pub wxsl_editor::Command::AddNode::document: wxsl_editor::Document
 pub wxsl_editor::Command::AddNode::node: wxsl_core::graph::Node
 pub wxsl_editor::Command::Batch
 pub wxsl_editor::Command::Batch::commands: alloc::vec::Vec<wxsl_editor::Command>
+pub wxsl_editor::Command::CloseScene
 pub wxsl_editor::Command::Connect
 pub wxsl_editor::Command::Connect::document: wxsl_editor::Document
 pub wxsl_editor::Command::Connect::from: wxsl_core::graph::SocketRef
@@ -75,13 +81,23 @@ pub wxsl_editor::Command::Connect::to: wxsl_core::graph::SocketRef
 pub wxsl_editor::Command::Disconnect
 pub wxsl_editor::Command::Disconnect::document: wxsl_editor::Document
 pub wxsl_editor::Command::Disconnect::to: wxsl_core::graph::SocketRef
+pub wxsl_editor::Command::ImportGltf
+pub wxsl_editor::Command::ImportGltf::path: alloc::string::String
 pub wxsl_editor::Command::MoveNodes
 pub wxsl_editor::Command::MoveNodes::document: wxsl_editor::Document
 pub wxsl_editor::Command::MoveNodes::positions: alloc::vec::Vec<(wxsl_core::graph::NodeId, [f32; 2])>
+pub wxsl_editor::Command::OpenScene
+pub wxsl_editor::Command::OpenScene::path: alloc::string::String
 pub wxsl_editor::Command::Redo
+pub wxsl_editor::Command::RemoveInstances
+pub wxsl_editor::Command::RemoveInstances::instances: alloc::vec::Vec<usize>
 pub wxsl_editor::Command::RemoveNodes
 pub wxsl_editor::Command::RemoveNodes::document: wxsl_editor::Document
 pub wxsl_editor::Command::RemoveNodes::nodes: alloc::vec::Vec<wxsl_core::graph::NodeId>
+pub wxsl_editor::Command::SaveScene
+pub wxsl_editor::Command::SaveScene::path: alloc::string::String
+pub wxsl_editor::Command::SelectInstance
+pub wxsl_editor::Command::SelectInstance::instance: core::option::Option<usize>
 pub wxsl_editor::Command::SetColor
 pub wxsl_editor::Command::SetColor::color: core::option::Option<[f32; 3]>
 pub wxsl_editor::Command::SetColor::document: wxsl_editor::Document
@@ -91,10 +107,20 @@ pub wxsl_editor::Command::SetGeneric::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetGeneric::node: wxsl_core::graph::NodeId
 pub wxsl_editor::Command::SetGeneric::param: alloc::string::String
 pub wxsl_editor::Command::SetGeneric::ty: wxsl_core::node::ValueType
+pub wxsl_editor::Command::SetInstanceMaterial
+pub wxsl_editor::Command::SetInstanceMaterial::instance: usize
+pub wxsl_editor::Command::SetInstanceMaterial::material: usize
+pub wxsl_editor::Command::SetInstanceName
+pub wxsl_editor::Command::SetInstanceName::instance: usize
+pub wxsl_editor::Command::SetInstanceName::name: alloc::string::String
 pub wxsl_editor::Command::SetLabel
 pub wxsl_editor::Command::SetLabel::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetLabel::label: core::option::Option<alloc::string::String>
 pub wxsl_editor::Command::SetLabel::node: wxsl_core::graph::NodeId
+pub wxsl_editor::Command::SetLight
+pub wxsl_editor::Command::SetLight::color: [f32; 3]
+pub wxsl_editor::Command::SetLight::intensity: f32
+pub wxsl_editor::Command::SetLight::light: usize
 pub wxsl_editor::Command::SetMacro
 pub wxsl_editor::Command::SetMacro::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetMacro::name: alloc::string::String
@@ -102,6 +128,12 @@ pub wxsl_editor::Command::SetMacro::value: core::option::Option<wxsl_core::macro
 pub wxsl_editor::Command::SetMaterialParam
 pub wxsl_editor::Command::SetMaterialParam::name: alloc::string::String
 pub wxsl_editor::Command::SetMaterialParam::value: wxsl_core::node::Value
+pub wxsl_editor::Command::SetMaterialTags
+pub wxsl_editor::Command::SetMaterialTags::material: usize
+pub wxsl_editor::Command::SetMaterialTags::tags: alloc::vec::Vec<alloc::string::String>
+pub wxsl_editor::Command::SetMaxLayers
+pub wxsl_editor::Command::SetMaxLayers::layers: i32
+pub wxsl_editor::Command::SetMaxLayers::material: usize
 pub wxsl_editor::Command::SetName
 pub wxsl_editor::Command::SetName::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetName::name: alloc::string::String
@@ -114,11 +146,17 @@ pub wxsl_editor::Command::SetPassParam
 pub wxsl_editor::Command::SetPassParam::name: alloc::string::String
 pub wxsl_editor::Command::SetPassParam::pass: alloc::string::String
 pub wxsl_editor::Command::SetPassParam::value: wxsl_core::node::Value
+pub wxsl_editor::Command::SetRenderOrder
+pub wxsl_editor::Command::SetRenderOrder::material: usize
+pub wxsl_editor::Command::SetRenderOrder::order: i32
 pub wxsl_editor::Command::SetSetting
 pub wxsl_editor::Command::SetSetting::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetSetting::name: alloc::string::String
 pub wxsl_editor::Command::SetSetting::node: wxsl_core::graph::NodeId
 pub wxsl_editor::Command::SetSetting::value: alloc::string::String
+pub wxsl_editor::Command::SetTransform
+pub wxsl_editor::Command::SetTransform::instance: usize
+pub wxsl_editor::Command::SetTransform::transform: [f32; 16]
 pub wxsl_editor::Command::TidyLayout
 pub wxsl_editor::Command::TidyLayout::document: wxsl_editor::Document
 pub wxsl_editor::Command::Undo
@@ -149,11 +187,16 @@ pub wxsl_editor::CommandError::HistoryInBatch
 pub wxsl_editor::CommandError::InBatch
 pub wxsl_editor::CommandError::InBatch::error: alloc::boxed::Box<wxsl_editor::CommandError>
 pub wxsl_editor::CommandError::InBatch::index: usize
+pub wxsl_editor::CommandError::NoScene
+pub wxsl_editor::CommandError::NoSuchInstance(usize)
+pub wxsl_editor::CommandError::NoSuchLight(usize)
+pub wxsl_editor::CommandError::NoSuchMaterial(usize)
 pub wxsl_editor::CommandError::NoSuchNode(wxsl_core::graph::NodeId)
 pub wxsl_editor::CommandError::NotConnected(wxsl_core::graph::SocketRef)
 pub wxsl_editor::CommandError::NothingToRedo
 pub wxsl_editor::CommandError::NothingToUndo
 pub wxsl_editor::CommandError::Render(alloc::string::String)
+pub wxsl_editor::CommandError::Scene(alloc::string::String)
 pub wxsl_editor::CommandError::UnknownDefinition(alloc::string::String)
 pub wxsl_editor::CommandError::UnknownMaterialParam(alloc::string::String)
 pub wxsl_editor::CommandError::UnknownSetting
@@ -239,6 +282,7 @@ pub wxsl_editor::Query::Nodes
 pub wxsl_editor::Query::Nodes::document: wxsl_editor::Document
 pub wxsl_editor::Query::Nodes::search: core::option::Option<alloc::string::String>
 pub wxsl_editor::Query::Passes
+pub wxsl_editor::Query::Scene
 pub wxsl_editor::Query::Source
 pub wxsl_editor::Query::Stats
 impl core::clone::Clone for wxsl_editor::Query

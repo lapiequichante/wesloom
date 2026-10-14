@@ -5,10 +5,15 @@
 //! which is what makes a batch atomic; an undo puts them back too, and
 //! keeps what it replaced as the redo. Nothing here needs a device: the
 //! editor is one [`Host`], and the tests have another.
+//!
+//! The scene (ADR 0082) is a third document. A material snapshot also
+//! records which scene material the canvas had open, so an undo after the
+//! selection moved restores the right one.
 
 use wxsl_core::{Graph, NodeRegistry, Value};
 
 use crate::command::{edit_graph, Command, CommandError, Document, Outcome};
+use crate::scene::{self, SceneChanges, SceneDoc};
 
 /// How many steps the history keeps.
 const DEPTH: usize = 200;
@@ -29,18 +34,43 @@ pub(crate) trait Host {
     fn write_material_param(&mut self, name: &str, value: Value) -> Result<(), String>;
     /// A document changed; `rebuild` when what it compiles to did.
     fn changed(&mut self, document: Document, rebuild: bool);
+    /// The open scene.
+    fn scene(&self) -> Option<&SceneDoc>;
+    /// The scene to edit, and the registry an import builds against.
+    fn scene_mut(&mut self) -> (&mut Option<SceneDoc>, &NodeRegistry);
+    /// The scene changed.
+    fn scene_changed(&mut self, changes: SceneChanges);
+    /// The scene material the material canvas edits, if any.
+    fn material_slot(&self) -> Option<usize>;
+    /// Edit scene material `slot` in the material canvas, or with `None`
+    /// the graph the canvas had before.
+    fn open_slot(&mut self, slot: Option<usize>);
+    /// Select an instance: session state, not an undo step.
+    fn select_instance(&mut self, instance: Option<usize>) -> Result<(), CommandError>;
 }
 
 /// The state a step replaced.
 #[derive(Clone, Debug, Default)]
 struct Snapshot {
     material: Option<Graph>,
+    /// The scene material the canvas had open, with `material`.
+    slot: Option<usize>,
     pipeline: Option<Graph>,
+    /// The scene, with `None` inside for "no scene was open".
+    scene: Option<Option<SceneDoc>>,
     /// `(pass, name, value)`, in the order they were first set.
     pass_params: Vec<(String, String, Value)>,
 }
 
 impl Snapshot {
+    /// Whether it holds nothing to put back.
+    fn is_empty(&self) -> bool {
+        self.material.is_none()
+            && self.pipeline.is_none()
+            && self.scene.is_none()
+            && self.pass_params.is_empty()
+    }
+
     /// The state of everything `self` holds, as it is now.
     fn current(&self, host: &impl Host) -> Snapshot {
         Snapshot {
@@ -48,10 +78,12 @@ impl Snapshot {
                 .material
                 .as_ref()
                 .and_then(|_| host.graph(Document::Material).cloned()),
+            slot: host.material_slot(),
             pipeline: self
                 .pipeline
                 .as_ref()
                 .and_then(|_| host.graph(Document::Pipeline).cloned()),
+            scene: self.scene.as_ref().map(|_| host.scene().cloned()),
             pass_params: self
                 .pass_params
                 .iter()
@@ -65,14 +97,23 @@ impl Snapshot {
 
     /// Put everything back.
     fn restore(self, host: &mut impl Host) {
-        for (document, graph) in [
-            (Document::Material, self.material),
-            (Document::Pipeline, self.pipeline),
-        ] {
-            if let Some(graph) = graph {
-                host.replace(document, graph);
-                host.changed(document, true);
+        // The scene first: the material canvas may be editing one of its
+        // materials, which the scene's restore resynchronizes.
+        if let Some(scene) = self.scene {
+            let changes = SceneChanges::between(host.scene(), scene.as_ref());
+            *host.scene_mut().0 = scene;
+            host.scene_changed(changes);
+        }
+        if let Some(graph) = self.material {
+            if host.material_slot() != self.slot {
+                host.open_slot(self.slot);
             }
+            host.replace(Document::Material, graph);
+            host.changed(Document::Material, true);
+        }
+        if let Some(graph) = self.pipeline {
+            host.replace(Document::Pipeline, graph);
+            host.changed(Document::Pipeline, true);
         }
         for (pass, name, value) in self.pass_params.into_iter().rev() {
             // The value was accepted once, so the pass took it.
@@ -89,6 +130,13 @@ pub(crate) struct History {
     /// The merge key of the gesture the top undo step belongs to, while
     /// that gesture lasts.
     open: Option<String>,
+}
+
+/// What a command changed, gathered across a batch.
+#[derive(Default)]
+struct Changed {
+    rebuilt: [bool; 2],
+    scene: SceneChanges,
 }
 
 impl History {
@@ -121,28 +169,41 @@ impl History {
             _ => {}
         }
         let mut before = Snapshot::default();
+        if scene::mentions_scene(command) {
+            before.scene = Some(host.scene().cloned());
+        }
         for document in [Document::Material, Document::Pipeline] {
             if command.mentions(document) {
                 let graph = host.open(document).0.clone();
                 match document {
-                    Document::Material => before.material = Some(graph),
+                    Document::Material => {
+                        before.material = Some(graph);
+                        before.slot = host.material_slot();
+                    }
                     Document::Pipeline => before.pipeline = Some(graph),
                 }
             }
         }
         let mut outcome = Outcome::default();
-        let mut rebuilt = [false; 2];
-        if let Err(error) = run(host, command, &mut outcome, &mut before, &mut rebuilt) {
+        let mut changed = Changed::default();
+        if let Err(error) = run(host, command, &mut outcome, &mut before, &mut changed) {
             before.restore(host);
             return Err(error);
         }
+        if !changed.scene.is_empty() {
+            host.scene_changed(changed.scene);
+        }
         for (document, graph, rebuild) in [
-            (Document::Material, &before.material, rebuilt[0]),
-            (Document::Pipeline, &before.pipeline, rebuilt[1]),
+            (Document::Material, &before.material, changed.rebuilt[0]),
+            (Document::Pipeline, &before.pipeline, changed.rebuilt[1]),
         ] {
             if graph.is_some() {
                 host.changed(document, rebuild);
             }
+        }
+        // A selection or a save leaves nothing to undo.
+        if before.is_empty() {
+            return Ok(outcome);
         }
 
         let key = gesture.then(|| command.merge_key()).flatten();
@@ -177,18 +238,18 @@ impl History {
 }
 
 /// Run one command, recording in `before` the old value of every pass
-/// parameter it sets, and in `rebuilt` which documents need a recompile.
+/// parameter it sets, and in `changed` what needs redoing.
 fn run(
     host: &mut impl Host,
     command: &Command,
     outcome: &mut Outcome,
     before: &mut Snapshot,
-    rebuilt: &mut [bool; 2],
+    changed: &mut Changed,
 ) -> Result<(), CommandError> {
     match command {
         Command::Batch { commands } => {
             for (index, command) in commands.iter().enumerate() {
-                run(host, command, outcome, before, rebuilt).map_err(|error| {
+                run(host, command, outcome, before, changed).map_err(|error| {
                     CommandError::InBatch {
                         index,
                         error: Box::new(error),
@@ -211,6 +272,16 @@ fn run(
             }
         }
         Command::Undo | Command::Redo => return Err(CommandError::HistoryInBatch),
+        Command::SelectInstance { instance } => host.select_instance(*instance)?,
+        Command::SaveScene { path } => host
+            .scene()
+            .ok_or(CommandError::NoScene)?
+            .save(std::path::Path::new(path))?,
+        _ if scene::mentions_scene(command) => {
+            let (scene, registry) = host.scene_mut();
+            let changes = scene::edit_scene(scene, registry, command)?;
+            changed.scene.merge(changes);
+        }
         _ => {
             let document = if command.mentions(Document::Pipeline) {
                 Document::Pipeline
@@ -223,7 +294,7 @@ fn run(
                 host.write_material_param(name, *value)
                     .map_err(CommandError::Render)?;
             }
-            rebuilt[document as usize] |= command.rebuilds();
+            changed.rebuilt[document as usize] |= command.rebuilds();
         }
     }
     Ok(())
@@ -238,13 +309,19 @@ mod tests {
 
     use super::*;
 
-    /// Two documents and a table of pass parameters, without a device.
+    /// The documents and a table of pass parameters, without a device.
+    /// Opening a scene material works as the editor's does: the canvas
+    /// edits a copy, written back on every change.
     struct TestHost {
         material: Graph,
         pipeline: Option<Graph>,
         registry: NodeRegistry,
         pass_params: BTreeMap<(String, String), Value>,
         rebuilds: usize,
+        scene: Option<SceneDoc>,
+        slot: Option<usize>,
+        loose: Option<Graph>,
+        selected: Option<usize>,
     }
 
     impl Host for TestHost {
@@ -283,8 +360,75 @@ mod tests {
         fn write_material_param(&mut self, _: &str, _: Value) -> Result<(), String> {
             Ok(())
         }
-        fn changed(&mut self, _: Document, rebuild: bool) {
+        fn changed(&mut self, document: Document, rebuild: bool) {
             self.rebuilds += usize::from(rebuild);
+            if let (Document::Material, Some(slot), Some(scene)) =
+                (document, self.slot, self.scene.as_mut())
+            {
+                scene.document.materials[slot].graph = self.material.clone();
+            }
+        }
+        fn scene(&self) -> Option<&SceneDoc> {
+            self.scene.as_ref()
+        }
+        fn scene_mut(&mut self) -> (&mut Option<SceneDoc>, &NodeRegistry) {
+            (&mut self.scene, &self.registry)
+        }
+        fn scene_changed(&mut self, _: SceneChanges) {
+            let count = self
+                .scene
+                .as_ref()
+                .map_or(0, |scene| scene.document.materials.len());
+            match self.slot {
+                Some(slot) if slot < count => {
+                    self.material = self.scene.as_ref().unwrap().document.materials[slot]
+                        .graph
+                        .clone();
+                }
+                Some(_) => self.open_slot(None),
+                None => {}
+            }
+        }
+        fn material_slot(&self) -> Option<usize> {
+            self.slot
+        }
+        fn open_slot(&mut self, slot: Option<usize>) {
+            match slot {
+                Some(slot) => {
+                    let graph = self.scene.as_ref().unwrap().document.materials[slot]
+                        .graph
+                        .clone();
+                    let previous = std::mem::replace(&mut self.material, graph);
+                    if self.slot.is_none() {
+                        self.loose = Some(previous);
+                    }
+                }
+                None => {
+                    if let Some(loose) = self.loose.take() {
+                        self.material = loose;
+                    }
+                }
+            }
+            self.slot = slot;
+        }
+        fn select_instance(&mut self, instance: Option<usize>) -> Result<(), CommandError> {
+            let scene = self.scene.as_ref().ok_or(CommandError::NoScene)?;
+            let material = match instance {
+                Some(index) => Some(
+                    scene
+                        .document
+                        .instances
+                        .get(index)
+                        .ok_or(CommandError::NoSuchInstance(index))?
+                        .material,
+                ),
+                None => None,
+            };
+            self.selected = instance;
+            if material.is_some() {
+                self.open_slot(material);
+            }
+            Ok(())
         }
     }
 
@@ -315,7 +459,26 @@ mod tests {
                 Value::F32(0.5),
             )]),
             rebuilds: 0,
+            scene: None,
+            slot: None,
+            loose: None,
+            selected: None,
         }
+    }
+
+    /// Two cubes, each with its own material.
+    fn two_cubes() -> SceneDoc {
+        use wxsl_core::scene::{Instance, MaterialEntry, MeshEntry, MeshSource, Scene};
+        let mut scene = Scene::new("two cubes");
+        scene.add_mesh(MeshEntry::new("cube", MeshSource::Cube { size: 1.0 }));
+        for name in ["red", "blue"] {
+            let mut graph = Graph::new(name);
+            graph.add_node("test.three");
+            scene.add_material(MaterialEntry::new(name, graph));
+        }
+        scene.add_instance(Instance::new(0, 0).with_name("left"));
+        scene.add_instance(Instance::new(0, 1).with_name("right"));
+        SceneDoc::new(scene, None)
     }
 
     fn add(history: &mut History, host: &mut TestHost, def: &str) -> NodeId {
@@ -606,5 +769,191 @@ mod tests {
         let error =
             Command::parse_transcript("{\"command\":\"undo\"}\n{\"command\":\"fly\"}").unwrap_err();
         assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn every_scene_command_undoes_and_redoes() {
+        let mut host = host();
+        host.scene = Some(two_cubes());
+        let mut history = History::default();
+        let moved = crate::scene::compose([1.0, 2.0, 3.0], [0.0, 45.0, 0.0], [1.0; 3]);
+        let commands = [
+            Command::SetTransform {
+                instance: 1,
+                transform: moved,
+            },
+            Command::SetInstanceMaterial {
+                instance: 0,
+                material: 1,
+            },
+            Command::SetInstanceName {
+                instance: 0,
+                name: "front".into(),
+            },
+            Command::SetMaterialTags {
+                material: 0,
+                tags: vec!["transparent".into(), "glass".into()],
+            },
+            Command::SetRenderOrder {
+                material: 1,
+                order: 4,
+            },
+            Command::SetMaxLayers {
+                material: 1,
+                layers: 2,
+            },
+            Command::RemoveInstances {
+                instances: vec![1, 0, 1],
+            },
+            Command::CloseScene,
+        ];
+        for command in &commands {
+            let before = host.scene.as_ref().map(|scene| scene.document.clone());
+            history.execute(&mut host, command, false).unwrap();
+            let after = host.scene.as_ref().map(|scene| scene.document.clone());
+            assert_ne!(before, after, "{command:?} changed nothing");
+            history.execute(&mut host, &Command::Undo, false).unwrap();
+            let undone = host.scene.as_ref().map(|scene| scene.document.clone());
+            assert_eq!(undone, before, "undo of {command:?}");
+            history.execute(&mut host, &Command::Redo, false).unwrap();
+            let redone = host.scene.as_ref().map(|scene| scene.document.clone());
+            assert_eq!(redone, after, "redo of {command:?}");
+            history.execute(&mut host, &Command::Undo, false).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_selection_is_not_a_step_and_an_undo_edits_the_material_it_was_taken_on() {
+        let mut host = host();
+        host.scene = Some(two_cubes());
+        let loose = host.material.clone();
+        let mut history = History::default();
+        history
+            .execute(
+                &mut host,
+                &Command::SelectInstance { instance: Some(0) },
+                false,
+            )
+            .unwrap();
+        assert_eq!(history.undo_depth(), 0, "a selection is not an undo step");
+        assert_eq!(host.material.name(), "red");
+        let red = host.material.clone();
+        history
+            .execute(
+                &mut host,
+                &Command::SetLabel {
+                    document: Document::Material,
+                    node: NodeId(1),
+                    label: Some("tint".into()),
+                },
+                false,
+            )
+            .unwrap();
+        let scene = |host: &TestHost, index: usize| {
+            host.scene.as_ref().unwrap().document.materials[index]
+                .graph
+                .clone()
+        };
+        assert_eq!(scene(&host, 0), host.material, "the scene's copy follows");
+
+        // The selection moves to the blue cube; the undo restores red.
+        history
+            .execute(
+                &mut host,
+                &Command::SelectInstance { instance: Some(1) },
+                false,
+            )
+            .unwrap();
+        assert_eq!(host.material.name(), "blue");
+        history.execute(&mut host, &Command::Undo, false).unwrap();
+        assert_eq!(host.slot, Some(0));
+        assert_eq!(scene(&host, 0), red);
+        assert_eq!(host.material, red);
+
+        // Closing the scene gives the canvas its own graph back.
+        history
+            .execute(&mut host, &Command::CloseScene, false)
+            .unwrap();
+        assert_eq!(host.slot, None);
+        assert_eq!(host.material, loose);
+    }
+
+    #[test]
+    fn a_scene_command_without_a_scene_or_a_target_names_the_cause() {
+        let mut host = host();
+        let mut history = History::default();
+        let set = Command::SetInstanceName {
+            instance: 5,
+            name: "x".into(),
+        };
+        assert_eq!(
+            history.execute(&mut host, &set, false),
+            Err(CommandError::NoScene)
+        );
+        host.scene = Some(two_cubes());
+        assert_eq!(
+            history.execute(&mut host, &set, false),
+            Err(CommandError::NoSuchInstance(5))
+        );
+        assert_eq!(
+            history.execute(
+                &mut host,
+                &Command::SetLight {
+                    light: 0,
+                    color: [1.0; 3],
+                    intensity: 1.0
+                },
+                false
+            ),
+            Err(CommandError::NoSuchLight(0))
+        );
+        assert_eq!(
+            history.execute(
+                &mut host,
+                &Command::SetInstanceMaterial {
+                    instance: 0,
+                    material: 9
+                },
+                false
+            ),
+            Err(CommandError::NoSuchMaterial(9))
+        );
+        assert_eq!(history.undo_depth(), 0);
+    }
+
+    #[test]
+    fn a_saved_scene_reads_back_and_an_imported_one_is_refused() {
+        let directory = std::env::temp_dir().join(format!("wxsl-scene-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("two.scene.json");
+        let mut host = host();
+        host.scene = Some(two_cubes());
+        let mut history = History::default();
+        let save = Command::SaveScene {
+            path: path.display().to_string(),
+        };
+        history.execute(&mut host, &save, false).unwrap();
+        let saved = host.scene.clone().unwrap().document;
+        history
+            .execute(&mut host, &Command::CloseScene, false)
+            .unwrap();
+        history
+            .execute(
+                &mut host,
+                &Command::OpenScene {
+                    path: path.display().to_string(),
+                },
+                false,
+            )
+            .unwrap();
+        assert_eq!(host.scene.as_ref().unwrap().document, saved);
+
+        host.scene.as_mut().unwrap().document.meshes[0].source =
+            wxsl_core::scene::MeshSource::Embedded { index: 0 };
+        assert!(matches!(
+            history.execute(&mut host, &save, false),
+            Err(CommandError::Scene(_))
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

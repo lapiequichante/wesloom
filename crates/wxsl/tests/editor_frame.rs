@@ -1754,3 +1754,185 @@ fn a_function_written_in_the_editor_becomes_a_node() {
     tick(&mut editor);
     assert!(!editor.is_typing());
 }
+
+#[test]
+fn the_scene_mode_draws_a_scene_and_a_click_opens_its_material() {
+    // ADR 0082: a scene through the preview's renderer, picked on the CPU,
+    // its material edited in the material canvas and written back.
+    use wxsl::editor::{Answer, CanvasMode, Query};
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    let scene = |editor: &Editor| match editor.query(&Query::Scene) {
+        Answer::Scene {
+            scene,
+            selected,
+            material,
+        } => (scene, selected, material),
+        other => panic!("{other:?}"),
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let loose = editor.graph().clone();
+    // The sheen scene names a lighting model the editor's renderer does
+    // not start with: the set widens rather than the load failing.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/sheen.scene.json");
+    editor
+        .apply(Command::OpenScene {
+            path: path.to_string(),
+        })
+        .expect("the scene opens");
+    editor.set_canvas_mode(CanvasMode::Scene);
+    let mut pixels = Vec::new();
+    for step in 0..3 {
+        pixels = frame(&gpu, &mut editor, &target, 0.1 * step as f64);
+    }
+    if let Ok(path) = std::env::var("WXSL_SCENE_SHOT") {
+        image::RgbaImage::from_raw(target.width(), target.height(), pixels.clone())
+            .unwrap()
+            .save(path)
+            .unwrap();
+    }
+    assert!(
+        !editor.message().contains("cannot"),
+        "the scene loads: {}",
+        editor.message()
+    );
+
+    // The viewport is the canvas rectangle; the cube, framed, is in its
+    // middle and is not the canvas colour.
+    let viewport = editor.canvas_rect();
+    let centre = viewport.center();
+    let at = |pixels: &[u8], point: Vec2| {
+        let index = (point.y as usize * target.width() as usize + point.x as usize) * 4;
+        [pixels[index], pixels[index + 1], pixels[index + 2]]
+    };
+    let cube = at(&pixels, centre);
+
+    // A click on it selects it and opens its material.
+    editor.handle_event(UiEvent::PointerMoved(centre));
+    frame(&gpu, &mut editor, &target, 0.5);
+    for pressed in [true, false] {
+        editor.handle_event(UiEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+        });
+        frame(&gpu, &mut editor, &target, 0.6);
+    }
+    let (_, selected, material) = scene(&editor);
+    assert_eq!((selected, material), (Some(0), Some(0)));
+    assert_eq!(editor.graph().name(), "fragment sheen tint and roughness");
+
+    // An edit in the material canvas lands in the scene's copy, and an
+    // undo takes it back out.
+    let output = editor
+        .graph()
+        .nodes()
+        .find(|(_, node)| node.def == "output.surface")
+        .map(|(id, _)| id)
+        .expect("the material has an output");
+    editor
+        .apply(Command::SetParam {
+            document: wxsl::editor::Document::Material,
+            node: output,
+            socket: "roughness".into(),
+            value: wxsl::core::node::Value::F32(0.9),
+        })
+        .unwrap();
+    frame(&gpu, &mut editor, &target, 0.7);
+    let edited = scene(&editor).0.unwrap().materials[0].graph.clone();
+    assert_eq!(&edited, editor.graph());
+    editor.apply(Command::Undo).unwrap();
+    assert_ne!(scene(&editor).0.unwrap().materials[0].graph, edited);
+
+    // A transform from the inspector's command moves the cube out of the
+    // middle, and closing the scene gives the canvas its graph back.
+    editor
+        .apply(Command::SetTransform {
+            instance: 0,
+            transform: glam::Mat4::from_translation(glam::Vec3::new(50.0, 0.0, 0.0))
+                .to_cols_array(),
+        })
+        .unwrap();
+    let pixels = frame(&gpu, &mut editor, &target, 0.8);
+    let distance = |a: [u8; 3], b: [u8; 3]| {
+        a.iter()
+            .zip(b)
+            .map(|(a, b)| (*a as i32 - b as i32).abs())
+            .sum::<i32>()
+    };
+    assert!(
+        distance(at(&pixels, centre), cube) > 30,
+        "the cube was in the middle and left it: {cube:?} then {:?}",
+        at(&pixels, centre)
+    );
+    editor.apply(Command::CloseScene).unwrap();
+    frame(&gpu, &mut editor, &target, 0.9);
+    assert_eq!(editor.graph(), &loose);
+    assert_eq!(scene(&editor), (None, None, None));
+}
+
+#[cfg(feature = "gltf")]
+#[test]
+fn a_gltf_file_imports_into_the_scene_mode_and_a_second_one_joins_it() {
+    // ADR 0082: the import is a command, and a second import appends.
+    use wxsl::editor::{Answer, CanvasMode, Query};
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    let scene = |editor: &Editor| match editor.query(&Query::Scene) {
+        Answer::Scene { scene, .. } => scene.expect("a scene is open"),
+        other => panic!("{other:?}"),
+    };
+    let helmet = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../resources/glb/DamagedHelmet/DamagedHelmet.glb"
+    );
+    editor
+        .apply(Command::ImportGltf {
+            path: helmet.to_string(),
+        })
+        .expect("the helmet imports");
+    editor.set_canvas_mode(CanvasMode::Scene);
+    let mut pixels = Vec::new();
+    for step in 0..3 {
+        pixels = frame(&gpu, &mut editor, &target, 0.1 * step as f64);
+    }
+    if let Ok(path) = std::env::var("WXSL_GLTF_SHOT") {
+        image::RgbaImage::from_raw(target.width(), target.height(), pixels.clone())
+            .unwrap()
+            .save(path)
+            .unwrap();
+    }
+    let first = scene(&editor);
+    assert!(!first.instances.is_empty());
+    let viewport = editor.canvas_rect();
+    let centre = viewport.center();
+    let index = (centre.y as usize * target.width() as usize + centre.x as usize) * 4;
+    let corner =
+        (viewport.min.y as usize + 4) * target.width() as usize + viewport.min.x as usize + 4;
+    assert_ne!(
+        pixels[index..index + 3],
+        pixels[corner * 4..corner * 4 + 3],
+        "the helmet is drawn in the middle"
+    );
+
+    let colors = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vertex_colors.gltf");
+    editor
+        .apply(Command::ImportGltf {
+            path: colors.to_string(),
+        })
+        .expect("the second file imports");
+    frame(&gpu, &mut editor, &target, 0.5);
+    let both = scene(&editor);
+    assert!(both.instances.len() > first.instances.len());
+    assert_eq!(both.meshes.len(), first.meshes.len() + 1);
+    assert!(both.validate().is_empty());
+
+    editor.apply(Command::Undo).unwrap();
+    frame(&gpu, &mut editor, &target, 0.6);
+    assert_eq!(scene(&editor), first);
+}

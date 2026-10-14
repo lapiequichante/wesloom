@@ -28,7 +28,7 @@ In the order a program meets them:
 | `Environment`, `Camera`, `Light` | `wxsl::render` | The frame's camera, lights, exposure and time. |
 | `DrawList`, `DrawItem` | `wxsl::render` | What one frame draws: a mesh, a material, a transform, tags and bindings. |
 | `Scene` | `wxsl::core` | The scene document: meshes, materials, instances, and since v2 textures, bindings, nodes and an optional environment. |
-| `SceneResources` | `wxsl::scene` | A scene loaded onto the GPU. `create_bindings()` uploads its textures and applies its bindings; `draw_list()` turns it into a `DrawList`; `wxsl::scene::environment` turns its environment block into an `Environment`. |
+| `SceneResources` | `wxsl::scene` | A scene loaded onto the GPU (the loader lives in `wxsl_render::scene`, ADR 0082). `create_bindings()` uploads its textures and applies its bindings; `draw_list()` turns it into a `DrawList`; `wxsl::scene::environment` turns its environment block into an `Environment`. |
 | `import_gltf`, `ImportedScene` | `wxsl::asset` | A `.gltf`/`.glb` file as a scene document with generated `gltf_pbr` materials, its geometry and images, and named warnings (`gltf` feature). `SceneResources::load_imported` uploads it. The device-free crate under it is `wxsl-gltf`. |
 | `Editor` | `wxsl::editor` | The visual editor, behind the `editor` feature. |
 

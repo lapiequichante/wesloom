@@ -117,7 +117,7 @@ Each test file's header says what it covers.
 | wgpu adapters, shader variants, renderer UI | `cargo test -p wxsl-render` |
 | a material or pipeline feature on a device | the matching `cargo test -p wxsl --test <name>` |
 | `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
-| editor commands, undo, transcripts (no device) | `cargo test -p wxsl-editor` |
+| editor commands, undo, transcripts, scene picking (no device) | `cargo test -p wxsl-editor` |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
@@ -196,7 +196,8 @@ The ADR named on each line holds the reasoning.
 - **Scene, environment, draw list.** A scene is what exists, an
   environment is camera and lights, and a draw list is what a frame
   submits. The renderer takes a draw list. Translating a scene into one is
-  the facade's job (`wxsl::scene`).
+  `wxsl_render::scene`'s job, a loader beside the renderer, re-exported as
+  `wxsl::scene` (ADR 0082).
 - **Two implementations must agree.**
   - The MSDF generator (CPU and compute) is checked in `editor_frame`.
   - Forward and deferred are checked in `render_cube` and the other device
@@ -206,8 +207,9 @@ The ADR named on each line holds the reasoning.
   `Editor::apply(Command)`; a new gesture is a new `Command` variant
   emitted into the frame's requests, never a direct mutation. Undo is
   by snapshot, so a command needs no hand-written inverse.
-- **One editor, several canvas modes.** The pipeline canvas is a mode of
-  the same editor (ADR 0043), not a second editor.
+- **One editor, several canvas modes.** The pipeline canvas and the scene
+  mode are modes of the same editor over one renderer (ADRs 0043, 0082),
+  not second editors.
 
 ## Where things are
 

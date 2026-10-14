@@ -2827,8 +2827,11 @@ pub fn wxsl_core::scene::Instance::with_tags(self, wxsl_core::scene::Tags) -> Se
 pub fn wxsl_core::scene::Instance::with_transform(self, [f32; 16]) -> Self
 impl core::clone::Clone for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::Instance
+pub fn wxsl_core::scene::Instance::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Instance
 impl serde_core::ser::Serialize for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Instance
@@ -2855,8 +2858,11 @@ pub fn wxsl_core::scene::MaterialEntry::with_tags(self, wxsl_core::scene::Tags) 
 pub fn wxsl_core::scene::MaterialEntry::with_texture(self, impl core::convert::Into<alloc::string::String>, usize) -> Self
 impl core::clone::Clone for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::MaterialEntry
+pub fn wxsl_core::scene::MaterialEntry::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::MaterialEntry
 impl serde_core::ser::Serialize for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::MaterialEntry
@@ -2875,8 +2881,11 @@ impl wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::new(impl core::convert::Into<alloc::string::String>, wxsl_core::scene::MeshSource) -> Self
 impl core::clone::Clone for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::MeshEntry
+pub fn wxsl_core::scene::MeshEntry::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::MeshEntry
 impl serde_core::ser::Serialize for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::MeshEntry
@@ -2938,10 +2947,13 @@ pub fn wxsl_core::scene::Scene::placement(&self, core::option::Option<usize>) ->
 pub fn wxsl_core::scene::Scene::validate(&self) -> alloc::vec::Vec<wxsl_core::scene::SceneError>
 impl core::clone::Clone for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::Scene
+pub fn wxsl_core::scene::Scene::eq(&self, &Self) -> bool
 impl core::default::Default for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::default() -> Self
 impl core::fmt::Debug for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Scene
 impl serde_core::ser::Serialize for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Scene
@@ -3831,8 +3843,11 @@ pub fn wxsl_core::scene::Instance::with_tags(self, wxsl_core::scene::Tags) -> Se
 pub fn wxsl_core::scene::Instance::with_transform(self, [f32; 16]) -> Self
 impl core::clone::Clone for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::Instance
+pub fn wxsl_core::scene::Instance::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Instance
 impl serde_core::ser::Serialize for wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Instance
@@ -3956,8 +3971,11 @@ pub fn wxsl_core::scene::MaterialEntry::with_tags(self, wxsl_core::scene::Tags) 
 pub fn wxsl_core::scene::MaterialEntry::with_texture(self, impl core::convert::Into<alloc::string::String>, usize) -> Self
 impl core::clone::Clone for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::MaterialEntry
+pub fn wxsl_core::scene::MaterialEntry::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::MaterialEntry
 impl serde_core::ser::Serialize for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::MaterialEntry
@@ -4004,8 +4022,11 @@ impl wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::new(impl core::convert::Into<alloc::string::String>, wxsl_core::scene::MeshSource) -> Self
 impl core::clone::Clone for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::MeshEntry
+pub fn wxsl_core::scene::MeshEntry::eq(&self, &Self) -> bool
 impl core::fmt::Debug for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::MeshEntry
 impl serde_core::ser::Serialize for wxsl_core::scene::MeshEntry
 pub fn wxsl_core::scene::MeshEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::MeshEntry
@@ -4226,10 +4247,13 @@ pub fn wxsl_core::scene::Scene::placement(&self, core::option::Option<usize>) ->
 pub fn wxsl_core::scene::Scene::validate(&self) -> alloc::vec::Vec<wxsl_core::scene::SceneError>
 impl core::clone::Clone for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::Scene
+pub fn wxsl_core::scene::Scene::eq(&self, &Self) -> bool
 impl core::default::Default for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::default() -> Self
 impl core::fmt::Debug for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Scene
 impl serde_core::ser::Serialize for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Scene

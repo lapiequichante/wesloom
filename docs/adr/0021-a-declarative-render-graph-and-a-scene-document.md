@@ -193,6 +193,10 @@ either a lie or a translator nobody asked for.
 * If the pass or resource vocabulary changes, `docs/architecture.md`'s
   "How a frame is drawn" section and `AGENTS.md`'s test-command list are the
   two places outside the code that describe it.
+* **Amended by [ADR 0082](0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md):**
+  `SceneResources` moved from the facade to `wxsl_render::scene`, so the
+  editor's scene mode can use it. The facade re-exports it as
+  `wxsl::scene`; the renderer still takes only a draw list.
 
 ## Amendment (ADR 0026)
 

@@ -180,6 +180,88 @@ pub enum Command {
         /// The value.
         value: Value,
     },
+    /// Open a `.scene.json`, or import a `.gltf`/`.glb` as the scene,
+    /// replacing the open one (ADR 0082).
+    OpenScene {
+        /// The file.
+        path: String,
+    },
+    /// Import a `.gltf`/`.glb` into the open scene, or as the scene when
+    /// none is open. Needs the `gltf` feature.
+    ImportGltf {
+        /// The file.
+        path: String,
+    },
+    /// Close the scene. The material canvas goes back to the graph it had
+    /// before a scene material was opened.
+    CloseScene,
+    /// Write the scene as a `.scene.json`. Not an undo step.
+    SaveScene {
+        /// The file.
+        path: String,
+    },
+    /// Select an instance, or with `None` nothing, and open its material
+    /// in the material canvas. Not an undo step.
+    SelectInstance {
+        /// The instance, by index.
+        instance: Option<usize>,
+    },
+    /// Set an instance's transform, relative to its node.
+    SetTransform {
+        /// The instance.
+        instance: usize,
+        /// Column-major.
+        transform: [f32; 16],
+    },
+    /// Draw an instance with another of the scene's materials.
+    SetInstanceMaterial {
+        /// The instance.
+        instance: usize,
+        /// The material, by index.
+        material: usize,
+    },
+    /// Rename an instance.
+    SetInstanceName {
+        /// The instance.
+        instance: usize,
+        /// The name.
+        name: String,
+    },
+    /// Replace a scene material's tags.
+    SetMaterialTags {
+        /// The material.
+        material: usize,
+        /// The tags.
+        tags: Vec<String>,
+    },
+    /// Set a scene material's `render_order`.
+    SetRenderOrder {
+        /// The material.
+        material: usize,
+        /// The order.
+        order: i32,
+    },
+    /// Set a scene material's `max_layers`.
+    SetMaxLayers {
+        /// The material.
+        material: usize,
+        /// The layers.
+        layers: i32,
+    },
+    /// Set the colour and intensity of one of the scene's lights.
+    SetLight {
+        /// The light, by index in the environment block.
+        light: usize,
+        /// Linear RGB.
+        color: [f32; 3],
+        /// Its intensity.
+        intensity: f32,
+    },
+    /// Remove instances.
+    RemoveInstances {
+        /// The instances.
+        instances: Vec<usize>,
+    },
     /// Apply commands in order, as one undo step. If one fails, nothing
     /// changes.
     Batch {
@@ -244,6 +326,12 @@ impl Command {
             Command::SetColor { document, node, .. } => format!("color {document:?} {node}"),
             Command::SetMaterialParam { name, .. } => format!("material {name}"),
             Command::SetPassParam { pass, name, .. } => format!("pass {pass} {name}"),
+            Command::SetTransform { instance, .. } => format!("transform {instance}"),
+            Command::SetInstanceName { instance, .. } => format!("instance name {instance}"),
+            Command::SetMaterialTags { material, .. } => format!("tags {material}"),
+            Command::SetRenderOrder { material, .. } => format!("order {material}"),
+            Command::SetMaxLayers { material, .. } => format!("layers {material}"),
+            Command::SetLight { light, .. } => format!("light {light}"),
             _ => return None,
         })
     }
@@ -267,7 +355,7 @@ impl Command {
             | Command::TidyLayout { document } => *document == which,
             Command::SetMaterialParam { .. } => which == Document::Material,
             Command::Batch { commands } => commands.iter().any(|command| command.mentions(which)),
-            Command::SetPassParam { .. } | Command::Undo | Command::Redo => false,
+            _ => false,
         }
     }
 
@@ -328,6 +416,16 @@ pub enum CommandError {
     NothingToRedo,
     /// `undo` and `redo` are steps of their own, never part of a batch.
     HistoryInBatch,
+    /// The command needs a scene and none is open.
+    NoScene,
+    /// The scene has no instance at this index.
+    NoSuchInstance(usize),
+    /// The scene has no material at this index.
+    NoSuchMaterial(usize),
+    /// The scene's environment has no light at this index.
+    NoSuchLight(usize),
+    /// A scene file could not be read, imported or written.
+    Scene(String),
     /// A command inside a batch failed.
     InBatch {
         /// Its index in the batch.
@@ -355,6 +453,11 @@ impl fmt::Display for CommandError {
             CommandError::NothingToUndo => f.write_str("nothing to undo"),
             CommandError::NothingToRedo => f.write_str("nothing to redo"),
             CommandError::HistoryInBatch => f.write_str("undo and redo cannot be batched"),
+            CommandError::NoScene => f.write_str("no scene is open"),
+            CommandError::NoSuchInstance(index) => write!(f, "no instance {index}"),
+            CommandError::NoSuchMaterial(index) => write!(f, "no scene material {index}"),
+            CommandError::NoSuchLight(index) => write!(f, "no light {index}"),
+            CommandError::Scene(message) => f.write_str(message),
             CommandError::InBatch { index, error } => {
                 write!(f, "batch command {index}: {error}")
             }
@@ -418,6 +521,8 @@ pub enum Query {
     Stats,
     /// How many steps can be undone and redone.
     History,
+    /// The open scene document, and the selected instance.
+    Scene,
 }
 
 /// The answer to a [`Query`].
@@ -473,6 +578,15 @@ pub enum Answer {
         undo: usize,
         /// Steps that can be redone.
         redo: usize,
+    },
+    /// The open scene.
+    Scene {
+        /// The document, if a scene is open.
+        scene: Option<wxsl_core::scene::Scene>,
+        /// The selected instance.
+        selected: Option<usize>,
+        /// The material open in the material canvas, by index.
+        material: Option<usize>,
     },
 }
 
@@ -678,9 +792,7 @@ pub(crate) fn edit_graph(
                 graph.set_param(id, wxsl_core::node::SOCKET_VALUE, *value);
             }
         }
-        Command::SetPassParam { .. } | Command::Batch { .. } | Command::Undo | Command::Redo => {
-            unreachable!("not a graph command: the editor applies it")
-        }
+        _ => unreachable!("not a graph command: the editor applies it"),
     }
     Ok(())
 }

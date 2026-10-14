@@ -1096,6 +1096,79 @@ impl Preview {
         )
     }
 
+    /// Render a scene's draws into the target instead of the material
+    /// (ADR 0082): the same renderer, pass list and variant cache.
+    pub(crate) fn render_scene(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        draws: &wxsl_render::DrawList<'_>,
+        environment: &Environment,
+    ) -> Result<(), RenderError> {
+        if self.swapping && self.renderer.swap_progress().is_none() {
+            self.swapping = false;
+            self.refresh_wgsl(device);
+        }
+        let curve = Value::F32(if self.debug_view == 0 { 1.0 } else { 0.0 });
+        if self
+            .renderer
+            .pass_param(TONEMAP_PASS, "curve")
+            .is_some_and(|current| current != curve)
+        {
+            self.renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
+        }
+        self.time = environment.time;
+        self.renderer.render(
+            device,
+            queue,
+            &RenderRequest {
+                view: self.target.view(),
+                environment,
+                draws,
+            },
+        )
+    }
+
+    /// The target's size in pixels: [`Preview::SIZE`] square, unless the
+    /// scene viewport asked for another.
+    pub(crate) fn size(&self) -> (u32, u32) {
+        let target = self.renderer.target();
+        (target.width, target.height)
+    }
+
+    /// Render at `width` × `height` from now on, keeping the texture id the
+    /// interface draws with.
+    pub(crate) fn set_size(
+        &mut self,
+        device: &wgpu::Device,
+        ui: &mut UiRenderer,
+        width: u32,
+        height: u32,
+    ) {
+        let (width, height) = (width.max(1), height.max(1));
+        if self.size() == (width, height) {
+            return;
+        }
+        self.renderer.resize(device, width, height);
+        self.target = OffscreenTarget::new(device, width, height);
+        ui.replace_texture(device, self.texture, self.target.view());
+    }
+
+    /// The renderer, for binding a scene's materials on it.
+    pub(crate) fn renderer_mut(&mut self) -> &mut Renderer {
+        &mut self.renderer
+    }
+
+    /// The renderer.
+    pub(crate) fn renderer(&self) -> &Renderer {
+        &self.renderer
+    }
+
+    /// The checker and sampler bound wherever nothing else is.
+    pub(crate) fn placeholder(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
+        (&self.placeholder, &self.placeholder_sampler)
+    }
+
     /// Turn the preview by a drag, in pixels.
     pub fn drag(&mut self, delta: f32) {
         self.angle += delta * 0.01;

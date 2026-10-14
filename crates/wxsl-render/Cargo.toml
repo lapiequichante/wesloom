@@ -21,11 +21,16 @@ ttf-parser = { workspace = true }
 # a toy, and a renderer that always pulls in an asset pipeline is a tax.
 # The reading itself is wxsl-gltf's, which has no device (ADR 0080).
 wxsl-gltf = { workspace = true, optional = true }
+# PNG and JPEG decoding for scene textures given as files or encoded bytes
+# (ADR 0079), optional like glTF.
+image = { workspace = true, optional = true }
 
 [features]
 default = []
 # Read geometry from glTF/GLB files (`crate::gltf`).
 gltf = ["dep:wxsl-gltf"]
+# Decode PNG and JPEG scene textures (`crate::scene`).
+images = ["dep:image"]
 # On wasm32, also compile wgpu's WebGL2 backend, the fallback profile for a
 # browser without WebGPU (ADR 0075). WebGPU is wgpu's default web backend.
 webgl = ["wgpu/webgl"]

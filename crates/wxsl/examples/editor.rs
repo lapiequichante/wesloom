@@ -15,6 +15,7 @@
 //! cargo run --example editor -- --list-fonts           # what it would pick
 //! cargo run --example editor -- --screenshot out.png   # one frame, no window
 //! cargo run --example editor -- --pipeline             # open the pipeline canvas
+//! cargo run --example editor --features gltf -- --scene resources/glb/DamagedHelmet/DamagedHelmet.glb
 //! ```
 //!
 //! # Fonts
@@ -46,6 +47,15 @@
 //! pick its link up · right-click a link to cut it · right-click the canvas
 //! to add a node there · middle-drag (or shift-right-drag) to pan · wheel to
 //! zoom · drag the preview to turn it.
+//!
+//! # Scenes
+//!
+//! `--scene` opens a `.scene.json`, or a `.glb`/`.gltf` with the `gltf`
+//! feature, in the scene mode (ADR 0082); dropping one of those files on
+//! the window does the same, a glTF file joining the open scene. Drag the
+//! viewport to orbit, scroll to zoom, click an instance to select it and
+//! open its material in the material canvas. `Ctrl+S` in the scene mode
+//! writes the scene as JSON.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -59,7 +69,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::core::graph::Graph;
-use wxsl::editor::{CanvasMode, Editor, EditorConfig};
+use wxsl::editor::{CanvasMode, Command, Editor, EditorConfig};
 use wxsl::render::gpu::GpuContext;
 use wxsl::render::ui::input::{Key, Modifiers, MouseButton, UiEvent};
 use wxsl::render::ui::{MsdfBackend, UiTarget};
@@ -78,6 +88,8 @@ OPTIONS:
     --graph <FILE>        Graph to open, in the node format (default: the shipped demo)
     --pipeline            Start on the pipeline canvas (the deferred preset,
                           compiled live; Ctrl+S there saves edited.pipeline.json)
+    --scene <FILE>        Open a .scene.json, or a .glb/.gltf (gltf feature),
+                          in the scene mode; dropping a file does the same
     --font <FILE>         Proportional font for the interface
     --mono <FILE>         Monospaced font for the code panels
     --msdf <cpu|gpu>      Which MSDF backend generates glyphs (default: gpu)
@@ -209,6 +221,9 @@ fn screenshot(
     if options.pipeline {
         editor.set_canvas_mode(CanvasMode::Pipeline);
     }
+    if let Some(scene) = options.scene.as_deref() {
+        open_file(&mut editor, scene);
+    }
 
     // Three frames: the first fills the glyph atlas and compiles the
     // material, and the preview needs one more to have something to spin.
@@ -269,6 +284,7 @@ fn screenshot(
 struct Options {
     graph: Option<PathBuf>,
     pipeline: bool,
+    scene: Option<PathBuf>,
     ui_font: Option<PathBuf>,
     mono_font: Option<PathBuf>,
     msdf: MsdfBackend,
@@ -283,6 +299,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             graph: None,
+            scene: None,
             pipeline: false,
             ui_font: None,
             mono_font: None,
@@ -311,6 +328,7 @@ impl Options {
             match argument.as_str() {
                 "--graph" => options.graph = Some(PathBuf::from(value()?)),
                 "--pipeline" => options.pipeline = true,
+                "--scene" => options.scene = Some(PathBuf::from(value()?)),
                 "--font" => options.ui_font = Some(PathBuf::from(value()?)),
                 "--mono" => options.mono_font = Some(PathBuf::from(value()?)),
                 "--msdf" => {
@@ -342,6 +360,30 @@ impl Options {
             }
         }
         Ok(options)
+    }
+}
+
+/// Open a dropped or named file in the scene mode: a scene document
+/// replaces the scene, a glTF file joins it.
+fn open_file(editor: &mut Editor, path: &Path) {
+    let gltf = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf"));
+    let path_text = path.display().to_string();
+    let command = if gltf {
+        Command::ImportGltf { path: path_text }
+    } else {
+        Command::OpenScene { path: path_text }
+    };
+    match editor.apply(command) {
+        Ok(_) => {
+            editor.set_canvas_mode(CanvasMode::Scene);
+            editor.set_message(format!("opened {}", path.display()));
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            editor.set_message(error.to_string());
+        }
     }
 }
 
@@ -589,6 +631,9 @@ impl App {
         if self.options.pipeline {
             editor.set_canvas_mode(CanvasMode::Pipeline);
         }
+        if let Some(scene) = self.options.scene.as_deref() {
+            open_file(&mut editor, scene);
+        }
         let size = window.inner_size();
         // The editor learns the viewport from events, so it needs the first
         // one before it can lay anything out.
@@ -670,6 +715,28 @@ impl App {
     /// pipeline is not a material and overwriting the material's file
     /// with one would be a prank.
     fn save(&mut self) {
+        if let Some(state) = self.state.as_mut() {
+            if state.editor.canvas_mode() == CanvasMode::Scene {
+                // Back to its own file only when that is a scene document:
+                // a .glb is not overwritten with JSON.
+                let path = self
+                    .options
+                    .scene
+                    .clone()
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+                    .unwrap_or_else(|| PathBuf::from("edited.scene.json"));
+                let command = Command::SaveScene {
+                    path: path.display().to_string(),
+                };
+                match state.editor.apply(command) {
+                    Ok(_) => state
+                        .editor
+                        .set_message(format!("saved {}", path.display())),
+                    Err(error) => state.editor.set_message(error.to_string()),
+                }
+                return;
+            }
+        }
         let pipeline = self
             .state
             .as_ref()
@@ -814,6 +881,11 @@ impl ApplicationHandler for App {
         // editor's, which is what keeps it usable from another event loop.
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::DroppedFile(path) => {
+                if let Some(state) = self.state.as_mut() {
+                    open_file(&mut state.editor, &path);
+                }
+            }
             WindowEvent::RedrawRequested => self.render(),
             WindowEvent::Resized(size) => {
                 if let Some(state) = self.state.as_mut() {
