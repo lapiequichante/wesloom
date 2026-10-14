@@ -295,6 +295,28 @@ ADR and its own plan if the demand is real.
   sessions for regression tests.
 * **ADR:** commands as the editor's single mutation path.
 
+**Landed (2026-10-14, ADR 0081):**
+
+- `Command` covers every edit the canvases, inspectors, palette and
+  toolbar made, on either document, plus `batch` (atomic), `undo` and
+  `redo`. `Editor::apply` is the only path, and `graph_mut`,
+  `pipeline_graph_mut` and `set_pass_param` are gone.
+- Undo restores a snapshot rather than running an inverse, because
+  generic re-resolution makes inverses inexact. A drag, a slider or a
+  rename merges into one step. `Ctrl`/`Cmd`+`Z` and `Shift`+`Z` or `Y` are
+  bound.
+- `Query` and `Answer` cover the graph, diagnostics, source, nodes,
+  passes, stats and history. Transcripts are JSON lines.
+- Tests: the round trip of every command, an atomic batch, merging and
+  transcript replay, all without a device; a UI drag undone with `Cmd`+`Z`
+  in `editor_frame`.
+- Not yet done:
+  - saving a function is not a command, because it needs the device;
+  - a batch cannot refer to a node it adds;
+  - the selection is not a command.
+
+  These come back with E1 and M1.
+
 ### E1 — The scene mode in the editor
 
 * **A third `CanvasMode::Scene`.** The viewport becomes the main panel and

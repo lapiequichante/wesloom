@@ -414,6 +414,11 @@ It has two canvas modes over one renderer:
 
 It also offers pass stepping, resource inspection and shader hot reload.
 
+Every change to a document is a serializable `Command`, applied by
+`Editor::apply`; the UI's gestures emit them too. Undo restores a snapshot
+taken before each command, and `Query` is the read-only side
+([ADR 0081](adr/0081-commands-are-the-editors-single-mutation-path.md)).
+
 ## WXSL and the compiler
 
 WGSL has no imports, no conditional compilation and no generics; the node

@@ -13,7 +13,7 @@
 use glam::Vec2;
 use wxsl::core::graph::Graph;
 use wxsl::core::node::ValueType;
-use wxsl::editor::{Editor, EditorConfig, ThemeMode};
+use wxsl::editor::{Command, Editor, EditorConfig, ThemeMode};
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::ui::input::{Key, MouseButton, UiEvent};
 use wxsl::render::ui::{MsdfBackend, UiTarget};
@@ -243,20 +243,26 @@ fn editing_the_graph_recompiles_the_material() {
 
     // Add a node the way the palette does, and check the recompile lands.
     // `math.add` is generic (one node kind serving every type instead of a
-    // separate `math.add.f32`/`.vec3f`/…), so it needs its type picked
-    // explicitly since nothing is connected to infer it from — and its two
-    // operands resolve independently, so picking `A` seeds `B` to match
-    // rather than leaving the node half-typed.
-    let registry = editor.registry().clone();
-    let added = editor.graph_mut().add_node("math.add");
+    // separate `math.add.f32`/`.vec3f`/…): it arrives at its default types,
+    // and picking one is a command like any other.
+    let added = editor
+        .apply(Command::AddNode {
+            document: Default::default(),
+            node: wxsl::core::graph::Node::new("math.add"),
+        })
+        .expect("math.add is in the library")
+        .added[0];
     editor
-        .graph_mut()
-        .set_generic(&registry, added, "A", ValueType::Vec3)
+        .apply(Command::SetGeneric {
+            document: Default::default(),
+            node: added,
+            param: "A".into(),
+            ty: ValueType::Vec3,
+        })
         .expect("vec3f is one of A's allowed types");
     assert_eq!(
-        editor.graph().generic_type(added, "B"),
-        Some(ValueType::Vec3),
-        "picking one operand's type should carry to the other"
+        editor.graph().generic_type(added, "A"),
+        Some(ValueType::Vec3)
     );
     assert_eq!(editor.graph().node_count(), nodes_before + 1);
     frame(&gpu, &mut editor, &target, 0.032);
@@ -271,11 +277,96 @@ fn editing_the_graph_recompiles_the_material() {
     );
     assert!(editor.is_modified(), "the document changed");
 
-    // Removing it again leaves the graph as it was.
-    editor.graph_mut().remove_node(&registry, added);
+    // Removing it again leaves the graph as it was; undoing the removal
+    // brings it back under the same id, and redoing removes it again.
+    editor
+        .apply(Command::RemoveNodes {
+            document: Default::default(),
+            nodes: vec![added],
+        })
+        .expect("the node exists");
     frame(&gpu, &mut editor, &target, 0.048);
     assert_eq!(editor.graph().node_count(), nodes_before);
     assert!(editor.preview().status().is_ok());
+    editor.apply(Command::Undo).expect("a removal to undo");
+    assert!(editor.graph().node(added).is_some());
+    editor.apply(Command::Redo).expect("a removal to redo");
+    frame(&gpu, &mut editor, &target, 0.064);
+    assert_eq!(editor.graph().node_count(), nodes_before);
+    assert!(editor.preview().status().is_ok());
+}
+
+#[test]
+fn a_node_drag_is_one_undo_step_and_command_z_undoes_it() {
+    // ADR 0081: the canvas emits a move per frame of the drag, and the
+    // history merges them while the button is down.
+    use wxsl::editor::{Answer, Query};
+    use wxsl::render::ui::input::Modifiers;
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    frame(&gpu, &mut editor, &target, 0.0);
+    let before = editor.graph().clone();
+    let depth = |editor: &Editor| match editor.query(&Query::History) {
+        Answer::History { undo, redo } => (undo, redo),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(depth(&editor), (0, 0));
+
+    // Press on a node's title strip, drag in three steps, release.
+    let (_, node) = editor
+        .graph()
+        .nodes()
+        .find(|(_, node)| node.position.is_some())
+        .expect("the demo graph is laid out");
+    let grab = Vec2::from_array(node.position.unwrap()) + Vec2::new(30.0, 6.0);
+    let start = editor.canvas_view().to_screen(editor.canvas_rect(), grab);
+    editor.handle_event(UiEvent::PointerMoved(start));
+    frame(&gpu, &mut editor, &target, 0.1);
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+    });
+    frame(&gpu, &mut editor, &target, 0.11);
+    for step in 1..=3 {
+        editor.handle_event(UiEvent::PointerMoved(
+            start + Vec2::new(20.0, 10.0) * step as f32,
+        ));
+        frame(&gpu, &mut editor, &target, 0.11 + 0.01 * step as f64);
+    }
+    editor.handle_event(UiEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
+    frame(&gpu, &mut editor, &target, 0.2);
+    assert_ne!(editor.graph(), &before, "the drag moved a node");
+    assert_eq!(depth(&editor), (1, 0), "three frames of drag, one step");
+
+    let shortcut = |editor: &mut Editor, shift: bool, time: f64| {
+        let modifiers = Modifiers {
+            logo: true,
+            shift,
+            ..Modifiers::NONE
+        };
+        editor.handle_event(UiEvent::ModifiersChanged(modifiers));
+        for pressed in [true, false] {
+            editor.handle_event(UiEvent::Key {
+                key: Key::Char('z'),
+                pressed,
+                repeat: false,
+            });
+        }
+        editor.handle_event(UiEvent::ModifiersChanged(Modifiers::NONE));
+        frame(&gpu, editor, &target, time);
+    };
+    shortcut(&mut editor, false, 0.3);
+    assert_eq!(editor.graph(), &before, "command-Z puts the node back");
+    assert_eq!(depth(&editor), (0, 1));
+    shortcut(&mut editor, true, 0.4);
+    assert_ne!(editor.graph(), &before, "shift-command-Z moves it again");
+    assert_eq!(depth(&editor), (1, 0));
 }
 
 #[test]
@@ -599,9 +690,10 @@ fn the_pipeline_canvas_edits_the_pipeline_live() {
     // The bloom drop: a `pass.screen` with its effect named, a resource
     // for it to write into, and the tonemap's image wire picked up and
     // re-dropped on the new pass's output.
-    let registry = wxsl::render::document_registry(editor.preview().effects());
     {
-        let graph = editor.pipeline_graph_mut();
+        use wxsl::core::graph::Node;
+        use wxsl::editor::Document::Pipeline;
+        let graph = editor.pipeline_graph().expect("the canvas is open");
         let tonemap = graph
             .nodes()
             .find(|(_, node)| node.label.as_deref() == Some("tonemap"))
@@ -613,23 +705,35 @@ fn the_pipeline_canvas_edits_the_pipeline_live() {
             .map(|(id, _)| id)
             .expect("the preset has an intermediate target");
 
-        let bloom = graph.add_node(doc::PASS_SCREEN);
-        graph.set_setting(bloom, doc::SETTING_EFFECT, "wxsl.bloom");
-        if let Some(node) = graph.node_mut(bloom) {
-            node.label = Some("bloom".to_string());
-        }
-        let bloomed = graph.add_node(doc::RESOURCE_COLOR);
-        graph.set_setting(bloomed, doc::SETTING_PRECISION, "hdr");
-        graph
-            .wire(&registry, (scene, "color"), (bloom, "image"))
-            .expect("bloom takes an image");
-        graph
-            .wire(&registry, (bloomed, "color"), (bloom, "into"))
-            .expect("bloom writes the new resource");
-        graph.disconnect(&registry, &SocketRef::new(tonemap, "image"));
-        graph
-            .wire(&registry, (bloomed, "color"), (tonemap, "image"))
-            .expect("tonemap takes bloom's output");
+        let mut add = |node: Node| {
+            editor
+                .apply(Command::AddNode {
+                    document: Pipeline,
+                    node,
+                })
+                .expect("a document node")
+                .added[0]
+        };
+        let bloom = add(Node::new(doc::PASS_SCREEN)
+            .with_setting(doc::SETTING_EFFECT, "wxsl.bloom")
+            .with_label("bloom"));
+        let bloomed =
+            add(Node::new(doc::RESOURCE_COLOR).with_setting(doc::SETTING_PRECISION, "hdr"));
+        let connect = |from: (_, &str), to: (_, &str)| Command::Connect {
+            document: Pipeline,
+            from: SocketRef::new(from.0, from.1),
+            to: SocketRef::new(to.0, to.1),
+        };
+        // `connect` replaces what fed tonemap's image.
+        editor
+            .apply(Command::Batch {
+                commands: vec![
+                    connect((scene, "color"), (bloom, "image")),
+                    connect((bloomed, "color"), (bloom, "into")),
+                    connect((bloomed, "color"), (tonemap, "image")),
+                ],
+            })
+            .expect("bloom wires between the scene and tonemap");
     }
     frame(&gpu, &mut editor, &target, 0.032);
 
@@ -671,7 +775,11 @@ fn the_pipeline_canvas_edits_the_pipeline_live() {
     );
     let variants_before = editor.preview().variant_stats().0;
     editor
-        .set_pass_param("bloom", "threshold", Value::F32(0.5))
+        .apply(Command::SetPassParam {
+            pass: "bloom".into(),
+            name: "threshold".into(),
+            value: Value::F32(0.5),
+        })
         .expect("bloom declares a threshold");
     frame(&gpu, &mut editor, &target, 0.056);
     assert_eq!(
@@ -1029,9 +1137,18 @@ fn the_subsurface_debug_view_isolates_the_channel() {
     click(&mut editor, Vec2::new(220.0, 555.0), 0.1);
     click(&mut editor, Vec2::new(100.0, 607.0), 0.2);
     assert_eq!(editor.preview().features(), vec!["subsurface"]);
-    let graph = editor.graph_mut();
-    graph.set_macro("wxsl_subsurface", MacroValue::Flag(true));
-    graph.set_macro("wxsl_subsurface_strength", MacroValue::Float(0.5));
+    for (name, value) in [
+        ("wxsl_subsurface", MacroValue::Flag(true)),
+        ("wxsl_subsurface_strength", MacroValue::Float(0.5)),
+    ] {
+        editor
+            .apply(Command::SetMacro {
+                document: Default::default(),
+                name: name.into(),
+                value: Some(value),
+            })
+            .expect("a macro pins");
+    }
     click(&mut editor, Vec2::new(400.0, 19.0), 0.3);
     click(&mut editor, Vec2::new(400.0, 68.0), 0.4);
     settle(&mut editor, 0.5);
@@ -1550,24 +1667,25 @@ fn a_function_written_in_the_editor_becomes_a_node() {
     );
 
     // Use it: the material compiles the function the editor wrote.
-    let registry = editor.registry().clone();
     let output = editor
         .graph()
         .nodes()
         .find(|(_, node)| node.def == wxsl::core::abi::SURFACE_OUTPUT_ID)
         .map(|(id, _)| id)
         .expect("the demo graph has an output");
-    let glow = editor.graph_mut().add_node("user.glow");
-    editor.graph_mut().disconnect(
-        &registry,
-        &wxsl::core::graph::SocketRef {
-            node: output,
-            socket: "emissive".to_string(),
-        },
-    );
+    let glow = editor
+        .apply(Command::AddNode {
+            document: Default::default(),
+            node: wxsl::core::graph::Node::new("user.glow"),
+        })
+        .expect("the saved function is a node")
+        .added[0];
     editor
-        .graph_mut()
-        .wire(&registry, (glow, "out"), (output, "emissive"))
+        .apply(Command::Connect {
+            document: Default::default(),
+            from: wxsl::core::graph::SocketRef::new(glow, "out"),
+            to: wxsl::core::graph::SocketRef::new(output, "emissive"),
+        })
         .expect("a vec3f is an emissive");
     tick(&mut editor);
     assert!(

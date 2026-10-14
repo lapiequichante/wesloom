@@ -133,6 +133,8 @@ and what the panels show instead of generated code.
   and the read side (`effects`, `render_graph`, `pipeline_config`);
   `pipeline_graph`/`pipeline_graph_mut`/`pipeline_status` are how an
   application — or a test — drives the document programmatically.
+  ADR 0081 replaced `pipeline_graph_mut` with commands whose `document`
+  is `pipeline`.
 * The editor crate touches no facade code: the graph-authored effects
   (`wxsl::effects`) are the *application's* to register, exactly as the
   gallery's is — the example does it, and an editor built without them

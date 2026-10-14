@@ -17,11 +17,12 @@
 use std::collections::BTreeMap;
 
 use glam::Vec2;
-use wxsl_core::graph::{Graph, Node, NodeId, SocketRef};
+use wxsl_core::graph::{Graph, NodeId, SocketRef};
 use wxsl_core::node::{NodeDefinition, NodeRegistry, Socket, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
 use wxsl_render::ui::input::{Key, MouseButton};
 
+use crate::command::{Command, Document};
 use crate::theme::Theme;
 use crate::ui::{Align, Ui};
 
@@ -312,14 +313,18 @@ pub enum Interaction {
         from: SocketRef,
         /// Which side of its node that port is.
         kind: PortKind,
+        /// The input an existing link was picked up from: it is hidden
+        /// while dragged, and removed or moved on release.
+        detached: Option<SocketRef>,
     },
 }
 
 /// What one frame of canvas did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CanvasResponse {
-    /// The graph changed, so the material needs recompiling.
-    pub changed: bool,
+    /// The edits the gestures asked for, applied by the editor after the
+    /// frame (ADR 0081).
+    pub commands: Vec<Command>,
     /// Something to show the user: a refused connection, usually.
     pub message: Option<String>,
     /// The user asked for the node palette at this graph-space point.
@@ -388,8 +393,9 @@ impl Canvas {
         &mut self,
         ui: &mut Ui<'_>,
         rect: Rect,
-        graph: &mut Graph,
+        graph: &Graph,
         registry: &NodeRegistry,
+        document: Document,
     ) -> CanvasResponse {
         let mut response = CanvasResponse::default();
         let theme = *ui.theme();
@@ -439,7 +445,14 @@ impl Canvas {
         // -- links -------------------------------------------------------
         self.hovered_link = None;
         let link_hit_radius = (theme.metrics.link_width * 3.0).max(6.0);
+        let detached = match &self.interaction {
+            Interaction::DraggingLink { detached, .. } => detached.clone(),
+            _ => None,
+        };
         for edge in graph.edges() {
+            if detached.as_ref() == Some(&edge.to) {
+                continue;
+            }
             let Some(from) = self.port_center(&edge.from, PortKind::Output) else {
                 continue;
             };
@@ -481,8 +494,8 @@ impl Canvas {
 
         // -- interaction -------------------------------------------------
         if self.interaction != Interaction::Panning {
-            response.changed |= self.handle_ports(ui, rect, graph, registry, &mut response);
-            response.changed |= self.handle_nodes(ui, rect, graph, clicked_node);
+            self.handle_ports(ui, rect, graph, document, &mut response);
+            self.handle_nodes(ui, rect, graph, document, clicked_node, &mut response);
         }
 
         if over_canvas && ui.input.released(MouseButton::Right) && !ui.input.modifiers().shift {
@@ -491,10 +504,11 @@ impl Canvas {
                 // Right-clicking a link cuts it, which is the fastest
                 // unlink gesture there is.
                 if let Some(input) = self.hovered_link.clone() {
-                    if graph.disconnect(registry, &input).is_some() {
-                        response.changed = true;
-                        response.message = Some(format!("disconnected {input}"));
-                    }
+                    response.message = Some(format!("disconnected {input}"));
+                    response.commands.push(Command::Disconnect {
+                        document,
+                        to: input,
+                    });
                 }
             } else if !self
                 .layouts
@@ -509,10 +523,10 @@ impl Canvas {
             let delete = ui.input.key_pressed_plain(Key::Delete)
                 || ui.input.key_pressed_plain(Key::Backspace);
             if delete && !self.selection.is_empty() {
-                for node in core::mem::take(&mut self.selection) {
-                    graph.remove_node(registry, node);
-                }
-                response.changed = true;
+                response.commands.push(Command::RemoveNodes {
+                    document,
+                    nodes: core::mem::take(&mut self.selection),
+                });
                 response.message = Some("deleted the selection".to_string());
             }
         }
@@ -734,16 +748,15 @@ impl Canvas {
         &mut self,
         ui: &mut Ui<'_>,
         rect: Rect,
-        graph: &mut Graph,
-        registry: &NodeRegistry,
+        graph: &Graph,
+        document: Document,
         response: &mut CanvasResponse,
-    ) -> bool {
+    ) {
         let theme = *ui.theme();
         let radius = (theme.metrics.port_radius * self.view.zoom).max(2.0) * 2.0;
         let Some(pointer) = ui.input.pointer() else {
-            return false;
+            return;
         };
-        let mut changed = false;
 
         let hit = self.layouts.iter().rev().find_map(|layout| {
             layout
@@ -751,7 +764,12 @@ impl Canvas {
                 .map(|(kind, port)| (layout.id, kind, port.clone()))
         });
 
-        if let Interaction::DraggingLink { from, kind } = self.interaction.clone() {
+        if let Interaction::DraggingLink {
+            from,
+            kind,
+            detached,
+        } = self.interaction.clone()
+        {
             // Draw the pending link to the pointer.
             let anchor = self.port_center(&from, kind).unwrap_or(pointer);
             let (start, end) = match kind {
@@ -762,6 +780,14 @@ impl Canvas {
 
             if ui.input.released(MouseButton::Left) {
                 self.interaction = Interaction::Idle;
+                // A picked-up link let go anywhere but on a port is cut.
+                let mut commands: Vec<Command> = detached
+                    .iter()
+                    .map(|input| Command::Disconnect {
+                        document,
+                        to: input.clone(),
+                    })
+                    .collect();
                 if let Some((_, hit_kind, port)) = &hit {
                     if *hit_kind != kind {
                         let target = SocketRef::new(
@@ -784,26 +810,29 @@ impl Canvas {
                         };
                         // Re-plugging an input replaces whatever was there,
                         // which is what dropping a link on a busy input
-                        // obviously means.
-                        let previous = graph.disconnect(registry, &input);
-                        match graph.connect(registry, output.clone(), input.clone()) {
-                            Ok(()) => {
-                                changed = true;
-                                response.message = Some(format!("connected {output} → {input}"));
-                            }
-                            Err(error) => {
-                                if let Some(edge) = previous {
-                                    // The refusal changed nothing, so put
-                                    // back what the optimistic unplug removed.
-                                    let _ = graph.connect(registry, edge.from, edge.to);
-                                }
-                                response.message = Some(error.to_string());
-                            }
+                        // obviously means: `connect` does. Dropped back
+                        // where it came from, a picked-up link is unchanged.
+                        if detached.as_ref() == Some(&input) {
+                            commands.clear();
+                        } else {
+                            response.message = Some(format!("connected {output} → {input}"));
+                            commands.push(Command::Connect {
+                                document,
+                                from: output,
+                                to: input,
+                            });
                         }
                     }
                 }
+                // One step: a refused connection leaves a moved link
+                // where it was.
+                match commands.len() {
+                    0 => {}
+                    1 => response.commands.extend(commands),
+                    _ => response.commands.push(Command::Batch { commands }),
+                }
             }
-            return changed;
+            return;
         }
 
         if ui.input.pressed(MouseButton::Left) && !ui.pointer_claimed() {
@@ -814,23 +843,26 @@ impl Canvas {
                     // up by its far end, so a link can be moved rather than
                     // deleted and redrawn.
                     PortKind::Input if port.connected => {
-                        if let Some(edge) = graph.disconnect(registry, &socket) {
-                            changed = true;
+                        if let Some(edge) = graph.edge_into(&socket) {
                             self.interaction = Interaction::DraggingLink {
-                                from: edge.from,
+                                from: edge.from.clone(),
                                 kind: PortKind::Output,
+                                detached: Some(socket),
                             };
                         }
                     }
                     _ => {
-                        self.interaction = Interaction::DraggingLink { from: socket, kind };
+                        self.interaction = Interaction::DraggingLink {
+                            from: socket,
+                            kind,
+                            detached: None,
+                        };
                     }
                 }
                 ui.claim_pointer();
                 let _ = rect;
             }
         }
-        changed
     }
 
     /// Selection and node dragging.
@@ -838,10 +870,11 @@ impl Canvas {
         &mut self,
         ui: &mut Ui<'_>,
         rect: Rect,
-        graph: &mut Graph,
+        graph: &Graph,
+        document: Document,
         clicked: Option<NodeId>,
-    ) -> bool {
-        let mut changed = false;
+        response: &mut CanvasResponse,
+    ) {
         let pointer = ui.input.pointer();
 
         if matches!(self.interaction, Interaction::Idle) && !ui.pointer_claimed() {
@@ -893,23 +926,25 @@ impl Canvas {
                         } else {
                             vec![node]
                         };
-                        for id in selection {
-                            if let Some(node) = graph.node_mut(id) {
+                        let positions = selection
+                            .into_iter()
+                            .filter_map(|id| {
+                                let node = graph.node(id)?;
                                 let position =
                                     Vec2::from_array(node.position.unwrap_or_default()) + delta;
-                                node.position = Some(position.to_array());
-                            }
-                        }
-                        // A move changes the document but not the shader, so
-                        // the caller should save but need not recompile.
-                        changed = false;
+                                Some((id, position.to_array()))
+                            })
+                            .collect();
+                        response.commands.push(Command::MoveNodes {
+                            document,
+                            positions,
+                        });
                     }
                 }
             } else {
                 self.interaction = Interaction::Idle;
             }
         }
-        changed
     }
 
     /// Where a socket's port is on screen, from the last layout.
@@ -1228,25 +1263,10 @@ fn pack(desired: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Place a new node so that its top-left corner is where the user pointed.
-///
-/// [`Graph::add_resolved`] rather than `Graph::add`: a node dropped on the
-/// canvas should be complete — its generic parameters at their default
-/// types, its inputs holding a value of that type — rather than arrive
-/// reporting an unresolved parameter and showing sockets with nothing to
-/// edit. Connecting anything retypes it from there.
-pub fn place_new_node(
-    graph: &mut Graph,
-    registry: &NodeRegistry,
-    definition: &str,
-    at: Vec2,
-) -> NodeId {
-    graph.add_resolved(registry, Node::new(definition).with_position(at.to_array()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wxsl_core::graph::Node;
     use wxsl_core::node::{Socket, ValueType};
 
     fn definition() -> NodeDefinition {

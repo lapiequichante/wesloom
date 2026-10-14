@@ -63,14 +63,26 @@
 //! | `app` | [`Editor`]: the panels, the frame, and the shortcuts |
 //! | `buffer` | the code editor's text model: caret, selection, lines, undo |
 //! | `canvas` | the pan/zoom node canvas: layout, links, hit-testing, dragging |
+//! | `command` | [`Command`] and [`Query`]: every change and question, serializable |
 //! | `function` | functions written in the editor, derived into `user.*` nodes on save |
 //! | `highlight` | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
+//! | `history` | running commands, undo and redo by snapshot |
 //! | `palette` | searching the node library |
 //! | `pipeline` | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
 //! | `preview` | the offscreen material preview, and the compiled WXSL and WGSL |
 //! | `ui` | the immediate-mode layer: identity, interaction, widgets |
 //! | `widgets` | editors for the values a socket can carry, and the colour picker |
 //! | `theme` | colours and metrics |
+//!
+//! # Commands
+//!
+//! A document changes only through [`Editor::apply`], which takes a
+//! [`Command`]: the UI's gestures, a test and an agent all speak it
+//! ([ADR 0081](../../../docs/adr/0081-commands-are-the-editors-single-mutation-path.md)).
+//! Each applied command is one undo step ([`Command::Undo`], or `Ctrl`/`Cmd`+`Z`
+//! in the window), a [`Command::Batch`] is atomic, and [`Editor::query`]
+//! answers the read-only questions. A transcript is one JSON command per
+//! line ([`Command::parse_transcript`]).
 //!
 //! # `wxsl-core` still knows nothing about how it looks
 //!
@@ -93,8 +105,7 @@
 //!
 //! # What the editor does not do
 //!
-//! Worth knowing before reaching for it: there is no undo history for the
-//! graph (the code editor's buffers have their own, plan3 M11), no platform
+//! Worth knowing before reaching for it: there is no platform
 //! clipboard (that needs a platform dependency this crate does not have; the
 //! code editor's copy and paste stay inside the editor), no tabs over
 //! several *materials*, and no box selection. (The pipeline canvas
@@ -105,7 +116,8 @@
 //!
 //! The names re-exported at this root are the whole public surface, and
 //! stable ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)):
-//! [`Editor`] and [`EditorConfig`], and the types their methods return. The
+//! [`Editor`] and [`EditorConfig`], the commands and queries, and the
+//! types their methods return. The
 //! modules are private; `unnameable_types` keeps a public signature from
 //! leaking one of their types.
 
@@ -115,8 +127,10 @@
 mod app;
 mod buffer;
 mod canvas;
+mod command;
 mod function;
 mod highlight;
+mod history;
 mod palette;
 mod pipeline;
 mod preview;
@@ -128,6 +142,10 @@ mod widgets;
 
 pub use app::{Editor, EditorConfig};
 pub use canvas::View;
+pub use command::{
+    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query,
+    SocketSummary, TranscriptError,
+};
 pub use pipeline::CanvasMode;
 pub use preview::{Preview, PreviewStatus, StepView};
 pub use theme::{Metrics, Palette, Theme, ThemeMode};

@@ -2945,6 +2945,8 @@ name = "wxsl-editor"
 version = "0.0.0"
 dependencies = [
  "glam",
+ "serde",
+ "serde_json",
  "wgpu",
  "wxsl-core",
  "wxsl-lang",

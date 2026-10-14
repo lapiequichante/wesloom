@@ -39,6 +39,7 @@ use wxsl_render::ui::draw::Rect;
 
 use crate::app::Requests;
 use crate::canvas::{self, Canvas};
+use crate::command::{Command, Document};
 use crate::palette::{score, Match, NodePicker};
 use crate::preview::Preview;
 use crate::ui::{Align, Id, Ui};
@@ -152,14 +153,6 @@ impl PipelineCanvas {
             dirty: true,
             fit_pending: true,
         }
-    }
-
-    /// The document, for a caller that wants to change it — an
-    /// application's own edit, or the screenshot mode. Marks it for
-    /// recompilation.
-    pub fn graph_mut(&mut self) -> &mut Graph {
-        self.dirty = true;
-        &mut self.graph
     }
 }
 
@@ -405,12 +398,13 @@ pub(crate) fn inspector_panel(
             )
             .changed
         {
-            if let Some(node) = state.graph.node_mut(id) {
-                let trimmed = name.trim();
-                node.label = (!trimmed.is_empty() && trimmed != definition.label)
-                    .then(|| trimmed.to_string());
-            }
-            requests.changed_metadata = true;
+            let trimmed = name.trim();
+            requests.commands.push(Command::SetLabel {
+                document: Document::Pipeline,
+                node: id,
+                label: (!trimmed.is_empty() && trimmed != definition.label)
+                    .then(|| trimmed.to_string()),
+            });
         }
         widgets::field_row(ui, next(metrics.row_height), "definition", &definition.id);
         widgets::field_row(
@@ -474,9 +468,12 @@ pub(crate) fn inspector_panel(
             if let Some(value) =
                 widgets::setting_editor(ui, field_id, next(metrics.row_height), &current, choices)
             {
-                state.graph.set_setting(id, setting_name, &value);
-                state.dirty = true;
-                requests.changed_metadata = true;
+                requests.commands.push(Command::SetSetting {
+                    document: Document::Pipeline,
+                    node: id,
+                    name: setting_name.to_string(),
+                    value,
+                });
             }
         }
 
@@ -505,9 +502,11 @@ pub(crate) fn inspector_panel(
                 let editor_rect = next(widgets::value_editor_height(ui, param_id, *ty, width));
                 let mut value = preview.pass_param(&pass_label, name).unwrap_or(*default);
                 if widgets::value_editor(ui, param_id, editor_rect, &mut value) {
-                    if let Err(error) = preview.set_pass_param(&pass_label, name, value) {
-                        requests.message = Some(error.to_string());
-                    }
+                    requests.commands.push(Command::SetPassParam {
+                        pass: pass_label.clone(),
+                        name: name.clone(),
+                        value,
+                    });
                 }
             }
         }
@@ -865,7 +864,7 @@ mod tests {
     fn a_bloom_node_dropped_on_the_preset_compiles_to_a_bloom_pass() {
         let (registry, effects, config) = harness();
         let mut state = PipelineCanvas::open_on_preset(StockPipeline::Deferred);
-        add_bloom(state.graph_mut(), &registry);
+        add_bloom(&mut state.graph, &registry);
         let (errors, graph) = compile(&state.graph, &registry, &effects, &config);
         assert!(errors.is_empty(), "{errors:?}");
         let graph = graph.expect("compiles");

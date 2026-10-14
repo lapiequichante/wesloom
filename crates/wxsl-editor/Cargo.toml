@@ -21,3 +21,7 @@ wxsl-render = { workspace = true }
 wxsl-lang = { workspace = true }
 wgpu = { workspace = true }
 glam = { workspace = true }
+# Commands and queries serialize, for transcripts and the MCP server
+# (ADR 0081).
+serde = { workspace = true }
+serde_json = { workspace = true }

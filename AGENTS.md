@@ -117,6 +117,7 @@ Each test file's header says what it covers.
 | wgpu adapters, shader variants, renderer UI | `cargo test -p wxsl-render` |
 | a material or pipeline feature on a device | the matching `cargo test -p wxsl --test <name>` |
 | `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
+| editor commands, undo, transcripts (no device) | `cargo test -p wxsl-editor` |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
@@ -201,6 +202,10 @@ The ADR named on each line holds the reasoning.
   - Forward and deferred are checked in `render_cube` and the other device
     tests.
   - The C ABI and wgpu are checked by the parity harness.
+- **Editor commands** (ADR 0081). A document changes only through
+  `Editor::apply(Command)`; a new gesture is a new `Command` variant
+  emitted into the frame's requests, never a direct mutation. Undo is
+  by snapshot, so a command needs no hand-written inverse.
 - **One editor, several canvas modes.** The pipeline canvas is a mode of
   the same editor (ADR 0043), not a second editor.
 

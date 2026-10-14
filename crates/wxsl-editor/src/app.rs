@@ -32,13 +32,17 @@ use wxsl_core::lighting;
 use wxsl_core::macros::MacroDef;
 use wxsl_core::node::{NodeRegistry, ValueType};
 use wxsl_render::ui::draw::{Color, Rect};
-use wxsl_render::ui::input::{Key, UiEvent};
+use wxsl_render::ui::input::{Key, MouseButton, UiEvent};
 use wxsl_render::ui::text::{GlyphCache, TextOptions};
 use wxsl_render::ui::{Atlas, Font, InputState, MsdfBackend, MsdfGenerator, UiRenderer, UiTarget};
 use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
+use crate::command::{
+    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query,
+};
 use crate::function::{self, FunctionSource, Functions};
+use crate::history::{History, Host};
 use crate::palette::{Match, NodePicker};
 use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
@@ -186,6 +190,8 @@ pub struct Editor {
     space_tap: bool,
     /// The function buffers of the code editor (plan3 M11).
     functions: Functions,
+    /// Undo and redo (ADR 0081).
+    history: History,
 }
 
 impl Editor {
@@ -249,6 +255,7 @@ impl Editor {
             next_poll: 0.0,
             space_tap: false,
             functions: Functions::default(),
+            history: History::default(),
         })
     }
 
@@ -371,12 +378,118 @@ impl Editor {
         &self.graph
     }
 
-    /// The graph, for a caller that wants to change it — a loaded file, or an
-    /// application's own command. Marks it for recompilation.
-    pub fn graph_mut(&mut self) -> &mut Graph {
-        self.dirty = true;
-        self.modified = true;
-        &mut self.graph
+    /// Apply a command: the only way a document changes (ADR 0081). A
+    /// refused command changes nothing. Every applied command is one undo
+    /// step; [`Command::Undo`] and [`Command::Redo`] walk them.
+    pub fn apply(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        self.execute(&command, false)
+    }
+
+    /// Answer a read-only question about the editor's state.
+    pub fn query(&self, query: &Query) -> Answer {
+        match query {
+            Query::Graph { document } => Answer::Graph {
+                graph: Host::graph(self, *document).cloned(),
+            },
+            Query::Diagnostics => Answer::Diagnostics {
+                material: self.preview.status().errors().to_vec(),
+                pipeline: self.pipeline_status().to_vec(),
+                reload: self.preview.reload_errors().to_vec(),
+            },
+            Query::Source => Answer::Source {
+                wxsl: self.preview.wxsl().to_string(),
+                wgsl: self.preview.wgsl().to_string(),
+            },
+            Query::Nodes { document, search } => {
+                let needle = search.as_deref().map(str::to_lowercase);
+                let wanted = |definition: &&std::sync::Arc<wxsl_core::node::NodeDefinition>| {
+                    needle.as_ref().is_none_or(|needle| {
+                        [&definition.id, &definition.label, &definition.category]
+                            .iter()
+                            .any(|text| text.to_lowercase().contains(needle))
+                    })
+                };
+                let nodes = match document {
+                    Document::Material => self
+                        .registry
+                        .in_domain(self.graph.domain())
+                        .filter(wanted)
+                        .map(|definition| NodeSummary::of(definition))
+                        .collect(),
+                    Document::Pipeline => {
+                        let opened = self.pipeline.as_ref().map(|state| &state.registry);
+                        let fallback;
+                        let registry = match opened {
+                            Some(registry) => registry,
+                            None => {
+                                fallback = wxsl_render::pipeline_doc::document_registry(
+                                    self.preview.effects(),
+                                );
+                                &fallback
+                            }
+                        };
+                        registry
+                            .iter()
+                            .filter(wanted)
+                            .map(|definition| NodeSummary::of(definition))
+                            .collect()
+                    }
+                };
+                Answer::Nodes { nodes }
+            }
+            Query::Passes => Answer::Passes {
+                passes: self
+                    .preview
+                    .render_graph()
+                    .passes()
+                    .iter()
+                    .map(|pass| PassSummary {
+                        label: pass.label.clone(),
+                        policy: format!("{:?}", pass.policy),
+                        parameters: pass
+                            .parameters
+                            .iter()
+                            .map(|(name, default)| {
+                                let value = self
+                                    .preview
+                                    .pass_param(&pass.label, name)
+                                    .unwrap_or(*default);
+                                (name.clone(), value)
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            Query::Stats => Answer::Stats {
+                nodes: self.graph.node_count(),
+                edges: self.graph.edges().len(),
+                variants: self.preview.variant_stats().0,
+                frame_ms: self.preview.frame_time(),
+            },
+            Query::History => Answer::History {
+                undo: self.history.undo_depth(),
+                redo: self.history.redo_depth(),
+            },
+        }
+    }
+
+    /// Run a command through the history: `gesture` when the UI emitted
+    /// it, so a drag merges into one step.
+    fn execute(&mut self, command: &Command, gesture: bool) -> Result<Outcome, CommandError> {
+        let mut history = std::mem::take(&mut self.history);
+        let result = history.execute(self, command, gesture);
+        self.history = history;
+        // An undone add or a removal leaves no selected ghost behind.
+        let graph = &self.graph;
+        self.canvas.selection.retain(|id| graph.node(*id).is_some());
+        if let Some(state) = self.pipeline.as_mut() {
+            let graph = &state.graph;
+            state
+                .canvas
+                .selection
+                .retain(|id| graph.node(*id).is_some());
+        }
+        result
     }
 
     /// The node library.
@@ -455,18 +568,6 @@ impl Editor {
         self.pipeline.as_ref().map(|state| &state.graph)
     }
 
-    /// The pipeline document, for a caller that wants to change it — an
-    /// application's own edit. Opening the canvas if it has never been
-    /// opened. Marks it for recompilation; the next frame compiles the
-    /// document onto the preview's renderer.
-    pub fn pipeline_graph_mut(&mut self) -> &mut Graph {
-        self.set_canvas_mode(CanvasMode::Pipeline);
-        self.pipeline
-            .as_mut()
-            .expect("pipeline mode opens the canvas")
-            .graph_mut()
-    }
-
     /// The pipeline document's last compile errors; empty means the
     /// document is running.
     pub fn pipeline_status(&self) -> &[String] {
@@ -474,19 +575,6 @@ impl Editor {
             .as_ref()
             .map(|state| state.errors.as_slice())
             .unwrap_or(&[])
-    }
-
-    /// Tune one of the running pipeline's effect parameters — the same
-    /// channel the pipeline inspector's sliders drive (ADR 0042). The
-    /// pass is addressed by its label, the parameter by the effect
-    /// descriptor's name; a move is a buffer write, and compiles nothing.
-    pub fn set_pass_param(
-        &mut self,
-        pass: &str,
-        name: &str,
-        value: wxsl_core::node::Value,
-    ) -> Result<(), RenderError> {
-        self.preview.set_pass_param(pass, name, value)
     }
 
     /// Where the node canvas was on the last drawn frame, in physical
@@ -667,10 +755,13 @@ impl Editor {
                 .pipeline
                 .as_mut()
                 .expect("pipeline mode opened the canvas");
-            let response =
-                state
-                    .canvas
-                    .show(&mut ui, canvas_rect, &mut state.graph, &state.registry);
+            let response = state.canvas.show(
+                &mut ui,
+                canvas_rect,
+                &state.graph,
+                &state.registry,
+                Document::Pipeline,
+            );
             if state.fit_pending {
                 state
                     .canvas
@@ -679,9 +770,13 @@ impl Editor {
             }
             response
         } else {
-            let response = self
-                .canvas
-                .show(&mut ui, canvas_rect, &mut self.graph, &self.registry);
+            let response = self.canvas.show(
+                &mut ui,
+                canvas_rect,
+                &self.graph,
+                &self.registry,
+                Document::Material,
+            );
             if self.first_frame {
                 self.canvas
                     .fit_to_graph(&self.graph, &self.registry, canvas_rect, &theme);
@@ -698,9 +793,9 @@ impl Editor {
                 &self.preview,
                 self.backend,
                 (self.mode, (false, "")),
-                &mut self
+                &self
                     .pipeline
-                    .as_mut()
+                    .as_ref()
                     .expect("pipeline mode opened the canvas")
                     .graph,
             );
@@ -720,7 +815,7 @@ impl Editor {
                             .map_or("deferred", |state| state.graph.name()),
                     ),
                 ),
-                &mut self.graph,
+                &self.graph,
             );
         }
 
@@ -793,7 +888,7 @@ impl Editor {
                 &mut ui,
                 inspector,
                 &self.preview,
-                &mut self.graph,
+                &self.graph,
                 &self.registry,
                 self.canvas.selected_node(),
                 &mut requests,
@@ -912,6 +1007,18 @@ impl Editor {
 
         // -- shortcuts ---------------------------------------------------
         if !ui.state.is_editing() {
+            // The code editor's buffers keep their own undo while typing.
+            for press in ui.input.keys() {
+                let command = press.modifiers.command() && !press.modifiers.alt;
+                match press.key {
+                    Key::Char('z') if command && press.modifiers.shift => {
+                        requests.commands.push(Command::Redo)
+                    }
+                    Key::Char('z') if command => requests.commands.push(Command::Undo),
+                    Key::Char('y') if command => requests.commands.push(Command::Redo),
+                    _ => {}
+                }
+            }
             // The stock pipelines are the material canvas's knobs; the
             // pipeline canvas's document *is* the pipeline, so the keys
             // would lie there.
@@ -974,17 +1081,11 @@ impl Editor {
         if let Some(message) = canvas_response.message {
             self.message = message;
         }
-        if canvas_response.changed {
-            if pipeline_mode {
-                self.pipeline
-                    .as_mut()
-                    .expect("pipeline mode opened the canvas")
-                    .dirty = true;
-            } else {
-                self.dirty = true;
-            }
-            self.modified = true;
-        }
+        let document = if pipeline_mode {
+            Document::Pipeline
+        } else {
+            Document::Material
+        };
         if requests.add_at_center {
             let at = canvas_rect.center();
             requests.add_at = Some(if pipeline_mode {
@@ -1027,64 +1128,77 @@ impl Editor {
             let at =
                 resolve_add_position(requests.drop_screen_point, canvas_rect, view, picker_target);
             let (definition, preset) = (add.definition, add.preset);
-            if pipeline_mode {
-                let state = self
-                    .pipeline
-                    .as_mut()
-                    .expect("pipeline mode opened the canvas");
-                let id = canvas::place_new_node(&mut state.graph, &state.registry, &definition, at);
-                if let Some((name, value)) = preset {
-                    state.graph.set_setting(id, name, value);
-                }
-                state.canvas.selection = vec![id];
-                state.picker.close();
-                state.dirty = true;
-            } else {
-                let id = canvas::place_new_node(&mut self.graph, &self.registry, &definition, at);
-                if let Some((name, value)) = preset {
-                    self.graph.set_setting(id, name, value);
-                }
-                self.canvas.selection = vec![id];
-                self.picker.close();
-                self.dirty = true;
+            let mut node =
+                wxsl_core::graph::Node::new(definition.as_str()).with_position(at.to_array());
+            if let Some((name, value)) = preset {
+                node = node.with_setting(name, value);
             }
-            self.ui.clear_focus();
-            self.modified = true;
-            self.message = format!("added {definition}");
-        }
-        if requests.changed_graph {
+            match self.execute(&Command::AddNode { document, node }, false) {
+                Ok(outcome) => {
+                    let canvas = if pipeline_mode {
+                        &mut self
+                            .pipeline
+                            .as_mut()
+                            .expect("pipeline mode opened the canvas")
+                            .canvas
+                    } else {
+                        &mut self.canvas
+                    };
+                    canvas.selection = outcome.added;
+                    self.message = format!("added {definition}");
+                }
+                Err(error) => self.message = error.to_string(),
+            }
             if pipeline_mode {
                 self.pipeline
                     .as_mut()
                     .expect("pipeline mode opened the canvas")
-                    .dirty = true;
+                    .picker
+                    .close();
             } else {
-                self.dirty = true;
+                self.picker.close();
             }
-            self.modified = true;
+            self.ui.clear_focus();
         }
-        if requests.changed_metadata {
-            self.modified = true;
+        if requests.tidy {
+            requests.commands.push(Command::TidyLayout { document });
+        }
+        for command in canvas_response
+            .commands
+            .into_iter()
+            .chain(std::mem::take(&mut requests.commands))
+        {
+            match self.execute(&command, true) {
+                Ok(outcome) => {
+                    if let Command::SetGeneric { param, ty, .. } = &command {
+                        if !outcome.disconnected.is_empty() {
+                            self.message = format!(
+                                "{param} is now {ty}; disconnected {} edge(s) that no longer fit",
+                                outcome.disconnected.len()
+                            );
+                        }
+                    }
+                    match command {
+                        Command::Undo => self.message = "undone".to_string(),
+                        Command::Redo => self.message = "redone".to_string(),
+                        Command::TidyLayout { .. } => {
+                            let count = Host::graph(self, document).map_or(0, Graph::node_count);
+                            self.message = format!("tidied {count} nodes");
+                            requests.fit = true;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(error) => self.message = error.to_string(),
+            }
+        }
+        // A drag, a slider or a text field is one undo step until the
+        // pointer is up and nothing has the keyboard.
+        if !self.input.is_down(MouseButton::Left) && !self.ui.is_editing() {
+            self.history.seal();
         }
         if let Some(mode) = requests.mode {
             self.set_canvas_mode(mode);
-        }
-        if requests.tidy {
-            // Positions only: nothing to recompile.
-            let count = if pipeline_mode {
-                let state = self
-                    .pipeline
-                    .as_mut()
-                    .expect("pipeline mode opened the canvas");
-                canvas::tidy_layout(&mut state.graph, &state.registry);
-                state.graph.node_count()
-            } else {
-                canvas::tidy_layout(&mut self.graph, &self.registry);
-                self.graph.node_count()
-            };
-            self.modified = true;
-            self.message = format!("tidied {count} nodes");
-            requests.fit = true;
         }
         if requests.fit {
             if pipeline_mode {
@@ -1204,34 +1318,6 @@ impl Editor {
             self.preview.reset_runs();
             self.message = "run counts reset".to_string();
         }
-        if let Some((name, value)) = requests.material_param.take() {
-            match self.preview.set_material_param(&name, value) {
-                Ok(()) => {
-                    // Every `param` node declaring the name, so whichever
-                    // one the interface's "first wins" picks carries it.
-                    let declaring: Vec<NodeId> = self
-                        .graph
-                        .nodes()
-                        .filter(|(id, node)| {
-                            self.registry.get(&node.def).is_some_and(|definition| {
-                                matches!(definition.body, wxsl_core::node::NodeBody::Param)
-                            }) && self.graph.setting(
-                                &self.registry,
-                                *id,
-                                wxsl_core::node::SETTING_NAME,
-                            ) == Some(name.as_str())
-                        })
-                        .map(|(id, _)| id)
-                        .collect();
-                    for id in declaring {
-                        self.graph
-                            .set_param(id, wxsl_core::node::SOCKET_VALUE, value);
-                    }
-                    self.modified = true;
-                }
-                Err(error) => self.message = error.to_string(),
-            }
-        }
         if requests.toggle_theme {
             self.ui.theme.toggle_mode();
         }
@@ -1244,6 +1330,70 @@ impl Editor {
         }
         if let Some(error) = error {
             self.message = error;
+        }
+    }
+}
+
+/// The editor as commands see it (ADR 0081).
+impl Host for Editor {
+    fn graph(&self, document: Document) -> Option<&Graph> {
+        match document {
+            Document::Material => Some(&self.graph),
+            Document::Pipeline => self.pipeline_graph(),
+        }
+    }
+
+    fn open(&mut self, document: Document) -> (&mut Graph, &NodeRegistry) {
+        match document {
+            Document::Material => (&mut self.graph, &self.registry),
+            Document::Pipeline => {
+                let state = self
+                    .pipeline
+                    .get_or_insert_with(|| PipelineCanvas::open_on_preset(StockPipeline::Deferred));
+                (&mut state.graph, &state.registry)
+            }
+        }
+    }
+
+    fn replace(&mut self, document: Document, graph: Graph) -> Graph {
+        let (slot, _) = self.open(document);
+        std::mem::replace(slot, graph)
+    }
+
+    fn pass_param(&self, pass: &str, name: &str) -> Option<wxsl_core::node::Value> {
+        self.preview.pass_param(pass, name)
+    }
+
+    fn set_pass_param(
+        &mut self,
+        pass: &str,
+        name: &str,
+        value: wxsl_core::node::Value,
+    ) -> Result<(), String> {
+        self.preview
+            .set_pass_param(pass, name, value)
+            .map_err(|error| error.to_string())
+    }
+
+    fn write_material_param(
+        &mut self,
+        name: &str,
+        value: wxsl_core::node::Value,
+    ) -> Result<(), String> {
+        self.preview
+            .set_material_param(name, value)
+            .map_err(|error| error.to_string())
+    }
+
+    fn changed(&mut self, document: Document, rebuild: bool) {
+        self.modified = true;
+        match document {
+            Document::Material => self.dirty |= rebuild,
+            Document::Pipeline => {
+                if let Some(state) = self.pipeline.as_mut() {
+                    state.dirty |= rebuild;
+                }
+            }
         }
     }
 }
@@ -1299,11 +1449,9 @@ pub(crate) struct Requests {
     /// A palette row is being dragged this frame; its label, for the ghost
     /// that follows the pointer.
     pub(crate) dragging_definition: Option<String>,
-    pub(crate) changed_graph: bool,
-    /// Something worth saving changed that the shader does not depend on —
-    /// a node's name or its colour. Marks the document modified without
-    /// paying for a recompile.
-    pub(crate) changed_metadata: bool,
+    /// The edits the panels asked for, applied in order after the frame
+    /// (ADR 0081).
+    pub(crate) commands: Vec<Command>,
     pub(crate) toggle_spin: bool,
     pub(crate) toggle_theme: bool,
     /// Turn the preview by this many pixels of drag.
@@ -1324,11 +1472,6 @@ pub(crate) struct Requests {
     /// Make every `once` and `on resize` pass due again — the policy
     /// inspector's reset.
     pub(crate) reset_runs: bool,
-    /// A material parameter the inspector's slider moved: written into the
-    /// preview's buffer and pinned on the declaring `param` node as its
-    /// starting value — saved with the graph, yet no recompile, because a
-    /// parameter's value is not part of the variant key (ADR 0023).
-    pub(crate) material_param: Option<(String, wxsl_core::node::Value)>,
     /// Show this in the status bar instead of building a message at the
     /// apply site — for a widget (the inspector's generic-type picker) whose
     /// outcome depends on what it did, not just that it ran.
@@ -1385,7 +1528,7 @@ fn toolbar_panel(
     // Which canvas is up, whether the material previews through the
     // pipeline document, and that document's name.
     (mode, document): (CanvasMode, (bool, &str)),
-    graph: &mut Graph,
+    graph: &Graph,
 ) {
     let theme = *ui.theme();
     let metrics = theme.metrics;
@@ -1447,8 +1590,14 @@ fn toolbar_panel(
         .text_field(Id::new("toolbar.name"), name_rect, &mut name)
         .changed
     {
-        graph.set_name(name);
-        requests.changed_graph = true;
+        requests.commands.push(Command::SetName {
+            document: if mode == CanvasMode::Pipeline {
+                Document::Pipeline
+            } else {
+                Document::Material
+            },
+            name,
+        });
     }
     cursor = Rect::from_min_max(rest.min + Vec2::new(gap, 0.0), rest.max);
 
@@ -1756,7 +1905,7 @@ fn inspector_panel(
     ui: &mut Ui<'_>,
     rect: Rect,
     preview: &Preview,
-    graph: &mut Graph,
+    graph: &Graph,
     registry: &NodeRegistry,
     selected: Option<NodeId>,
     requests: &mut Requests,
@@ -2038,12 +2187,13 @@ fn inspector_panel(
                 )
                 .changed
             {
-                if let Some(node) = graph.node_mut(id) {
-                    let trimmed = name.trim();
-                    node.label = (!trimmed.is_empty() && trimmed != definition.label)
-                        .then(|| trimmed.to_string());
-                }
-                requests.changed_metadata = true;
+                let trimmed = name.trim();
+                requests.commands.push(Command::SetLabel {
+                    document: Document::Material,
+                    node: id,
+                    label: (!trimmed.is_empty() && trimmed != definition.label)
+                        .then(|| trimmed.to_string()),
+                });
             }
             widgets::field_row(ui, next(metrics.row_height), "definition", &definition.id);
             widgets::field_row(
@@ -2100,10 +2250,11 @@ fn inspector_panel(
                 .clicked
                 && current.is_some()
             {
-                if let Some(node) = graph.node_mut(id) {
-                    node.color = None;
-                }
-                requests.changed_metadata = true;
+                requests.commands.push(Command::SetColor {
+                    document: Document::Material,
+                    node: id,
+                    color: None,
+                });
             }
             if ui.color_picker_open(picker_id) {
                 let rect = next(widgets::color_picker_height(&theme, width, false));
@@ -2112,10 +2263,11 @@ fn inspector_panel(
                 // default left off instead of jumping to black.
                 let mut components = current.unwrap_or([shown.r, shown.g, shown.b]).to_vec();
                 if widgets::color_picker(ui, picker_id.with(3), rect, &mut components) {
-                    if let Some(node) = graph.node_mut(id) {
-                        node.color = Some([components[0], components[1], components[2]]);
-                    }
-                    requests.changed_metadata = true;
+                    requests.commands.push(Command::SetColor {
+                        document: Document::Material,
+                        node: id,
+                        color: Some([components[0], components[1], components[2]]),
+                    });
                 }
             }
 
@@ -2146,11 +2298,15 @@ fn inspector_panel(
                     &current,
                     &setting.choices,
                 ) {
-                    graph.set_setting(id, setting_name, &value);
                     // A declaration, not decoration: renaming a parameter
-                    // changes the generated struct, so the material has to
-                    // be recompiled rather than merely redrawn.
-                    requests.changed_graph = true;
+                    // changes the generated struct, so the material is
+                    // recompiled rather than merely redrawn.
+                    requests.commands.push(Command::SetSetting {
+                        document: Document::Material,
+                        node: id,
+                        name: setting_name.to_string(),
+                        value,
+                    });
                 }
             }
 
@@ -2209,19 +2365,12 @@ fn inspector_panel(
                         .clicked
                         && !active
                     {
-                        match graph.set_generic(registry, id, param_name, candidate) {
-                            Ok(disconnected) => {
-                                requests.changed_graph = true;
-                                if !disconnected.is_empty() {
-                                    requests.message = Some(format!(
-                                        "{param_name} is now {candidate}; disconnected {} \
-                                         edge(s) that no longer fit",
-                                        disconnected.len()
-                                    ));
-                                }
-                            }
-                            Err(error) => requests.message = Some(error.to_string()),
-                        }
+                        requests.commands.push(Command::SetGeneric {
+                            document: Document::Material,
+                            node: id,
+                            param: param_name.to_string(),
+                            ty: candidate,
+                        });
                     }
                 }
             }
@@ -2287,8 +2436,12 @@ fn inspector_panel(
                     continue;
                 };
                 if widgets::value_editor(ui, widget_id, editor_rect, &mut value) {
-                    graph.set_param(id, name, value);
-                    requests.changed_graph = true;
+                    requests.commands.push(Command::SetParam {
+                        document: Document::Material,
+                        node: id,
+                        socket: name.to_string(),
+                        value,
+                    });
                 }
             }
         }
@@ -2361,7 +2514,9 @@ fn inspector_panel(
         let id = param_id(&name);
         let editor = next(widgets::value_editor_height(ui, id, value.ty(), width));
         if widgets::value_editor(ui, id, editor, &mut value) {
-            requests.material_param = Some((name, value));
+            requests
+                .commands
+                .push(Command::SetMaterialParam { name, value });
         }
     }
 
@@ -2380,8 +2535,11 @@ fn inspector_panel(
                 declaration,
                 &mut value,
             ) {
-                graph.set_macro(name.to_string(), value);
-                requests.changed_graph = true;
+                requests.commands.push(Command::SetMacro {
+                    document: Document::Material,
+                    name: name.to_string(),
+                    value: Some(value),
+                });
             }
         }
     }
