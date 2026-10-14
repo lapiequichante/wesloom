@@ -647,7 +647,7 @@ pub struct PassDesc {
     /// (plan2 P10).
     pub policy: Policy,
     /// How the pass orders its draws, on top of each draw's own
-    /// [`RENDER_ORDER_NONE`] (plan5 D3/D4). [`SortOrder::None`] —
+    /// `render_order` (plan5 D3/D4). [`SortOrder::None`] —
     /// submission order — is the default and every pass list's behaviour
     /// before this field existed. Sorting reorders the draws *inside*
     /// this pass; the pass order itself stays the scheduler's.

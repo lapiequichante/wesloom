@@ -187,5 +187,5 @@ ctest --test-dir target/dawn-abi -C Debug --output-on-failure
 ```
 
 API request shapes and ownership are documented in
-`crates/wxsl-ffi/README.md`. Runtime cdylib integration is optional, not a
+[`docs/cpp.md`](../docs/cpp.md). Runtime cdylib integration is optional, not a
 requirement of the offline renderer or this harness.

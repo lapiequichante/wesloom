@@ -664,7 +664,7 @@ impl Graph {
     /// [`GraphError::UnresolvedGeneric`] and shows inputs with no value to
     /// edit, which is a node complaining before it has been used; picking a
     /// default type is a guess, but it is a guess anything else overrides —
-    /// connecting a wire retypes it ([`Graph::plan_retype`]) and so does
+    /// connecting a wire retypes it (`Graph::plan_retype`) and so does
     /// picking a type ([`Graph::set_generic`]).
     pub fn add_resolved(&mut self, registry: &NodeRegistry, node: Node) -> NodeId {
         let id = self.add(node);
@@ -685,7 +685,7 @@ impl Graph {
     /// A surviving node on the other end of one of those edges forgets a
     /// generic resolution the same way [`Graph::disconnect`] would, if that
     /// was the edge keeping it constrained — see
-    /// [`Graph::refresh_generics`].
+    /// `Graph::refresh_generics`.
     ///
     /// Returns the removed node, or `None` if there was no such node.
     pub fn remove_node(&mut self, registry: &NodeRegistry, id: NodeId) -> Option<Node> {
@@ -1750,7 +1750,7 @@ impl Graph {
     /// forgotten too — otherwise a node that adopted, say, `f32` from a
     /// since-removed wire would refuse a `vec3f` one next, even with
     /// nothing at all connected to tell it not to. See
-    /// [`Graph::refresh_generics`] for exactly what "constrained"
+    /// `Graph::refresh_generics` for exactly what "constrained"
     /// means and the one case (a chain of generic nodes) it deliberately
     /// does not chase through.
     pub fn disconnect(&mut self, registry: &NodeRegistry, input: &SocketRef) -> Option<Edge> {

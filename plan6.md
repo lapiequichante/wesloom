@@ -111,22 +111,47 @@ This is moving and cutting, never rewriting.
 
 ### C2 — API inventory and tiers
 
-* Snapshot each crate's public surface (`cargo public-api`, or a
-  rustdoc-JSON test) into `api/<crate>.txt`. A test fails whenever the
-  surface changes without the snapshot being updated, as the generated C
-  header is already pinned.
-* Classify every item:
-  * **stable**: the facade, the document types, `Renderer`'s frame loop;
-  * **unstable**: module-level, `#[doc(hidden)]` or behind an `unstable`
-    feature;
-  * **internal**: becomes `pub(crate)`. The inventory will find leaks such
-    as editor internals and generator helpers.
-* Set `#![deny(missing_docs)]` and `RUSTDOCFLAGS=-D warnings` on
-  `cargo doc` in CI (broken intra-doc links). Each stable item gets an
-  example that compiles as a doctest.
-* **ADR:** the stability policy, covering what each tier promises, how
-  deprecation works (one minor version with `#[deprecated]`), and which
-  crates are published.
+**Landed (2026-10-14, ADR 0078):**
+
+* **Snapshots.** `api/<crate>.txt` holds every public item
+  (`cargo public-api -s`). `scripts/public-api.sh` checks them, `--bless`
+  rewrites them, and a CI job runs the check. The nightly and the tool are
+  pinned.
+* **Tiers.**
+  * Stable: what a crate exports at its root, plus the document formats and
+    the C ABI.
+  * Unstable: module paths, and all of `wxsl-frame`.
+  * Internal: private.
+  Each crate's root doc has a "Stability" section.
+* **First internal cut.** `wxsl-lang`'s pass modules are now private: its
+  public API went from 1836 to 1533 lines.
+* **Rust docs.**
+  * The 21 rustdoc warnings are fixed, and `cargo doc -D warnings` runs in
+    CI.
+  * `missing_docs` is on in every library crate, so the ffi structs are
+    documented.
+  * The facade's front page now shows a complete frame, as a doctest.
+  * `docs/rust.md` is a tour of the main types.
+* **C/C++ docs.** `docs/cpp.md` is now the single home of the C ABI
+  contract, moved there from the `wxsl-ffi` README. It covers:
+  * the three ways to integrate;
+  * ownership and status codes;
+  * every request and response;
+  * the `wxsl::Renderer` and `wxsl::Compiler` classes.
+  The generated header now carries `/** */` comments on every field and
+  status code, and the C++ headers document every method, all readable by
+  Doxygen.
+
+**Still open:**
+
+* **Curate the stable roots** before `0.1`. `wxsl-render`'s root exports
+  pools, caches and variants (`ResourcePool`, `PipelineCache`,
+  `ShaderVariants`, `gbuffer_format`, …). `wxsl-editor`'s exports canvases
+  and widgets. `wxsl-lang`'s exports `mangle`, `Origins`, `Tok` and
+  `Spanned`. Each should move behind its module or become private.
+* **Find more internal leaks** with the snapshots: a `pub` item nothing
+  outside its crate uses.
+* **Doctests** for the stable items that have none.
 
 ### C3 — Targeted cleanup
 

@@ -62,13 +62,15 @@ minimal program.
 | [`wxsl-stdlib`](crates/wxsl-stdlib) | The node library, one `.wxsl` file per node. |
 | [`wxsl-render`](crates/wxsl-render) | The wgpu renderer and its 2D UI layer. |
 | [`wxsl-editor`](crates/wxsl-editor) | The visual editor. |
-| [`wxsl-ffi`](crates/wxsl-ffi) | The C ABI that the Dawn backend uses. |
+| [`wxsl-ffi`](crates/wxsl-ffi) | The C ABI that C/C++ hosts and the Dawn backend use. |
 | [`wxsl`](crates/wxsl) | The facade: re-exports the above behind features. |
 
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md): how the pieces fit together.
 - [`docs/glossary.md`](docs/glossary.md): the terms used throughout.
+- [`docs/rust.md`](docs/rust.md) and [`docs/cpp.md`](docs/cpp.md): using the
+  libraries from Rust, and from C or C++.
 - [`docs/adr/`](docs/adr/README.md): every design decision, with its reasoning.
 - [`plan6.md`](plan6.md): the current plan. Earlier plans are in
   [`docs/history/`](docs/history).

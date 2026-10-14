@@ -100,6 +100,12 @@
 //! several *materials*, and no box selection. (The pipeline canvas
 //! is a second document with its own state, not a tab.) None of these are
 //! hard; they are simply not there yet.
+//!
+//! # Stability
+//!
+//! The names re-exported at this root are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)),
+//! still being curated before `0.1`; [`Editor`] and [`EditorConfig`] are its
+//! core. The modules are unstable.
 
 #![warn(missing_docs)]
 

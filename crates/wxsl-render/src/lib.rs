@@ -58,6 +58,13 @@
 //! mounted when the variant is compiled. An application's own
 //! effects carry their sources the same way, or resolve against the
 //! library like everything else.
+//!
+//! # Stability
+//!
+//! The names re-exported at this root are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)),
+//! still being curated before `0.1`. Modules reached only by path, including
+//! [`ui`] and [`graph`], are unstable. [`wgpu`] and [`glam`] are re-exported at
+//! the versions this crate is built against.
 
 #![warn(missing_docs)]
 

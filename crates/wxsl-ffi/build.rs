@@ -31,17 +31,32 @@ fn c_type(ty: &Type) -> String {
     }
 }
 
-fn docs(attributes: &[syn::Attribute], out: &mut String) {
-    for attr in attributes {
-        if !attr.path().is_ident("doc") {
-            continue;
-        }
-        if let syn::Meta::NameValue(value) = &attr.meta {
-            if let syn::Expr::Lit(lit) = &value.value {
-                if let syn::Lit::Str(line) = &lit.lit {
-                    writeln!(out, "/* {} */", line.value().trim().replace("*/", "* /")).unwrap();
-                }
+/// Rust doc comments as one Doxygen-readable `/** ... */` block.
+fn docs(attributes: &[syn::Attribute], indent: &str, out: &mut String) {
+    let lines: Vec<String> = attributes
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .filter_map(|attr| match &attr.meta {
+            syn::Meta::NameValue(syn::MetaNameValue {
+                value:
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(line),
+                        ..
+                    }),
+                ..
+            }) => Some(line.value().trim().replace("*/", "* /")),
+            _ => None,
+        })
+        .collect();
+    match lines.as_slice() {
+        [] => {}
+        [line] => writeln!(out, "{indent}/** {line} */").unwrap(),
+        lines => {
+            writeln!(out, "{indent}/**").unwrap();
+            for line in lines {
+                writeln!(out, "{indent} * {line}").unwrap();
             }
+            writeln!(out, "{indent} */").unwrap();
         }
     }
 }
@@ -70,9 +85,10 @@ fn main() {
     for item in &syntax.items {
         match item {
             Item::Enum(item) if item.ident == "WxslStatus" => {
-                docs(&item.attrs, &mut header);
+                docs(&item.attrs, "", &mut header);
                 header.push_str("typedef uint32_t WxslStatus;\nenum {\n");
                 for variant in &item.variants {
+                    docs(&variant.attrs, "    ", &mut header);
                     let (_, syn::Expr::Lit(lit)) =
                         variant.discriminant.as_ref().expect("explicit status code")
                     else {
@@ -101,13 +117,13 @@ fn main() {
                 header.push_str("};\n\n");
             }
             Item::Struct(item) if item.attrs.iter().any(|attr| attr.path().is_ident("repr")) => {
-                docs(&item.attrs, &mut header);
+                docs(&item.attrs, "", &mut header);
                 writeln!(header, "typedef struct {} {{", item.ident).unwrap();
                 let Fields::Named(fields) = &item.fields else {
                     panic!("named ABI fields")
                 };
                 for field in &fields.named {
-                    docs(&field.attrs, &mut header);
+                    docs(&field.attrs, "    ", &mut header);
                     writeln!(
                         header,
                         "    {} {};",
@@ -133,7 +149,7 @@ fn main() {
                         .as_deref(),
                     Some("C")
                 );
-                docs(&item.attrs, &mut header);
+                docs(&item.attrs, "", &mut header);
                 let ret = match &item.sig.output {
                     ReturnType::Default => "void".into(),
                     ReturnType::Type(_, ty) => c_type(ty),

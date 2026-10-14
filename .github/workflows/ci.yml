@@ -114,6 +114,28 @@ jobs:
           components: clippy
       - run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Every public-item change shows up as a diff of api/*.txt (ADR 0078).
+  # The nightly and the tool are pinned in scripts/public-api.sh.
+  public-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-13
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-public-api --version 0.52.0 --locked
+      - run: bash scripts/public-api.sh
+
   test:
     runs-on: ubuntu-latest
     steps:

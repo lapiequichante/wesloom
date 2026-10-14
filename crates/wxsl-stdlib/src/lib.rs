@@ -47,6 +47,12 @@
 //! // The function the node calls is shipped as WXSL source in this crate.
 //! assert!(wxsl_stdlib::shaders::module("package::lighting::pbr_direct").is_some());
 //! ```
+//!
+//! # Stability
+//!
+//! The root names, [`registry()`], [`all_nodes`] and [`MODULES`], are
+//! stable ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)). Which nodes the library contains grows from release to
+//! release; a node's id, sockets and defaults are part of the document format.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

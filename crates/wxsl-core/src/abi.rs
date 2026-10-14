@@ -27,7 +27,7 @@ use crate::node::{
 /// that serialized documents pin.
 ///
 /// A document's `abi` field names the revision it was written against; a
-/// reader whose [`Self::REVISION`] differs refuses the document by name
+/// reader whose [`REVISION`] differs refuses the document by name
 /// rather than second-guessing what its node ids, sockets or macros meant.
 /// Rename a socket, retire a node id a document can store, or change what
 /// a setting value means, and this is the number that moves. One number
@@ -679,7 +679,7 @@ pub const fn shadow_tile(index: u32) -> ShadowTile {
 /// occupies.
 ///
 /// The channel count is not cosmetic: a pass's colour attachments share a
-/// bytes-per-sample budget ([`MAX_GBUFFER_BYTES_PER_SAMPLE`], in
+/// bytes-per-sample budget (`wxsl_frame::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE`, in
 /// `wxsl-render`), and every vec4 target costs 8 of it regardless of its
 /// bit depth — a scalar target costs 1, a two-channel one 4. Targets that
 /// only need a value or two declare that here, which is what lets a
@@ -1373,7 +1373,7 @@ impl MaterialStage {
     /// A colour-writing stage does; a [`StageOutput::Nothing`] stage has
     /// one only when the material discards, which is a property of the
     /// material and not of the stage
-    /// ([`GeneratedShader::fragment_entry`] is the answer for a given
+    /// ([`MaterialStage::fragment_entry`] is the answer for a given
     /// one).
     pub fn always_has_fragment(self) -> bool {
         self.output() != StageOutput::Nothing

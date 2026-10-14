@@ -1,0 +1,2392 @@
+pub mod wxsl_frame
+pub mod wxsl_frame::effect
+pub mod wxsl_frame::effect::ibl
+pub struct wxsl_frame::effect::ibl::BakeOutputs
+pub wxsl_frame::effect::ibl::BakeOutputs::diffuse: wxsl_frame::pass::ResourceId
+pub wxsl_frame::effect::ibl::BakeOutputs::radiance: wxsl_frame::pass::ResourceId
+pub wxsl_frame::effect::ibl::BakeOutputs::specular: wxsl_frame::pass::ResourceId
+impl core::clone::Clone for wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::BakeOutputs::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::BakeOutputs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::ibl::BakeOutputs
+impl core::marker::Freeze for wxsl_frame::effect::ibl::BakeOutputs
+impl core::marker::Send for wxsl_frame::effect::ibl::BakeOutputs
+impl core::marker::Sync for wxsl_frame::effect::ibl::BakeOutputs
+impl core::marker::Unpin for wxsl_frame::effect::ibl::BakeOutputs
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::ibl::BakeOutputs
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::ibl::BakeOutputs
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::ibl::BakeOutputs
+pub const wxsl_frame::effect::ibl::BACKGROUND: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ibl::DIFFUSE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ibl::EQUIRECT_TO_CUBE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ibl::RESAMPLE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ibl::SPECULAR: wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::ibl::append_background(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::ibl::append_bake(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::append_filtered_bake(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub mod wxsl_frame::effect::refraction
+pub enum wxsl_frame::effect::refraction::Quality
+pub wxsl_frame::effect::refraction::Quality::Layered
+pub wxsl_frame::effect::refraction::Quality::Precise
+impl core::clone::Clone for wxsl_frame::effect::refraction::Quality
+pub fn wxsl_frame::effect::refraction::Quality::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::refraction::Quality
+impl core::cmp::PartialEq for wxsl_frame::effect::refraction::Quality
+pub fn wxsl_frame::effect::refraction::Quality::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::effect::refraction::Quality
+pub fn wxsl_frame::effect::refraction::Quality::default() -> Self
+impl core::fmt::Debug for wxsl_frame::effect::refraction::Quality
+pub fn wxsl_frame::effect::refraction::Quality::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::refraction::Quality
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::refraction::Quality
+impl core::str::traits::FromStr for wxsl_frame::effect::refraction::Quality
+pub type wxsl_frame::effect::refraction::Quality::Err = &'static str
+pub fn wxsl_frame::effect::refraction::Quality::from_str(&str) -> core::result::Result<Self, Self::Err>
+impl core::marker::Freeze for wxsl_frame::effect::refraction::Quality
+impl core::marker::Send for wxsl_frame::effect::refraction::Quality
+impl core::marker::Sync for wxsl_frame::effect::refraction::Quality
+impl core::marker::Unpin for wxsl_frame::effect::refraction::Quality
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::refraction::Quality
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::refraction::Quality
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::refraction::Quality
+pub const wxsl_frame::effect::refraction::BOUNDS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::refraction::COMPOSE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::refraction::COMPOSE_DEPTH: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::refraction::RESOLVE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::refraction::SCENE_DEPTH: wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::refraction::append(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::refraction::append_with_quality(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32, wxsl_frame::effect::refraction::Quality) -> wxsl_frame::pass::ResourceId
+pub enum wxsl_frame::effect::Downlevel
+pub wxsl_frame::effect::Downlevel::Fragment
+pub wxsl_frame::effect::Downlevel::Fragment::fragment_entry: &'static str
+pub wxsl_frame::effect::Downlevel::Fragment::shader: wxsl_frame::effect::EffectShader
+pub wxsl_frame::effect::Downlevel::Fragment::vertex_entry: &'static str
+pub wxsl_frame::effect::Downlevel::NativeOnly
+pub wxsl_frame::effect::Downlevel::Portable
+impl core::clone::Clone for wxsl_frame::effect::Downlevel
+pub fn wxsl_frame::effect::Downlevel::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::effect::Downlevel
+pub fn wxsl_frame::effect::Downlevel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::Downlevel
+pub fn wxsl_frame::effect::Downlevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::Downlevel
+impl core::marker::Freeze for wxsl_frame::effect::Downlevel
+impl core::marker::Send for wxsl_frame::effect::Downlevel
+impl core::marker::Sync for wxsl_frame::effect::Downlevel
+impl core::marker::Unpin for wxsl_frame::effect::Downlevel
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::Downlevel
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::Downlevel
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::Downlevel
+pub enum wxsl_frame::effect::EffectInputKind
+pub wxsl_frame::effect::EffectInputKind::Buffer
+pub wxsl_frame::effect::EffectInputKind::DepthImage
+pub wxsl_frame::effect::EffectInputKind::GBuffer
+pub wxsl_frame::effect::EffectInputKind::Image
+impl core::clone::Clone for wxsl_frame::effect::EffectInputKind
+pub fn wxsl_frame::effect::EffectInputKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::EffectInputKind
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectInputKind
+pub fn wxsl_frame::effect::EffectInputKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectInputKind
+pub fn wxsl_frame::effect::EffectInputKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectInputKind
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectInputKind
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectInputKind
+pub fn wxsl_frame::effect::EffectInputKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectInputKind
+impl core::marker::Send for wxsl_frame::effect::EffectInputKind
+impl core::marker::Sync for wxsl_frame::effect::EffectInputKind
+impl core::marker::Unpin for wxsl_frame::effect::EffectInputKind
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectInputKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectInputKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectInputKind
+pub enum wxsl_frame::effect::EffectKind
+pub wxsl_frame::effect::EffectKind::Compute
+pub wxsl_frame::effect::EffectKind::Compute::entry: &'static str
+pub wxsl_frame::effect::EffectKind::Compute::workgroups: [u32; 3]
+pub wxsl_frame::effect::EffectKind::Screen
+pub wxsl_frame::effect::EffectKind::Screen::fragment_entry: &'static str
+pub wxsl_frame::effect::EffectKind::Screen::vertex_entry: &'static str
+impl core::clone::Clone for wxsl_frame::effect::EffectKind
+pub fn wxsl_frame::effect::EffectKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::EffectKind
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectKind
+pub fn wxsl_frame::effect::EffectKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectKind
+pub fn wxsl_frame::effect::EffectKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectKind
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectKind
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectKind
+pub fn wxsl_frame::effect::EffectKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectKind
+impl core::marker::Send for wxsl_frame::effect::EffectKind
+impl core::marker::Sync for wxsl_frame::effect::EffectKind
+impl core::marker::Unpin for wxsl_frame::effect::EffectKind
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectKind
+pub enum wxsl_frame::effect::EffectOutputShape
+pub wxsl_frame::effect::EffectOutputShape::Buffer
+pub wxsl_frame::effect::EffectOutputShape::StorageTexture
+impl core::clone::Clone for wxsl_frame::effect::EffectOutputShape
+pub fn wxsl_frame::effect::EffectOutputShape::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::EffectOutputShape
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectOutputShape
+pub fn wxsl_frame::effect::EffectOutputShape::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectOutputShape
+pub fn wxsl_frame::effect::EffectOutputShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectOutputShape
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectOutputShape
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectOutputShape
+pub fn wxsl_frame::effect::EffectOutputShape::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectOutputShape
+impl core::marker::Send for wxsl_frame::effect::EffectOutputShape
+impl core::marker::Sync for wxsl_frame::effect::EffectOutputShape
+impl core::marker::Unpin for wxsl_frame::effect::EffectOutputShape
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectOutputShape
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectOutputShape
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectOutputShape
+pub enum wxsl_frame::effect::EffectShader
+pub wxsl_frame::effect::EffectShader::Graph
+pub wxsl_frame::effect::EffectShader::Graph::graph: alloc::rcs::arc::Arc<wxsl_core::graph::Graph>
+pub wxsl_frame::effect::EffectShader::Graph::module: &'static str
+pub wxsl_frame::effect::EffectShader::Graph::wxsl: alloc::rcs::arc::Arc<str>
+pub wxsl_frame::effect::EffectShader::Lighting
+pub wxsl_frame::effect::EffectShader::Source
+pub wxsl_frame::effect::EffectShader::Source::path: &'static str
+pub wxsl_frame::effect::EffectShader::Source::wxsl: &'static str
+impl wxsl_frame::effect::EffectShader
+pub fn wxsl_frame::effect::EffectShader::source(&self) -> core::option::Option<(&'static str, alloc::borrow::Cow<'static, str>)>
+impl core::clone::Clone for wxsl_frame::effect::EffectShader
+pub fn wxsl_frame::effect::EffectShader::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectShader
+pub fn wxsl_frame::effect::EffectShader::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectShader
+pub fn wxsl_frame::effect::EffectShader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectShader
+impl core::marker::Freeze for wxsl_frame::effect::EffectShader
+impl core::marker::Send for wxsl_frame::effect::EffectShader
+impl core::marker::Sync for wxsl_frame::effect::EffectShader
+impl core::marker::Unpin for wxsl_frame::effect::EffectShader
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectShader
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectShader
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectShader
+pub struct wxsl_frame::effect::Effect
+pub wxsl_frame::effect::Effect::description: &'static str
+pub wxsl_frame::effect::Effect::downlevel: wxsl_frame::effect::Downlevel
+pub wxsl_frame::effect::Effect::id: &'static str
+pub wxsl_frame::effect::Effect::inputs: &'static [wxsl_frame::effect::EffectInput]
+pub wxsl_frame::effect::Effect::kind: wxsl_frame::effect::EffectKind
+pub wxsl_frame::effect::Effect::label: &'static str
+pub wxsl_frame::effect::Effect::outputs: &'static [wxsl_frame::effect::EffectOutput]
+pub wxsl_frame::effect::Effect::parameters: &'static [wxsl_frame::effect::EffectParameter]
+pub wxsl_frame::effect::Effect::shader: wxsl_frame::effect::EffectShader
+impl wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::Effect::declares(&self, &str) -> bool
+pub fn wxsl_frame::effect::Effect::fits_pass_screen(&self) -> bool
+pub fn wxsl_frame::effect::Effect::from_bake(&'static str, &'static str, &'static str, &wxsl_core::graph::Graph, &str, &wxsl_core::macros::MacroSet, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_frame::effect::Effect, wxsl_core::error::CodegenError>
+pub fn wxsl_frame::effect::Effect::from_graph(&'static str, &'static str, &'static str, wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_frame::effect::Effect, wxsl_core::error::CodegenError>
+pub fn wxsl_frame::effect::Effect::graph(&self) -> core::option::Option<&wxsl_core::graph::Graph>
+pub fn wxsl_frame::effect::Effect::initial_parameters(&self, &alloc::collections::btree::map::BTreeMap<alloc::string::String, wxsl_core::node::Value>) -> core::result::Result<alloc::vec::Vec<u8>, alloc::string::String>
+pub fn wxsl_frame::effect::Effect::is_compute(&self) -> bool
+pub fn wxsl_frame::effect::Effect::module_source(&self, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> (&'static str, alloc::borrow::Cow<'static, str>)
+pub fn wxsl_frame::effect::Effect::on(&self, &wxsl_frame::profile::Profile) -> alloc::borrow::Cow<'_, wxsl_frame::effect::Effect>
+pub fn wxsl_frame::effect::Effect::param_layout(&self) -> wxsl_core::resources::BufferLayout
+pub fn wxsl_frame::effect::Effect::params_header(&self) -> alloc::string::String
+pub fn wxsl_frame::effect::Effect::shader_macros(&self, &wxsl_core::macros::MacroSet) -> wxsl_core::macros::MacroSet
+impl core::clone::Clone for wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::Effect::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::Effect::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::Effect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::Effect
+impl core::marker::Freeze for wxsl_frame::effect::Effect
+impl core::marker::Send for wxsl_frame::effect::Effect
+impl core::marker::Sync for wxsl_frame::effect::Effect
+impl core::marker::Unpin for wxsl_frame::effect::Effect
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::Effect
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::Effect
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::Effect
+pub struct wxsl_frame::effect::EffectInput
+pub wxsl_frame::effect::EffectInput::description: &'static str
+pub wxsl_frame::effect::EffectInput::history: u32
+pub wxsl_frame::effect::EffectInput::kind: wxsl_frame::effect::EffectInputKind
+pub wxsl_frame::effect::EffectInput::name: &'static str
+impl core::clone::Clone for wxsl_frame::effect::EffectInput
+pub fn wxsl_frame::effect::EffectInput::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::EffectInput
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectInput
+pub fn wxsl_frame::effect::EffectInput::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectInput
+pub fn wxsl_frame::effect::EffectInput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectInput
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectInput
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectInput
+pub fn wxsl_frame::effect::EffectInput::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectInput
+impl core::marker::Send for wxsl_frame::effect::EffectInput
+impl core::marker::Sync for wxsl_frame::effect::EffectInput
+impl core::marker::Unpin for wxsl_frame::effect::EffectInput
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectInput
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectInput
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectInput
+pub struct wxsl_frame::effect::EffectOutput
+pub wxsl_frame::effect::EffectOutput::description: &'static str
+pub wxsl_frame::effect::EffectOutput::name: &'static str
+pub wxsl_frame::effect::EffectOutput::shape: wxsl_frame::effect::EffectOutputShape
+impl core::clone::Clone for wxsl_frame::effect::EffectOutput
+pub fn wxsl_frame::effect::EffectOutput::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::EffectOutput
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectOutput
+pub fn wxsl_frame::effect::EffectOutput::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectOutput
+pub fn wxsl_frame::effect::EffectOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectOutput
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectOutput
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectOutput
+pub fn wxsl_frame::effect::EffectOutput::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectOutput
+impl core::marker::Send for wxsl_frame::effect::EffectOutput
+impl core::marker::Sync for wxsl_frame::effect::EffectOutput
+impl core::marker::Unpin for wxsl_frame::effect::EffectOutput
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectOutput
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectOutput
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectOutput
+pub struct wxsl_frame::effect::EffectParameter
+pub wxsl_frame::effect::EffectParameter::default: wxsl_core::node::Value
+pub wxsl_frame::effect::EffectParameter::name: &'static str
+impl wxsl_frame::effect::EffectParameter
+pub fn wxsl_frame::effect::EffectParameter::ty(&self) -> wxsl_core::node::ValueType
+impl core::clone::Clone for wxsl_frame::effect::EffectParameter
+pub fn wxsl_frame::effect::EffectParameter::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::effect::EffectParameter
+pub fn wxsl_frame::effect::EffectParameter::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::EffectParameter
+pub fn wxsl_frame::effect::EffectParameter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::EffectParameter
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::EffectParameter
+impl serde_core::ser::Serialize for wxsl_frame::effect::EffectParameter
+pub fn wxsl_frame::effect::EffectParameter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::effect::EffectParameter
+impl core::marker::Send for wxsl_frame::effect::EffectParameter
+impl core::marker::Sync for wxsl_frame::effect::EffectParameter
+impl core::marker::Unpin for wxsl_frame::effect::EffectParameter
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectParameter
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectParameter
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectParameter
+pub struct wxsl_frame::effect::EffectRegistry
+impl wxsl_frame::effect::EffectRegistry
+pub fn wxsl_frame::effect::EffectRegistry::add(&mut self, wxsl_frame::effect::Effect)
+pub fn wxsl_frame::effect::EffectRegistry::empty() -> Self
+pub fn wxsl_frame::effect::EffectRegistry::get(&self, &str) -> core::option::Option<wxsl_frame::effect::Effect>
+pub fn wxsl_frame::effect::EffectRegistry::get_on(&self, wxsl_frame::profile::Profile, &str) -> core::option::Option<wxsl_frame::effect::Effect>
+pub fn wxsl_frame::effect::EffectRegistry::ids(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn wxsl_frame::effect::EffectRegistry::is_empty(&self) -> bool
+pub fn wxsl_frame::effect::EffectRegistry::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_frame::effect::Effect>
+pub fn wxsl_frame::effect::EffectRegistry::len(&self) -> usize
+pub fn wxsl_frame::effect::EffectRegistry::node_defs(&self) -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_frame::effect::EffectRegistry::shipped() -> Self
+pub fn wxsl_frame::effect::EffectRegistry::with(self, wxsl_frame::effect::Effect) -> Self
+impl core::clone::Clone for wxsl_frame::effect::EffectRegistry
+pub fn wxsl_frame::effect::EffectRegistry::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::effect::EffectRegistry
+pub fn wxsl_frame::effect::EffectRegistry::default() -> Self
+impl core::fmt::Debug for wxsl_frame::effect::EffectRegistry
+pub fn wxsl_frame::effect::EffectRegistry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::effect::EffectRegistry
+pub fn wxsl_frame::effect::EffectRegistry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::effect::EffectRegistry
+impl core::marker::Send for wxsl_frame::effect::EffectRegistry
+impl core::marker::Sync for wxsl_frame::effect::EffectRegistry
+impl core::marker::Unpin for wxsl_frame::effect::EffectRegistry
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::EffectRegistry
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::EffectRegistry
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::EffectRegistry
+pub const wxsl_frame::effect::BLOOM: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_COMBINE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_COMBINE_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_DOWN: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_DOWN_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_EXTRACT: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_EXTRACT_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_UP: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_UP_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_X: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_X_MODULE: &str
+pub const wxsl_frame::effect::BLOOM_Y: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BLOOM_Y_MODULE: &str
+pub const wxsl_frame::effect::BRDF_LUT: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::BRDF_LUT_FRAGMENT_MODULE: &str
+pub const wxsl_frame::effect::BRDF_LUT_MODULE: &str
+pub const wxsl_frame::effect::DEFERRED_LIGHTING: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::DOF_COC: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::DOF_COC_MODULE: &str
+pub const wxsl_frame::effect::DOF_FAR: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::DOF_FAR_MODULE: &str
+pub const wxsl_frame::effect::DOF_NEAR: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::DOF_NEAR_MODULE: &str
+pub const wxsl_frame::effect::LUT_VIEW: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::LUT_VIEW_MODULE: &str
+pub const wxsl_frame::effect::MOTION_BLUR: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::MOTION_BLUR_MODULE: &str
+pub const wxsl_frame::effect::PEEL_BOUNDS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::PEEL_BOUNDS_MODULE: &str
+pub const wxsl_frame::effect::PEEL_COMPOSITE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::PEEL_COMPOSITE_MODULE: &str
+pub const wxsl_frame::effect::PEEL_DEPTH_BOUNDS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::PEEL_DEPTH_BOUNDS_MODULE: &str
+pub const wxsl_frame::effect::PEEL_OVER: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::PEEL_OVER_MODULE: &str
+pub const wxsl_frame::effect::PEEL_UNDER: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::PEEL_UNDER_MODULE: &str
+pub const wxsl_frame::effect::RAMP_FILL: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::RAMP_MODULE: &str
+pub const wxsl_frame::effect::RAMP_VIEW: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::RAMP_VIEW_MODULE: &str
+pub const wxsl_frame::effect::TAA: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::TAA_MODULE: &str
+pub const wxsl_frame::effect::TONEMAP: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::TONEMAP_MODULE: &str
+pub mod wxsl_frame::environment
+pub enum wxsl_frame::environment::LightKind
+pub wxsl_frame::environment::LightKind::Directional
+pub wxsl_frame::environment::LightKind::Point
+pub wxsl_frame::environment::LightKind::Rectangle
+pub wxsl_frame::environment::LightKind::Spot
+impl core::clone::Clone for wxsl_frame::environment::LightKind
+pub fn wxsl_frame::environment::LightKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::environment::LightKind
+impl core::cmp::PartialEq for wxsl_frame::environment::LightKind
+pub fn wxsl_frame::environment::LightKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::environment::LightKind
+pub fn wxsl_frame::environment::LightKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::LightKind
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::LightKind
+impl core::marker::Freeze for wxsl_frame::environment::LightKind
+impl core::marker::Send for wxsl_frame::environment::LightKind
+impl core::marker::Sync for wxsl_frame::environment::LightKind
+impl core::marker::Unpin for wxsl_frame::environment::LightKind
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::LightKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::LightKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::LightKind
+pub struct wxsl_frame::environment::Camera
+pub wxsl_frame::environment::Camera::aspect: f32
+pub wxsl_frame::environment::Camera::eye: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Camera::far: f32
+pub wxsl_frame::environment::Camera::fov_y: f32
+pub wxsl_frame::environment::Camera::jitter: glam::f32::vec2::Vec2
+pub wxsl_frame::environment::Camera::near: f32
+pub wxsl_frame::environment::Camera::target: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Camera::up: glam::f32::vec3::Vec3
+impl wxsl_frame::environment::Camera
+pub fn wxsl_frame::environment::Camera::uniform(&self) -> wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::Camera::uniform_with(&self, core::option::Option<&wxsl_frame::environment::Camera>) -> wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::Camera::view_proj(&self) -> glam::f32::neon::mat4::Mat4
+impl core::clone::Clone for wxsl_frame::environment::Camera
+pub fn wxsl_frame::environment::Camera::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::environment::Camera
+pub fn wxsl_frame::environment::Camera::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::Camera
+pub fn wxsl_frame::environment::Camera::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::Camera
+impl core::marker::Freeze for wxsl_frame::environment::Camera
+impl core::marker::Send for wxsl_frame::environment::Camera
+impl core::marker::Sync for wxsl_frame::environment::Camera
+impl core::marker::Unpin for wxsl_frame::environment::Camera
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::Camera
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::Camera
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::Camera
+#[repr(C)] pub struct wxsl_frame::environment::CameraUniform
+pub wxsl_frame::environment::CameraUniform::inverse_view_proj: [[f32; 4]; 4]
+pub wxsl_frame::environment::CameraUniform::position: [f32; 3]
+pub wxsl_frame::environment::CameraUniform::previous_position: [f32; 3]
+pub wxsl_frame::environment::CameraUniform::previous_view_proj: [[f32; 4]; 4]
+pub wxsl_frame::environment::CameraUniform::view_proj: [[f32; 4]; 4]
+impl wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::CameraUniform::new(glam::f32::neon::mat4::Mat4, glam::f32::vec3::Vec3) -> Self
+pub fn wxsl_frame::environment::CameraUniform::new_with_previous(glam::f32::neon::mat4::Mat4, glam::f32::neon::mat4::Mat4, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
+impl bytemuck::pod::Pod for wxsl_frame::environment::CameraUniform
+impl bytemuck::zeroable::Zeroable for wxsl_frame::environment::CameraUniform
+impl core::clone::Clone for wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::CameraUniform::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::CameraUniform::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::CameraUniform::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::CameraUniform
+pub fn wxsl_frame::environment::CameraUniform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::CameraUniform
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::CameraUniform
+impl core::marker::Freeze for wxsl_frame::environment::CameraUniform
+impl core::marker::Send for wxsl_frame::environment::CameraUniform
+impl core::marker::Sync for wxsl_frame::environment::CameraUniform
+impl core::marker::Unpin for wxsl_frame::environment::CameraUniform
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::CameraUniform
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::CameraUniform
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::CameraUniform
+pub struct wxsl_frame::environment::Environment
+pub wxsl_frame::environment::Environment::ambient_ground: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Environment::ambient_sky: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Environment::camera: wxsl_frame::environment::Camera
+pub wxsl_frame::environment::Environment::cluster_lights: bool
+pub wxsl_frame::environment::Environment::exposure: f32
+pub wxsl_frame::environment::Environment::lights: alloc::vec::Vec<wxsl_frame::environment::Light>
+pub wxsl_frame::environment::Environment::origin: glam::f64::dvec3::DVec3
+pub wxsl_frame::environment::Environment::previous_camera: core::option::Option<wxsl_frame::environment::Camera>
+pub wxsl_frame::environment::Environment::previous_time: f32
+pub wxsl_frame::environment::Environment::time: f32
+impl wxsl_frame::environment::Environment
+pub fn wxsl_frame::environment::Environment::advance(&mut self, f32)
+pub fn wxsl_frame::environment::Environment::grid_mapping(&self) -> wxsl_frame::light_grid::GridMapping
+pub fn wxsl_frame::environment::Environment::light_grid(&self) -> wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::environment::Environment::local_lights(&self) -> alloc::vec::Vec<&wxsl_frame::environment::Light>
+pub fn wxsl_frame::environment::Environment::local_point(&self, glam::f64::dvec3::DVec3) -> glam::f32::vec3::Vec3
+pub fn wxsl_frame::environment::Environment::local_transform(&self, glam::f64::dmat4::DMat4) -> glam::f32::neon::mat4::Mat4
+pub fn wxsl_frame::environment::Environment::look_from(&mut self, glam::f64::dvec3::DVec3, glam::f64::dvec3::DVec3)
+pub fn wxsl_frame::environment::Environment::shadow_tiles(&self) -> alloc::vec::Vec<wxsl_frame::environment::ShadowTileView>
+pub fn wxsl_frame::environment::Environment::tile_casts_shadow(&self, u32) -> bool
+pub fn wxsl_frame::environment::Environment::uniform(&self) -> wxsl_frame::environment::SceneUniform
+pub fn wxsl_frame::environment::Environment::uniform_lights(&self) -> alloc::vec::Vec<&wxsl_frame::environment::Light>
+pub fn wxsl_frame::environment::Environment::views(&self) -> alloc::vec::Vec<wxsl_frame::environment::CameraUniform>
+impl core::clone::Clone for wxsl_frame::environment::Environment
+pub fn wxsl_frame::environment::Environment::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::environment::Environment
+pub fn wxsl_frame::environment::Environment::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::Environment
+pub fn wxsl_frame::environment::Environment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::environment::Environment
+impl core::marker::Send for wxsl_frame::environment::Environment
+impl core::marker::Sync for wxsl_frame::environment::Environment
+impl core::marker::Unpin for wxsl_frame::environment::Environment
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::Environment
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::Environment
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::Environment
+pub struct wxsl_frame::environment::InstanceRowSet
+impl wxsl_frame::environment::InstanceRowSet
+pub fn wxsl_frame::environment::InstanceRowSet::bytes(&self) -> &[u8]
+pub fn wxsl_frame::environment::InstanceRowSet::is_empty(&self) -> bool
+pub fn wxsl_frame::environment::InstanceRowSet::layout(&self) -> &wxsl_core::resources::BufferLayout
+pub fn wxsl_frame::environment::InstanceRowSet::len(&self) -> usize
+impl core::clone::Clone for wxsl_frame::environment::InstanceRowSet
+pub fn wxsl_frame::environment::InstanceRowSet::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::environment::InstanceRowSet
+pub fn wxsl_frame::environment::InstanceRowSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::environment::InstanceRowSet
+impl core::marker::Send for wxsl_frame::environment::InstanceRowSet
+impl core::marker::Sync for wxsl_frame::environment::InstanceRowSet
+impl core::marker::Unpin for wxsl_frame::environment::InstanceRowSet
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::InstanceRowSet
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::InstanceRowSet
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::InstanceRowSet
+pub struct wxsl_frame::environment::InstanceRows
+impl wxsl_frame::environment::InstanceRows
+pub fn wxsl_frame::environment::InstanceRows::is_empty(&self) -> bool
+pub fn wxsl_frame::environment::InstanceRows::new() -> Self
+pub fn wxsl_frame::environment::InstanceRows::reserve(&mut self, &wxsl_core::resources::BufferLayout, usize)
+pub fn wxsl_frame::environment::InstanceRows::row_mut(&mut self, &wxsl_core::resources::BufferLayout, usize) -> core::option::Option<&mut [u8]>
+pub fn wxsl_frame::environment::InstanceRows::sets(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &wxsl_frame::environment::InstanceRowSet)>
+impl core::clone::Clone for wxsl_frame::environment::InstanceRows
+pub fn wxsl_frame::environment::InstanceRows::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::environment::InstanceRows
+pub fn wxsl_frame::environment::InstanceRows::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::InstanceRows
+pub fn wxsl_frame::environment::InstanceRows::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::environment::InstanceRows
+impl core::marker::Send for wxsl_frame::environment::InstanceRows
+impl core::marker::Sync for wxsl_frame::environment::InstanceRows
+impl core::marker::Unpin for wxsl_frame::environment::InstanceRows
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::InstanceRows
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::InstanceRows
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::InstanceRows
+#[repr(C)] pub struct wxsl_frame::environment::InstanceTransform
+pub wxsl_frame::environment::InstanceTransform::model: [[f32; 4]; 4]
+pub wxsl_frame::environment::InstanceTransform::normal_matrix: [[f32; 4]; 4]
+impl wxsl_frame::environment::InstanceTransform
+pub fn wxsl_frame::environment::InstanceTransform::new(glam::f32::neon::mat4::Mat4) -> Self
+impl bytemuck::pod::Pod for wxsl_frame::environment::InstanceTransform
+impl bytemuck::zeroable::Zeroable for wxsl_frame::environment::InstanceTransform
+impl core::clone::Clone for wxsl_frame::environment::InstanceTransform
+pub fn wxsl_frame::environment::InstanceTransform::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::InstanceTransform
+pub fn wxsl_frame::environment::InstanceTransform::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::InstanceTransform
+pub fn wxsl_frame::environment::InstanceTransform::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::InstanceTransform
+pub fn wxsl_frame::environment::InstanceTransform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::InstanceTransform
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::InstanceTransform
+impl core::marker::Freeze for wxsl_frame::environment::InstanceTransform
+impl core::marker::Send for wxsl_frame::environment::InstanceTransform
+impl core::marker::Sync for wxsl_frame::environment::InstanceTransform
+impl core::marker::Unpin for wxsl_frame::environment::InstanceTransform
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::InstanceTransform
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::InstanceTransform
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::InstanceTransform
+pub struct wxsl_frame::environment::Light
+pub wxsl_frame::environment::Light::area_u: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::area_v: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::casts_shadow: bool
+pub wxsl_frame::environment::Light::color: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::cookie_layer: core::option::Option<u32>
+pub wxsl_frame::environment::Light::intensity: f32
+pub wxsl_frame::environment::Light::kind: wxsl_frame::environment::LightKind
+pub wxsl_frame::environment::Light::position_or_direction: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::range: f32
+pub wxsl_frame::environment::Light::shadow_cascades: u32
+pub wxsl_frame::environment::Light::shadow_distance: f32
+pub wxsl_frame::environment::Light::shadow_extent: f32
+pub wxsl_frame::environment::Light::shadow_normal_bias: f32
+pub wxsl_frame::environment::Light::spot_direction: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::spot_inner_angle: f32
+pub wxsl_frame::environment::Light::spot_outer_angle: f32
+impl wxsl_frame::environment::Light
+pub const wxsl_frame::environment::Light::DEFAULTS: wxsl_frame::environment::Light
+pub fn wxsl_frame::environment::Light::area_sample_positions(&self) -> [glam::f32::vec3::Vec3; 16]
+pub fn wxsl_frame::environment::Light::casting_shadow(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::directional(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::is_local(&self) -> bool
+pub fn wxsl_frame::environment::Light::point(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::rectangle(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::shadow_views(&self, &wxsl_frame::environment::Camera) -> alloc::vec::Vec<wxsl_frame::environment::ShadowView>
+pub fn wxsl_frame::environment::Light::spot(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, f32, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_cascades(self, u32) -> Self
+pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
+pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
+impl core::clone::Clone for wxsl_frame::environment::Light
+pub fn wxsl_frame::environment::Light::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::environment::Light
+pub fn wxsl_frame::environment::Light::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::Light
+impl core::marker::Freeze for wxsl_frame::environment::Light
+impl core::marker::Send for wxsl_frame::environment::Light
+impl core::marker::Sync for wxsl_frame::environment::Light
+impl core::marker::Unpin for wxsl_frame::environment::Light
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::Light
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::Light
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::Light
+#[repr(C)] pub struct wxsl_frame::environment::LightUniform
+pub wxsl_frame::environment::LightUniform::area_u: [f32; 3]
+pub wxsl_frame::environment::LightUniform::area_v: [f32; 3]
+pub wxsl_frame::environment::LightUniform::color: [f32; 3]
+pub wxsl_frame::environment::LightUniform::cookie_layer: u32
+pub wxsl_frame::environment::LightUniform::intensity: f32
+pub wxsl_frame::environment::LightUniform::kind: f32
+pub wxsl_frame::environment::LightUniform::position_or_direction: [f32; 3]
+pub wxsl_frame::environment::LightUniform::range: f32
+pub wxsl_frame::environment::LightUniform::shadow_normal_bias: f32
+pub wxsl_frame::environment::LightUniform::spot_direction: [f32; 3]
+pub wxsl_frame::environment::LightUniform::spot_inner_cos: f32
+pub wxsl_frame::environment::LightUniform::spot_outer_cos: f32
+pub wxsl_frame::environment::LightUniform::tile_count: u32
+pub wxsl_frame::environment::LightUniform::tile_first: u32
+impl bytemuck::pod::Pod for wxsl_frame::environment::LightUniform
+impl bytemuck::zeroable::Zeroable for wxsl_frame::environment::LightUniform
+impl core::clone::Clone for wxsl_frame::environment::LightUniform
+pub fn wxsl_frame::environment::LightUniform::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::LightUniform
+pub fn wxsl_frame::environment::LightUniform::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::LightUniform
+pub fn wxsl_frame::environment::LightUniform::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::LightUniform
+pub fn wxsl_frame::environment::LightUniform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::LightUniform
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::LightUniform
+impl core::marker::Freeze for wxsl_frame::environment::LightUniform
+impl core::marker::Send for wxsl_frame::environment::LightUniform
+impl core::marker::Sync for wxsl_frame::environment::LightUniform
+impl core::marker::Unpin for wxsl_frame::environment::LightUniform
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::LightUniform
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::LightUniform
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::LightUniform
+#[repr(C)] pub struct wxsl_frame::environment::SceneUniform
+pub wxsl_frame::environment::SceneUniform::ambient_ground: [f32; 3]
+pub wxsl_frame::environment::SceneUniform::ambient_sky: [f32; 3]
+pub wxsl_frame::environment::SceneUniform::environment_enabled: f32
+pub wxsl_frame::environment::SceneUniform::environment_levels: u32
+pub wxsl_frame::environment::SceneUniform::environment_scale: f32
+pub wxsl_frame::environment::SceneUniform::exposure: f32
+pub wxsl_frame::environment::SceneUniform::light_count: u32
+pub wxsl_frame::environment::SceneUniform::light_grid: [u32; 4]
+pub wxsl_frame::environment::SceneUniform::light_grid_depth: [f32; 4]
+pub wxsl_frame::environment::SceneUniform::light_grid_view_proj: [[f32; 4]; 4]
+pub wxsl_frame::environment::SceneUniform::lights: [wxsl_frame::environment::LightUniform; 16]
+pub wxsl_frame::environment::SceneUniform::origin: [f32; 3]
+pub wxsl_frame::environment::SceneUniform::previous_time: f32
+pub wxsl_frame::environment::SceneUniform::shadow_tiles: [wxsl_frame::environment::ShadowTileUniform; 112]
+pub wxsl_frame::environment::SceneUniform::time: f32
+impl bytemuck::pod::Pod for wxsl_frame::environment::SceneUniform
+impl bytemuck::zeroable::Zeroable for wxsl_frame::environment::SceneUniform
+impl core::clone::Clone for wxsl_frame::environment::SceneUniform
+pub fn wxsl_frame::environment::SceneUniform::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::SceneUniform
+pub fn wxsl_frame::environment::SceneUniform::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::SceneUniform
+pub fn wxsl_frame::environment::SceneUniform::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::SceneUniform
+pub fn wxsl_frame::environment::SceneUniform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::SceneUniform
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::SceneUniform
+impl core::marker::Freeze for wxsl_frame::environment::SceneUniform
+impl core::marker::Send for wxsl_frame::environment::SceneUniform
+impl core::marker::Sync for wxsl_frame::environment::SceneUniform
+impl core::marker::Unpin for wxsl_frame::environment::SceneUniform
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::SceneUniform
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::SceneUniform
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::SceneUniform
+#[repr(C)] pub struct wxsl_frame::environment::ShadowTileUniform
+pub wxsl_frame::environment::ShadowTileUniform::rect: [f32; 4]
+pub wxsl_frame::environment::ShadowTileUniform::split: f32
+pub wxsl_frame::environment::ShadowTileUniform::view_proj: [[f32; 4]; 4]
+impl bytemuck::pod::Pod for wxsl_frame::environment::ShadowTileUniform
+impl bytemuck::zeroable::Zeroable for wxsl_frame::environment::ShadowTileUniform
+impl core::clone::Clone for wxsl_frame::environment::ShadowTileUniform
+pub fn wxsl_frame::environment::ShadowTileUniform::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::ShadowTileUniform
+pub fn wxsl_frame::environment::ShadowTileUniform::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::ShadowTileUniform
+pub fn wxsl_frame::environment::ShadowTileUniform::default() -> Self
+impl core::fmt::Debug for wxsl_frame::environment::ShadowTileUniform
+pub fn wxsl_frame::environment::ShadowTileUniform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::Freeze for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::Send for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::Sync for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::Unpin for wxsl_frame::environment::ShadowTileUniform
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::ShadowTileUniform
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::ShadowTileUniform
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::ShadowTileUniform
+pub struct wxsl_frame::environment::ShadowTileView
+pub wxsl_frame::environment::ShadowTileView::eye: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::ShadowTileView::light: u32
+pub wxsl_frame::environment::ShadowTileView::split: f32
+pub wxsl_frame::environment::ShadowTileView::view_proj: glam::f32::neon::mat4::Mat4
+impl core::clone::Clone for wxsl_frame::environment::ShadowTileView
+pub fn wxsl_frame::environment::ShadowTileView::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::environment::ShadowTileView
+pub fn wxsl_frame::environment::ShadowTileView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::ShadowTileView
+impl core::marker::Freeze for wxsl_frame::environment::ShadowTileView
+impl core::marker::Send for wxsl_frame::environment::ShadowTileView
+impl core::marker::Sync for wxsl_frame::environment::ShadowTileView
+impl core::marker::Unpin for wxsl_frame::environment::ShadowTileView
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::ShadowTileView
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::ShadowTileView
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::ShadowTileView
+pub struct wxsl_frame::environment::ShadowView
+pub wxsl_frame::environment::ShadowView::eye: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::ShadowView::split: f32
+pub wxsl_frame::environment::ShadowView::view_proj: glam::f32::neon::mat4::Mat4
+impl core::clone::Clone for wxsl_frame::environment::ShadowView
+pub fn wxsl_frame::environment::ShadowView::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::ShadowView
+pub fn wxsl_frame::environment::ShadowView::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::environment::ShadowView
+pub fn wxsl_frame::environment::ShadowView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::ShadowView
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::ShadowView
+impl core::marker::Freeze for wxsl_frame::environment::ShadowView
+impl core::marker::Send for wxsl_frame::environment::ShadowView
+impl core::marker::Sync for wxsl_frame::environment::ShadowView
+impl core::marker::Unpin for wxsl_frame::environment::ShadowView
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::ShadowView
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::ShadowView
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::ShadowView
+pub const wxsl_frame::environment::CUBE_FACE_DIRECTIONS: [glam::f32::vec3::Vec3; 6]
+pub const wxsl_frame::environment::MAX_LIGHTS: usize
+pub const wxsl_frame::environment::MAX_SHADOW_CASCADES: u32
+pub fn wxsl_frame::environment::view_depth(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> f32
+pub mod wxsl_frame::graph
+pub enum wxsl_frame::graph::Allocation
+pub wxsl_frame::graph::Allocation::Imported
+pub wxsl_frame::graph::Allocation::Ring
+pub wxsl_frame::graph::Allocation::Ring::base: usize
+pub wxsl_frame::graph::Allocation::Ring::length: usize
+impl core::clone::Clone for wxsl_frame::graph::Allocation
+pub fn wxsl_frame::graph::Allocation::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::graph::Allocation
+impl core::cmp::PartialEq for wxsl_frame::graph::Allocation
+pub fn wxsl_frame::graph::Allocation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::graph::Allocation
+pub fn wxsl_frame::graph::Allocation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::graph::Allocation
+impl core::marker::StructuralPartialEq for wxsl_frame::graph::Allocation
+impl serde_core::ser::Serialize for wxsl_frame::graph::Allocation
+pub fn wxsl_frame::graph::Allocation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::Allocation
+impl core::marker::Send for wxsl_frame::graph::Allocation
+impl core::marker::Sync for wxsl_frame::graph::Allocation
+impl core::marker::Unpin for wxsl_frame::graph::Allocation
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::Allocation
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::Allocation
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::Allocation
+pub enum wxsl_frame::graph::GraphError
+pub wxsl_frame::graph::GraphError::AttachmentNotATexture
+pub wxsl_frame::graph::GraphError::AttachmentNotATexture::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::AttachmentNotATexture::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::Cycle
+pub wxsl_frame::graph::GraphError::Cycle::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::DepthFormatMismatch
+pub wxsl_frame::graph::GraphError::DepthFormatMismatch::attached: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_frame::graph::GraphError::DepthFormatMismatch::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::DepthFormatMismatch::state: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer
+pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::reason: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidTexture
+pub wxsl_frame::graph::GraphError::InvalidTexture::reason: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidTexture::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidTextureUse
+pub wxsl_frame::graph::GraphError::InvalidTextureUse::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidTextureUse::reason: alloc::string::String
+pub wxsl_frame::graph::GraphError::InvalidTextureUse::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::NeverWritten
+pub wxsl_frame::graph::GraphError::NeverWritten::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::NeverWritten::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::NoSuchHistory
+pub wxsl_frame::graph::GraphError::NoSuchHistory::available: u32
+pub wxsl_frame::graph::GraphError::NoSuchHistory::history: u32
+pub wxsl_frame::graph::GraphError::NoSuchHistory::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::NoSuchHistory::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage
+pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::imported: bool
+pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::policy: wxsl_frame::pass::Policy
+pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::ReadsWhatItWrites
+pub wxsl_frame::graph::GraphError::ReadsWhatItWrites::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::ReadsWhatItWrites::resource: alloc::string::String
+pub wxsl_frame::graph::GraphError::UnknownResource
+pub wxsl_frame::graph::GraphError::UnknownResource::pass: alloc::string::String
+pub wxsl_frame::graph::GraphError::UnknownResource::resource: wxsl_frame::pass::ResourceId
+pub wxsl_frame::graph::GraphError::WrongColorTargetCount
+pub wxsl_frame::graph::GraphError::WrongColorTargetCount::expected: usize
+pub wxsl_frame::graph::GraphError::WrongColorTargetCount::found: usize
+pub wxsl_frame::graph::GraphError::WrongColorTargetCount::pass: alloc::string::String
+impl core::clone::Clone for wxsl_frame::graph::GraphError
+pub fn wxsl_frame::graph::GraphError::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::graph::GraphError
+pub fn wxsl_frame::graph::GraphError::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_frame::graph::GraphError
+impl core::fmt::Debug for wxsl_frame::graph::GraphError
+pub fn wxsl_frame::graph::GraphError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::graph::GraphError
+pub fn wxsl_frame::graph::GraphError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::graph::GraphError
+impl core::marker::Freeze for wxsl_frame::graph::GraphError
+impl core::marker::Send for wxsl_frame::graph::GraphError
+impl core::marker::Sync for wxsl_frame::graph::GraphError
+impl core::marker::Unpin for wxsl_frame::graph::GraphError
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::GraphError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::GraphError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::GraphError
+pub enum wxsl_frame::graph::SlotShape
+pub wxsl_frame::graph::SlotShape::Buffer
+pub wxsl_frame::graph::SlotShape::Buffer::size: u64
+pub wxsl_frame::graph::SlotShape::Buffer::usage: wxsl_frame::types::BufferUsages
+pub wxsl_frame::graph::SlotShape::Texture
+pub wxsl_frame::graph::SlotShape::Texture::dimension: wxsl_frame::pass::Dimension
+pub wxsl_frame::graph::SlotShape::Texture::extent: wxsl_frame::pass::Extent
+pub wxsl_frame::graph::SlotShape::Texture::format: wxsl_frame::types::TextureFormat
+pub wxsl_frame::graph::SlotShape::Texture::layers: u32
+pub wxsl_frame::graph::SlotShape::Texture::mip_levels: u32
+pub wxsl_frame::graph::SlotShape::Texture::usage: wxsl_frame::types::TextureUsages
+impl core::clone::Clone for wxsl_frame::graph::SlotShape
+pub fn wxsl_frame::graph::SlotShape::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::graph::SlotShape
+pub fn wxsl_frame::graph::SlotShape::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::graph::SlotShape
+pub fn wxsl_frame::graph::SlotShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::graph::SlotShape
+impl core::marker::StructuralPartialEq for wxsl_frame::graph::SlotShape
+impl serde_core::ser::Serialize for wxsl_frame::graph::SlotShape
+pub fn wxsl_frame::graph::SlotShape::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::SlotShape
+impl core::marker::Send for wxsl_frame::graph::SlotShape
+impl core::marker::Sync for wxsl_frame::graph::SlotShape
+impl core::marker::Unpin for wxsl_frame::graph::SlotShape
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::SlotShape
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::SlotShape
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::SlotShape
+pub struct wxsl_frame::graph::RenderGraph
+impl wxsl_frame::graph::RenderGraph
+pub const wxsl_frame::graph::RenderGraph::STEP_INSPECT_PASS: &'static str
+pub const wxsl_frame::graph::RenderGraph::TARGET: wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::RenderGraph::declare_environment_maps(&mut self, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId)
+pub fn wxsl_frame::graph::RenderGraph::declare_shadow_maps(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::RenderGraph::environment_maps(&self) -> core::option::Option<[wxsl_frame::pass::ResourceId; 2]>
+pub fn wxsl_frame::graph::RenderGraph::environment_scale(&self) -> f32
+pub fn wxsl_frame::graph::RenderGraph::gbuffer_layout(&self) -> &[wxsl_core::abi::GBufferTarget]
+pub fn wxsl_frame::graph::RenderGraph::make_stable_storage(&mut self, wxsl_frame::pass::ResourceId)
+pub fn wxsl_frame::graph::RenderGraph::new(wxsl_frame::types::TextureFormat) -> Self
+pub fn wxsl_frame::graph::RenderGraph::pass(&mut self, wxsl_frame::pass::PassDesc) -> &mut Self
+pub fn wxsl_frame::graph::RenderGraph::pass_mut(&mut self, usize) -> core::option::Option<&mut wxsl_frame::pass::PassDesc>
+pub fn wxsl_frame::graph::RenderGraph::passes(&self) -> &[wxsl_frame::pass::PassDesc]
+pub fn wxsl_frame::graph::RenderGraph::resource(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::RenderGraph::resource_by_label(&self, &str) -> core::option::Option<wxsl_frame::pass::ResourceId>
+pub fn wxsl_frame::graph::RenderGraph::resource_desc(&self, wxsl_frame::pass::ResourceId) -> core::option::Option<&wxsl_frame::pass::ResourceDesc>
+pub fn wxsl_frame::graph::RenderGraph::resources(&self) -> &[wxsl_frame::pass::ResourceDesc]
+pub fn wxsl_frame::graph::RenderGraph::schedule(&self) -> core::result::Result<wxsl_frame::graph::Schedule, wxsl_frame::graph::GraphError>
+pub fn wxsl_frame::graph::RenderGraph::set_environment_scale(&mut self, f32)
+pub fn wxsl_frame::graph::RenderGraph::shadow_maps(&self) -> core::option::Option<wxsl_frame::pass::ResourceId>
+pub fn wxsl_frame::graph::RenderGraph::stepped(&self, usize, core::option::Option<(wxsl_frame::pass::ResourceId, &str)>) -> core::result::Result<wxsl_frame::graph::RenderGraph, wxsl_frame::graph::GraphError>
+pub fn wxsl_frame::graph::RenderGraph::with_gbuffer_layout(self, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>) -> Self
+impl core::clone::Clone for wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::graph::RenderGraph::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::graph::RenderGraph::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::graph::RenderGraph::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::RenderGraph
+impl core::marker::Send for wxsl_frame::graph::RenderGraph
+impl core::marker::Sync for wxsl_frame::graph::RenderGraph
+impl core::marker::Unpin for wxsl_frame::graph::RenderGraph
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::RenderGraph
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::RenderGraph
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::RenderGraph
+pub struct wxsl_frame::graph::Schedule
+impl wxsl_frame::graph::Schedule
+pub fn wxsl_frame::graph::Schedule::allocation(&self, wxsl_frame::pass::ResourceId) -> wxsl_frame::graph::Allocation
+pub fn wxsl_frame::graph::Schedule::order(&self) -> &[usize]
+pub fn wxsl_frame::graph::Schedule::slot(&self, wxsl_frame::pass::ResourceId, u64, u32) -> core::option::Option<usize>
+pub fn wxsl_frame::graph::Schedule::slots(&self) -> &[wxsl_frame::graph::SlotDesc]
+impl core::clone::Clone for wxsl_frame::graph::Schedule
+pub fn wxsl_frame::graph::Schedule::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::graph::Schedule
+pub fn wxsl_frame::graph::Schedule::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::graph::Schedule
+pub fn wxsl_frame::graph::Schedule::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::Schedule
+impl core::marker::Send for wxsl_frame::graph::Schedule
+impl core::marker::Sync for wxsl_frame::graph::Schedule
+impl core::marker::Unpin for wxsl_frame::graph::Schedule
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::Schedule
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::Schedule
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::Schedule
+pub struct wxsl_frame::graph::SlotDesc
+pub wxsl_frame::graph::SlotDesc::label: alloc::string::String
+pub wxsl_frame::graph::SlotDesc::shape: wxsl_frame::graph::SlotShape
+impl core::clone::Clone for wxsl_frame::graph::SlotDesc
+pub fn wxsl_frame::graph::SlotDesc::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::graph::SlotDesc
+pub fn wxsl_frame::graph::SlotDesc::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::graph::SlotDesc
+pub fn wxsl_frame::graph::SlotDesc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::graph::SlotDesc
+impl serde_core::ser::Serialize for wxsl_frame::graph::SlotDesc
+pub fn wxsl_frame::graph::SlotDesc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::SlotDesc
+impl core::marker::Send for wxsl_frame::graph::SlotDesc
+impl core::marker::Sync for wxsl_frame::graph::SlotDesc
+impl core::marker::Unpin for wxsl_frame::graph::SlotDesc
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::SlotDesc
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::SlotDesc
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::SlotDesc
+pub mod wxsl_frame::light_grid
+pub struct wxsl_frame::light_grid::GridMapping
+pub wxsl_frame::light_grid::GridMapping::far: f32
+pub wxsl_frame::light_grid::GridMapping::near: f32
+pub wxsl_frame::light_grid::GridMapping::view_proj: glam::f32::neon::mat4::Mat4
+impl wxsl_frame::light_grid::GridMapping
+pub fn wxsl_frame::light_grid::GridMapping::cell(&self, glam::f32::vec3::Vec3) -> core::option::Option<usize>
+pub fn wxsl_frame::light_grid::GridMapping::depth(&self) -> [f32; 4]
+pub fn wxsl_frame::light_grid::GridMapping::slice_scale(&self) -> f32
+impl core::clone::Clone for wxsl_frame::light_grid::GridMapping
+pub fn wxsl_frame::light_grid::GridMapping::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::light_grid::GridMapping
+pub fn wxsl_frame::light_grid::GridMapping::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::light_grid::GridMapping
+pub fn wxsl_frame::light_grid::GridMapping::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::light_grid::GridMapping
+impl core::marker::StructuralPartialEq for wxsl_frame::light_grid::GridMapping
+impl core::marker::Freeze for wxsl_frame::light_grid::GridMapping
+impl core::marker::Send for wxsl_frame::light_grid::GridMapping
+impl core::marker::Sync for wxsl_frame::light_grid::GridMapping
+impl core::marker::Unpin for wxsl_frame::light_grid::GridMapping
+impl core::marker::UnsafeUnpin for wxsl_frame::light_grid::GridMapping
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::light_grid::GridMapping
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::light_grid::GridMapping
+pub struct wxsl_frame::light_grid::LightGrid
+pub wxsl_frame::light_grid::LightGrid::dropped: usize
+pub wxsl_frame::light_grid::LightGrid::lights: alloc::vec::Vec<wxsl_frame::environment::LightUniform>
+pub wxsl_frame::light_grid::LightGrid::words: alloc::vec::Vec<u32>
+impl wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::light_grid::LightGrid::build(&wxsl_frame::light_grid::GridMapping, &[&wxsl_frame::environment::Light]) -> wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::light_grid::LightGrid::cell_lights(&self, usize) -> &[u32]
+impl core::clone::Clone for wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::light_grid::LightGrid::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::light_grid::LightGrid::default() -> Self
+impl core::fmt::Debug for wxsl_frame::light_grid::LightGrid
+pub fn wxsl_frame::light_grid::LightGrid::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::light_grid::LightGrid
+impl core::marker::Send for wxsl_frame::light_grid::LightGrid
+impl core::marker::Sync for wxsl_frame::light_grid::LightGrid
+impl core::marker::Unpin for wxsl_frame::light_grid::LightGrid
+impl core::marker::UnsafeUnpin for wxsl_frame::light_grid::LightGrid
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::light_grid::LightGrid
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::light_grid::LightGrid
+pub mod wxsl_frame::pass
+pub enum wxsl_frame::pass::Dimension
+pub wxsl_frame::pass::Dimension::Cube
+pub wxsl_frame::pass::Dimension::D2
+pub wxsl_frame::pass::Dimension::D2Array
+pub wxsl_frame::pass::Dimension::D3
+impl core::clone::Clone for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::Dimension
+impl core::cmp::PartialEq for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::Dimension
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Dimension
+impl serde_core::ser::Serialize for wxsl_frame::pass::Dimension
+pub fn wxsl_frame::pass::Dimension::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Dimension
+impl core::marker::Send for wxsl_frame::pass::Dimension
+impl core::marker::Sync for wxsl_frame::pass::Dimension
+impl core::marker::Unpin for wxsl_frame::pass::Dimension
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Dimension
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Dimension
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Dimension
+pub enum wxsl_frame::pass::DrawSource
+pub wxsl_frame::pass::DrawSource::Indirect
+pub wxsl_frame::pass::DrawSource::Indirect::buffer: wxsl_frame::pass::ResourceId
+pub wxsl_frame::pass::DrawSource::Indirect::count: u32
+pub wxsl_frame::pass::DrawSource::Indirect::draw: usize
+pub wxsl_frame::pass::DrawSource::Indirect::offset: u64
+pub wxsl_frame::pass::DrawSource::Scene(wxsl_core::scene::TagExpr)
+impl core::clone::Clone for wxsl_frame::pass::DrawSource
+pub fn wxsl_frame::pass::DrawSource::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::pass::DrawSource
+pub fn wxsl_frame::pass::DrawSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::pass::DrawSource
+pub fn wxsl_frame::pass::DrawSource::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::DrawSource
+impl core::marker::Send for wxsl_frame::pass::DrawSource
+impl core::marker::Sync for wxsl_frame::pass::DrawSource
+impl core::marker::Unpin for wxsl_frame::pass::DrawSource
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::DrawSource
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::DrawSource
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::DrawSource
+pub enum wxsl_frame::pass::Extent
+pub wxsl_frame::pass::Extent::Fixed
+pub wxsl_frame::pass::Extent::Fixed::height: u32
+pub wxsl_frame::pass::Extent::Fixed::width: u32
+pub wxsl_frame::pass::Extent::Viewport
+pub wxsl_frame::pass::Extent::Viewport::scale: f32
+impl wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::resolve(self, u32, u32) -> (u32, u32)
+pub fn wxsl_frame::pass::Extent::resolve_mip(self, u32, u32, u32) -> (u32, u32)
+impl core::clone::Clone for wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::Extent
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Extent
+impl serde_core::ser::Serialize for wxsl_frame::pass::Extent
+pub fn wxsl_frame::pass::Extent::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Extent
+impl core::marker::Send for wxsl_frame::pass::Extent
+impl core::marker::Sync for wxsl_frame::pass::Extent
+impl core::marker::Unpin for wxsl_frame::pass::Extent
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Extent
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Extent
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Extent
+pub enum wxsl_frame::pass::LayerFilter
+pub wxsl_frame::pass::LayerFilter::All
+pub wxsl_frame::pass::LayerFilter::Peeled
+pub wxsl_frame::pass::LayerFilter::Peeled::layer: u32
+pub wxsl_frame::pass::LayerFilter::Sorted
+impl wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::admits(self, i32) -> bool
+pub fn wxsl_frame::pass::LayerFilter::name(self) -> &'static str
+pub fn wxsl_frame::pass::LayerFilter::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::LayerFilter
+impl core::cmp::PartialEq for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::LayerFilter
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::LayerFilter
+impl serde_core::ser::Serialize for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pass::LayerFilter
+pub fn wxsl_frame::pass::LayerFilter::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::pass::LayerFilter
+impl core::marker::Send for wxsl_frame::pass::LayerFilter
+impl core::marker::Sync for wxsl_frame::pass::LayerFilter
+impl core::marker::Unpin for wxsl_frame::pass::LayerFilter
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::LayerFilter
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::LayerFilter
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::LayerFilter
+pub enum wxsl_frame::pass::Load
+pub wxsl_frame::pass::Load::Clear(wxsl_frame::types::Color)
+pub wxsl_frame::pass::Load::Load
+impl core::clone::Clone for wxsl_frame::pass::Load
+pub fn wxsl_frame::pass::Load::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::Load
+pub fn wxsl_frame::pass::Load::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::Load
+pub fn wxsl_frame::pass::Load::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::Load
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Load
+impl serde_core::ser::Serialize for wxsl_frame::pass::Load
+pub fn wxsl_frame::pass::Load::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Load
+impl core::marker::Send for wxsl_frame::pass::Load
+impl core::marker::Sync for wxsl_frame::pass::Load
+impl core::marker::Unpin for wxsl_frame::pass::Load
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Load
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Load
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Load
+pub enum wxsl_frame::pass::PassKind
+pub wxsl_frame::pass::PassKind::Compute
+pub wxsl_frame::pass::PassKind::Compute::effect: alloc::string::String
+pub wxsl_frame::pass::PassKind::Geometry
+pub wxsl_frame::pass::PassKind::Geometry::source: wxsl_frame::pass::DrawSource
+pub wxsl_frame::pass::PassKind::Geometry::stage: wxsl_core::abi::MaterialStage
+pub wxsl_frame::pass::PassKind::Screen
+pub wxsl_frame::pass::PassKind::Screen::effect: alloc::string::String
+impl core::clone::Clone for wxsl_frame::pass::PassKind
+pub fn wxsl_frame::pass::PassKind::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::pass::PassKind
+pub fn wxsl_frame::pass::PassKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::pass::PassKind
+pub fn wxsl_frame::pass::PassKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::PassKind
+impl core::marker::Send for wxsl_frame::pass::PassKind
+impl core::marker::Sync for wxsl_frame::pass::PassKind
+impl core::marker::Unpin for wxsl_frame::pass::PassKind
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::PassKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::PassKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassKind
+pub enum wxsl_frame::pass::PassView
+pub wxsl_frame::pass::PassView::Camera
+pub wxsl_frame::pass::PassView::Shadow
+pub wxsl_frame::pass::PassView::Shadow::tile: u32
+impl wxsl_frame::pass::PassView
+pub const wxsl_frame::pass::PassView::COUNT: usize
+pub fn wxsl_frame::pass::PassView::slot(self) -> usize
+impl core::clone::Clone for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::PassView
+impl core::cmp::PartialEq for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::PassView
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::PassView
+impl serde_core::ser::Serialize for wxsl_frame::pass::PassView
+pub fn wxsl_frame::pass::PassView::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::PassView
+impl core::marker::Send for wxsl_frame::pass::PassView
+impl core::marker::Sync for wxsl_frame::pass::PassView
+impl core::marker::Unpin for wxsl_frame::pass::PassView
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::PassView
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::PassView
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassView
+pub enum wxsl_frame::pass::Persistence
+pub wxsl_frame::pass::Persistence::Persistent
+pub wxsl_frame::pass::Persistence::Persistent::history: u32
+pub wxsl_frame::pass::Persistence::Transient
+impl wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::ring_length(self) -> usize
+impl core::clone::Clone for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::Persistence
+impl core::cmp::PartialEq for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::Persistence
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Persistence
+impl serde_core::ser::Serialize for wxsl_frame::pass::Persistence
+pub fn wxsl_frame::pass::Persistence::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Persistence
+impl core::marker::Send for wxsl_frame::pass::Persistence
+impl core::marker::Sync for wxsl_frame::pass::Persistence
+impl core::marker::Unpin for wxsl_frame::pass::Persistence
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Persistence
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Persistence
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Persistence
+pub enum wxsl_frame::pass::Policy
+pub wxsl_frame::pass::Policy::OnDemand
+pub wxsl_frame::pass::Policy::OnResize
+pub wxsl_frame::pass::Policy::Once
+pub wxsl_frame::pass::Policy::PerFrame
+impl wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::due(self, bool, bool, bool) -> bool
+pub fn wxsl_frame::pass::Policy::name(self) -> &'static str
+pub fn wxsl_frame::pass::Policy::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::Policy
+impl core::cmp::PartialEq for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::Policy
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Policy
+impl serde_core::ser::Serialize for wxsl_frame::pass::Policy
+pub fn wxsl_frame::pass::Policy::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Policy
+impl core::marker::Send for wxsl_frame::pass::Policy
+impl core::marker::Sync for wxsl_frame::pass::Policy
+impl core::marker::Unpin for wxsl_frame::pass::Policy
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Policy
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Policy
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Policy
+pub enum wxsl_frame::pass::ResourceShape
+pub wxsl_frame::pass::ResourceShape::Buffer
+pub wxsl_frame::pass::ResourceShape::Buffer::size: u64
+pub wxsl_frame::pass::ResourceShape::Buffer::usage: wxsl_frame::types::BufferUsages
+pub wxsl_frame::pass::ResourceShape::Texture
+pub wxsl_frame::pass::ResourceShape::Texture::dimension: wxsl_frame::pass::Dimension
+pub wxsl_frame::pass::ResourceShape::Texture::extent: wxsl_frame::pass::Extent
+pub wxsl_frame::pass::ResourceShape::Texture::format: wxsl_frame::types::TextureFormat
+pub wxsl_frame::pass::ResourceShape::Texture::layers: u32
+pub wxsl_frame::pass::ResourceShape::Texture::mip_levels: u32
+pub wxsl_frame::pass::ResourceShape::Texture::usage: wxsl_frame::types::TextureUsages
+impl core::clone::Clone for wxsl_frame::pass::ResourceShape
+pub fn wxsl_frame::pass::ResourceShape::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::ResourceShape
+pub fn wxsl_frame::pass::ResourceShape::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::ResourceShape
+pub fn wxsl_frame::pass::ResourceShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::ResourceShape
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::ResourceShape
+impl serde_core::ser::Serialize for wxsl_frame::pass::ResourceShape
+pub fn wxsl_frame::pass::ResourceShape::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::ResourceShape
+impl core::marker::Send for wxsl_frame::pass::ResourceShape
+impl core::marker::Sync for wxsl_frame::pass::ResourceShape
+impl core::marker::Unpin for wxsl_frame::pass::ResourceShape
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::ResourceShape
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::ResourceShape
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::ResourceShape
+pub enum wxsl_frame::pass::SortOrder
+pub wxsl_frame::pass::SortOrder::BackToFront
+pub wxsl_frame::pass::SortOrder::FrontToBack
+pub wxsl_frame::pass::SortOrder::None
+impl wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::name(self) -> &'static str
+pub fn wxsl_frame::pass::SortOrder::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::SortOrder
+impl core::cmp::PartialEq for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::SortOrder
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::SortOrder
+impl serde_core::ser::Serialize for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pass::SortOrder
+pub fn wxsl_frame::pass::SortOrder::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::pass::SortOrder
+impl core::marker::Send for wxsl_frame::pass::SortOrder
+impl core::marker::Sync for wxsl_frame::pass::SortOrder
+impl core::marker::Unpin for wxsl_frame::pass::SortOrder
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::SortOrder
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::SortOrder
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::SortOrder
+pub struct wxsl_frame::pass::Attachment
+pub wxsl_frame::pass::Attachment::blend: core::option::Option<wxsl_frame::types::BlendState>
+pub wxsl_frame::pass::Attachment::layer: u32
+pub wxsl_frame::pass::Attachment::load: wxsl_frame::pass::Load
+pub wxsl_frame::pass::Attachment::mip: u32
+pub wxsl_frame::pass::Attachment::resource: wxsl_frame::pass::ResourceId
+pub wxsl_frame::pass::Attachment::store: bool
+impl wxsl_frame::pass::Attachment
+pub fn wxsl_frame::pass::Attachment::clear(wxsl_frame::pass::ResourceId, wxsl_frame::types::Color) -> Self
+pub fn wxsl_frame::pass::Attachment::load(wxsl_frame::pass::ResourceId) -> Self
+pub fn wxsl_frame::pass::Attachment::with_blend(self, wxsl_frame::types::BlendState) -> Self
+pub fn wxsl_frame::pass::Attachment::with_layer(self, u32) -> Self
+pub fn wxsl_frame::pass::Attachment::with_mip(self, u32) -> Self
+impl core::clone::Clone for wxsl_frame::pass::Attachment
+pub fn wxsl_frame::pass::Attachment::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::Attachment
+pub fn wxsl_frame::pass::Attachment::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::Attachment
+pub fn wxsl_frame::pass::Attachment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::Attachment
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Attachment
+impl serde_core::ser::Serialize for wxsl_frame::pass::Attachment
+pub fn wxsl_frame::pass::Attachment::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Attachment
+impl core::marker::Send for wxsl_frame::pass::Attachment
+impl core::marker::Sync for wxsl_frame::pass::Attachment
+impl core::marker::Unpin for wxsl_frame::pass::Attachment
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Attachment
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Attachment
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Attachment
+pub struct wxsl_frame::pass::DepthAttachment
+pub wxsl_frame::pass::DepthAttachment::clear: core::option::Option<f32>
+pub wxsl_frame::pass::DepthAttachment::layer: u32
+pub wxsl_frame::pass::DepthAttachment::mip: u32
+pub wxsl_frame::pass::DepthAttachment::resource: wxsl_frame::pass::ResourceId
+pub wxsl_frame::pass::DepthAttachment::store: bool
+impl wxsl_frame::pass::DepthAttachment
+pub fn wxsl_frame::pass::DepthAttachment::clear(wxsl_frame::pass::ResourceId, f32) -> Self
+pub fn wxsl_frame::pass::DepthAttachment::load(wxsl_frame::pass::ResourceId) -> Self
+pub fn wxsl_frame::pass::DepthAttachment::with_layer(self, u32) -> Self
+pub fn wxsl_frame::pass::DepthAttachment::with_mip(self, u32) -> Self
+impl core::clone::Clone for wxsl_frame::pass::DepthAttachment
+pub fn wxsl_frame::pass::DepthAttachment::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::DepthAttachment
+pub fn wxsl_frame::pass::DepthAttachment::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::DepthAttachment
+pub fn wxsl_frame::pass::DepthAttachment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pass::DepthAttachment
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::DepthAttachment
+impl serde_core::ser::Serialize for wxsl_frame::pass::DepthAttachment
+pub fn wxsl_frame::pass::DepthAttachment::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::DepthAttachment
+impl core::marker::Send for wxsl_frame::pass::DepthAttachment
+impl core::marker::Sync for wxsl_frame::pass::DepthAttachment
+impl core::marker::Unpin for wxsl_frame::pass::DepthAttachment
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::DepthAttachment
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::DepthAttachment
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::DepthAttachment
+pub struct wxsl_frame::pass::PassDesc
+pub wxsl_frame::pass::PassDesc::color: alloc::vec::Vec<wxsl_frame::pass::Attachment>
+pub wxsl_frame::pass::PassDesc::depth: core::option::Option<wxsl_frame::pass::DepthAttachment>
+pub wxsl_frame::pass::PassDesc::kind: wxsl_frame::pass::PassKind
+pub wxsl_frame::pass::PassDesc::label: alloc::string::String
+pub wxsl_frame::pass::PassDesc::layers: wxsl_frame::pass::LayerFilter
+pub wxsl_frame::pass::PassDesc::parameters: alloc::collections::btree::map::BTreeMap<alloc::string::String, wxsl_core::node::Value>
+pub wxsl_frame::pass::PassDesc::policy: wxsl_frame::pass::Policy
+pub wxsl_frame::pass::PassDesc::reads: alloc::vec::Vec<wxsl_frame::pass::Read>
+pub wxsl_frame::pass::PassDesc::sort: wxsl_frame::pass::SortOrder
+pub wxsl_frame::pass::PassDesc::state: wxsl_frame::pass::PassState
+pub wxsl_frame::pass::PassDesc::view: wxsl_frame::pass::PassView
+pub wxsl_frame::pass::PassDesc::viewport: core::option::Option<wxsl_frame::pass::ViewportRect>
+pub wxsl_frame::pass::PassDesc::writes: alloc::vec::Vec<wxsl_frame::pass::ResourceId>
+impl wxsl_frame::pass::PassDesc
+pub fn wxsl_frame::pass::PassDesc::compute(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_frame::pass::PassDesc::geometry(impl core::convert::Into<alloc::string::String>, wxsl_frame::pass::DrawSource, wxsl_core::abi::MaterialStage) -> Self
+pub fn wxsl_frame::pass::PassDesc::indirect_buffer(&self) -> core::option::Option<wxsl_frame::pass::ResourceId>
+pub fn wxsl_frame::pass::PassDesc::read_this_frame(&self) -> impl core::iter::traits::iterator::Iterator<Item = wxsl_frame::pass::ResourceId> + '_
+pub fn wxsl_frame::pass::PassDesc::screen(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_color(self, wxsl_frame::pass::Attachment) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_colors(self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_frame::pass::Attachment>) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_depth(self, wxsl_frame::pass::DepthAttachment) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_layers(self, wxsl_frame::pass::LayerFilter) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_parameter(self, impl core::convert::Into<alloc::string::String>, wxsl_core::node::Value) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_policy(self, wxsl_frame::pass::Policy) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_reads(self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_frame::pass::Read>) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_sort(self, wxsl_frame::pass::SortOrder) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_state(self, wxsl_frame::pass::PassState) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_view(self, wxsl_frame::pass::PassView) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_viewport(self, wxsl_frame::pass::ViewportRect) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_write(self, wxsl_frame::pass::ResourceId) -> Self
+pub fn wxsl_frame::pass::PassDesc::written(&self) -> impl core::iter::traits::iterator::Iterator<Item = wxsl_frame::pass::ResourceId> + '_
+impl core::clone::Clone for wxsl_frame::pass::PassDesc
+pub fn wxsl_frame::pass::PassDesc::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::pass::PassDesc
+pub fn wxsl_frame::pass::PassDesc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::pass::PassDesc
+pub fn wxsl_frame::pass::PassDesc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::PassDesc
+impl core::marker::Send for wxsl_frame::pass::PassDesc
+impl core::marker::Sync for wxsl_frame::pass::PassDesc
+impl core::marker::Unpin for wxsl_frame::pass::PassDesc
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::PassDesc
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::PassDesc
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassDesc
+pub struct wxsl_frame::pass::PassState
+pub wxsl_frame::pass::PassState::blend: core::option::Option<wxsl_frame::types::BlendState>
+pub wxsl_frame::pass::PassState::cull_mode: core::option::Option<wxsl_frame::types::Face>
+pub wxsl_frame::pass::PassState::depth_compare: wxsl_frame::types::CompareFunction
+pub wxsl_frame::pass::PassState::depth_format: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_frame::pass::PassState::depth_write: bool
+impl wxsl_frame::pass::PassState
+pub const wxsl_frame::pass::PassState::FULLSCREEN: wxsl_frame::pass::PassState
+pub const wxsl_frame::pass::PassState::OPAQUE: wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::with_blend(self, wxsl_frame::types::BlendState) -> Self
+pub fn wxsl_frame::pass::PassState::with_cull_mode(self, core::option::Option<wxsl_frame::types::Face>) -> Self
+pub fn wxsl_frame::pass::PassState::with_depth_format(self, core::option::Option<wxsl_frame::types::TextureFormat>) -> Self
+pub fn wxsl_frame::pass::PassState::with_depth_test(self, wxsl_frame::types::CompareFunction, bool) -> Self
+impl core::clone::Clone for wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::PassState
+impl core::cmp::PartialEq for wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::PassState
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::PassState
+impl serde_core::ser::Serialize for wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::PassState
+impl core::marker::Send for wxsl_frame::pass::PassState
+impl core::marker::Sync for wxsl_frame::pass::PassState
+impl core::marker::Unpin for wxsl_frame::pass::PassState
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::PassState
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::PassState
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassState
+pub struct wxsl_frame::pass::Read
+pub wxsl_frame::pass::Read::history: u32
+pub wxsl_frame::pass::Read::resource: wxsl_frame::pass::ResourceId
+impl wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::current(wxsl_frame::pass::ResourceId) -> Self
+pub fn wxsl_frame::pass::Read::previous(wxsl_frame::pass::ResourceId, u32) -> Self
+impl core::clone::Clone for wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::Read
+impl core::cmp::PartialEq for wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::Read
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::Read
+impl serde_core::ser::Serialize for wxsl_frame::pass::Read
+pub fn wxsl_frame::pass::Read::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::Read
+impl core::marker::Send for wxsl_frame::pass::Read
+impl core::marker::Sync for wxsl_frame::pass::Read
+impl core::marker::Unpin for wxsl_frame::pass::Read
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::Read
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::Read
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::Read
+pub struct wxsl_frame::pass::ResourceDesc
+pub wxsl_frame::pass::ResourceDesc::imported: bool
+pub wxsl_frame::pass::ResourceDesc::label: alloc::string::String
+pub wxsl_frame::pass::ResourceDesc::persistence: wxsl_frame::pass::Persistence
+pub wxsl_frame::pass::ResourceDesc::shape: wxsl_frame::pass::ResourceShape
+impl wxsl_frame::pass::ResourceDesc
+pub fn wxsl_frame::pass::ResourceDesc::aliasable_with(&self, &wxsl_frame::pass::ResourceDesc) -> bool
+pub fn wxsl_frame::pass::ResourceDesc::buffer(impl core::convert::Into<alloc::string::String>, u64) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::color(impl core::convert::Into<alloc::string::String>, wxsl_frame::types::TextureFormat) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::imported(impl core::convert::Into<alloc::string::String>, wxsl_frame::types::TextureFormat) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::persistent(self, u32) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::texture(&self) -> core::option::Option<&wxsl_frame::pass::ResourceShape>
+pub fn wxsl_frame::pass::ResourceDesc::with_buffer_usage(self, wxsl_frame::types::BufferUsages) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::with_dimension(self, wxsl_frame::pass::Dimension, u32) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::with_extent(self, wxsl_frame::pass::Extent) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::with_mip_levels(self, u32) -> Self
+pub fn wxsl_frame::pass::ResourceDesc::with_usage(self, wxsl_frame::types::TextureUsages) -> Self
+impl core::clone::Clone for wxsl_frame::pass::ResourceDesc
+pub fn wxsl_frame::pass::ResourceDesc::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pass::ResourceDesc
+pub fn wxsl_frame::pass::ResourceDesc::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::ResourceDesc
+pub fn wxsl_frame::pass::ResourceDesc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::ResourceDesc
+impl serde_core::ser::Serialize for wxsl_frame::pass::ResourceDesc
+pub fn wxsl_frame::pass::ResourceDesc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::ResourceDesc
+impl core::marker::Send for wxsl_frame::pass::ResourceDesc
+impl core::marker::Sync for wxsl_frame::pass::ResourceDesc
+impl core::marker::Unpin for wxsl_frame::pass::ResourceDesc
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::ResourceDesc
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::ResourceDesc
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::ResourceDesc
+pub struct wxsl_frame::pass::ResourceId(_)
+impl wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::index(self) -> usize
+impl core::clone::Clone for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::ResourceId
+impl core::cmp::Ord for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::ResourceId
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::ResourceId
+impl serde_core::ser::Serialize for wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::pass::ResourceId::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::ResourceId
+impl core::marker::Send for wxsl_frame::pass::ResourceId
+impl core::marker::Sync for wxsl_frame::pass::ResourceId
+impl core::marker::Unpin for wxsl_frame::pass::ResourceId
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::ResourceId
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::ResourceId
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::ResourceId
+pub struct wxsl_frame::pass::ViewportRect
+pub wxsl_frame::pass::ViewportRect::height: u32
+pub wxsl_frame::pass::ViewportRect::width: u32
+pub wxsl_frame::pass::ViewportRect::x: u32
+pub wxsl_frame::pass::ViewportRect::y: u32
+impl wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::square(u32, u32, u32) -> Self
+impl core::clone::Clone for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::ViewportRect
+impl core::cmp::PartialEq for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pass::ViewportRect
+impl core::marker::StructuralPartialEq for wxsl_frame::pass::ViewportRect
+impl serde_core::ser::Serialize for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pass::ViewportRect
+pub fn wxsl_frame::pass::ViewportRect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::pass::ViewportRect
+impl core::marker::Send for wxsl_frame::pass::ViewportRect
+impl core::marker::Sync for wxsl_frame::pass::ViewportRect
+impl core::marker::Unpin for wxsl_frame::pass::ViewportRect
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::ViewportRect
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::ViewportRect
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::ViewportRect
+pub const wxsl_frame::pass::ALPHA_OVER: wxsl_frame::types::BlendState
+pub const wxsl_frame::pass::DEPTH_FORMAT: wxsl_frame::types::TextureFormat
+pub const wxsl_frame::pass::MAX_BLEND: wxsl_frame::types::BlendState
+pub const wxsl_frame::pass::PREMULTIPLIED_OVER: wxsl_frame::types::BlendState
+pub const wxsl_frame::pass::PREMULTIPLIED_UNDER: wxsl_frame::types::BlendState
+pub mod wxsl_frame::pipeline
+pub enum wxsl_frame::pipeline::StockPipeline
+pub wxsl_frame::pipeline::StockPipeline::Deferred
+pub wxsl_frame::pipeline::StockPipeline::Forward
+impl wxsl_frame::pipeline::StockPipeline
+pub const wxsl_frame::pipeline::StockPipeline::ALL: &'static [wxsl_frame::pipeline::StockPipeline]
+pub fn wxsl_frame::pipeline::StockPipeline::document(&self) -> wxsl_core::graph::Graph
+pub fn wxsl_frame::pipeline::StockPipeline::graph(&self, &wxsl_frame::pipeline::PipelineConfig) -> wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::pipeline::StockPipeline::is_deferred(&self) -> bool
+pub fn wxsl_frame::pipeline::StockPipeline::name(&self) -> &'static str
+pub fn wxsl_frame::pipeline::StockPipeline::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pipeline::StockPipeline
+impl core::cmp::Ord for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_frame::pipeline::StockPipeline::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::pipeline::StockPipeline
+impl core::marker::StructuralPartialEq for wxsl_frame::pipeline::StockPipeline
+impl core::marker::Freeze for wxsl_frame::pipeline::StockPipeline
+impl core::marker::Send for wxsl_frame::pipeline::StockPipeline
+impl core::marker::Sync for wxsl_frame::pipeline::StockPipeline
+impl core::marker::Unpin for wxsl_frame::pipeline::StockPipeline
+impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::StockPipeline
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::StockPipeline
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::StockPipeline
+pub struct wxsl_frame::pipeline::PipelineConfig
+pub wxsl_frame::pipeline::PipelineConfig::features: alloc::vec::Vec<wxsl_core::lighting::ChannelRequest>
+pub wxsl_frame::pipeline::PipelineConfig::lighting: wxsl_core::lighting::LightingSet
+pub wxsl_frame::pipeline::PipelineConfig::macros: wxsl_core::macros::MacroSet
+pub wxsl_frame::pipeline::PipelineConfig::profile: wxsl_frame::profile::Profile
+pub wxsl_frame::pipeline::PipelineConfig::target: wxsl_frame::pipeline::TargetConfig
+impl wxsl_frame::pipeline::PipelineConfig
+pub fn wxsl_frame::pipeline::PipelineConfig::gbuffer_layout(&self) -> alloc::vec::Vec<wxsl_core::abi::GBufferTarget>
+pub fn wxsl_frame::pipeline::PipelineConfig::new(impl core::convert::Into<wxsl_frame::pipeline::TargetConfig>) -> Self
+pub fn wxsl_frame::pipeline::PipelineConfig::plan(&self) -> core::result::Result<wxsl_core::lighting::GBufferPlan, wxsl_core::lighting::LightingError>
+impl core::clone::Clone for wxsl_frame::pipeline::PipelineConfig
+pub fn wxsl_frame::pipeline::PipelineConfig::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::pipeline::PipelineConfig
+pub fn wxsl_frame::pipeline::PipelineConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::pipeline::PipelineConfig
+impl core::marker::Send for wxsl_frame::pipeline::PipelineConfig
+impl core::marker::Sync for wxsl_frame::pipeline::PipelineConfig
+impl core::marker::Unpin for wxsl_frame::pipeline::PipelineConfig
+impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::PipelineConfig
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::PipelineConfig
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::PipelineConfig
+pub struct wxsl_frame::pipeline::TargetConfig
+pub wxsl_frame::pipeline::TargetConfig::clear_color: wxsl_frame::types::Color
+pub wxsl_frame::pipeline::TargetConfig::format: wxsl_frame::types::TextureFormat
+pub wxsl_frame::pipeline::TargetConfig::height: u32
+pub wxsl_frame::pipeline::TargetConfig::width: u32
+impl wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::new(u32, u32, wxsl_frame::types::TextureFormat) -> Self
+impl core::clone::Clone for wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pipeline::TargetConfig
+impl core::marker::StructuralPartialEq for wxsl_frame::pipeline::TargetConfig
+impl serde_core::ser::Serialize for wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pipeline::TargetConfig
+pub fn wxsl_frame::pipeline::TargetConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::pipeline::TargetConfig
+impl core::marker::Send for wxsl_frame::pipeline::TargetConfig
+impl core::marker::Sync for wxsl_frame::pipeline::TargetConfig
+impl core::marker::Unpin for wxsl_frame::pipeline::TargetConfig
+impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::TargetConfig
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::TargetConfig
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::TargetConfig
+pub const wxsl_frame::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE: u32
+pub fn wxsl_frame::pipeline::deferred_graph(wxsl_frame::pipeline::TargetConfig, &wxsl_core::lighting::LightingSet) -> wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::pipeline::forward_graph(wxsl_frame::pipeline::TargetConfig) -> wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::pipeline::gbuffer_bytes_per_sample(&wxsl_core::lighting::LightingSet) -> u32
+pub fn wxsl_frame::pipeline::gbuffer_format(wxsl_core::abi::GBufferPrecision) -> wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::pipeline::gbuffer_formats(&wxsl_core::lighting::LightingSet) -> alloc::vec::Vec<wxsl_frame::types::TextureFormat>
+pub fn wxsl_frame::pipeline::gbuffer_layout_bytes_per_sample(&[wxsl_core::abi::GBufferTarget]) -> u32
+pub mod wxsl_frame::pipeline_doc
+pub enum wxsl_frame::pipeline_doc::PipelineError
+pub wxsl_frame::pipeline_doc::PipelineError::BadBufferSize
+pub wxsl_frame::pipeline_doc::PipelineError::BadBufferSize::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadBufferSize::value: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadNumber
+pub wxsl_frame::pipeline_doc::PipelineError::BadNumber::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadNumber::setting: &'static str
+pub wxsl_frame::pipeline_doc::PipelineError::BadNumber::value: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadTags
+pub wxsl_frame::pipeline_doc::PipelineError::BadTags::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadTags::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BadTags::value: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BloomPyramid
+pub wxsl_frame::pipeline_doc::PipelineError::BloomPyramid::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::BloomPyramid::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ChannelCollision
+pub wxsl_frame::pipeline_doc::PipelineError::ChannelCollision::error: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ChannelCollision::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ColorFromColorlessStage
+pub wxsl_frame::pipeline_doc::PipelineError::ColorFromColorlessStage::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ColorFromColorlessStage::stage: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ColorWithoutConsumer
+pub wxsl_frame::pipeline_doc::PipelineError::ColorWithoutConsumer::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::DepthConflict
+pub wxsl_frame::pipeline_doc::PipelineError::DepthConflict::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::DepthOutputWithoutDepth
+pub wxsl_frame::pipeline_doc::PipelineError::DepthOutputWithoutDepth::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Dof
+pub wxsl_frame::pipeline_doc::PipelineError::Dof::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Dof::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::EffectInputMismatch
+pub wxsl_frame::pipeline_doc::PipelineError::EffectInputMismatch::effect: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::EffectInputMismatch::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::EffectInputMismatch::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Environment
+pub wxsl_frame::pipeline_doc::PipelineError::Environment::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Environment::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::GbufferWithoutGbuffer
+pub wxsl_frame::pipeline_doc::PipelineError::GbufferWithoutGbuffer::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ImageFromPass
+pub wxsl_frame::pipeline_doc::PipelineError::ImageFromPass::fed_by: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ImageFromPass::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ImportedTargetSized
+pub wxsl_frame::pipeline_doc::PipelineError::ImportedTargetSized::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ImportedTargetSized::setting: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ImportedTargetSized::value: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::IntoFromPass
+pub wxsl_frame::pipeline_doc::PipelineError::IntoFromPass::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::InvalidDocument(wxsl_core::error::GraphErrors)
+pub wxsl_frame::pipeline_doc::PipelineError::NativeOnly
+pub wxsl_frame::pipeline_doc::PipelineError::NativeOnly::effect: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::NativeOnly::pass: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::NativeOnly::profile: wxsl_frame::profile::Profile
+pub wxsl_frame::pipeline_doc::PipelineError::NoPresent
+pub wxsl_frame::pipeline_doc::PipelineError::NotPresentable
+pub wxsl_frame::pipeline_doc::PipelineError::NotPresentable::fed_by: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::NotPresentable::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::NotPresentable::wrote: core::option::Option<alloc::string::String>
+pub wxsl_frame::pipeline_doc::PipelineError::PassWithoutDepth
+pub wxsl_frame::pipeline_doc::PipelineError::PassWithoutDepth::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Peel
+pub wxsl_frame::pipeline_doc::PipelineError::Peel::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::Peel::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::TwoPresents
+pub wxsl_frame::pipeline_doc::PipelineError::TwoPresents::nodes: alloc::vec::Vec<alloc::string::String>
+pub wxsl_frame::pipeline_doc::PipelineError::TwoShadowSources
+pub wxsl_frame::pipeline_doc::PipelineError::TwoShadowSources::nodes: alloc::vec::Vec<alloc::string::String>
+pub wxsl_frame::pipeline_doc::PipelineError::TwoTargetWriters
+pub wxsl_frame::pipeline_doc::PipelineError::TwoTargetWriters::first: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::TwoTargetWriters::second: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownBlend
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownBlend::blend: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownBlend::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownEffect
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownEffect::effect: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownEffect::known: alloc::vec::Vec<alloc::string::String>
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownEffect::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownLayers
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownLayers::layers: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownLayers::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPolicy
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPolicy::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPolicy::policy: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPrecision
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPrecision::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownPrecision::precision: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSize
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSize::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSize::size: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSort
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSort::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownSort::sort: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownStage
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownStage::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::UnknownStage::stage: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::VelocityTargetFormat
+pub wxsl_frame::pipeline_doc::PipelineError::VelocityTargetFormat::format: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::VelocityTargetFormat::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::WriteIntoPassOutput
+pub wxsl_frame::pipeline_doc::PipelineError::WriteIntoPassOutput::node: alloc::string::String
+impl core::clone::Clone for wxsl_frame::pipeline_doc::PipelineError
+pub fn wxsl_frame::pipeline_doc::PipelineError::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pipeline_doc::PipelineError
+pub fn wxsl_frame::pipeline_doc::PipelineError::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_frame::pipeline_doc::PipelineError
+impl core::fmt::Debug for wxsl_frame::pipeline_doc::PipelineError
+pub fn wxsl_frame::pipeline_doc::PipelineError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::pipeline_doc::PipelineError
+pub fn wxsl_frame::pipeline_doc::PipelineError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::pipeline_doc::PipelineError
+impl core::marker::Freeze for wxsl_frame::pipeline_doc::PipelineError
+impl core::marker::Send for wxsl_frame::pipeline_doc::PipelineError
+impl core::marker::Sync for wxsl_frame::pipeline_doc::PipelineError
+impl core::marker::Unpin for wxsl_frame::pipeline_doc::PipelineError
+impl core::marker::UnsafeUnpin for wxsl_frame::pipeline_doc::PipelineError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline_doc::PipelineError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline_doc::PipelineError
+pub fn wxsl_frame::pipeline_doc::compile(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> core::result::Result<wxsl_frame::graph::RenderGraph, wxsl_frame::pipeline_doc::PipelineError>
+pub fn wxsl_frame::pipeline_doc::document_registry(&wxsl_frame::effect::EffectRegistry) -> wxsl_core::node::NodeRegistry
+pub mod wxsl_frame::profile
+pub struct wxsl_frame::profile::Profile
+pub wxsl_frame::profile::Profile::compute: bool
+pub wxsl_frame::profile::Profile::storage_buffers: bool
+impl wxsl_frame::profile::Profile
+pub const wxsl_frame::profile::Profile::FULL: wxsl_frame::profile::Profile
+pub const wxsl_frame::profile::Profile::WEBGL2: wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::is_full(&self) -> bool
+pub fn wxsl_frame::profile::Profile::macros(&self) -> wxsl_core::macros::MacroSet
+pub fn wxsl_frame::profile::Profile::name(&self) -> alloc::string::String
+impl core::clone::Clone for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::profile::Profile
+impl core::cmp::PartialEq for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::default() -> Self
+impl core::fmt::Debug for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::profile::Profile
+impl core::marker::StructuralPartialEq for wxsl_frame::profile::Profile
+impl serde_core::ser::Serialize for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::profile::Profile
+pub fn wxsl_frame::profile::Profile::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::profile::Profile
+impl core::marker::Send for wxsl_frame::profile::Profile
+impl core::marker::Sync for wxsl_frame::profile::Profile
+impl core::marker::Unpin for wxsl_frame::profile::Profile
+impl core::marker::UnsafeUnpin for wxsl_frame::profile::Profile
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::profile::Profile
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::profile::Profile
+pub mod wxsl_frame::setup
+pub enum wxsl_frame::setup::Incompatibility
+pub wxsl_frame::setup::Incompatibility::Effect
+pub wxsl_frame::setup::Incompatibility::Effect::effect: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Effect::pass: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Feature
+pub wxsl_frame::setup::Incompatibility::Feature::feature: &'static str
+pub wxsl_frame::setup::Incompatibility::Feature::macro_name: &'static str
+pub wxsl_frame::setup::Incompatibility::Feature::material: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Material
+pub wxsl_frame::setup::Incompatibility::Material::material: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Material::reason: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Model
+pub wxsl_frame::setup::Incompatibility::Model::material: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Model::model: alloc::string::String
+pub wxsl_frame::setup::Incompatibility::Plan
+pub wxsl_frame::setup::Incompatibility::Plan::reason: alloc::string::String
+impl core::clone::Clone for wxsl_frame::setup::Incompatibility
+pub fn wxsl_frame::setup::Incompatibility::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::setup::Incompatibility
+impl core::cmp::PartialEq for wxsl_frame::setup::Incompatibility
+pub fn wxsl_frame::setup::Incompatibility::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_frame::setup::Incompatibility
+impl core::fmt::Debug for wxsl_frame::setup::Incompatibility
+pub fn wxsl_frame::setup::Incompatibility::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::setup::Incompatibility
+pub fn wxsl_frame::setup::Incompatibility::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::setup::Incompatibility
+impl core::marker::Freeze for wxsl_frame::setup::Incompatibility
+impl core::marker::Send for wxsl_frame::setup::Incompatibility
+impl core::marker::Sync for wxsl_frame::setup::Incompatibility
+impl core::marker::Unpin for wxsl_frame::setup::Incompatibility
+impl core::marker::UnsafeUnpin for wxsl_frame::setup::Incompatibility
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::setup::Incompatibility
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::setup::Incompatibility
+pub struct wxsl_frame::setup::Capabilities
+pub wxsl_frame::setup::Capabilities::effects: alloc::vec::Vec<alloc::string::String>
+pub wxsl_frame::setup::Capabilities::lighting: wxsl_core::lighting::LightingSet
+pub wxsl_frame::setup::Capabilities::plan: wxsl_core::lighting::GBufferPlan
+pub wxsl_frame::setup::Capabilities::stages: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for wxsl_frame::setup::Capabilities
+pub fn wxsl_frame::setup::Capabilities::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::setup::Capabilities
+pub fn wxsl_frame::setup::Capabilities::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::setup::Capabilities
+impl core::marker::Send for wxsl_frame::setup::Capabilities
+impl core::marker::Sync for wxsl_frame::setup::Capabilities
+impl core::marker::Unpin for wxsl_frame::setup::Capabilities
+impl core::marker::UnsafeUnpin for wxsl_frame::setup::Capabilities
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::setup::Capabilities
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::setup::Capabilities
+pub struct wxsl_frame::setup::RenderSetup
+impl wxsl_frame::setup::RenderSetup
+pub fn wxsl_frame::setup::RenderSetup::capabilities(&self) -> core::result::Result<wxsl_frame::setup::Capabilities, wxsl_core::lighting::LightingError>
+pub fn wxsl_frame::setup::RenderSetup::check(&self, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_frame::setup::Incompatibility>
+pub fn wxsl_frame::setup::RenderSetup::for_stock(wxsl_frame::pipeline::StockPipeline, wxsl_frame::effect::EffectRegistry, wxsl_frame::pipeline::PipelineConfig) -> Self
+pub fn wxsl_frame::setup::RenderSetup::new(wxsl_core::graph::Graph, wxsl_frame::effect::EffectRegistry, wxsl_frame::pipeline::PipelineConfig) -> Self
+impl core::clone::Clone for wxsl_frame::setup::RenderSetup
+pub fn wxsl_frame::setup::RenderSetup::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::setup::RenderSetup
+pub fn wxsl_frame::setup::RenderSetup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::setup::RenderSetup
+impl core::marker::Send for wxsl_frame::setup::RenderSetup
+impl core::marker::Sync for wxsl_frame::setup::RenderSetup
+impl core::marker::Unpin for wxsl_frame::setup::RenderSetup
+impl core::marker::UnsafeUnpin for wxsl_frame::setup::RenderSetup
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::setup::RenderSetup
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::setup::RenderSetup
+pub fn wxsl_frame::setup::check_scene(&wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> alloc::vec::Vec<wxsl_frame::setup::Incompatibility>
+pub mod wxsl_frame::types
+pub enum wxsl_frame::types::AstcBlock
+pub wxsl_frame::types::AstcBlock::B10x10
+pub wxsl_frame::types::AstcBlock::B10x5
+pub wxsl_frame::types::AstcBlock::B10x6
+pub wxsl_frame::types::AstcBlock::B10x8
+pub wxsl_frame::types::AstcBlock::B12x10
+pub wxsl_frame::types::AstcBlock::B12x12
+pub wxsl_frame::types::AstcBlock::B4x4
+pub wxsl_frame::types::AstcBlock::B5x4
+pub wxsl_frame::types::AstcBlock::B5x5
+pub wxsl_frame::types::AstcBlock::B6x5
+pub wxsl_frame::types::AstcBlock::B6x6
+pub wxsl_frame::types::AstcBlock::B8x5
+pub wxsl_frame::types::AstcBlock::B8x6
+pub wxsl_frame::types::AstcBlock::B8x8
+impl core::clone::Clone for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::AstcBlock
+impl core::cmp::PartialEq for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::AstcBlock
+impl core::marker::StructuralPartialEq for wxsl_frame::types::AstcBlock
+impl serde_core::ser::Serialize for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::AstcBlock
+pub fn wxsl_frame::types::AstcBlock::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::AstcBlock
+impl core::marker::Send for wxsl_frame::types::AstcBlock
+impl core::marker::Sync for wxsl_frame::types::AstcBlock
+impl core::marker::Unpin for wxsl_frame::types::AstcBlock
+impl core::marker::UnsafeUnpin for wxsl_frame::types::AstcBlock
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::AstcBlock
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::AstcBlock
+pub enum wxsl_frame::types::AstcChannel
+pub wxsl_frame::types::AstcChannel::Hdr
+pub wxsl_frame::types::AstcChannel::Unorm
+pub wxsl_frame::types::AstcChannel::UnormSrgb
+impl core::clone::Clone for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::AstcChannel
+impl core::cmp::PartialEq for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::AstcChannel
+impl core::marker::StructuralPartialEq for wxsl_frame::types::AstcChannel
+impl serde_core::ser::Serialize for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::AstcChannel
+pub fn wxsl_frame::types::AstcChannel::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::AstcChannel
+impl core::marker::Send for wxsl_frame::types::AstcChannel
+impl core::marker::Sync for wxsl_frame::types::AstcChannel
+impl core::marker::Unpin for wxsl_frame::types::AstcChannel
+impl core::marker::UnsafeUnpin for wxsl_frame::types::AstcChannel
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::AstcChannel
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::AstcChannel
+pub enum wxsl_frame::types::BlendFactor
+pub wxsl_frame::types::BlendFactor::Constant
+pub wxsl_frame::types::BlendFactor::Dst
+pub wxsl_frame::types::BlendFactor::DstAlpha
+pub wxsl_frame::types::BlendFactor::One
+pub wxsl_frame::types::BlendFactor::OneMinusConstant
+pub wxsl_frame::types::BlendFactor::OneMinusDst
+pub wxsl_frame::types::BlendFactor::OneMinusDstAlpha
+pub wxsl_frame::types::BlendFactor::OneMinusSrc
+pub wxsl_frame::types::BlendFactor::OneMinusSrc1
+pub wxsl_frame::types::BlendFactor::OneMinusSrc1Alpha
+pub wxsl_frame::types::BlendFactor::OneMinusSrcAlpha
+pub wxsl_frame::types::BlendFactor::Src
+pub wxsl_frame::types::BlendFactor::Src1
+pub wxsl_frame::types::BlendFactor::Src1Alpha
+pub wxsl_frame::types::BlendFactor::SrcAlpha
+pub wxsl_frame::types::BlendFactor::SrcAlphaSaturated
+pub wxsl_frame::types::BlendFactor::Zero
+impl core::clone::Clone for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::BlendFactor
+impl core::cmp::PartialEq for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::BlendFactor
+impl core::marker::StructuralPartialEq for wxsl_frame::types::BlendFactor
+impl serde_core::ser::Serialize for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::BlendFactor
+pub fn wxsl_frame::types::BlendFactor::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::BlendFactor
+impl core::marker::Send for wxsl_frame::types::BlendFactor
+impl core::marker::Sync for wxsl_frame::types::BlendFactor
+impl core::marker::Unpin for wxsl_frame::types::BlendFactor
+impl core::marker::UnsafeUnpin for wxsl_frame::types::BlendFactor
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::BlendFactor
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::BlendFactor
+pub enum wxsl_frame::types::BlendOperation
+pub wxsl_frame::types::BlendOperation::Add
+pub wxsl_frame::types::BlendOperation::Max
+pub wxsl_frame::types::BlendOperation::Min
+pub wxsl_frame::types::BlendOperation::ReverseSubtract
+pub wxsl_frame::types::BlendOperation::Subtract
+impl core::clone::Clone for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::BlendOperation
+impl core::cmp::PartialEq for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::BlendOperation
+impl core::marker::StructuralPartialEq for wxsl_frame::types::BlendOperation
+impl serde_core::ser::Serialize for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::BlendOperation
+pub fn wxsl_frame::types::BlendOperation::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::BlendOperation
+impl core::marker::Send for wxsl_frame::types::BlendOperation
+impl core::marker::Sync for wxsl_frame::types::BlendOperation
+impl core::marker::Unpin for wxsl_frame::types::BlendOperation
+impl core::marker::UnsafeUnpin for wxsl_frame::types::BlendOperation
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::BlendOperation
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::BlendOperation
+pub enum wxsl_frame::types::CompareFunction
+pub wxsl_frame::types::CompareFunction::Always
+pub wxsl_frame::types::CompareFunction::Equal
+pub wxsl_frame::types::CompareFunction::Greater
+pub wxsl_frame::types::CompareFunction::GreaterEqual
+pub wxsl_frame::types::CompareFunction::Less
+pub wxsl_frame::types::CompareFunction::LessEqual
+pub wxsl_frame::types::CompareFunction::Never
+pub wxsl_frame::types::CompareFunction::NotEqual
+impl core::clone::Clone for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::CompareFunction
+impl core::cmp::PartialEq for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::CompareFunction
+impl core::marker::StructuralPartialEq for wxsl_frame::types::CompareFunction
+impl serde_core::ser::Serialize for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::CompareFunction
+pub fn wxsl_frame::types::CompareFunction::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::CompareFunction
+impl core::marker::Send for wxsl_frame::types::CompareFunction
+impl core::marker::Sync for wxsl_frame::types::CompareFunction
+impl core::marker::Unpin for wxsl_frame::types::CompareFunction
+impl core::marker::UnsafeUnpin for wxsl_frame::types::CompareFunction
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::CompareFunction
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::CompareFunction
+pub enum wxsl_frame::types::Face
+pub wxsl_frame::types::Face::Back
+pub wxsl_frame::types::Face::Front
+impl core::clone::Clone for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::Face
+impl core::cmp::PartialEq for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::Face
+impl core::marker::StructuralPartialEq for wxsl_frame::types::Face
+impl serde_core::ser::Serialize for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::Face
+pub fn wxsl_frame::types::Face::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::Face
+impl core::marker::Send for wxsl_frame::types::Face
+impl core::marker::Sync for wxsl_frame::types::Face
+impl core::marker::Unpin for wxsl_frame::types::Face
+impl core::marker::UnsafeUnpin for wxsl_frame::types::Face
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::Face
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::Face
+pub enum wxsl_frame::types::TextureFormat
+pub wxsl_frame::types::TextureFormat::Astc
+pub wxsl_frame::types::TextureFormat::Astc::block: wxsl_frame::types::AstcBlock
+pub wxsl_frame::types::TextureFormat::Astc::channel: wxsl_frame::types::AstcChannel
+pub wxsl_frame::types::TextureFormat::Bc1RgbaUnorm
+pub wxsl_frame::types::TextureFormat::Bc1RgbaUnormSrgb
+pub wxsl_frame::types::TextureFormat::Bc2RgbaUnorm
+pub wxsl_frame::types::TextureFormat::Bc2RgbaUnormSrgb
+pub wxsl_frame::types::TextureFormat::Bc3RgbaUnorm
+pub wxsl_frame::types::TextureFormat::Bc3RgbaUnormSrgb
+pub wxsl_frame::types::TextureFormat::Bc4RSnorm
+pub wxsl_frame::types::TextureFormat::Bc4RUnorm
+pub wxsl_frame::types::TextureFormat::Bc5RgSnorm
+pub wxsl_frame::types::TextureFormat::Bc5RgUnorm
+pub wxsl_frame::types::TextureFormat::Bc6hRgbFloat
+pub wxsl_frame::types::TextureFormat::Bc6hRgbUfloat
+pub wxsl_frame::types::TextureFormat::Bc7RgbaUnorm
+pub wxsl_frame::types::TextureFormat::Bc7RgbaUnormSrgb
+pub wxsl_frame::types::TextureFormat::Bgra8Unorm
+pub wxsl_frame::types::TextureFormat::Bgra8UnormSrgb
+pub wxsl_frame::types::TextureFormat::Depth16Unorm
+pub wxsl_frame::types::TextureFormat::Depth24Plus
+pub wxsl_frame::types::TextureFormat::Depth24PlusStencil8
+pub wxsl_frame::types::TextureFormat::Depth32Float
+pub wxsl_frame::types::TextureFormat::Depth32FloatStencil8
+pub wxsl_frame::types::TextureFormat::EacR11Snorm
+pub wxsl_frame::types::TextureFormat::EacR11Unorm
+pub wxsl_frame::types::TextureFormat::EacRg11Snorm
+pub wxsl_frame::types::TextureFormat::EacRg11Unorm
+pub wxsl_frame::types::TextureFormat::Etc2Rgb8A1Unorm
+pub wxsl_frame::types::TextureFormat::Etc2Rgb8A1UnormSrgb
+pub wxsl_frame::types::TextureFormat::Etc2Rgb8Unorm
+pub wxsl_frame::types::TextureFormat::Etc2Rgb8UnormSrgb
+pub wxsl_frame::types::TextureFormat::Etc2Rgba8Unorm
+pub wxsl_frame::types::TextureFormat::Etc2Rgba8UnormSrgb
+pub wxsl_frame::types::TextureFormat::NV12
+pub wxsl_frame::types::TextureFormat::P010
+pub wxsl_frame::types::TextureFormat::R16Float
+pub wxsl_frame::types::TextureFormat::R16Sint
+pub wxsl_frame::types::TextureFormat::R16Snorm
+pub wxsl_frame::types::TextureFormat::R16Uint
+pub wxsl_frame::types::TextureFormat::R16Unorm
+pub wxsl_frame::types::TextureFormat::R32Float
+pub wxsl_frame::types::TextureFormat::R32Sint
+pub wxsl_frame::types::TextureFormat::R32Uint
+pub wxsl_frame::types::TextureFormat::R64Uint
+pub wxsl_frame::types::TextureFormat::R8Sint
+pub wxsl_frame::types::TextureFormat::R8Snorm
+pub wxsl_frame::types::TextureFormat::R8Uint
+pub wxsl_frame::types::TextureFormat::R8Unorm
+pub wxsl_frame::types::TextureFormat::Rg11b10Ufloat
+pub wxsl_frame::types::TextureFormat::Rg16Float
+pub wxsl_frame::types::TextureFormat::Rg16Sint
+pub wxsl_frame::types::TextureFormat::Rg16Snorm
+pub wxsl_frame::types::TextureFormat::Rg16Uint
+pub wxsl_frame::types::TextureFormat::Rg16Unorm
+pub wxsl_frame::types::TextureFormat::Rg32Float
+pub wxsl_frame::types::TextureFormat::Rg32Sint
+pub wxsl_frame::types::TextureFormat::Rg32Uint
+pub wxsl_frame::types::TextureFormat::Rg8Sint
+pub wxsl_frame::types::TextureFormat::Rg8Snorm
+pub wxsl_frame::types::TextureFormat::Rg8Uint
+pub wxsl_frame::types::TextureFormat::Rg8Unorm
+pub wxsl_frame::types::TextureFormat::Rgb10a2Uint
+pub wxsl_frame::types::TextureFormat::Rgb10a2Unorm
+pub wxsl_frame::types::TextureFormat::Rgb9e5Ufloat
+pub wxsl_frame::types::TextureFormat::Rgba16Float
+pub wxsl_frame::types::TextureFormat::Rgba16Sint
+pub wxsl_frame::types::TextureFormat::Rgba16Snorm
+pub wxsl_frame::types::TextureFormat::Rgba16Uint
+pub wxsl_frame::types::TextureFormat::Rgba16Unorm
+pub wxsl_frame::types::TextureFormat::Rgba32Float
+pub wxsl_frame::types::TextureFormat::Rgba32Sint
+pub wxsl_frame::types::TextureFormat::Rgba32Uint
+pub wxsl_frame::types::TextureFormat::Rgba8Sint
+pub wxsl_frame::types::TextureFormat::Rgba8Snorm
+pub wxsl_frame::types::TextureFormat::Rgba8Uint
+pub wxsl_frame::types::TextureFormat::Rgba8Unorm
+pub wxsl_frame::types::TextureFormat::Rgba8UnormSrgb
+pub wxsl_frame::types::TextureFormat::Stencil8
+impl core::clone::Clone for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::TextureFormat
+impl core::cmp::PartialEq for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::TextureFormat
+impl core::marker::StructuralPartialEq for wxsl_frame::types::TextureFormat
+impl serde_core::ser::Serialize for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::TextureFormat
+pub fn wxsl_frame::types::TextureFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::TextureFormat
+impl core::marker::Send for wxsl_frame::types::TextureFormat
+impl core::marker::Sync for wxsl_frame::types::TextureFormat
+impl core::marker::Unpin for wxsl_frame::types::TextureFormat
+impl core::marker::UnsafeUnpin for wxsl_frame::types::TextureFormat
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::TextureFormat
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::TextureFormat
+pub struct wxsl_frame::types::BlendComponent
+pub wxsl_frame::types::BlendComponent::dst_factor: wxsl_frame::types::BlendFactor
+pub wxsl_frame::types::BlendComponent::operation: wxsl_frame::types::BlendOperation
+pub wxsl_frame::types::BlendComponent::src_factor: wxsl_frame::types::BlendFactor
+impl wxsl_frame::types::BlendComponent
+pub const wxsl_frame::types::BlendComponent::OVER: Self
+pub const wxsl_frame::types::BlendComponent::REPLACE: Self
+impl core::clone::Clone for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::BlendComponent
+impl core::cmp::PartialEq for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::BlendComponent
+impl core::marker::StructuralPartialEq for wxsl_frame::types::BlendComponent
+impl serde_core::ser::Serialize for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::BlendComponent
+pub fn wxsl_frame::types::BlendComponent::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::BlendComponent
+impl core::marker::Send for wxsl_frame::types::BlendComponent
+impl core::marker::Sync for wxsl_frame::types::BlendComponent
+impl core::marker::Unpin for wxsl_frame::types::BlendComponent
+impl core::marker::UnsafeUnpin for wxsl_frame::types::BlendComponent
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::BlendComponent
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::BlendComponent
+pub struct wxsl_frame::types::BlendState
+pub wxsl_frame::types::BlendState::alpha: wxsl_frame::types::BlendComponent
+pub wxsl_frame::types::BlendState::color: wxsl_frame::types::BlendComponent
+impl wxsl_frame::types::BlendState
+pub const wxsl_frame::types::BlendState::ALPHA_BLENDING: Self
+pub const wxsl_frame::types::BlendState::PREMULTIPLIED_ALPHA_BLENDING: Self
+pub const wxsl_frame::types::BlendState::REPLACE: Self
+impl core::clone::Clone for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::BlendState
+impl core::cmp::PartialEq for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_frame::types::BlendState
+impl core::marker::StructuralPartialEq for wxsl_frame::types::BlendState
+impl serde_core::ser::Serialize for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::BlendState
+pub fn wxsl_frame::types::BlendState::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::BlendState
+impl core::marker::Send for wxsl_frame::types::BlendState
+impl core::marker::Sync for wxsl_frame::types::BlendState
+impl core::marker::Unpin for wxsl_frame::types::BlendState
+impl core::marker::UnsafeUnpin for wxsl_frame::types::BlendState
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::BlendState
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::BlendState
+pub struct wxsl_frame::types::BufferUsages(_)
+impl wxsl_frame::types::BufferUsages
+pub const wxsl_frame::types::BufferUsages::BLAS_INPUT: Self
+pub const wxsl_frame::types::BufferUsages::COPY_DST: Self
+pub const wxsl_frame::types::BufferUsages::COPY_SRC: Self
+pub const wxsl_frame::types::BufferUsages::INDEX: Self
+pub const wxsl_frame::types::BufferUsages::INDIRECT: Self
+pub const wxsl_frame::types::BufferUsages::MAP_READ: Self
+pub const wxsl_frame::types::BufferUsages::MAP_WRITE: Self
+pub const wxsl_frame::types::BufferUsages::QUERY_RESOLVE: Self
+pub const wxsl_frame::types::BufferUsages::STORAGE: Self
+pub const wxsl_frame::types::BufferUsages::TLAS_INPUT: Self
+pub const wxsl_frame::types::BufferUsages::UNIFORM: Self
+pub const wxsl_frame::types::BufferUsages::VERTEX: Self
+impl wxsl_frame::types::BufferUsages
+pub const fn wxsl_frame::types::BufferUsages::all() -> Self
+pub const fn wxsl_frame::types::BufferUsages::bits(&self) -> u32
+pub const fn wxsl_frame::types::BufferUsages::complement(self) -> Self
+pub const fn wxsl_frame::types::BufferUsages::contains(&self, Self) -> bool
+pub const fn wxsl_frame::types::BufferUsages::difference(self, Self) -> Self
+pub const fn wxsl_frame::types::BufferUsages::empty() -> Self
+pub const fn wxsl_frame::types::BufferUsages::from_bits(u32) -> core::option::Option<Self>
+pub const fn wxsl_frame::types::BufferUsages::from_bits_retain(u32) -> Self
+pub const fn wxsl_frame::types::BufferUsages::from_bits_truncate(u32) -> Self
+pub fn wxsl_frame::types::BufferUsages::from_name(&str) -> core::option::Option<Self>
+pub fn wxsl_frame::types::BufferUsages::insert(&mut self, Self)
+pub const fn wxsl_frame::types::BufferUsages::intersection(self, Self) -> Self
+pub const fn wxsl_frame::types::BufferUsages::intersects(&self, Self) -> bool
+pub const fn wxsl_frame::types::BufferUsages::is_all(&self) -> bool
+pub const fn wxsl_frame::types::BufferUsages::is_empty(&self) -> bool
+pub fn wxsl_frame::types::BufferUsages::remove(&mut self, Self)
+pub fn wxsl_frame::types::BufferUsages::set(&mut self, Self, bool)
+pub const fn wxsl_frame::types::BufferUsages::symmetric_difference(self, Self) -> Self
+pub fn wxsl_frame::types::BufferUsages::toggle(&mut self, Self)
+pub const fn wxsl_frame::types::BufferUsages::union(self, Self) -> Self
+impl wxsl_frame::types::BufferUsages
+pub const fn wxsl_frame::types::BufferUsages::iter(&self) -> bitflags::iter::Iter<wxsl_frame::types::BufferUsages>
+pub const fn wxsl_frame::types::BufferUsages::iter_names(&self) -> bitflags::iter::IterNames<wxsl_frame::types::BufferUsages>
+impl bitflags::traits::Flags for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Bits = u32
+pub const wxsl_frame::types::BufferUsages::FLAGS: &'static [bitflags::traits::Flag<wxsl_frame::types::BufferUsages>]
+pub fn wxsl_frame::types::BufferUsages::all_named() -> wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bits(&self) -> u32
+pub fn wxsl_frame::types::BufferUsages::from_bits_retain(u32) -> wxsl_frame::types::BufferUsages
+impl bitflags::traits::PublicFlags for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Internal = InternalBitFlags
+pub type wxsl_frame::types::BufferUsages::Primitive = u32
+impl core::clone::Clone for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::BufferUsages
+impl core::cmp::PartialEq for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::default() -> Self
+impl core::fmt::Binary for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Debug for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::LowerHex for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Octal for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::UpperHex for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::iter::traits::collect::Extend<wxsl_frame::types::BufferUsages> for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::extend<T: core::iter::traits::collect::IntoIterator<Item = Self>>(&mut self, T)
+impl core::iter::traits::collect::FromIterator<wxsl_frame::types::BufferUsages> for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::from_iter<T: core::iter::traits::collect::IntoIterator<Item = Self>>(T) -> Self
+impl core::iter::traits::collect::IntoIterator for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::IntoIter = bitflags::iter::Iter<wxsl_frame::types::BufferUsages>
+pub type wxsl_frame::types::BufferUsages::Item = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::into_iter(self) -> Self::IntoIter
+impl core::marker::Copy for wxsl_frame::types::BufferUsages
+impl core::marker::StructuralPartialEq for wxsl_frame::types::BufferUsages
+impl core::ops::arith::Sub for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Output = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::sub(self, Self) -> Self
+impl core::ops::arith::SubAssign for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::sub_assign(&mut self, Self)
+impl core::ops::bit::BitAnd for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Output = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitand(self, Self) -> Self
+impl core::ops::bit::BitAndAssign for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitand_assign(&mut self, Self)
+impl core::ops::bit::BitOr for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Output = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitor(self, wxsl_frame::types::BufferUsages) -> Self
+impl core::ops::bit::BitOrAssign for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitor_assign(&mut self, Self)
+impl core::ops::bit::BitXor for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Output = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitxor(self, Self) -> Self
+impl core::ops::bit::BitXorAssign for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::bitxor_assign(&mut self, Self)
+impl core::ops::bit::Not for wxsl_frame::types::BufferUsages
+pub type wxsl_frame::types::BufferUsages::Output = wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::not(self) -> Self
+impl serde_core::ser::Serialize for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::BufferUsages
+pub fn wxsl_frame::types::BufferUsages::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::BufferUsages
+impl core::marker::Send for wxsl_frame::types::BufferUsages
+impl core::marker::Sync for wxsl_frame::types::BufferUsages
+impl core::marker::Unpin for wxsl_frame::types::BufferUsages
+impl core::marker::UnsafeUnpin for wxsl_frame::types::BufferUsages
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::BufferUsages
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::BufferUsages
+pub struct wxsl_frame::types::Color
+pub wxsl_frame::types::Color::a: f64
+pub wxsl_frame::types::Color::b: f64
+pub wxsl_frame::types::Color::g: f64
+pub wxsl_frame::types::Color::r: f64
+impl wxsl_frame::types::Color
+pub const wxsl_frame::types::Color::BLACK: Self
+pub const wxsl_frame::types::Color::TRANSPARENT: Self
+impl core::clone::Clone for wxsl_frame::types::Color
+pub fn wxsl_frame::types::Color::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::types::Color
+pub fn wxsl_frame::types::Color::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::types::Color
+pub fn wxsl_frame::types::Color::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::types::Color
+impl core::marker::StructuralPartialEq for wxsl_frame::types::Color
+impl serde_core::ser::Serialize for wxsl_frame::types::Color
+pub fn wxsl_frame::types::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::Color
+pub fn wxsl_frame::types::Color::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::Color
+impl core::marker::Send for wxsl_frame::types::Color
+impl core::marker::Sync for wxsl_frame::types::Color
+impl core::marker::Unpin for wxsl_frame::types::Color
+impl core::marker::UnsafeUnpin for wxsl_frame::types::Color
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::Color
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::Color
+pub struct wxsl_frame::types::TextureUsages(_)
+impl wxsl_frame::types::TextureUsages
+pub const wxsl_frame::types::TextureUsages::COPY_DST: Self
+pub const wxsl_frame::types::TextureUsages::COPY_SRC: Self
+pub const wxsl_frame::types::TextureUsages::RENDER_ATTACHMENT: Self
+pub const wxsl_frame::types::TextureUsages::STORAGE_ATOMIC: Self
+pub const wxsl_frame::types::TextureUsages::STORAGE_BINDING: Self
+pub const wxsl_frame::types::TextureUsages::TEXTURE_BINDING: Self
+pub const wxsl_frame::types::TextureUsages::TRANSIENT_ATTACHMENT: Self
+impl wxsl_frame::types::TextureUsages
+pub const fn wxsl_frame::types::TextureUsages::all() -> Self
+pub const fn wxsl_frame::types::TextureUsages::bits(&self) -> u32
+pub const fn wxsl_frame::types::TextureUsages::complement(self) -> Self
+pub const fn wxsl_frame::types::TextureUsages::contains(&self, Self) -> bool
+pub const fn wxsl_frame::types::TextureUsages::difference(self, Self) -> Self
+pub const fn wxsl_frame::types::TextureUsages::empty() -> Self
+pub const fn wxsl_frame::types::TextureUsages::from_bits(u32) -> core::option::Option<Self>
+pub const fn wxsl_frame::types::TextureUsages::from_bits_retain(u32) -> Self
+pub const fn wxsl_frame::types::TextureUsages::from_bits_truncate(u32) -> Self
+pub fn wxsl_frame::types::TextureUsages::from_name(&str) -> core::option::Option<Self>
+pub fn wxsl_frame::types::TextureUsages::insert(&mut self, Self)
+pub const fn wxsl_frame::types::TextureUsages::intersection(self, Self) -> Self
+pub const fn wxsl_frame::types::TextureUsages::intersects(&self, Self) -> bool
+pub const fn wxsl_frame::types::TextureUsages::is_all(&self) -> bool
+pub const fn wxsl_frame::types::TextureUsages::is_empty(&self) -> bool
+pub fn wxsl_frame::types::TextureUsages::remove(&mut self, Self)
+pub fn wxsl_frame::types::TextureUsages::set(&mut self, Self, bool)
+pub const fn wxsl_frame::types::TextureUsages::symmetric_difference(self, Self) -> Self
+pub fn wxsl_frame::types::TextureUsages::toggle(&mut self, Self)
+pub const fn wxsl_frame::types::TextureUsages::union(self, Self) -> Self
+impl wxsl_frame::types::TextureUsages
+pub const fn wxsl_frame::types::TextureUsages::iter(&self) -> bitflags::iter::Iter<wxsl_frame::types::TextureUsages>
+pub const fn wxsl_frame::types::TextureUsages::iter_names(&self) -> bitflags::iter::IterNames<wxsl_frame::types::TextureUsages>
+impl bitflags::traits::Flags for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Bits = u32
+pub const wxsl_frame::types::TextureUsages::FLAGS: &'static [bitflags::traits::Flag<wxsl_frame::types::TextureUsages>]
+pub fn wxsl_frame::types::TextureUsages::all_named() -> wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bits(&self) -> u32
+pub fn wxsl_frame::types::TextureUsages::from_bits_retain(u32) -> wxsl_frame::types::TextureUsages
+impl bitflags::traits::PublicFlags for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Internal = InternalBitFlags
+pub type wxsl_frame::types::TextureUsages::Primitive = u32
+impl core::clone::Clone for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::types::TextureUsages
+impl core::cmp::PartialEq for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::default() -> Self
+impl core::fmt::Binary for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Debug for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::LowerHex for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Octal for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::UpperHex for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::iter::traits::collect::Extend<wxsl_frame::types::TextureUsages> for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::extend<T: core::iter::traits::collect::IntoIterator<Item = Self>>(&mut self, T)
+impl core::iter::traits::collect::FromIterator<wxsl_frame::types::TextureUsages> for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::from_iter<T: core::iter::traits::collect::IntoIterator<Item = Self>>(T) -> Self
+impl core::iter::traits::collect::IntoIterator for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::IntoIter = bitflags::iter::Iter<wxsl_frame::types::TextureUsages>
+pub type wxsl_frame::types::TextureUsages::Item = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::into_iter(self) -> Self::IntoIter
+impl core::marker::Copy for wxsl_frame::types::TextureUsages
+impl core::marker::StructuralPartialEq for wxsl_frame::types::TextureUsages
+impl core::ops::arith::Sub for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Output = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::sub(self, Self) -> Self
+impl core::ops::arith::SubAssign for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::sub_assign(&mut self, Self)
+impl core::ops::bit::BitAnd for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Output = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitand(self, Self) -> Self
+impl core::ops::bit::BitAndAssign for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitand_assign(&mut self, Self)
+impl core::ops::bit::BitOr for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Output = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitor(self, wxsl_frame::types::TextureUsages) -> Self
+impl core::ops::bit::BitOrAssign for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitor_assign(&mut self, Self)
+impl core::ops::bit::BitXor for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Output = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitxor(self, Self) -> Self
+impl core::ops::bit::BitXorAssign for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::bitxor_assign(&mut self, Self)
+impl core::ops::bit::Not for wxsl_frame::types::TextureUsages
+pub type wxsl_frame::types::TextureUsages::Output = wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::not(self) -> Self
+impl serde_core::ser::Serialize for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::types::TextureUsages
+pub fn wxsl_frame::types::TextureUsages::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::types::TextureUsages
+impl core::marker::Send for wxsl_frame::types::TextureUsages
+impl core::marker::Sync for wxsl_frame::types::TextureUsages
+impl core::marker::Unpin for wxsl_frame::types::TextureUsages
+impl core::marker::UnsafeUnpin for wxsl_frame::types::TextureUsages
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::types::TextureUsages
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::types::TextureUsages
+pub const wxsl_frame::HOST_HEADER: &str

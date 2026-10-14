@@ -49,12 +49,12 @@ use crate::node::{GraphDomain, NodeDefinition, NodeRegistry, SettingDef, Socket,
 /// Setting on the pass nodes that takes a tag expression: what a pass
 /// draws, as a [`crate::scene::TagExpr`].
 pub const SETTING_TAGS: &str = "tags";
-/// Setting on `pass.geometry`: which [`abi::MaterialStage`] the pass draws
+/// Setting on `pass.geometry`: which [`MaterialStage`](crate::abi::MaterialStage) the pass draws
 /// its materials with.
 pub const SETTING_STAGE: &str = "stage";
 /// Setting on `pass.screen`: which screen effect the pass runs.
 pub const SETTING_EFFECT: &str = "effect";
-/// Setting on `resource.color`: the target's [`GBufferPrecision`].
+/// Setting on `resource.color`: the target's [`GBufferPrecision`](crate::abi::GBufferPrecision).
 pub const SETTING_PRECISION: &str = "precision";
 /// Setting on `resource.color` and `resource.depth`: the target's size, as
 /// a fraction of the frame target.
@@ -180,7 +180,7 @@ fn text_setting(name: &str, label: &str, doc: &str, default: &str) -> SettingDef
 }
 
 /// The pipeline document's node vocabulary: one reviewable table, the same
-/// shape as [`abi::context_node_defs`].
+/// shape as [`context_node_defs`](crate::abi::context_node_defs).
 ///
 /// An application extends a pipeline canvas by registering more
 /// `NodeBody::Document` definitions beside these — the same extension story

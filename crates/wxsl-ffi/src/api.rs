@@ -25,28 +25,44 @@ use crate::ffi::WxslStatus;
 
 /// An owned row of a computed buffer layout. No shader-buffer structs cross the ABI.
 pub struct ComputedField {
+    /// Which buffer: 0 material params, 1 user block, 2 instance attributes, 3 effect params.
     pub buffer: u32,
+    /// Bind group of the enclosing buffer.
     pub group: u32,
+    /// Binding of the enclosing buffer within its group.
     pub binding: u32,
+    /// Field name.
     pub name: String,
+    /// Host storage type (`bool` is stored as `u32`).
     pub ty: &'static str,
+    /// Byte offset in the buffer.
     pub offset: u32,
+    /// Byte size, WGSL padding included.
     pub size: u32,
+    /// Alignment in bytes.
     pub align: u32,
+    /// Byte size of the enclosing buffer.
     pub buffer_size: u32,
+    /// Alignment of the enclosing buffer.
     pub buffer_align: u32,
 }
 
 /// Owned operation output; the foreign boundary exposes immutable views of this data.
 pub struct Response {
+    /// Outcome of the call.
     pub status: WxslStatus,
+    /// The JSON envelope: `{version, abi, status, data}`.
     pub json: Vec<u8>,
+    /// UTF-8 WGSL, empty unless the call compiled a shader.
     pub wgsl: Vec<u8>,
+    /// Initial parameter bytes, already padded to the computed layout.
     pub params: Vec<u8>,
+    /// Computed layout rows.
     pub fields: Vec<ComputedField>,
 }
 
 impl Response {
+    /// A response whose envelope carries `payload` as `data`.
     pub fn new(status: WxslStatus, payload: Value) -> Self {
         let json = serde_json::to_vec(&json!({
             "version": crate::ABI_VERSION,
@@ -64,6 +80,7 @@ impl Response {
         }
     }
 
+    /// A failure whose `data.message` is `message`.
     pub fn error(status: WxslStatus, message: impl ToString) -> Self {
         Self::new(status, json!({"message": message.to_string()}))
     }

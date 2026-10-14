@@ -11,13 +11,9 @@
 
 use std::path::{Path, PathBuf};
 
-use wxsl_lang::compile::compile;
-use wxsl_lang::cond::{Bindings, Value};
-use wxsl_lang::emit::emit;
 use wxsl_lang::lexer::tokenize;
-use wxsl_lang::parse::parse;
-use wxsl_lang::resolve::Modules;
 use wxsl_lang::token::Tok;
+use wxsl_lang::{compile, emit, parse, Bindings, Modules, Value};
 
 fn shader_root() -> Option<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

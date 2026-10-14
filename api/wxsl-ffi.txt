@@ -1,0 +1,120 @@
+pub mod wxsl_ffi
+pub mod wxsl_ffi::api
+pub struct wxsl_ffi::api::ComputedField
+pub wxsl_ffi::api::ComputedField::align: u32
+pub wxsl_ffi::api::ComputedField::binding: u32
+pub wxsl_ffi::api::ComputedField::buffer: u32
+pub wxsl_ffi::api::ComputedField::buffer_align: u32
+pub wxsl_ffi::api::ComputedField::buffer_size: u32
+pub wxsl_ffi::api::ComputedField::group: u32
+pub wxsl_ffi::api::ComputedField::name: alloc::string::String
+pub wxsl_ffi::api::ComputedField::offset: u32
+pub wxsl_ffi::api::ComputedField::size: u32
+pub wxsl_ffi::api::ComputedField::ty: &'static str
+impl core::marker::Freeze for wxsl_ffi::api::ComputedField
+impl core::marker::Send for wxsl_ffi::api::ComputedField
+impl core::marker::Sync for wxsl_ffi::api::ComputedField
+impl core::marker::Unpin for wxsl_ffi::api::ComputedField
+impl core::marker::UnsafeUnpin for wxsl_ffi::api::ComputedField
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::ComputedField
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::ComputedField
+pub struct wxsl_ffi::api::Response
+pub wxsl_ffi::api::Response::fields: alloc::vec::Vec<wxsl_ffi::api::ComputedField>
+pub wxsl_ffi::api::Response::json: alloc::vec::Vec<u8>
+pub wxsl_ffi::api::Response::params: alloc::vec::Vec<u8>
+pub wxsl_ffi::api::Response::status: wxsl_ffi::ffi::WxslStatus
+pub wxsl_ffi::api::Response::wgsl: alloc::vec::Vec<u8>
+impl wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::Response::error(wxsl_ffi::ffi::WxslStatus, impl alloc::string::ToString) -> Self
+pub fn wxsl_ffi::api::Response::new(wxsl_ffi::ffi::WxslStatus, serde_json::value::Value) -> Self
+impl core::marker::Freeze for wxsl_ffi::api::Response
+impl core::marker::Send for wxsl_ffi::api::Response
+impl core::marker::Sync for wxsl_ffi::api::Response
+impl core::marker::Unpin for wxsl_ffi::api::Response
+impl core::marker::UnsafeUnpin for wxsl_ffi::api::Response
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::Response
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::check(&[u8]) -> wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::material(&[u8]) -> wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::pipeline(&[u8]) -> wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::shader(&[u8]) -> wxsl_ffi::api::Response
+pub mod wxsl_ffi::ffi
+#[repr(u32)] pub enum wxsl_ffi::ffi::WxslStatus
+pub wxsl_ffi::ffi::WxslStatus::AbiMismatch = 2
+pub wxsl_ffi::ffi::WxslStatus::CompileError = 4
+pub wxsl_ffi::ffi::WxslStatus::Incompatible = 5
+pub wxsl_ffi::ffi::WxslStatus::InternalError = 6
+pub wxsl_ffi::ffi::WxslStatus::InvalidArgument = 1
+pub wxsl_ffi::ffi::WxslStatus::InvalidDocument = 3
+pub wxsl_ffi::ffi::WxslStatus::Success = 0
+impl core::clone::Clone for wxsl_ffi::ffi::WxslStatus
+pub fn wxsl_ffi::ffi::WxslStatus::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_ffi::ffi::WxslStatus
+impl core::cmp::PartialEq for wxsl_ffi::ffi::WxslStatus
+pub fn wxsl_ffi::ffi::WxslStatus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_ffi::ffi::WxslStatus
+pub fn wxsl_ffi::ffi::WxslStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_ffi::ffi::WxslStatus
+impl core::marker::StructuralPartialEq for wxsl_ffi::ffi::WxslStatus
+impl serde_core::ser::Serialize for wxsl_ffi::ffi::WxslStatus
+pub fn wxsl_ffi::ffi::WxslStatus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_ffi::ffi::WxslStatus
+impl core::marker::Send for wxsl_ffi::ffi::WxslStatus
+impl core::marker::Sync for wxsl_ffi::ffi::WxslStatus
+impl core::marker::Unpin for wxsl_ffi::ffi::WxslStatus
+impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslStatus
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslStatus
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslStatus
+#[repr(C)] pub struct wxsl_ffi::ffi::WxslBytes
+pub wxsl_ffi::ffi::WxslBytes::data: *const u8
+pub wxsl_ffi::ffi::WxslBytes::len: usize
+impl core::clone::Clone for wxsl_ffi::ffi::WxslBytes
+pub fn wxsl_ffi::ffi::WxslBytes::clone(&self) -> Self
+impl core::marker::Copy for wxsl_ffi::ffi::WxslBytes
+impl core::marker::Freeze for wxsl_ffi::ffi::WxslBytes
+impl !core::marker::Send for wxsl_ffi::ffi::WxslBytes
+impl !core::marker::Sync for wxsl_ffi::ffi::WxslBytes
+impl core::marker::Unpin for wxsl_ffi::ffi::WxslBytes
+impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslBytes
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslBytes
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslBytes
+#[repr(C)] pub struct wxsl_ffi::ffi::WxslField
+pub wxsl_ffi::ffi::WxslField::align: u32
+pub wxsl_ffi::ffi::WxslField::binding: u32
+pub wxsl_ffi::ffi::WxslField::buffer: u32
+pub wxsl_ffi::ffi::WxslField::buffer_align: u32
+pub wxsl_ffi::ffi::WxslField::buffer_size: u32
+pub wxsl_ffi::ffi::WxslField::group: u32
+pub wxsl_ffi::ffi::WxslField::name: wxsl_ffi::ffi::WxslBytes
+pub wxsl_ffi::ffi::WxslField::offset: u32
+pub wxsl_ffi::ffi::WxslField::size: u32
+pub wxsl_ffi::ffi::WxslField::ty: wxsl_ffi::ffi::WxslBytes
+impl core::marker::Freeze for wxsl_ffi::ffi::WxslField
+impl !core::marker::Send for wxsl_ffi::ffi::WxslField
+impl !core::marker::Sync for wxsl_ffi::ffi::WxslField
+impl core::marker::Unpin for wxsl_ffi::ffi::WxslField
+impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslField
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslField
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslField
+pub struct wxsl_ffi::ffi::WxslResult
+impl core::marker::Freeze for wxsl_ffi::ffi::WxslResult
+impl !core::marker::Send for wxsl_ffi::ffi::WxslResult
+impl !core::marker::Sync for wxsl_ffi::ffi::WxslResult
+impl core::marker::Unpin for wxsl_ffi::ffi::WxslResult
+impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslResult
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslResult
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub c fn wxsl_ffi::ffi::wxsl_abi_version() -> u32
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_check_setup(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_material(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_pipeline(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_shader(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_field_count(*const wxsl_ffi::ffi::WxslResult) -> usize
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_fields(*const wxsl_ffi::ffi::WxslResult) -> *const wxsl_ffi::ffi::WxslField
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_free(*mut wxsl_ffi::ffi::WxslResult)
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_json(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_params(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_status(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslStatus
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_wgsl(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes
+pub const wxsl_ffi::ABI_VERSION: u32
+pub const wxsl_ffi::C_HEADER: &str

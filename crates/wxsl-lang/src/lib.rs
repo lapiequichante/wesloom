@@ -27,23 +27,30 @@
 //!
 //! Complete and in use: `wxsl-render` compiles every shader through this
 //! crate, and the `wesl` dependency it replaced is gone. Templates are
-//! monomorphized ([`mod@crate::mono`]), so a generic function reaches the
+//! monomorphized (the `mono` pass), so a generic function reaches the
 //! backend as one concrete copy per type it is used at.
+//!
+//! # Stability
+//!
+//! The root re-exports are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)): the
+//! `compile*` entry points, [`Modules`], [`Bindings`], diagnostics and
+//! [`node_from_source`]. The `ast`, `lexer` and `token` modules are unstable;
+//! the compiler's passes are private.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod ast;
-pub mod compile;
-pub mod cond;
-pub mod diagnostic;
-pub mod emit;
+mod compile;
+mod cond;
+mod diagnostic;
+mod emit;
 pub mod lexer;
-pub mod mono;
-pub mod node;
-pub mod parse;
-pub mod resolve;
-pub mod span;
+mod mono;
+mod node;
+mod parse;
+mod resolve;
+mod span;
 pub mod token;
 
 lalrpop_util::lalrpop_mod!(

@@ -825,7 +825,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
     },
 ];
 
-/// The id of the model [`LightingSet::default_set`] shades with, and the
+/// The id of the model [`default_set`] shades with, and the
 /// model a material that names none gets: the same Cook-Torrance model the
 /// ABI shaded with before models existed.
 pub const DEFAULT_MODEL_ID: u32 = 2;

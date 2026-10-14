@@ -359,7 +359,7 @@ impl UiState {
     /// press and stays active until release, wherever the pointer goes, which
     /// is what makes dragging work and what makes a click cancel when the
     /// pointer leaves before release. The rules themselves live on
-    /// [`Interaction`], which holds no `wgpu` state and so is what a test
+    /// `Interaction`, which holds no `wgpu` state and so is what a test
     /// drives directly.
     pub fn interact(&mut self, input: &InputState, id: Id, rect: Rect) -> Response {
         let clip = self.draw.clip();

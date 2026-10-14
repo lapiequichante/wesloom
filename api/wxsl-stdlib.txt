@@ -1,0 +1,19 @@
+pub mod wxsl_stdlib
+pub mod wxsl_stdlib::registry
+pub fn wxsl_stdlib::registry::abi_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::all_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::constant_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::convert_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::declaration_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::derived_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::logic_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::math_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry::registry() -> wxsl_core::node::NodeRegistry
+pub fn wxsl_stdlib::registry::vector_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub mod wxsl_stdlib::shaders
+pub const wxsl_stdlib::shaders::MODULES: &[(&str, &str)]
+pub fn wxsl_stdlib::shaders::module(&str) -> core::option::Option<&'static str>
+pub const wxsl_stdlib::MODULES: &[(&str, &str)]
+pub const wxsl_stdlib::THIRD_PARTY_NOTICES: &str
+pub fn wxsl_stdlib::all_nodes() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
+pub fn wxsl_stdlib::registry() -> wxsl_core::node::NodeRegistry

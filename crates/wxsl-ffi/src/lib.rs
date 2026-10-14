@@ -1,6 +1,12 @@
 //! Device-free C ABI: documents in, frame plans, WGSL and computed layouts out.
-//! See ADR 0049 and `README.md` for the wire and ownership contracts.
+//! See ADR 0049, and `docs/cpp.md` for the wire and ownership contracts.
+//!
+//! # Stability
+//!
+//! The C ABI (`include/wxsl.h`) is the stable surface. This crate's Rust
+//! API exists for that ABI and for tests, and is unstable (ADR 0078).
 
+#![warn(missing_docs)]
 #![deny(unsafe_code)]
 
 #[cfg(panic = "abort")]

@@ -85,7 +85,14 @@ cargo check -p wxsl --features editor          # pulls wxsl-render transitively
 cargo tree -p wxsl-frame -e normal             # only wxsl-core in-workspace
 cargo tree -p wxsl-ffi -e normal               # no renderer/GUI
 cargo tree -p wxsl --no-default-features -e normal | grep -E 'wgpu|winit|egui'  # must print nothing
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+bash scripts/public-api.sh                     # --bless after an intended API change
 ```
+
+A change to a public item updates `api/<crate>.txt` with
+`bash scripts/public-api.sh --bless` (pinned nightly, see the script). A
+crate's root re-exports are its stable surface; module paths are unstable
+(ADR 0078). Don't add a root re-export casually.
 
 A change to crate or feature boundaries is not finished until the
 `--no-default-features` and `--features editor` checks pass, as well as
@@ -207,4 +214,5 @@ The ADR named on each line holds the reasoning.
   - `pbr_cube.wxsl.json` is the commented node format;
   - `*.scene.json` are scene documents.
 - `docs/architecture.md` (the overall design), `docs/glossary.md` (terms),
-  `docs/adr/` (decisions).
+  `docs/adr/` (decisions), `docs/rust.md` and `docs/cpp.md` (using the
+  libraries), `docs/history/` (finished plans).

@@ -1,0 +1,1533 @@
+pub mod wxsl_lang
+pub mod wxsl_lang::ast
+pub enum wxsl_lang::ast::AssignOp
+pub wxsl_lang::ast::AssignOp::Add
+pub wxsl_lang::ast::AssignOp::And
+pub wxsl_lang::ast::AssignOp::Assign
+pub wxsl_lang::ast::AssignOp::Divide
+pub wxsl_lang::ast::AssignOp::Modulo
+pub wxsl_lang::ast::AssignOp::Multiply
+pub wxsl_lang::ast::AssignOp::Or
+pub wxsl_lang::ast::AssignOp::ShiftLeft
+pub wxsl_lang::ast::AssignOp::ShiftRight
+pub wxsl_lang::ast::AssignOp::Subtract
+pub wxsl_lang::ast::AssignOp::Xor
+impl wxsl_lang::ast::AssignOp
+pub fn wxsl_lang::ast::AssignOp::text(&self) -> &'static str
+impl core::clone::Clone for wxsl_lang::ast::AssignOp
+pub fn wxsl_lang::ast::AssignOp::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::AssignOp
+impl core::cmp::PartialEq for wxsl_lang::ast::AssignOp
+pub fn wxsl_lang::ast::AssignOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::AssignOp
+pub fn wxsl_lang::ast::AssignOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::AssignOp
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::AssignOp
+impl core::marker::Freeze for wxsl_lang::ast::AssignOp
+impl core::marker::Send for wxsl_lang::ast::AssignOp
+impl core::marker::Sync for wxsl_lang::ast::AssignOp
+impl core::marker::Unpin for wxsl_lang::ast::AssignOp
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::AssignOp
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::AssignOp
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::AssignOp
+pub enum wxsl_lang::ast::BinaryOp
+pub wxsl_lang::ast::BinaryOp::Add
+pub wxsl_lang::ast::BinaryOp::BitAnd
+pub wxsl_lang::ast::BinaryOp::BitOr
+pub wxsl_lang::ast::BinaryOp::BitXor
+pub wxsl_lang::ast::BinaryOp::Divide
+pub wxsl_lang::ast::BinaryOp::Equal
+pub wxsl_lang::ast::BinaryOp::Greater
+pub wxsl_lang::ast::BinaryOp::GreaterEqual
+pub wxsl_lang::ast::BinaryOp::Less
+pub wxsl_lang::ast::BinaryOp::LessEqual
+pub wxsl_lang::ast::BinaryOp::LogicalAnd
+pub wxsl_lang::ast::BinaryOp::LogicalOr
+pub wxsl_lang::ast::BinaryOp::Modulo
+pub wxsl_lang::ast::BinaryOp::Multiply
+pub wxsl_lang::ast::BinaryOp::NotEqual
+pub wxsl_lang::ast::BinaryOp::ShiftLeft
+pub wxsl_lang::ast::BinaryOp::ShiftRight
+pub wxsl_lang::ast::BinaryOp::Subtract
+impl wxsl_lang::ast::BinaryOp
+pub fn wxsl_lang::ast::BinaryOp::text(&self) -> &'static str
+impl core::clone::Clone for wxsl_lang::ast::BinaryOp
+pub fn wxsl_lang::ast::BinaryOp::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::BinaryOp
+impl core::cmp::PartialEq for wxsl_lang::ast::BinaryOp
+pub fn wxsl_lang::ast::BinaryOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::BinaryOp
+pub fn wxsl_lang::ast::BinaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::BinaryOp
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::BinaryOp
+impl core::marker::Freeze for wxsl_lang::ast::BinaryOp
+impl core::marker::Send for wxsl_lang::ast::BinaryOp
+impl core::marker::Sync for wxsl_lang::ast::BinaryOp
+impl core::marker::Unpin for wxsl_lang::ast::BinaryOp
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::BinaryOp
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::BinaryOp
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::BinaryOp
+pub enum wxsl_lang::ast::CaseSelector
+pub wxsl_lang::ast::CaseSelector::Default(wxsl_lang::Span)
+pub wxsl_lang::ast::CaseSelector::Value(wxsl_lang::ast::Expr)
+impl core::clone::Clone for wxsl_lang::ast::CaseSelector
+pub fn wxsl_lang::ast::CaseSelector::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::CaseSelector
+pub fn wxsl_lang::ast::CaseSelector::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::CaseSelector
+pub fn wxsl_lang::ast::CaseSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::CaseSelector
+impl core::marker::Freeze for wxsl_lang::ast::CaseSelector
+impl core::marker::Send for wxsl_lang::ast::CaseSelector
+impl core::marker::Sync for wxsl_lang::ast::CaseSelector
+impl core::marker::Unpin for wxsl_lang::ast::CaseSelector
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::CaseSelector
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::CaseSelector
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::CaseSelector
+pub enum wxsl_lang::ast::Declaration
+pub wxsl_lang::ast::Declaration::Alias(wxsl_lang::ast::AliasDecl)
+pub wxsl_lang::ast::Declaration::Const(wxsl_lang::ast::GlobalValue)
+pub wxsl_lang::ast::Declaration::ConstAssert(wxsl_lang::ast::ConstAssert)
+pub wxsl_lang::ast::Declaration::Function(wxsl_lang::ast::Function)
+pub wxsl_lang::ast::Declaration::Override(wxsl_lang::ast::GlobalValue)
+pub wxsl_lang::ast::Declaration::Struct(wxsl_lang::ast::StructDecl)
+pub wxsl_lang::ast::Declaration::Var(wxsl_lang::ast::GlobalValue)
+impl wxsl_lang::ast::Declaration
+pub fn wxsl_lang::ast::Declaration::attributes(&self) -> &[wxsl_lang::ast::Attribute]
+pub fn wxsl_lang::ast::Declaration::generics(&self) -> &[wxsl_lang::ast::GenericParam]
+pub fn wxsl_lang::ast::Declaration::name(&self) -> core::option::Option<&str>
+pub fn wxsl_lang::ast::Declaration::span(&self) -> wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Declaration
+pub fn wxsl_lang::ast::Declaration::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Declaration
+pub fn wxsl_lang::ast::Declaration::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Declaration
+pub fn wxsl_lang::ast::Declaration::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Declaration
+impl core::marker::Freeze for wxsl_lang::ast::Declaration
+impl core::marker::Send for wxsl_lang::ast::Declaration
+impl core::marker::Sync for wxsl_lang::ast::Declaration
+impl core::marker::Unpin for wxsl_lang::ast::Declaration
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Declaration
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Declaration
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Declaration
+pub enum wxsl_lang::ast::DirectiveKind
+pub wxsl_lang::ast::DirectiveKind::Enable
+pub wxsl_lang::ast::DirectiveKind::Requires
+impl core::clone::Clone for wxsl_lang::ast::DirectiveKind
+pub fn wxsl_lang::ast::DirectiveKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::DirectiveKind
+impl core::cmp::PartialEq for wxsl_lang::ast::DirectiveKind
+pub fn wxsl_lang::ast::DirectiveKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::DirectiveKind
+pub fn wxsl_lang::ast::DirectiveKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::DirectiveKind
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::DirectiveKind
+impl core::marker::Freeze for wxsl_lang::ast::DirectiveKind
+impl core::marker::Send for wxsl_lang::ast::DirectiveKind
+impl core::marker::Sync for wxsl_lang::ast::DirectiveKind
+impl core::marker::Unpin for wxsl_lang::ast::DirectiveKind
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::DirectiveKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::DirectiveKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::DirectiveKind
+pub enum wxsl_lang::ast::Expr
+pub wxsl_lang::ast::Expr::Binary(alloc::boxed::Box<wxsl_lang::ast::BinaryExpr>)
+pub wxsl_lang::ast::Expr::Call(alloc::boxed::Box<wxsl_lang::ast::CallExpr>)
+pub wxsl_lang::ast::Expr::Index(alloc::boxed::Box<wxsl_lang::ast::IndexExpr>)
+pub wxsl_lang::ast::Expr::Literal(wxsl_lang::ast::Literal)
+pub wxsl_lang::ast::Expr::Member(alloc::boxed::Box<wxsl_lang::ast::MemberExpr>)
+pub wxsl_lang::ast::Expr::Name(wxsl_lang::ast::NameExpr)
+pub wxsl_lang::ast::Expr::Paren(alloc::boxed::Box<wxsl_lang::ast::ParenExpr>)
+pub wxsl_lang::ast::Expr::Unary(alloc::boxed::Box<wxsl_lang::ast::UnaryExpr>)
+impl wxsl_lang::ast::Expr
+pub fn wxsl_lang::ast::Expr::as_name(&self) -> core::option::Option<&str>
+pub fn wxsl_lang::ast::Expr::span(&self) -> wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Expr
+pub fn wxsl_lang::ast::Expr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Expr
+pub fn wxsl_lang::ast::Expr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Expr
+pub fn wxsl_lang::ast::Expr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::Expr
+pub fn wxsl_lang::ast::Expr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Expr
+impl core::marker::Freeze for wxsl_lang::ast::Expr
+impl core::marker::Send for wxsl_lang::ast::Expr
+impl core::marker::Sync for wxsl_lang::ast::Expr
+impl core::marker::Unpin for wxsl_lang::ast::Expr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Expr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Expr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Expr
+pub enum wxsl_lang::ast::LiteralKind
+pub wxsl_lang::ast::LiteralKind::Bool
+pub wxsl_lang::ast::LiteralKind::Float
+pub wxsl_lang::ast::LiteralKind::Int
+impl core::clone::Clone for wxsl_lang::ast::LiteralKind
+pub fn wxsl_lang::ast::LiteralKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::LiteralKind
+impl core::cmp::PartialEq for wxsl_lang::ast::LiteralKind
+pub fn wxsl_lang::ast::LiteralKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::LiteralKind
+pub fn wxsl_lang::ast::LiteralKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::LiteralKind
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::LiteralKind
+impl core::marker::Freeze for wxsl_lang::ast::LiteralKind
+impl core::marker::Send for wxsl_lang::ast::LiteralKind
+impl core::marker::Sync for wxsl_lang::ast::LiteralKind
+impl core::marker::Unpin for wxsl_lang::ast::LiteralKind
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::LiteralKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::LiteralKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::LiteralKind
+pub enum wxsl_lang::ast::LocalKind
+pub wxsl_lang::ast::LocalKind::Const
+pub wxsl_lang::ast::LocalKind::Let
+pub wxsl_lang::ast::LocalKind::Var
+impl core::clone::Clone for wxsl_lang::ast::LocalKind
+pub fn wxsl_lang::ast::LocalKind::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::LocalKind
+impl core::cmp::PartialEq for wxsl_lang::ast::LocalKind
+pub fn wxsl_lang::ast::LocalKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::LocalKind
+pub fn wxsl_lang::ast::LocalKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::LocalKind
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::LocalKind
+impl core::marker::Freeze for wxsl_lang::ast::LocalKind
+impl core::marker::Send for wxsl_lang::ast::LocalKind
+impl core::marker::Sync for wxsl_lang::ast::LocalKind
+impl core::marker::Unpin for wxsl_lang::ast::LocalKind
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::LocalKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::LocalKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::LocalKind
+pub enum wxsl_lang::ast::Stage
+pub wxsl_lang::ast::Stage::Compute
+pub wxsl_lang::ast::Stage::Fragment
+pub wxsl_lang::ast::Stage::Vertex
+impl wxsl_lang::ast::Stage
+pub fn wxsl_lang::ast::Stage::attribute(&self) -> &'static str
+pub fn wxsl_lang::ast::Stage::from_attribute(&str) -> core::option::Option<wxsl_lang::ast::Stage>
+impl core::clone::Clone for wxsl_lang::ast::Stage
+pub fn wxsl_lang::ast::Stage::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::Stage
+impl core::cmp::PartialEq for wxsl_lang::ast::Stage
+pub fn wxsl_lang::ast::Stage::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Stage
+pub fn wxsl_lang::ast::Stage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_lang::ast::Stage
+pub fn wxsl_lang::ast::Stage::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_lang::ast::Stage
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Stage
+impl core::marker::Freeze for wxsl_lang::ast::Stage
+impl core::marker::Send for wxsl_lang::ast::Stage
+impl core::marker::Sync for wxsl_lang::ast::Stage
+impl core::marker::Unpin for wxsl_lang::ast::Stage
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Stage
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Stage
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Stage
+pub enum wxsl_lang::ast::Statement
+pub wxsl_lang::ast::Statement::Assign(wxsl_lang::ast::Assign)
+pub wxsl_lang::ast::Statement::Block(wxsl_lang::ast::Block)
+pub wxsl_lang::ast::Statement::Break(wxsl_lang::ast::Simple)
+pub wxsl_lang::ast::Statement::Call(wxsl_lang::ast::CallStatement)
+pub wxsl_lang::ast::Statement::ConstAssert(wxsl_lang::ast::ConstAssert)
+pub wxsl_lang::ast::Statement::Continue(wxsl_lang::ast::Simple)
+pub wxsl_lang::ast::Statement::Discard(wxsl_lang::ast::Simple)
+pub wxsl_lang::ast::Statement::For(wxsl_lang::ast::ForStatement)
+pub wxsl_lang::ast::Statement::If(wxsl_lang::ast::IfStatement)
+pub wxsl_lang::ast::Statement::Local(wxsl_lang::ast::LocalValue)
+pub wxsl_lang::ast::Statement::Loop(wxsl_lang::ast::LoopStatement)
+pub wxsl_lang::ast::Statement::Return(wxsl_lang::ast::ReturnStatement)
+pub wxsl_lang::ast::Statement::Step(wxsl_lang::ast::Step)
+pub wxsl_lang::ast::Statement::Switch(wxsl_lang::ast::SwitchStatement)
+pub wxsl_lang::ast::Statement::While(wxsl_lang::ast::WhileStatement)
+impl wxsl_lang::ast::Statement
+pub fn wxsl_lang::ast::Statement::attributes(&self) -> &[wxsl_lang::ast::Attribute]
+pub fn wxsl_lang::ast::Statement::span(&self) -> wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Statement
+pub fn wxsl_lang::ast::Statement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Statement
+pub fn wxsl_lang::ast::Statement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Statement
+pub fn wxsl_lang::ast::Statement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Statement
+impl core::marker::Freeze for wxsl_lang::ast::Statement
+impl core::marker::Send for wxsl_lang::ast::Statement
+impl core::marker::Sync for wxsl_lang::ast::Statement
+impl core::marker::Unpin for wxsl_lang::ast::Statement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Statement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Statement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Statement
+pub enum wxsl_lang::ast::UnaryOp
+pub wxsl_lang::ast::UnaryOp::BitNot
+pub wxsl_lang::ast::UnaryOp::Deref
+pub wxsl_lang::ast::UnaryOp::Negate
+pub wxsl_lang::ast::UnaryOp::Not
+pub wxsl_lang::ast::UnaryOp::Ref
+impl wxsl_lang::ast::UnaryOp
+pub fn wxsl_lang::ast::UnaryOp::text(&self) -> &'static str
+impl core::clone::Clone for wxsl_lang::ast::UnaryOp
+pub fn wxsl_lang::ast::UnaryOp::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::UnaryOp
+impl core::cmp::PartialEq for wxsl_lang::ast::UnaryOp
+pub fn wxsl_lang::ast::UnaryOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::UnaryOp
+pub fn wxsl_lang::ast::UnaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::ast::UnaryOp
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::UnaryOp
+impl core::marker::Freeze for wxsl_lang::ast::UnaryOp
+impl core::marker::Send for wxsl_lang::ast::UnaryOp
+impl core::marker::Sync for wxsl_lang::ast::UnaryOp
+impl core::marker::Unpin for wxsl_lang::ast::UnaryOp
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::UnaryOp
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::UnaryOp
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::UnaryOp
+pub struct wxsl_lang::ast::AliasDecl
+pub wxsl_lang::ast::AliasDecl::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::AliasDecl::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::AliasDecl::span: wxsl_lang::Span
+pub wxsl_lang::ast::AliasDecl::ty: wxsl_lang::ast::TypeExpr
+impl core::clone::Clone for wxsl_lang::ast::AliasDecl
+pub fn wxsl_lang::ast::AliasDecl::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::AliasDecl
+pub fn wxsl_lang::ast::AliasDecl::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::AliasDecl
+pub fn wxsl_lang::ast::AliasDecl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::AliasDecl
+impl core::marker::Freeze for wxsl_lang::ast::AliasDecl
+impl core::marker::Send for wxsl_lang::ast::AliasDecl
+impl core::marker::Sync for wxsl_lang::ast::AliasDecl
+impl core::marker::Unpin for wxsl_lang::ast::AliasDecl
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::AliasDecl
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::AliasDecl
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::AliasDecl
+pub struct wxsl_lang::ast::Assign
+pub wxsl_lang::ast::Assign::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Assign::op: wxsl_lang::ast::AssignOp
+pub wxsl_lang::ast::Assign::span: wxsl_lang::Span
+pub wxsl_lang::ast::Assign::target: core::option::Option<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::Assign::value: wxsl_lang::ast::Expr
+impl core::clone::Clone for wxsl_lang::ast::Assign
+pub fn wxsl_lang::ast::Assign::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Assign
+pub fn wxsl_lang::ast::Assign::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Assign
+pub fn wxsl_lang::ast::Assign::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Assign
+impl core::marker::Freeze for wxsl_lang::ast::Assign
+impl core::marker::Send for wxsl_lang::ast::Assign
+impl core::marker::Sync for wxsl_lang::ast::Assign
+impl core::marker::Unpin for wxsl_lang::ast::Assign
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Assign
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Assign
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Assign
+pub struct wxsl_lang::ast::Attribute
+pub wxsl_lang::ast::Attribute::args: alloc::vec::Vec<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::Attribute::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::Attribute::span: wxsl_lang::Span
+impl wxsl_lang::ast::Attribute
+pub fn wxsl_lang::ast::Attribute::condition(&self) -> core::option::Option<&wxsl_lang::ast::Expr>
+impl core::clone::Clone for wxsl_lang::ast::Attribute
+pub fn wxsl_lang::ast::Attribute::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Attribute
+pub fn wxsl_lang::ast::Attribute::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Attribute
+pub fn wxsl_lang::ast::Attribute::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Attribute
+impl core::marker::Freeze for wxsl_lang::ast::Attribute
+impl core::marker::Send for wxsl_lang::ast::Attribute
+impl core::marker::Sync for wxsl_lang::ast::Attribute
+impl core::marker::Unpin for wxsl_lang::ast::Attribute
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Attribute
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Attribute
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Attribute
+pub struct wxsl_lang::ast::BinaryExpr
+pub wxsl_lang::ast::BinaryExpr::left: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::BinaryExpr::op: wxsl_lang::ast::BinaryOp
+pub wxsl_lang::ast::BinaryExpr::right: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::BinaryExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::BinaryExpr
+pub fn wxsl_lang::ast::BinaryExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::BinaryExpr
+pub fn wxsl_lang::ast::BinaryExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::BinaryExpr
+pub fn wxsl_lang::ast::BinaryExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::BinaryExpr
+impl core::marker::Freeze for wxsl_lang::ast::BinaryExpr
+impl core::marker::Send for wxsl_lang::ast::BinaryExpr
+impl core::marker::Sync for wxsl_lang::ast::BinaryExpr
+impl core::marker::Unpin for wxsl_lang::ast::BinaryExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::BinaryExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::BinaryExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::BinaryExpr
+pub struct wxsl_lang::ast::Block
+pub wxsl_lang::ast::Block::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Block::span: wxsl_lang::Span
+pub wxsl_lang::ast::Block::statements: alloc::vec::Vec<wxsl_lang::ast::Statement>
+impl core::clone::Clone for wxsl_lang::ast::Block
+pub fn wxsl_lang::ast::Block::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Block
+pub fn wxsl_lang::ast::Block::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_lang::ast::Block
+pub fn wxsl_lang::ast::Block::default() -> Self
+impl core::fmt::Debug for wxsl_lang::ast::Block
+pub fn wxsl_lang::ast::Block::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Block
+impl core::marker::Freeze for wxsl_lang::ast::Block
+impl core::marker::Send for wxsl_lang::ast::Block
+impl core::marker::Sync for wxsl_lang::ast::Block
+impl core::marker::Unpin for wxsl_lang::ast::Block
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Block
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Block
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Block
+pub struct wxsl_lang::ast::CallExpr
+pub wxsl_lang::ast::CallExpr::args: alloc::vec::Vec<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::CallExpr::callee: wxsl_lang::ast::NameExpr
+pub wxsl_lang::ast::CallExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::CallExpr
+pub fn wxsl_lang::ast::CallExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::CallExpr
+pub fn wxsl_lang::ast::CallExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::CallExpr
+pub fn wxsl_lang::ast::CallExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::CallExpr
+impl core::marker::Freeze for wxsl_lang::ast::CallExpr
+impl core::marker::Send for wxsl_lang::ast::CallExpr
+impl core::marker::Sync for wxsl_lang::ast::CallExpr
+impl core::marker::Unpin for wxsl_lang::ast::CallExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::CallExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::CallExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::CallExpr
+pub struct wxsl_lang::ast::CallStatement
+pub wxsl_lang::ast::CallStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::CallStatement::call: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::CallStatement::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::CallStatement
+pub fn wxsl_lang::ast::CallStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::CallStatement
+pub fn wxsl_lang::ast::CallStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::CallStatement
+pub fn wxsl_lang::ast::CallStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::CallStatement
+impl core::marker::Freeze for wxsl_lang::ast::CallStatement
+impl core::marker::Send for wxsl_lang::ast::CallStatement
+impl core::marker::Sync for wxsl_lang::ast::CallStatement
+impl core::marker::Unpin for wxsl_lang::ast::CallStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::CallStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::CallStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::CallStatement
+pub struct wxsl_lang::ast::ConstAssert
+pub wxsl_lang::ast::ConstAssert::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::ConstAssert::expr: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::ConstAssert::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::ConstAssert
+pub fn wxsl_lang::ast::ConstAssert::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::ConstAssert
+pub fn wxsl_lang::ast::ConstAssert::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::ConstAssert
+pub fn wxsl_lang::ast::ConstAssert::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ConstAssert
+impl core::marker::Freeze for wxsl_lang::ast::ConstAssert
+impl core::marker::Send for wxsl_lang::ast::ConstAssert
+impl core::marker::Sync for wxsl_lang::ast::ConstAssert
+impl core::marker::Unpin for wxsl_lang::ast::ConstAssert
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ConstAssert
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ConstAssert
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ConstAssert
+pub struct wxsl_lang::ast::Continuing
+pub wxsl_lang::ast::Continuing::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Continuing::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::Continuing::break_if: core::option::Option<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::Continuing::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Continuing
+pub fn wxsl_lang::ast::Continuing::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Continuing
+pub fn wxsl_lang::ast::Continuing::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Continuing
+pub fn wxsl_lang::ast::Continuing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Continuing
+impl core::marker::Freeze for wxsl_lang::ast::Continuing
+impl core::marker::Send for wxsl_lang::ast::Continuing
+impl core::marker::Sync for wxsl_lang::ast::Continuing
+impl core::marker::Unpin for wxsl_lang::ast::Continuing
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Continuing
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Continuing
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Continuing
+pub struct wxsl_lang::ast::Directive
+pub wxsl_lang::ast::Directive::kind: wxsl_lang::ast::DirectiveKind
+pub wxsl_lang::ast::Directive::names: alloc::vec::Vec<wxsl_lang::Spanned<alloc::string::String>>
+pub wxsl_lang::ast::Directive::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Directive
+pub fn wxsl_lang::ast::Directive::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::Directive
+impl core::cmp::PartialEq for wxsl_lang::ast::Directive
+pub fn wxsl_lang::ast::Directive::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Directive
+pub fn wxsl_lang::ast::Directive::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Directive
+impl core::marker::Freeze for wxsl_lang::ast::Directive
+impl core::marker::Send for wxsl_lang::ast::Directive
+impl core::marker::Sync for wxsl_lang::ast::Directive
+impl core::marker::Unpin for wxsl_lang::ast::Directive
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Directive
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Directive
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Directive
+pub struct wxsl_lang::ast::ForStatement
+pub wxsl_lang::ast::ForStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::ForStatement::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::ForStatement::condition: core::option::Option<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::ForStatement::init: core::option::Option<alloc::boxed::Box<wxsl_lang::ast::Statement>>
+pub wxsl_lang::ast::ForStatement::span: wxsl_lang::Span
+pub wxsl_lang::ast::ForStatement::update: core::option::Option<alloc::boxed::Box<wxsl_lang::ast::Statement>>
+impl core::clone::Clone for wxsl_lang::ast::ForStatement
+pub fn wxsl_lang::ast::ForStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::ForStatement
+pub fn wxsl_lang::ast::ForStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::ForStatement
+pub fn wxsl_lang::ast::ForStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ForStatement
+impl core::marker::Freeze for wxsl_lang::ast::ForStatement
+impl core::marker::Send for wxsl_lang::ast::ForStatement
+impl core::marker::Sync for wxsl_lang::ast::ForStatement
+impl core::marker::Unpin for wxsl_lang::ast::ForStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ForStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ForStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ForStatement
+pub struct wxsl_lang::ast::Function
+pub wxsl_lang::ast::Function::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Function::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::Function::generics: alloc::vec::Vec<wxsl_lang::ast::GenericParam>
+pub wxsl_lang::ast::Function::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::Function::params: alloc::vec::Vec<wxsl_lang::ast::Param>
+pub wxsl_lang::ast::Function::return_attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Function::return_type: core::option::Option<wxsl_lang::ast::TypeExpr>
+pub wxsl_lang::ast::Function::span: wxsl_lang::Span
+impl wxsl_lang::ast::Function
+pub fn wxsl_lang::ast::Function::is_generic(&self) -> bool
+pub fn wxsl_lang::ast::Function::stage(&self) -> core::option::Option<wxsl_lang::ast::Stage>
+impl core::clone::Clone for wxsl_lang::ast::Function
+pub fn wxsl_lang::ast::Function::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Function
+pub fn wxsl_lang::ast::Function::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Function
+pub fn wxsl_lang::ast::Function::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Function
+impl core::marker::Freeze for wxsl_lang::ast::Function
+impl core::marker::Send for wxsl_lang::ast::Function
+impl core::marker::Sync for wxsl_lang::ast::Function
+impl core::marker::Unpin for wxsl_lang::ast::Function
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Function
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Function
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Function
+pub struct wxsl_lang::ast::GenericParam
+pub wxsl_lang::ast::GenericParam::constraints: alloc::vec::Vec<wxsl_lang::ast::TypeExpr>
+pub wxsl_lang::ast::GenericParam::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::GenericParam::span: wxsl_lang::Span
+impl wxsl_lang::ast::GenericParam
+pub fn wxsl_lang::ast::GenericParam::accepts(&self, &wxsl_lang::ast::TypeExpr) -> bool
+impl core::clone::Clone for wxsl_lang::ast::GenericParam
+pub fn wxsl_lang::ast::GenericParam::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::GenericParam
+pub fn wxsl_lang::ast::GenericParam::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::GenericParam
+pub fn wxsl_lang::ast::GenericParam::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::GenericParam
+impl core::marker::Freeze for wxsl_lang::ast::GenericParam
+impl core::marker::Send for wxsl_lang::ast::GenericParam
+impl core::marker::Sync for wxsl_lang::ast::GenericParam
+impl core::marker::Unpin for wxsl_lang::ast::GenericParam
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::GenericParam
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::GenericParam
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::GenericParam
+pub struct wxsl_lang::ast::GlobalValue
+pub wxsl_lang::ast::GlobalValue::address_space: alloc::vec::Vec<wxsl_lang::ast::TemplateArg>
+pub wxsl_lang::ast::GlobalValue::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::GlobalValue::init: core::option::Option<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::GlobalValue::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::GlobalValue::span: wxsl_lang::Span
+pub wxsl_lang::ast::GlobalValue::ty: core::option::Option<wxsl_lang::ast::TypeExpr>
+impl wxsl_lang::ast::GlobalValue
+pub fn wxsl_lang::ast::GlobalValue::is_macro(&self) -> bool
+impl core::clone::Clone for wxsl_lang::ast::GlobalValue
+pub fn wxsl_lang::ast::GlobalValue::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::GlobalValue
+pub fn wxsl_lang::ast::GlobalValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::GlobalValue
+pub fn wxsl_lang::ast::GlobalValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::GlobalValue
+impl core::marker::Freeze for wxsl_lang::ast::GlobalValue
+impl core::marker::Send for wxsl_lang::ast::GlobalValue
+impl core::marker::Sync for wxsl_lang::ast::GlobalValue
+impl core::marker::Unpin for wxsl_lang::ast::GlobalValue
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::GlobalValue
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::GlobalValue
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::GlobalValue
+pub struct wxsl_lang::ast::IfStatement
+pub wxsl_lang::ast::IfStatement::arms: alloc::vec::Vec<(wxsl_lang::ast::Expr, wxsl_lang::ast::Block)>
+pub wxsl_lang::ast::IfStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::IfStatement::otherwise: core::option::Option<wxsl_lang::ast::Block>
+pub wxsl_lang::ast::IfStatement::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::IfStatement
+pub fn wxsl_lang::ast::IfStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::IfStatement
+pub fn wxsl_lang::ast::IfStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::IfStatement
+pub fn wxsl_lang::ast::IfStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::IfStatement
+impl core::marker::Freeze for wxsl_lang::ast::IfStatement
+impl core::marker::Send for wxsl_lang::ast::IfStatement
+impl core::marker::Sync for wxsl_lang::ast::IfStatement
+impl core::marker::Unpin for wxsl_lang::ast::IfStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::IfStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::IfStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::IfStatement
+pub struct wxsl_lang::ast::Import
+pub wxsl_lang::ast::Import::items: alloc::vec::Vec<wxsl_lang::ast::ImportItem>
+pub wxsl_lang::ast::Import::path: wxsl_lang::ast::ModulePath
+pub wxsl_lang::ast::Import::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Import
+pub fn wxsl_lang::ast::Import::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::Import
+impl core::cmp::PartialEq for wxsl_lang::ast::Import
+pub fn wxsl_lang::ast::Import::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Import
+pub fn wxsl_lang::ast::Import::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Import
+impl core::marker::Freeze for wxsl_lang::ast::Import
+impl core::marker::Send for wxsl_lang::ast::Import
+impl core::marker::Sync for wxsl_lang::ast::Import
+impl core::marker::Unpin for wxsl_lang::ast::Import
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Import
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Import
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Import
+pub struct wxsl_lang::ast::ImportItem
+pub wxsl_lang::ast::ImportItem::alias: core::option::Option<wxsl_lang::Spanned<alloc::string::String>>
+pub wxsl_lang::ast::ImportItem::local: alloc::string::String
+pub wxsl_lang::ast::ImportItem::name: wxsl_lang::Spanned<alloc::string::String>
+impl core::clone::Clone for wxsl_lang::ast::ImportItem
+pub fn wxsl_lang::ast::ImportItem::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::ImportItem
+impl core::cmp::PartialEq for wxsl_lang::ast::ImportItem
+pub fn wxsl_lang::ast::ImportItem::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::ImportItem
+pub fn wxsl_lang::ast::ImportItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ImportItem
+impl core::marker::Freeze for wxsl_lang::ast::ImportItem
+impl core::marker::Send for wxsl_lang::ast::ImportItem
+impl core::marker::Sync for wxsl_lang::ast::ImportItem
+impl core::marker::Unpin for wxsl_lang::ast::ImportItem
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ImportItem
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ImportItem
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ImportItem
+pub struct wxsl_lang::ast::IndexExpr
+pub wxsl_lang::ast::IndexExpr::base: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::IndexExpr::index: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::IndexExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::IndexExpr
+pub fn wxsl_lang::ast::IndexExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::IndexExpr
+pub fn wxsl_lang::ast::IndexExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::IndexExpr
+pub fn wxsl_lang::ast::IndexExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::IndexExpr
+impl core::marker::Freeze for wxsl_lang::ast::IndexExpr
+impl core::marker::Send for wxsl_lang::ast::IndexExpr
+impl core::marker::Sync for wxsl_lang::ast::IndexExpr
+impl core::marker::Unpin for wxsl_lang::ast::IndexExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::IndexExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::IndexExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::IndexExpr
+pub struct wxsl_lang::ast::Literal
+pub wxsl_lang::ast::Literal::kind: wxsl_lang::ast::LiteralKind
+pub wxsl_lang::ast::Literal::span: wxsl_lang::Span
+pub wxsl_lang::ast::Literal::text: alloc::string::String
+impl core::clone::Clone for wxsl_lang::ast::Literal
+pub fn wxsl_lang::ast::Literal::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::Literal
+impl core::cmp::PartialEq for wxsl_lang::ast::Literal
+pub fn wxsl_lang::ast::Literal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Literal
+pub fn wxsl_lang::ast::Literal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Literal
+impl core::marker::Freeze for wxsl_lang::ast::Literal
+impl core::marker::Send for wxsl_lang::ast::Literal
+impl core::marker::Sync for wxsl_lang::ast::Literal
+impl core::marker::Unpin for wxsl_lang::ast::Literal
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Literal
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Literal
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Literal
+pub struct wxsl_lang::ast::LocalValue
+pub wxsl_lang::ast::LocalValue::address_space: alloc::vec::Vec<wxsl_lang::ast::TemplateArg>
+pub wxsl_lang::ast::LocalValue::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::LocalValue::init: core::option::Option<wxsl_lang::ast::Expr>
+pub wxsl_lang::ast::LocalValue::kind: wxsl_lang::ast::LocalKind
+pub wxsl_lang::ast::LocalValue::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::LocalValue::span: wxsl_lang::Span
+pub wxsl_lang::ast::LocalValue::ty: core::option::Option<wxsl_lang::ast::TypeExpr>
+impl core::clone::Clone for wxsl_lang::ast::LocalValue
+pub fn wxsl_lang::ast::LocalValue::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::LocalValue
+pub fn wxsl_lang::ast::LocalValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::LocalValue
+pub fn wxsl_lang::ast::LocalValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::LocalValue
+impl core::marker::Freeze for wxsl_lang::ast::LocalValue
+impl core::marker::Send for wxsl_lang::ast::LocalValue
+impl core::marker::Sync for wxsl_lang::ast::LocalValue
+impl core::marker::Unpin for wxsl_lang::ast::LocalValue
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::LocalValue
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::LocalValue
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::LocalValue
+pub struct wxsl_lang::ast::LoopStatement
+pub wxsl_lang::ast::LoopStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::LoopStatement::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::LoopStatement::continuing: core::option::Option<wxsl_lang::ast::Continuing>
+pub wxsl_lang::ast::LoopStatement::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::LoopStatement
+pub fn wxsl_lang::ast::LoopStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::LoopStatement
+pub fn wxsl_lang::ast::LoopStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::LoopStatement
+pub fn wxsl_lang::ast::LoopStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::LoopStatement
+impl core::marker::Freeze for wxsl_lang::ast::LoopStatement
+impl core::marker::Send for wxsl_lang::ast::LoopStatement
+impl core::marker::Sync for wxsl_lang::ast::LoopStatement
+impl core::marker::Unpin for wxsl_lang::ast::LoopStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::LoopStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::LoopStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::LoopStatement
+pub struct wxsl_lang::ast::MemberExpr
+pub wxsl_lang::ast::MemberExpr::base: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::MemberExpr::member: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::MemberExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::MemberExpr
+pub fn wxsl_lang::ast::MemberExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::MemberExpr
+pub fn wxsl_lang::ast::MemberExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::MemberExpr
+pub fn wxsl_lang::ast::MemberExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::MemberExpr
+impl core::marker::Freeze for wxsl_lang::ast::MemberExpr
+impl core::marker::Send for wxsl_lang::ast::MemberExpr
+impl core::marker::Sync for wxsl_lang::ast::MemberExpr
+impl core::marker::Unpin for wxsl_lang::ast::MemberExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::MemberExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::MemberExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::MemberExpr
+pub struct wxsl_lang::ast::Module
+pub wxsl_lang::ast::Module::declarations: alloc::vec::Vec<wxsl_lang::ast::Declaration>
+pub wxsl_lang::ast::Module::directives: alloc::vec::Vec<wxsl_lang::ast::Directive>
+pub wxsl_lang::ast::Module::imports: alloc::vec::Vec<wxsl_lang::ast::Import>
+impl wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::declaration(&self, &str) -> core::option::Option<&wxsl_lang::ast::Declaration>
+pub fn wxsl_lang::ast::Module::macros(&self) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_lang::ast::GlobalValue>
+impl core::clone::Clone for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::default() -> Self
+impl core::fmt::Debug for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Module
+impl core::marker::Freeze for wxsl_lang::ast::Module
+impl core::marker::Send for wxsl_lang::ast::Module
+impl core::marker::Sync for wxsl_lang::ast::Module
+impl core::marker::Unpin for wxsl_lang::ast::Module
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Module
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Module
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Module
+pub struct wxsl_lang::ast::ModulePath
+pub wxsl_lang::ast::ModulePath::segments: alloc::vec::Vec<alloc::string::String>
+impl wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::join(&self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_lang::ast::ModulePath::last(&self) -> core::option::Option<&str>
+pub fn wxsl_lang::ast::ModulePath::new(impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<alloc::string::String>>) -> Self
+pub fn wxsl_lang::ast::ModulePath::parent(&self) -> core::option::Option<Self>
+pub fn wxsl_lang::ast::ModulePath::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::ModulePath
+impl core::cmp::Ord for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ModulePath
+impl core::marker::Freeze for wxsl_lang::ast::ModulePath
+impl core::marker::Send for wxsl_lang::ast::ModulePath
+impl core::marker::Sync for wxsl_lang::ast::ModulePath
+impl core::marker::Unpin for wxsl_lang::ast::ModulePath
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ModulePath
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ModulePath
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ModulePath
+pub struct wxsl_lang::ast::NameExpr
+pub wxsl_lang::ast::NameExpr::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::NameExpr::span: wxsl_lang::Span
+pub wxsl_lang::ast::NameExpr::template_args: alloc::vec::Vec<wxsl_lang::ast::TemplateArg>
+impl core::clone::Clone for wxsl_lang::ast::NameExpr
+pub fn wxsl_lang::ast::NameExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::NameExpr
+pub fn wxsl_lang::ast::NameExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::NameExpr
+pub fn wxsl_lang::ast::NameExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::NameExpr
+pub fn wxsl_lang::ast::NameExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::NameExpr
+impl core::marker::Freeze for wxsl_lang::ast::NameExpr
+impl core::marker::Send for wxsl_lang::ast::NameExpr
+impl core::marker::Sync for wxsl_lang::ast::NameExpr
+impl core::marker::Unpin for wxsl_lang::ast::NameExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::NameExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::NameExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::NameExpr
+pub struct wxsl_lang::ast::Param
+pub wxsl_lang::ast::Param::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Param::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::Param::span: wxsl_lang::Span
+pub wxsl_lang::ast::Param::ty: wxsl_lang::ast::TypeExpr
+impl core::clone::Clone for wxsl_lang::ast::Param
+pub fn wxsl_lang::ast::Param::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Param
+pub fn wxsl_lang::ast::Param::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Param
+pub fn wxsl_lang::ast::Param::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Param
+impl core::marker::Freeze for wxsl_lang::ast::Param
+impl core::marker::Send for wxsl_lang::ast::Param
+impl core::marker::Sync for wxsl_lang::ast::Param
+impl core::marker::Unpin for wxsl_lang::ast::Param
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Param
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Param
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Param
+pub struct wxsl_lang::ast::ParenExpr
+pub wxsl_lang::ast::ParenExpr::inner: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::ParenExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::ParenExpr
+pub fn wxsl_lang::ast::ParenExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::ParenExpr
+pub fn wxsl_lang::ast::ParenExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::ParenExpr
+pub fn wxsl_lang::ast::ParenExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ParenExpr
+impl core::marker::Freeze for wxsl_lang::ast::ParenExpr
+impl core::marker::Send for wxsl_lang::ast::ParenExpr
+impl core::marker::Sync for wxsl_lang::ast::ParenExpr
+impl core::marker::Unpin for wxsl_lang::ast::ParenExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ParenExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ParenExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ParenExpr
+pub struct wxsl_lang::ast::ReturnStatement
+pub wxsl_lang::ast::ReturnStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::ReturnStatement::span: wxsl_lang::Span
+pub wxsl_lang::ast::ReturnStatement::value: core::option::Option<wxsl_lang::ast::Expr>
+impl core::clone::Clone for wxsl_lang::ast::ReturnStatement
+pub fn wxsl_lang::ast::ReturnStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::ReturnStatement
+pub fn wxsl_lang::ast::ReturnStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::ReturnStatement
+pub fn wxsl_lang::ast::ReturnStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ReturnStatement
+impl core::marker::Freeze for wxsl_lang::ast::ReturnStatement
+impl core::marker::Send for wxsl_lang::ast::ReturnStatement
+impl core::marker::Sync for wxsl_lang::ast::ReturnStatement
+impl core::marker::Unpin for wxsl_lang::ast::ReturnStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ReturnStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ReturnStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ReturnStatement
+pub struct wxsl_lang::ast::Simple
+pub wxsl_lang::ast::Simple::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Simple::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::Simple
+pub fn wxsl_lang::ast::Simple::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Simple
+pub fn wxsl_lang::ast::Simple::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Simple
+pub fn wxsl_lang::ast::Simple::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Simple
+impl core::marker::Freeze for wxsl_lang::ast::Simple
+impl core::marker::Send for wxsl_lang::ast::Simple
+impl core::marker::Sync for wxsl_lang::ast::Simple
+impl core::marker::Unpin for wxsl_lang::ast::Simple
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Simple
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Simple
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Simple
+pub struct wxsl_lang::ast::Step
+pub wxsl_lang::ast::Step::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::Step::increment: bool
+pub wxsl_lang::ast::Step::span: wxsl_lang::Span
+pub wxsl_lang::ast::Step::target: wxsl_lang::ast::Expr
+impl core::clone::Clone for wxsl_lang::ast::Step
+pub fn wxsl_lang::ast::Step::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Step
+pub fn wxsl_lang::ast::Step::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::Step
+pub fn wxsl_lang::ast::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Step
+impl core::marker::Freeze for wxsl_lang::ast::Step
+impl core::marker::Send for wxsl_lang::ast::Step
+impl core::marker::Sync for wxsl_lang::ast::Step
+impl core::marker::Unpin for wxsl_lang::ast::Step
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Step
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Step
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Step
+pub struct wxsl_lang::ast::StructDecl
+pub wxsl_lang::ast::StructDecl::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::StructDecl::generics: alloc::vec::Vec<wxsl_lang::ast::GenericParam>
+pub wxsl_lang::ast::StructDecl::members: alloc::vec::Vec<wxsl_lang::ast::StructMember>
+pub wxsl_lang::ast::StructDecl::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::StructDecl::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::StructDecl
+pub fn wxsl_lang::ast::StructDecl::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::StructDecl
+pub fn wxsl_lang::ast::StructDecl::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::StructDecl
+pub fn wxsl_lang::ast::StructDecl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::StructDecl
+impl core::marker::Freeze for wxsl_lang::ast::StructDecl
+impl core::marker::Send for wxsl_lang::ast::StructDecl
+impl core::marker::Sync for wxsl_lang::ast::StructDecl
+impl core::marker::Unpin for wxsl_lang::ast::StructDecl
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::StructDecl
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::StructDecl
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::StructDecl
+pub struct wxsl_lang::ast::StructMember
+pub wxsl_lang::ast::StructMember::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::StructMember::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::StructMember::span: wxsl_lang::Span
+pub wxsl_lang::ast::StructMember::ty: wxsl_lang::ast::TypeExpr
+impl core::clone::Clone for wxsl_lang::ast::StructMember
+pub fn wxsl_lang::ast::StructMember::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::StructMember
+pub fn wxsl_lang::ast::StructMember::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::StructMember
+pub fn wxsl_lang::ast::StructMember::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::StructMember
+impl core::marker::Freeze for wxsl_lang::ast::StructMember
+impl core::marker::Send for wxsl_lang::ast::StructMember
+impl core::marker::Sync for wxsl_lang::ast::StructMember
+impl core::marker::Unpin for wxsl_lang::ast::StructMember
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::StructMember
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::StructMember
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::StructMember
+pub struct wxsl_lang::ast::SwitchClause
+pub wxsl_lang::ast::SwitchClause::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::SwitchClause::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::SwitchClause::selectors: alloc::vec::Vec<wxsl_lang::ast::CaseSelector>
+pub wxsl_lang::ast::SwitchClause::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::SwitchClause
+pub fn wxsl_lang::ast::SwitchClause::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::SwitchClause
+pub fn wxsl_lang::ast::SwitchClause::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::SwitchClause
+pub fn wxsl_lang::ast::SwitchClause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::SwitchClause
+impl core::marker::Freeze for wxsl_lang::ast::SwitchClause
+impl core::marker::Send for wxsl_lang::ast::SwitchClause
+impl core::marker::Sync for wxsl_lang::ast::SwitchClause
+impl core::marker::Unpin for wxsl_lang::ast::SwitchClause
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::SwitchClause
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::SwitchClause
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::SwitchClause
+pub struct wxsl_lang::ast::SwitchStatement
+pub wxsl_lang::ast::SwitchStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::SwitchStatement::clauses: alloc::vec::Vec<wxsl_lang::ast::SwitchClause>
+pub wxsl_lang::ast::SwitchStatement::selector: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::SwitchStatement::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::SwitchStatement
+pub fn wxsl_lang::ast::SwitchStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::SwitchStatement
+pub fn wxsl_lang::ast::SwitchStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::SwitchStatement
+pub fn wxsl_lang::ast::SwitchStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::SwitchStatement
+impl core::marker::Freeze for wxsl_lang::ast::SwitchStatement
+impl core::marker::Send for wxsl_lang::ast::SwitchStatement
+impl core::marker::Sync for wxsl_lang::ast::SwitchStatement
+impl core::marker::Unpin for wxsl_lang::ast::SwitchStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::SwitchStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::SwitchStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::SwitchStatement
+pub struct wxsl_lang::ast::TemplateArg
+pub wxsl_lang::ast::TemplateArg::expr: wxsl_lang::ast::Expr
+impl core::clone::Clone for wxsl_lang::ast::TemplateArg
+pub fn wxsl_lang::ast::TemplateArg::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::TemplateArg
+pub fn wxsl_lang::ast::TemplateArg::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::TemplateArg
+pub fn wxsl_lang::ast::TemplateArg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::TemplateArg
+pub fn wxsl_lang::ast::TemplateArg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::TemplateArg
+impl core::marker::Freeze for wxsl_lang::ast::TemplateArg
+impl core::marker::Send for wxsl_lang::ast::TemplateArg
+impl core::marker::Sync for wxsl_lang::ast::TemplateArg
+impl core::marker::Unpin for wxsl_lang::ast::TemplateArg
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::TemplateArg
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::TemplateArg
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::TemplateArg
+pub struct wxsl_lang::ast::TypeExpr
+pub wxsl_lang::ast::TypeExpr::name: wxsl_lang::Spanned<alloc::string::String>
+pub wxsl_lang::ast::TypeExpr::span: wxsl_lang::Span
+pub wxsl_lang::ast::TypeExpr::template_args: alloc::vec::Vec<wxsl_lang::ast::TemplateArg>
+impl wxsl_lang::ast::TypeExpr
+pub fn wxsl_lang::ast::TypeExpr::is_named(&self, &str) -> bool
+pub fn wxsl_lang::ast::TypeExpr::named(impl core::convert::Into<alloc::string::String>, wxsl_lang::Span) -> Self
+pub fn wxsl_lang::ast::TypeExpr::same_type(&self, &wxsl_lang::ast::TypeExpr) -> bool
+impl core::clone::Clone for wxsl_lang::ast::TypeExpr
+pub fn wxsl_lang::ast::TypeExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::TypeExpr
+pub fn wxsl_lang::ast::TypeExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::TypeExpr
+pub fn wxsl_lang::ast::TypeExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::TypeExpr
+pub fn wxsl_lang::ast::TypeExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::TypeExpr
+impl core::marker::Freeze for wxsl_lang::ast::TypeExpr
+impl core::marker::Send for wxsl_lang::ast::TypeExpr
+impl core::marker::Sync for wxsl_lang::ast::TypeExpr
+impl core::marker::Unpin for wxsl_lang::ast::TypeExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::TypeExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::TypeExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::TypeExpr
+pub struct wxsl_lang::ast::UnaryExpr
+pub wxsl_lang::ast::UnaryExpr::op: wxsl_lang::ast::UnaryOp
+pub wxsl_lang::ast::UnaryExpr::operand: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::UnaryExpr::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::UnaryExpr
+pub fn wxsl_lang::ast::UnaryExpr::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::UnaryExpr
+pub fn wxsl_lang::ast::UnaryExpr::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::UnaryExpr
+pub fn wxsl_lang::ast::UnaryExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::UnaryExpr
+impl core::marker::Freeze for wxsl_lang::ast::UnaryExpr
+impl core::marker::Send for wxsl_lang::ast::UnaryExpr
+impl core::marker::Sync for wxsl_lang::ast::UnaryExpr
+impl core::marker::Unpin for wxsl_lang::ast::UnaryExpr
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::UnaryExpr
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::UnaryExpr
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::UnaryExpr
+pub struct wxsl_lang::ast::WhileStatement
+pub wxsl_lang::ast::WhileStatement::attributes: alloc::vec::Vec<wxsl_lang::ast::Attribute>
+pub wxsl_lang::ast::WhileStatement::body: wxsl_lang::ast::Block
+pub wxsl_lang::ast::WhileStatement::condition: wxsl_lang::ast::Expr
+pub wxsl_lang::ast::WhileStatement::span: wxsl_lang::Span
+impl core::clone::Clone for wxsl_lang::ast::WhileStatement
+pub fn wxsl_lang::ast::WhileStatement::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::WhileStatement
+pub fn wxsl_lang::ast::WhileStatement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::ast::WhileStatement
+pub fn wxsl_lang::ast::WhileStatement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::WhileStatement
+impl core::marker::Freeze for wxsl_lang::ast::WhileStatement
+impl core::marker::Send for wxsl_lang::ast::WhileStatement
+impl core::marker::Sync for wxsl_lang::ast::WhileStatement
+impl core::marker::Unpin for wxsl_lang::ast::WhileStatement
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::WhileStatement
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::WhileStatement
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::WhileStatement
+pub mod wxsl_lang::lexer
+pub fn wxsl_lang::lexer::disambiguate(alloc::vec::Vec<wxsl_lang::Spanned<wxsl_lang::token::Tok>>) -> alloc::vec::Vec<wxsl_lang::Spanned<wxsl_lang::token::Tok>>
+pub fn wxsl_lang::lexer::tokenize(&str) -> core::result::Result<alloc::vec::Vec<wxsl_lang::Spanned<wxsl_lang::token::Tok>>, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::lexer::tokenize_with_comments(&str) -> core::result::Result<(alloc::vec::Vec<wxsl_lang::Spanned<wxsl_lang::token::Tok>>, alloc::vec::Vec<wxsl_lang::Span>), wxsl_lang::Diagnostics>
+pub mod wxsl_lang::token
+pub enum wxsl_lang::token::Tok
+pub wxsl_lang::token::Tok::Alias
+pub wxsl_lang::token::Tok::And
+pub wxsl_lang::token::Tok::AndAnd
+pub wxsl_lang::token::Tok::AndEq
+pub wxsl_lang::token::Tok::Arrow
+pub wxsl_lang::token::Tok::As
+pub wxsl_lang::token::Tok::Attr(alloc::string::String)
+pub wxsl_lang::token::Tok::BraceClose
+pub wxsl_lang::token::Tok::BraceOpen
+pub wxsl_lang::token::Tok::BracketClose
+pub wxsl_lang::token::Tok::BracketOpen
+pub wxsl_lang::token::Tok::Break
+pub wxsl_lang::token::Tok::Caret
+pub wxsl_lang::token::Tok::CaretEq
+pub wxsl_lang::token::Tok::Case
+pub wxsl_lang::token::Tok::Colon
+pub wxsl_lang::token::Tok::ColonColon
+pub wxsl_lang::token::Tok::Comma
+pub wxsl_lang::token::Tok::Const
+pub wxsl_lang::token::Tok::ConstAssert
+pub wxsl_lang::token::Tok::Continue
+pub wxsl_lang::token::Tok::Continuing
+pub wxsl_lang::token::Tok::Default
+pub wxsl_lang::token::Tok::Discard
+pub wxsl_lang::token::Tok::Dot
+pub wxsl_lang::token::Tok::Else
+pub wxsl_lang::token::Tok::Enable
+pub wxsl_lang::token::Tok::Eq
+pub wxsl_lang::token::Tok::EqEq
+pub wxsl_lang::token::Tok::False
+pub wxsl_lang::token::Tok::FloatLit(alloc::string::String)
+pub wxsl_lang::token::Tok::Fn
+pub wxsl_lang::token::Tok::For
+pub wxsl_lang::token::Tok::Ge
+pub wxsl_lang::token::Tok::Gt
+pub wxsl_lang::token::Tok::Ident(alloc::string::String)
+pub wxsl_lang::token::Tok::If
+pub wxsl_lang::token::Tok::Import
+pub wxsl_lang::token::Tok::IntLit(alloc::string::String)
+pub wxsl_lang::token::Tok::Le
+pub wxsl_lang::token::Tok::Let
+pub wxsl_lang::token::Tok::Loop
+pub wxsl_lang::token::Tok::Lt
+pub wxsl_lang::token::Tok::Minus
+pub wxsl_lang::token::Tok::MinusEq
+pub wxsl_lang::token::Tok::MinusMinus
+pub wxsl_lang::token::Tok::Not
+pub wxsl_lang::token::Tok::NotEq
+pub wxsl_lang::token::Tok::Or
+pub wxsl_lang::token::Tok::OrEq
+pub wxsl_lang::token::Tok::OrOr
+pub wxsl_lang::token::Tok::Override
+pub wxsl_lang::token::Tok::ParenClose
+pub wxsl_lang::token::Tok::ParenOpen
+pub wxsl_lang::token::Tok::Percent
+pub wxsl_lang::token::Tok::PercentEq
+pub wxsl_lang::token::Tok::Plus
+pub wxsl_lang::token::Tok::PlusEq
+pub wxsl_lang::token::Tok::PlusPlus
+pub wxsl_lang::token::Tok::Requires
+pub wxsl_lang::token::Tok::Return
+pub wxsl_lang::token::Tok::Semi
+pub wxsl_lang::token::Tok::Shl
+pub wxsl_lang::token::Tok::ShlEq
+pub wxsl_lang::token::Tok::Shr
+pub wxsl_lang::token::Tok::ShrEq
+pub wxsl_lang::token::Tok::Slash
+pub wxsl_lang::token::Tok::SlashEq
+pub wxsl_lang::token::Tok::Star
+pub wxsl_lang::token::Tok::StarEq
+pub wxsl_lang::token::Tok::Struct
+pub wxsl_lang::token::Tok::Switch
+pub wxsl_lang::token::Tok::TemplateClose
+pub wxsl_lang::token::Tok::TemplateOpen
+pub wxsl_lang::token::Tok::Tilde
+pub wxsl_lang::token::Tok::True
+pub wxsl_lang::token::Tok::Underscore
+pub wxsl_lang::token::Tok::Var
+pub wxsl_lang::token::Tok::While
+impl wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::can_precede_template(&self) -> bool
+pub fn wxsl_lang::token::Tok::keyword(&str) -> core::option::Option<wxsl_lang::token::Tok>
+impl core::clone::Clone for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::token::Tok
+impl core::cmp::PartialEq for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::token::Tok
+impl core::marker::Freeze for wxsl_lang::token::Tok
+impl core::marker::Send for wxsl_lang::token::Tok
+impl core::marker::Sync for wxsl_lang::token::Tok
+impl core::marker::Unpin for wxsl_lang::token::Tok
+impl core::marker::UnsafeUnpin for wxsl_lang::token::Tok
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::token::Tok
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::token::Tok
+pub enum wxsl_lang::CompileError
+pub wxsl_lang::CompileError::InvalidModulePath
+pub wxsl_lang::CompileError::InvalidModulePath::module: alloc::string::String
+pub wxsl_lang::CompileError::ShaderCompile
+pub wxsl_lang::CompileError::ShaderCompile::diagnostic: alloc::string::String
+pub wxsl_lang::CompileError::ShaderCompile::module: alloc::string::String
+impl core::error::Error for wxsl_lang::CompileError
+impl core::fmt::Debug for wxsl_lang::CompileError
+pub fn wxsl_lang::CompileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::CompileError
+pub fn wxsl_lang::CompileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_lang::CompileError
+impl core::marker::Send for wxsl_lang::CompileError
+impl core::marker::Sync for wxsl_lang::CompileError
+impl core::marker::Unpin for wxsl_lang::CompileError
+impl core::marker::UnsafeUnpin for wxsl_lang::CompileError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::CompileError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::CompileError
+pub enum wxsl_lang::Severity
+pub wxsl_lang::Severity::Error
+pub wxsl_lang::Severity::Warning
+impl core::clone::Clone for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::Severity
+impl core::cmp::Ord for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_lang::Severity
+pub fn wxsl_lang::Severity::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_lang::Severity
+impl core::marker::StructuralPartialEq for wxsl_lang::Severity
+impl core::marker::Freeze for wxsl_lang::Severity
+impl core::marker::Send for wxsl_lang::Severity
+impl core::marker::Sync for wxsl_lang::Severity
+impl core::marker::Unpin for wxsl_lang::Severity
+impl core::marker::UnsafeUnpin for wxsl_lang::Severity
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Severity
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Severity
+pub enum wxsl_lang::Tok
+pub wxsl_lang::Tok::Alias
+pub wxsl_lang::Tok::And
+pub wxsl_lang::Tok::AndAnd
+pub wxsl_lang::Tok::AndEq
+pub wxsl_lang::Tok::Arrow
+pub wxsl_lang::Tok::As
+pub wxsl_lang::Tok::Attr(alloc::string::String)
+pub wxsl_lang::Tok::BraceClose
+pub wxsl_lang::Tok::BraceOpen
+pub wxsl_lang::Tok::BracketClose
+pub wxsl_lang::Tok::BracketOpen
+pub wxsl_lang::Tok::Break
+pub wxsl_lang::Tok::Caret
+pub wxsl_lang::Tok::CaretEq
+pub wxsl_lang::Tok::Case
+pub wxsl_lang::Tok::Colon
+pub wxsl_lang::Tok::ColonColon
+pub wxsl_lang::Tok::Comma
+pub wxsl_lang::Tok::Const
+pub wxsl_lang::Tok::ConstAssert
+pub wxsl_lang::Tok::Continue
+pub wxsl_lang::Tok::Continuing
+pub wxsl_lang::Tok::Default
+pub wxsl_lang::Tok::Discard
+pub wxsl_lang::Tok::Dot
+pub wxsl_lang::Tok::Else
+pub wxsl_lang::Tok::Enable
+pub wxsl_lang::Tok::Eq
+pub wxsl_lang::Tok::EqEq
+pub wxsl_lang::Tok::False
+pub wxsl_lang::Tok::FloatLit(alloc::string::String)
+pub wxsl_lang::Tok::Fn
+pub wxsl_lang::Tok::For
+pub wxsl_lang::Tok::Ge
+pub wxsl_lang::Tok::Gt
+pub wxsl_lang::Tok::Ident(alloc::string::String)
+pub wxsl_lang::Tok::If
+pub wxsl_lang::Tok::Import
+pub wxsl_lang::Tok::IntLit(alloc::string::String)
+pub wxsl_lang::Tok::Le
+pub wxsl_lang::Tok::Let
+pub wxsl_lang::Tok::Loop
+pub wxsl_lang::Tok::Lt
+pub wxsl_lang::Tok::Minus
+pub wxsl_lang::Tok::MinusEq
+pub wxsl_lang::Tok::MinusMinus
+pub wxsl_lang::Tok::Not
+pub wxsl_lang::Tok::NotEq
+pub wxsl_lang::Tok::Or
+pub wxsl_lang::Tok::OrEq
+pub wxsl_lang::Tok::OrOr
+pub wxsl_lang::Tok::Override
+pub wxsl_lang::Tok::ParenClose
+pub wxsl_lang::Tok::ParenOpen
+pub wxsl_lang::Tok::Percent
+pub wxsl_lang::Tok::PercentEq
+pub wxsl_lang::Tok::Plus
+pub wxsl_lang::Tok::PlusEq
+pub wxsl_lang::Tok::PlusPlus
+pub wxsl_lang::Tok::Requires
+pub wxsl_lang::Tok::Return
+pub wxsl_lang::Tok::Semi
+pub wxsl_lang::Tok::Shl
+pub wxsl_lang::Tok::ShlEq
+pub wxsl_lang::Tok::Shr
+pub wxsl_lang::Tok::ShrEq
+pub wxsl_lang::Tok::Slash
+pub wxsl_lang::Tok::SlashEq
+pub wxsl_lang::Tok::Star
+pub wxsl_lang::Tok::StarEq
+pub wxsl_lang::Tok::Struct
+pub wxsl_lang::Tok::Switch
+pub wxsl_lang::Tok::TemplateClose
+pub wxsl_lang::Tok::TemplateOpen
+pub wxsl_lang::Tok::Tilde
+pub wxsl_lang::Tok::True
+pub wxsl_lang::Tok::Underscore
+pub wxsl_lang::Tok::Var
+pub wxsl_lang::Tok::While
+impl wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::can_precede_template(&self) -> bool
+pub fn wxsl_lang::token::Tok::keyword(&str) -> core::option::Option<wxsl_lang::token::Tok>
+impl core::clone::Clone for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::token::Tok
+impl core::cmp::PartialEq for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::token::Tok
+pub fn wxsl_lang::token::Tok::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::token::Tok
+impl core::marker::Freeze for wxsl_lang::token::Tok
+impl core::marker::Send for wxsl_lang::token::Tok
+impl core::marker::Sync for wxsl_lang::token::Tok
+impl core::marker::Unpin for wxsl_lang::token::Tok
+impl core::marker::UnsafeUnpin for wxsl_lang::token::Tok
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::token::Tok
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::token::Tok
+pub enum wxsl_lang::Value
+pub wxsl_lang::Value::Bool(bool)
+pub wxsl_lang::Value::Float(f64)
+pub wxsl_lang::Value::Int(i64)
+impl wxsl_lang::Value
+pub fn wxsl_lang::Value::literal(&self) -> core::option::Option<alloc::string::String>
+pub fn wxsl_lang::Value::parse(&str) -> core::option::Option<Self>
+pub fn wxsl_lang::Value::wgsl_type(&self) -> &'static str
+impl core::clone::Clone for wxsl_lang::Value
+pub fn wxsl_lang::Value::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::Value
+pub fn wxsl_lang::Value::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_lang::Value
+pub fn wxsl_lang::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::Value
+pub fn wxsl_lang::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_lang::Value
+impl core::marker::StructuralPartialEq for wxsl_lang::Value
+impl core::marker::Freeze for wxsl_lang::Value
+impl core::marker::Send for wxsl_lang::Value
+impl core::marker::Sync for wxsl_lang::Value
+impl core::marker::Unpin for wxsl_lang::Value
+impl core::marker::UnsafeUnpin for wxsl_lang::Value
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Value
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Value
+pub struct wxsl_lang::Diagnostic
+pub wxsl_lang::Diagnostic::labels: alloc::vec::Vec<wxsl_lang::diagnostic::Label>
+pub wxsl_lang::Diagnostic::message: alloc::string::String
+pub wxsl_lang::Diagnostic::module: core::option::Option<alloc::string::String>
+pub wxsl_lang::Diagnostic::notes: alloc::vec::Vec<alloc::string::String>
+pub wxsl_lang::Diagnostic::severity: wxsl_lang::Severity
+pub wxsl_lang::Diagnostic::span: wxsl_lang::Span
+impl wxsl_lang::Diagnostic
+pub fn wxsl_lang::Diagnostic::error(impl core::convert::Into<alloc::string::String>, wxsl_lang::Span) -> Self
+pub fn wxsl_lang::Diagnostic::in_module(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_lang::Diagnostic::or_module(self, &str) -> Self
+pub fn wxsl_lang::Diagnostic::render(&self, &dyn core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> alloc::string::String
+pub fn wxsl_lang::Diagnostic::warning(impl core::convert::Into<alloc::string::String>, wxsl_lang::Span) -> Self
+pub fn wxsl_lang::Diagnostic::with_label(self, wxsl_lang::Span, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_lang::Diagnostic::with_label_in(self, wxsl_lang::Span, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_lang::Diagnostic::with_note(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for wxsl_lang::Diagnostic
+pub fn wxsl_lang::Diagnostic::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::Diagnostic
+impl core::cmp::PartialEq for wxsl_lang::Diagnostic
+pub fn wxsl_lang::Diagnostic::eq(&self, &Self) -> bool
+impl core::convert::From<wxsl_lang::Diagnostic> for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::from(wxsl_lang::Diagnostic) -> Self
+impl core::fmt::Debug for wxsl_lang::Diagnostic
+pub fn wxsl_lang::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::Diagnostic
+impl core::marker::Freeze for wxsl_lang::Diagnostic
+impl core::marker::Send for wxsl_lang::Diagnostic
+impl core::marker::Sync for wxsl_lang::Diagnostic
+impl core::marker::Unpin for wxsl_lang::Diagnostic
+impl core::marker::UnsafeUnpin for wxsl_lang::Diagnostic
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Diagnostic
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Diagnostic
+pub struct wxsl_lang::Diagnostics
+impl wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::extend(&mut self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_lang::Diagnostic>)
+pub fn wxsl_lang::Diagnostics::has_errors(&self) -> bool
+pub fn wxsl_lang::Diagnostics::into_vec(self) -> alloc::vec::Vec<wxsl_lang::Diagnostic>
+pub fn wxsl_lang::Diagnostics::is_empty(&self) -> bool
+pub fn wxsl_lang::Diagnostics::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_lang::Diagnostic>
+pub fn wxsl_lang::Diagnostics::len(&self) -> usize
+pub fn wxsl_lang::Diagnostics::new() -> Self
+pub fn wxsl_lang::Diagnostics::push(&mut self, wxsl_lang::Diagnostic)
+pub fn wxsl_lang::Diagnostics::render(&self, &dyn core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> alloc::string::String
+impl core::clone::Clone for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::Diagnostics
+impl core::cmp::PartialEq for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::eq(&self, &Self) -> bool
+impl core::convert::From<wxsl_lang::Diagnostic> for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::from(wxsl_lang::Diagnostic) -> Self
+impl core::default::Default for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::default() -> Self
+impl core::fmt::Debug for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::Diagnostics
+pub fn wxsl_lang::Diagnostics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::Diagnostics
+impl core::marker::Freeze for wxsl_lang::Diagnostics
+impl core::marker::Send for wxsl_lang::Diagnostics
+impl core::marker::Sync for wxsl_lang::Diagnostics
+impl core::marker::Unpin for wxsl_lang::Diagnostics
+impl core::marker::UnsafeUnpin for wxsl_lang::Diagnostics
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Diagnostics
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Diagnostics
+pub struct wxsl_lang::Module
+pub wxsl_lang::Module::declarations: alloc::vec::Vec<wxsl_lang::ast::Declaration>
+pub wxsl_lang::Module::directives: alloc::vec::Vec<wxsl_lang::ast::Directive>
+pub wxsl_lang::Module::imports: alloc::vec::Vec<wxsl_lang::ast::Import>
+impl wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::declaration(&self, &str) -> core::option::Option<&wxsl_lang::ast::Declaration>
+pub fn wxsl_lang::ast::Module::macros(&self) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_lang::ast::GlobalValue>
+impl core::clone::Clone for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::default() -> Self
+impl core::fmt::Debug for wxsl_lang::ast::Module
+pub fn wxsl_lang::ast::Module::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::Module
+impl core::marker::Freeze for wxsl_lang::ast::Module
+impl core::marker::Send for wxsl_lang::ast::Module
+impl core::marker::Sync for wxsl_lang::ast::Module
+impl core::marker::Unpin for wxsl_lang::ast::Module
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::Module
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::Module
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::Module
+pub struct wxsl_lang::ModulePath
+pub wxsl_lang::ModulePath::segments: alloc::vec::Vec<alloc::string::String>
+impl wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::join(&self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_lang::ast::ModulePath::last(&self) -> core::option::Option<&str>
+pub fn wxsl_lang::ast::ModulePath::new(impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<alloc::string::String>>) -> Self
+pub fn wxsl_lang::ast::ModulePath::parent(&self) -> core::option::Option<Self>
+pub fn wxsl_lang::ast::ModulePath::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::ast::ModulePath
+impl core::cmp::Ord for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_lang::ast::ModulePath
+pub fn wxsl_lang::ast::ModulePath::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for wxsl_lang::ast::ModulePath
+impl core::marker::Freeze for wxsl_lang::ast::ModulePath
+impl core::marker::Send for wxsl_lang::ast::ModulePath
+impl core::marker::Sync for wxsl_lang::ast::ModulePath
+impl core::marker::Unpin for wxsl_lang::ast::ModulePath
+impl core::marker::UnsafeUnpin for wxsl_lang::ast::ModulePath
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::ast::ModulePath
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::ast::ModulePath
+pub struct wxsl_lang::Modules
+impl wxsl_lang::Modules
+pub fn wxsl_lang::Modules::contains(&self, &str) -> bool
+pub fn wxsl_lang::Modules::get(&self, &str) -> core::option::Option<&str>
+pub fn wxsl_lang::Modules::insert(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
+pub fn wxsl_lang::Modules::insert_all<P: core::convert::Into<alloc::string::String>, S: core::convert::Into<alloc::string::String>>(&mut self, impl core::iter::traits::collect::IntoIterator<Item = (P, S)>)
+pub fn wxsl_lang::Modules::is_empty(&self) -> bool
+pub fn wxsl_lang::Modules::len(&self) -> usize
+pub fn wxsl_lang::Modules::new() -> Self
+pub fn wxsl_lang::Modules::paths(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+impl core::clone::Clone for wxsl_lang::Modules
+pub fn wxsl_lang::Modules::clone(&self) -> Self
+impl core::default::Default for wxsl_lang::Modules
+pub fn wxsl_lang::Modules::default() -> Self
+impl core::fmt::Debug for wxsl_lang::Modules
+pub fn wxsl_lang::Modules::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_lang::Modules
+impl core::marker::Send for wxsl_lang::Modules
+impl core::marker::Sync for wxsl_lang::Modules
+impl core::marker::Unpin for wxsl_lang::Modules
+impl core::marker::UnsafeUnpin for wxsl_lang::Modules
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Modules
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Modules
+pub struct wxsl_lang::Span
+pub wxsl_lang::Span::end: u32
+pub wxsl_lang::Span::start: u32
+impl wxsl_lang::Span
+pub const fn wxsl_lang::Span::at(u32) -> Self
+pub fn wxsl_lang::Span::is_empty(&self) -> bool
+pub fn wxsl_lang::Span::join(self, wxsl_lang::Span) -> wxsl_lang::Span
+pub fn wxsl_lang::Span::len(&self) -> u32
+pub fn wxsl_lang::Span::line_column(&self, &str) -> (usize, usize)
+pub const fn wxsl_lang::Span::new(u32, u32) -> Self
+pub fn wxsl_lang::Span::range(&self) -> core::ops::range::Range<usize>
+pub fn wxsl_lang::Span::text<'a>(&self, &'a str) -> core::option::Option<&'a str>
+impl core::clone::Clone for wxsl_lang::Span
+pub fn wxsl_lang::Span::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_lang::Span
+impl core::cmp::Ord for wxsl_lang::Span
+pub fn wxsl_lang::Span::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for wxsl_lang::Span
+pub fn wxsl_lang::Span::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for wxsl_lang::Span
+pub fn wxsl_lang::Span::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::convert::From<core::ops::range::Range<usize>> for wxsl_lang::Span
+pub fn wxsl_lang::Span::from(core::ops::range::Range<usize>) -> Self
+impl core::default::Default for wxsl_lang::Span
+pub fn wxsl_lang::Span::default() -> Self
+impl core::fmt::Debug for wxsl_lang::Span
+pub fn wxsl_lang::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_lang::Span
+pub fn wxsl_lang::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_lang::Span
+pub fn wxsl_lang::Span::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_lang::Span
+impl core::marker::StructuralPartialEq for wxsl_lang::Span
+impl core::marker::Freeze for wxsl_lang::Span
+impl core::marker::Send for wxsl_lang::Span
+impl core::marker::Sync for wxsl_lang::Span
+impl core::marker::Unpin for wxsl_lang::Span
+impl core::marker::UnsafeUnpin for wxsl_lang::Span
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Span
+impl core::panic::unwind_safe::UnwindSafe for wxsl_lang::Span
+pub struct wxsl_lang::Spanned<T>
+pub wxsl_lang::Spanned::node: T
+pub wxsl_lang::Spanned::span: wxsl_lang::Span
+impl<T> wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::as_ref(&self) -> wxsl_lang::Spanned<&T>
+pub fn wxsl_lang::Spanned<T>::map<U>(self, impl core::ops::function::FnOnce(T) -> U) -> wxsl_lang::Spanned<U>
+pub const fn wxsl_lang::Spanned<T>::new(T, wxsl_lang::Span) -> Self
+impl<T: core::clone::Clone> core::clone::Clone for wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::clone(&self) -> Self
+impl<T: core::cmp::Eq> core::cmp::Eq for wxsl_lang::Spanned<T>
+impl<T: core::cmp::PartialEq> core::cmp::PartialEq for wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::eq(&self, &Self) -> bool
+impl<T: core::default::Default> core::default::Default for wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::default() -> Self
+impl<T: core::fmt::Debug> core::fmt::Debug for wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: core::fmt::Display> core::fmt::Display for wxsl_lang::Spanned<T>
+pub fn wxsl_lang::Spanned<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: core::marker::Copy> core::marker::Copy for wxsl_lang::Spanned<T>
+impl<T> core::ops::deref::Deref for wxsl_lang::Spanned<T>
+pub type wxsl_lang::Spanned<T>::Target = T
+pub fn wxsl_lang::Spanned<T>::deref(&self) -> &T
+impl<T> core::marker::Freeze for wxsl_lang::Spanned<T> where T: core::marker::Freeze
+impl<T> core::marker::Send for wxsl_lang::Spanned<T> where T: core::marker::Send
+impl<T> core::marker::Sync for wxsl_lang::Spanned<T> where T: core::marker::Sync
+impl<T> core::marker::Unpin for wxsl_lang::Spanned<T> where T: core::marker::Unpin
+impl<T> core::marker::UnsafeUnpin for wxsl_lang::Spanned<T> where T: core::marker::UnsafeUnpin
+impl<T> core::panic::unwind_safe::RefUnwindSafe for wxsl_lang::Spanned<T> where T: core::panic::unwind_safe::RefUnwindSafe
+impl<T> core::panic::unwind_safe::UnwindSafe for wxsl_lang::Spanned<T> where T: core::panic::unwind_safe::UnwindSafe
+pub fn wxsl_lang::compile(&wxsl_lang::Modules, &str, &wxsl_lang::Bindings) -> core::result::Result<alloc::string::String, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::compile_to_wxsl(&wxsl_lang::Modules, &str, &wxsl_lang::Bindings) -> core::result::Result<alloc::string::String, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::compile_with_macros(&wxsl_lang::Modules, &str, &wxsl_core::macros::MacroSet) -> core::result::Result<alloc::string::String, wxsl_lang::CompileError>
+pub fn wxsl_lang::emit(&wxsl_lang::ast::Module) -> alloc::string::String
+pub fn wxsl_lang::emit_wgsl(&wxsl_lang::ast::Module) -> core::result::Result<alloc::string::String, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::mangle(&str, &str) -> alloc::string::String
+pub fn wxsl_lang::node_from_source(&str, &str) -> core::result::Result<wxsl_core::node::NodeDefinition, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::parse(&str) -> core::result::Result<wxsl_lang::ast::Module, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::parse_expr(&str) -> core::result::Result<wxsl_lang::ast::Expr, wxsl_lang::Diagnostics>
+pub fn wxsl_lang::resolve(&wxsl_lang::Modules, &str, &wxsl_lang::Bindings) -> core::result::Result<wxsl_lang::ast::Module, wxsl_lang::Diagnostics>
+pub type wxsl_lang::Bindings = alloc::collections::btree::map::BTreeMap<alloc::string::String, wxsl_lang::Value>
+pub type wxsl_lang::Origins = alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>

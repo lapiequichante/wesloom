@@ -439,7 +439,7 @@ const UNARY: &[Unary] = &[
 /// sockets ([ADR 0015](../../../docs/adr/0015-generic-sockets-for-arithmetic-nodes.md)).
 /// The families whose operands WGSL lets differ declare two parameters and
 /// derive the result, rather than forcing one shared `T` on both — see
-/// [`Binary::rule`] and
+/// `Binary::rule` and
 /// [ADR 0018](../../../docs/adr/0018-one-generic-node-per-operation.md).
 pub fn math_nodes() -> Vec<NodeDefinition> {
     let mut defs = Vec::new();

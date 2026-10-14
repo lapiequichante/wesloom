@@ -9,12 +9,19 @@ use crate::api::{self, Response};
 #[serde(rename_all = "snake_case")]
 #[repr(u32)]
 pub enum WxslStatus {
+    /// The call succeeded; `data` holds its output.
     Success = 0,
+    /// A null or oversized input span, or a null result.
     InvalidArgument = 1,
+    /// The caller's ABI version is not this library's; nothing was read.
     AbiMismatch = 2,
+    /// The request or a document in it did not parse or validate.
     InvalidDocument = 3,
+    /// WXSL, codegen or pipeline compilation failed; `data.message` says why.
     CompileError = 4,
+    /// The scene does not fit the setup; `data.incompatibilities` lists every mismatch.
     Incompatible = 5,
+    /// A panic was contained at the boundary. A bug in this library.
     InternalError = 6,
 }
 
@@ -22,7 +29,9 @@ pub enum WxslStatus {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct WxslBytes {
+    /// First byte, or null when `len` is zero.
     pub data: *const u8,
+    /// Length in bytes.
     pub len: usize,
 }
 
@@ -42,16 +51,25 @@ impl WxslBytes {
 /// A computed field: buffer 0=params, 1=user, 2=instance attributes, 3=effect params.
 #[repr(C)]
 pub struct WxslField {
+    /// Field name, as the graph or effect declared it.
     pub name: WxslBytes,
     /// Host storage type (`bool` uses `u32`); logical types are in interface JSON.
     pub ty: WxslBytes,
+    /// Which buffer: 0 material params, 1 user block, 2 instance attributes, 3 effect params.
     pub buffer: u32,
+    /// Bind group of the enclosing buffer.
     pub group: u32,
+    /// Binding of the enclosing buffer within its group.
     pub binding: u32,
+    /// Byte offset of the field in its buffer.
     pub offset: u32,
+    /// Byte size of the field (WGSL padding included, e.g. 48 for `mat3x3f`).
     pub size: u32,
+    /// Alignment of the field in bytes.
     pub align: u32,
+    /// Byte size of the whole enclosing buffer.
     pub buffer_size: u32,
+    /// Alignment of the whole enclosing buffer.
     pub buffer_align: u32,
 }
 

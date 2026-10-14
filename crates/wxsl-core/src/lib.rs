@@ -65,6 +65,15 @@
 //! assert!(shader.source.contains("surface.roughness = n2_out;"));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Stability
+//!
+//! The names re-exported at this root are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)):
+//! the graph, nodes and registry, macros, the material configuration, the
+//! computed resource layouts, and the scene document. Everything reached only
+//! through a module path (`codegen`, `abi`, `lighting`, `stages`, `pipeline`,
+//! `host`, `template`, …) is unstable: documented, usable, and free to change
+//! in any minor version.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

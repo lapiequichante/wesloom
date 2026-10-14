@@ -1,7 +1,7 @@
 //! Editors for the values a socket can carry.
 //!
 //! Which widget a socket gets is decided by its
-//! [`ValueType`](wxsl_core::node::ValueType) and nothing else — that is the
+//! [`ValueType`] and nothing else — that is the
 //! rule ADR 0004 set and ADR 0013 kept: the core node definition carries no
 //! display metadata, so the editor derives everything it needs from the
 //! interface the node already describes.

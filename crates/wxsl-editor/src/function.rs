@@ -10,7 +10,7 @@
 //! palette shows it under `user` in the same session. Nothing is written
 //! to disk; the buffers live as long as the editor.
 //!
-//! [`derive`] is the device-free half — parse, derive, resolve against the
+//! [`derive()`] is the device-free half — parse, derive, resolve against the
 //! library — and answers with the node or with the compiler's diagnostics
 //! placed on their own lines. Whether the WGSL validates is the preview's
 //! to say, the moment a graph uses the node.

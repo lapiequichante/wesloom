@@ -44,8 +44,42 @@
 //! # }
 //! ```
 //!
+//! Then, once per frame: a camera and lights, what to draw, and where.
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use wxsl::render::{single_draw, DrawItem, Environment, Mesh, MeshKind, RenderRequest};
+//! # let (device, queue): (wgpu::Device, wgpu::Queue) = unimplemented!();
+//! # let view: wgpu::TextureView = unimplemented!();
+//! # let mut renderer: wxsl::render::Renderer = unimplemented!();
+//! # let material: wxsl::render::Material = unimplemented!();
+//!
+//! let cube = Mesh::from_kind(&device, MeshKind::Cube);
+//! let environment = Environment::default();
+//! let draws = single_draw(DrawItem::new(&cube, &material));
+//! renderer.render(
+//!     &device,
+//!     &queue,
+//!     &RenderRequest { view: &view, environment: &environment, draws: &draws },
+//! )?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! See `crates/wxsl/examples/pbr_cube.rs` for a complete program: a PBR
-//! cube, authored as a node graph, rendered through either path.
+//! cube, authored as a node graph, rendered through either path, and
+//! `docs/rust.md` for a tour of the main types.
+//!
+//! # Stability
+//!
+//! The workspace is pre-`0.1`. The stable surface it is converging on
+//! ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md))
+//! is what each crate exports at its root, plus the document formats and the
+//! C ABI. Anything reached only through a module path, such as
+//! `wxsl::core::codegen::generate`, is unstable: documented and usable, but
+//! free to change in any minor version.
+
+#![warn(missing_docs)]
 
 pub use wxsl_core as core;
 

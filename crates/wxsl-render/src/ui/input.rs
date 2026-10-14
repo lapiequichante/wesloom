@@ -194,7 +194,7 @@ pub enum UiEvent {
 /// What has happened since the last frame.
 ///
 /// Fed by [`InputState::handle`] as events arrive, and reset by
-/// [`InputState::begin_frame`]. The queries are the vocabulary an
+/// [`InputState::end_frame`]. The queries are the vocabulary an
 /// immediate-mode widget is written in: is the pointer here, was this button
 /// pressed this frame, was this shortcut typed.
 #[derive(Clone, Debug)]
@@ -438,7 +438,7 @@ impl InputState {
         self.focused
     }
 
-    /// The time [`Self::begin_frame`] was last given, in seconds.
+    /// The time [`Self::set_time`] was last given, in seconds.
     pub fn time(&self) -> f64 {
         self.time
     }

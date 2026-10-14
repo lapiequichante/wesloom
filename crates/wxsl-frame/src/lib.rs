@@ -3,6 +3,12 @@
 //! Owns neutral pass/resource descriptions, graph scheduling, pipeline
 //! document compilation, presets, effects, capability checks and frame
 //! environment data. GPU allocation and recording belong to the backend.
+//!
+//! # Stability
+//!
+//! This crate is unstable as a whole ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)). Rust hosts reach its
+//! stable names through `wxsl-render`'s root re-exports; C and C++ hosts reach
+//! it through `wxsl-ffi`'s C ABI.
 
 #![warn(missing_docs)]
 

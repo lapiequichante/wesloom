@@ -345,7 +345,7 @@ impl Renderer {
     /// Ask for the pass labelled `label` to run on the next frame — the
     /// `on demand` policy's half of the bargain (plan2 P10). The name is
     /// the pass's label, which is what a pipeline document (or a
-    /// hand-built [`PassDesc`]) calls it; several passes sharing a label
+    /// hand-built [`PassDesc`](crate::pass::PassDesc)) calls it; several passes sharing a label
     /// are all marked.
     ///
     /// Marks are consumed when the pass runs, so a mark left while the
@@ -527,7 +527,7 @@ impl Renderer {
 
     /// Set one of the parameters the effect behind the pass labelled
     /// `pass` declares. The name is the pass's label — the same name
-    /// [`mark_pass`] and [`pass_run_count`] go by — and the parameter's
+    /// [`Self::mark_pass`] and [`Self::pass_run_count`] go by — and the parameter's
     /// name is the descriptor's.
     ///
     /// A buffer write and nothing else: no variant is recompiled, no
