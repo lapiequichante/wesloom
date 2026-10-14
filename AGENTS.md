@@ -1,575 +1,210 @@
 # AGENTS.md
 
-Guidance for coding agents working in this repository. Before a non-trivial
-change, read this file, `docs/architecture.md`, and the relevant ADR.
+Guidance for coding agents. Before a non-trivial change, read this file,
+`docs/architecture.md`, and the ADRs for the area (`docs/adr/README.md`).
+The current plan is the newest `plan*.md`.
 
 ## Working style
 
-- Prefer the smallest change that fully solves the request. Reuse existing
-  modules, APIs, patterns, and tests before adding abstractions or files.
-- Do not refactor, reformat, rename, or “improve” unrelated code. Keep diffs
-  easy to review and preserve existing public behavior unless the request
-  requires a change.
-- Make reasonable assumptions and proceed; ask only when a missing choice
-  would materially change the design or risk data loss.
-- Verify proportionally: run focused tests first, then the relevant broader
-  checks. Do not skip validation merely to keep the diff small.
-- Keep explanations and comments concise. Document decisions and invariants,
-  not obvious mechanics. Update an ADR only when the design decision changes.
+- Make the smallest change that fully solves the request. Reuse existing
+  modules, APIs, patterns and tests before adding abstractions or files.
+- Don't refactor, reformat or rename unrelated code. Keep public behavior
+  unless the request requires changing it.
+- Make reasonable assumptions and proceed. Ask only when a missing choice
+  would change the design or risk data loss.
+- Verify proportionally: focused tests first, then the broader checks the
+  changed boundary needs.
+- Keep explanations and comments concise. Document decisions and
+  invariants, not mechanics.
 
-## What this repo is
+## The workspace
 
-`wxsl` is a Rust workspace for building shader graphs in
-[WXSL](https://wesl-lang.dev) (WGSL Extended) visually or programmatically,
-and running them through a `wgpu` renderer that can switch between forward
-and deferred pipelines without the graph author doing anything special. It
-also ships a base node library (`wxsl-stdlib`) covering the
-usual granular shader-function ground (math, color, lighting, SDFs, …) —
-see [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
-for the original design, amended by [ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)
-to allow audited permissive ports.
+`wxsl` builds shader graphs in WXSL (WGSL extended) and renders them through
+data-driven forward/deferred pipelines on wgpu, or on Dawn through a C ABI.
+It ships a node library and a self-drawn visual editor. Each module's doc
+comment says what it holds and which ADR governs it; that is the source of
+truth.
 
-**Status: implemented, editor included.** The graph model, WXSL codegen, node
-library, the forward/deferred `wgpu` renderer, its 2D UI layer and the visual
-node editor all work and are tested end to end.
-`crates/wxsl/examples/pbr_cube.rs` is the demo to run first and
-`crates/wxsl/examples/editor.rs` the second. Each module's doc comment says
-what it holds and which ADR governs it; that's the source of truth for "what
-goes here," not this file.
+| Crate | Depends on (in-workspace) | wgpu? |
+|---|---|---|
+| `wxsl-core`: graph model, codegen, documents | nothing | no |
+| `wxsl-lang`: WXSL → WGSL compiler | `wxsl-core` | no |
+| `wxsl-frame`: frame plans, scheduling, presets, effects | `wxsl-core` | no (ADR 0048) |
+| `wxsl-ffi`: data-only C ABI | `core`, `frame`, `lang`, `stdlib` | no (ADR 0049) |
+| `wxsl-stdlib`: node library | `wxsl-core` (+ `wxsl-lang` at build time) | no |
+| `wxsl-render`: wgpu renderer and UI layer | `core`, `frame`, `lang` | yes |
+| `wxsl-editor`: node editor, draws itself | `core`, `render`, `lang` | yes (ADR 0013) |
+| `wxsl`: facade, behind features | all of the above | via `render`/`editor` |
 
-## Map of the workspace
+Boundaries that must hold (ADR 0002):
 
-Full detail, diagrams, and the "why" live in `docs/architecture.md`. Short
-version:
+- `wxsl-core`, `wxsl-frame` and `wxsl-ffi` never depend on wgpu, a GUI
+  toolkit or the renderer. `wxsl-render` is only a dev-dependency of
+  `wxsl-ffi`, used for parity tests.
+- `wxsl-core` and `wxsl-render` never depend on `wxsl-editor` or
+  `wxsl-stdlib`.
+- `wxsl-stdlib → wxsl-lang` stays a **build**-dependency (ADR 0020).
+- No GUI toolkit anywhere; the editor draws itself with the renderer.
+- `dawn/` consumes offline exports, or loads the same data ABI at runtime
+  (ADRs 0051, 0052). Never duplicate variant keys, shader compilation or
+  layout rules in C++.
 
-| Crate | Depends on | Needs GUI toolkit? | Needs wgpu? |
-|---|---|---|---|
-| `wxsl-core` | nothing in-workspace | no | no |
-| `wxsl-frame` | `wxsl-core` | no | no (ADR 0048) |
-| `wxsl-ffi` (C ABI cdylib) | `wxsl-core`, `wxsl-frame`, `wxsl-lang`, `wxsl-stdlib` | no | no (ADR 0049) |
-| `wxsl-render` | `wxsl-core`, `wxsl-frame`, `wxsl-lang` | no | yes |
-| `wxsl-editor` | `wxsl-core`, `wxsl-render`, `wxsl-lang` | no toolkit — it draws itself | yes (ADR 0013) |
-| `wxsl-stdlib` | `wxsl-core` (plus `wxsl-lang` at build time only) | no | no |
-| `wxsl` (facade) | all of the above, behind features | never | via `render`/`editor` features |
+## ADRs
 
-The dependency arrows point *into* `wxsl-core`, plus two more:
-`wxsl-editor → wxsl-render`, because the editor draws itself with the
-renderer rather than with a GUI toolkit (ADR 0013), and
-`wxsl-editor → wxsl-lang`, because its code-panel syntax highlighting
-reuses the compiler's own lexer rather than a second one (ADR 0016). Never
-make `wxsl-core` or `wxsl-render` depend on `wxsl-editor` or `wxsl-stdlib`
-— that's the whole point of the split (ADR 0002).
+If an ADR covers the area and your change conflicts with it, say so and
+propose superseding it; don't work around it quietly. A nontrivial
+architectural choice gets an ADR first: a new public boundary, crate,
+heavy dependency, or a change to the feature matrix.
 
-`wxsl-stdlib → wxsl-lang` is a **build**-dependency and must stay one: the
-node library derives its function nodes from the `.wxsl` files at build time
-(ADR 0020), so `cargo tree -p wxsl-stdlib -e normal` shows only
-`wxsl-core`. Promoting it to a normal dependency would put a shader compiler
-into every build of the node library.
+To write one, copy `docs/adr/template.md` to the next number, keep it short
+(context, decision, consequences), and link it from `docs/adr/README.md`.
+Mark the replaced ADR "Superseded by NNNN". To record drift, edit the
+existing ADR's Consequences section rather than diverging silently.
 
-## Before you start a nontrivial change
+## Licensing
 
-1. Check `docs/adr/` for an existing decision that covers the area. If one
-   exists and your change conflicts with it, say so and propose superseding
-   it (see "Writing an ADR" below) rather than quietly working around it.
-2. If no ADR covers a nontrivial architectural choice you're about to make
-   (a new public trait boundary, a new crate, a new dependency that affects
-   binary size or compile time, a change to the feature-flag matrix), write
-   one first. "Nontrivial" is a judgment call; when in doubt, write it —
-   a short ADR costs little and saves the next agent from re-deriving your
-   reasoning.
-3. Prefer extending an existing module stub over adding new top-level
-   modules. The stubs in each crate's `src/lib.rs` are the intended shape
-   of the codebase, not just placeholders to delete.
+Workspace code is MIT/Apache-2.0. Ports into `wxsl-stdlib` are allowed only
+from audited MIT, Apache-2.0 or BSD-2/3-Clause sources (ADR 0053):
 
-## Writing an ADR
+- check the exact file and its provenance at a pinned commit;
+- keep the copyright and license text;
+- note the source, symbol, revision and your changes in the shader;
+- update the root and packaged `NOTICE`.
 
-Copy `docs/adr/template.md` to `docs/adr/NNNN-short-title.md` (next
-sequential number, check `docs/adr/` for the current max), fill it in, and
-link it from `docs/adr/README.md`. Keep it short: context, decision,
-consequences. If it changes a decision made in a previous ADR, mark the old
-one "Superseded by NNNN" rather than deleting it.
+Any other license needs explicit review. `refs/` is research material,
+never a build input. Details: `crates/wxsl-stdlib/shaders/README.md`.
 
-## Licensing — read this before adding to `wxsl-stdlib`
-
-Workspace-owned code is MIT/Apache-2.0. Imported code retains its upstream
-license and notices; do not assume that attribution relicenses it.
-There is no non-permissive shader crate
-(`wxsl-lygia` was tried and dropped, see
-[ADR 0006](docs/adr/0006-lygia-port-licensing-and-isolation.md), superseded
-by [ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)).
-ADR 0053 permits original code and audited MIT, Apache-2.0 or BSD-2/3-Clause
-ports. Before copying, check the exact file and provenance chain at a pinned
-commit. Preserve copyright/license text and applicable notices, identify the
-source/symbol/revision and changes in the shader, and update root and packaged
-crate `NOTICE`. Review the package's SPDX expression when a new upstream license
-changes redistribution obligations. Other licenses need explicit review;
-non-permissive or unclear sources remain technique-only. `refs/` is ignored
-research material, never a build dependency. See `crates/wxsl-stdlib/shaders/README.md`.
-
-## Build, test, and lint commands
-
-Run from the workspace root:
+## Commands
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-cargo check -p wxsl --no-default-features        # graph model only: no wgpu, no GUI
-cargo check -p wxsl-frame --all-targets         # shared plans: no GPU/WXSL compiler
-cargo tree -p wxsl-frame -e normal             # only wxsl-core in-workspace; no wgpu/GUI
-cargo tree -p wxsl-ffi -e normal               # shared C ABI: no renderer/GUI
+cargo check -p wxsl --no-default-features      # graph model only
+cargo check -p wxsl --features editor          # pulls wxsl-render transitively
+cargo tree -p wxsl-frame -e normal             # only wxsl-core in-workspace
+cargo tree -p wxsl-ffi -e normal               # no renderer/GUI
 cargo tree -p wxsl --no-default-features -e normal | grep -E 'wgpu|winit|egui'  # must print nothing
 ```
 
-Because the whole point of the feature split is that certain combinations
-must compile *without* certain dependencies, don't just check
-`--all-features` and call it done — at minimum also check
-`-p wxsl --no-default-features` and `-p wxsl --features editor` (which
-should pull in `wxsl-render` transitively, per ADR 0002) before
-considering a change to the crate/feature boundaries finished. Note that
-`--workspace --no-default-features` still builds `wxsl-render`, whose
-`wgpu` dependency is not optional — the "no wgpu" guarantee is about the
-facade crate's feature set, not about the workspace.
+A change to crate or feature boundaries is not finished until the
+`--no-default-features` and `--features editor` checks pass, as well as
+`--all-features`.
 
-### Test routing
+### Which test to run
 
-Use the narrowest relevant check while iterating, then run the full checks
-needed by the changed boundary. The commands below are a reference map, not
-a requirement to run every test for every change:
+Iterate with the narrowest check, then run what the changed boundary needs.
+Each test file's header says what it covers.
 
-- graph, typing, codegen, documents: `cargo test -p wxsl-core`
-- scheduling, presets, effects, capabilities and frame layouts: `cargo test -p wxsl-frame`
-- C ABI, generated header and compiler/layout parity: `cargo test -p wxsl-ffi`, then `bash dawn/tests/run_abi_smoke.sh`
-- fixed host layouts or Dawn recording: `cargo test -p wxsl-frame --test host_header`, then `bash dawn/tests/run_renderer_smoke.sh` (requires an adapter)
-- Dawn runtime or category parity: `cargo test -p wxsl-ffi --example bake_docs`, then `bash dawn/tests/run_parity.sh` (requires an adapter)
-- stdlib or generated shader sources: `cargo test -p wxsl-stdlib --test lighting_models`
-- wgpu adapters, shader variants and renderer UI: `cargo test -p wxsl-render`
-- release gate, every shipped shader through the C ABI (ADR 0077): `cargo test -p wxsl-ffi --test release_gate`
-- clustered local lights (ADR 0076): `cargo test -p wxsl-frame light_grid`, then `cargo test -p wxsl --test clustered_lights`
-- WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
-- editor/UI behavior: `cargo test -p wxsl --features editor --test editor_frame`
-- visual/pipeline smoke test: `cargo run -p wxsl --example pbr_cube -- --headless`
-- WebGL2/GL fallback profile (ADR 0075): `cargo test -p wxsl --test downlevel_corpus` (GLSL ES column, no device), then `cargo test -p wxsl --test downlevel` (WebGL2-limits device); wasm: `cargo check -p wxsl --features editor,webgl --target wasm32-unknown-unknown`, browser: `node dawn/tests/web_smoke.mjs` (see `dawn/README.md`)
+| You changed | Run |
+|---|---|
+| graph, typing, codegen, documents | `cargo test -p wxsl-core` |
+| scheduling, presets, effects, capabilities, frame layouts | `cargo test -p wxsl-frame` |
+| stdlib or generated shader sources (corpus gate, ADR 0029) | `cargo test -p wxsl-stdlib --test lighting_models` |
+| a node's WXSL, every node on every stage | `cargo test -p wxsl --test graph_to_wgsl` |
+| C ABI, generated header, compiler/layout parity | `cargo test -p wxsl-ffi`, then `bash dawn/tests/run_abi_smoke.sh` |
+| anything shipped (release gate, ADR 0077) | `cargo test -p wxsl-ffi --test release_gate` |
+| fixed host layouts, Dawn recording | `cargo test -p wxsl-frame --test host_header`, then `bash dawn/tests/run_renderer_smoke.sh` |
+| Dawn runtime or parity | `cargo test -p wxsl-ffi --example bake_docs`, then `bash dawn/tests/run_parity.sh` |
+| wgpu adapters, shader variants, renderer UI | `cargo test -p wxsl-render` |
+| a material or pipeline feature on a device | the matching `cargo test -p wxsl --test <name>` |
+| `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
+| editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
+| WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
+| a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, or `gallery -- --screenshot` |
 
-GPU tests may skip when no adapter is available; a skip is not evidence that
-the GPU path passed. Changes to shared layouts or ABI tables deserve both a
-focused test and the relevant integration/render test.
+The wasm check is
+`cargo check -p wxsl --features editor,webgl --target wasm32-unknown-unknown`.
 
-The detailed coverage notes below are useful for choosing a test, but should
-not be expanded casually when new tests are added; keep this file about
-routing and invariants.
-
-- `cargo test -p wxsl-core` — the graph model: typing, cycle rejection,
-  validation, codegen, macro precedence, stage analysis, and the pipeline
-  document vocabulary (its handle types, and that a pipeline document
-  validates as an ordinary graph). Fast, no GPU, no shader compiler.
-- `cargo test -p wxsl-stdlib --test lighting_models` — the **corpus gate**
-  (ADR 0029): every shader the generators produce, compiled with no device —
-  every shipped model standalone and as a direct dispatch, the switch shape
-  for every telling lighting set, the lighting pass for every set under
-  every binding of the ABI's macro flags, the generated material module
-  for every stage of every set, and the feature half (ADR 0037): the
-  feature-enabled lighting pass under both arms of the feature's macro,
-  the feature module standalone. This is where a generator or template
-  change fails, in about a second, with the compiler's diagnostic.
-- `cargo test -p wxsl --test stage_analysis` — a node the compiler places
-  in the vertex stage and interpolates down (a synthesized stage cut, ADR
-  0032) rendering the same picture as the same value hand-wired through a
-  declared interpolant. Skips with no adapter.
-- `cargo test -p wxsl --test graph_to_wgsl` — the real WXSL compiler
-  over the real shader sources: **every node in the library** compiled on
-  every material stage, the demo graph, macro switching, node-format round
-  trip.
-  A node whose WXSL does not compile fails here. (A node *descriptor*
-  disagreeing with its WXSL is no longer a thing that can happen — the
-  descriptor is derived from the WXSL, ADR 0020.) It also asserts what a
-  stage *leaves out*: a depth prepass module must not contain the
-  material function, which is the whole of what ADR 0025's partitioning
-  bought and the only place it is checked directly.
-- `cargo test -p wxsl --test render_cube` — renders on a real device and
-  compares the two paths' images. Also covers what only a device can show
-  about the render graph: that each instance reads its own row of the
-  transform storage buffer, and that a `Persistent { history: 2 }` resource
-  really does hand a pass the previous frame's pixels. Skips (prints a
-  note, passes) when no adapter is available, so don't read a pass as proof
-  it ran.
-- `cargo test -p wxsl --test material_resources` — what a material
-  declares, on a real device: a parameter reaching the shader at the
-  offset `wxsl-core` computed (at **every** `ValueType`), a graph sampling
-  a real texture, an application-supplied uniform reaching a node, and —
-  the acceptance test of the whole idea — a parameter changing eight times
-  without `cache_stats()` or `pipeline_count()` moving. Skips with no
-  adapter.
-- `cargo test -p wxsl --test material_geometry` — what a material requires
-  of its *geometry*, also on a real device: a declared per-vertex stream
-  arriving interpolated, a thousand instances each reading their own row
-  in the fragment stage, a mesh that cannot supply a stream reported by
-  name, and a glTF file's `COLOR_0` driving a graph. Skips with no
-  adapter.
-- `cargo test -p wxsl --test shadows` — shadows on a real device, and
-  the only place M5's partitioning is checked for being *right* rather
-  than for compiling: an alpha-discarding material casting a perforated
-  shadow and a displacing one casting a displaced shadow are true only
-  if those subgraphs reached a stage that writes no colour. Also that
-  forward and deferred shade the same ground identically, which is what
-  keeps one generated `shadow_factor` rather than two. Skips with
-  no adapter.
-- `cargo test -p wxsl --test lighting_models` — lighting models on a real
-  device (ADR 0028): three models shaded through one deferred lighting
-  pass with forward and deferred still agreeing, the dispatch id channel
-  costing no pixel when the set widens, the clearcoat model's extra
-  target appearing only when it is enabled and its data reaching the
-  model, and both mismatch errors (a model outside the set, a frame
-  against a renderer running another set) reported by name. Skips with no
-  adapter.
-- `cargo test -p wxsl --test interpolants` — a value the vertex partition
-  computes arriving in the fragment stage, two of them not crossing
-  locations, and the four ways of declaring one wrong. The GPU half
-  matters because a location the two entry points number differently
-  compiles fine and draws the wrong thing.
-- `cargo test -p wxsl --test frame_of_reference` — the two ABI flags
-  M5 landed while the vertex stage was open: `wxsl_relative_to_eye` must
-  change no pixel near the origin (an exact equality, because the
-  algebra cancels), and `wxsl_previous_frame` must move every
-  time-driven node back one frame at once.
-- `cargo test -p wxsl --test motion` — the velocity stage and its first
-  two consumers on a real device (ADR 0046): the velocity buffer checked
-  against the projection the test computes itself (translation,
-  rotation, and camera motion — `Environment::previous_camera`'s whole
-  point), a still scene converging under the resolve without inventing
-  motion, the spinning cube settling (the resolve's frame-to-frame
-  difference below the raw chain's, while tracking the scene), the
-  swept cube smearing along its own motion, and the chain leaving the
-  lit frame untouched. Skips with no adapter.
-- `cargo test -p wxsl --test peeling` — dual depth peeling (ADR 0047):
-  four overlapping transparent surfaces, submitted out of depth order,
-  composite to the same front-to-back colour on the baseline path and,
-  when the device can blend `rg32float`, on the native path. A transparent
-  surface behind the opaque plane does not appear. And the tiered shape
-  (ADR 0057): a `max_layers = 0` plate composites over the peeled pair,
-  and the per-object budget is the *draw* count — the peel passes carry
-  the pair for its two layers and nobody for the rest, while still
-  running (`pass_draw_count`, not the run count, is where that shows).
-  Skips with no adapter.
-- `cargo test -p wxsl --test sorting` — draw order as data (ADR 0055):
-  a `render_order` group draws in front of a nearer transparent sheet
-  whichever way the draw list submitted them, and with the pass's sort
-  off the submission order composites — the pass reads depth, never
-  writes it. Skips with no adapter.
-- The geometry tests share `crates/wxsl/tests/probe/mod.rs`, and that is
-  the point:
-  the computed uniform layout and the computed instance row are the only
-  host-shared layouts in the repo with no `#[repr(C)]` mirror to check
-  them against, so they get by test what the mirrors get by construction —
-  and it should be the *same* test. Anything that changes
-  `wxsl_core::resources` should be run against both.
-- `cargo test -p wxsl --test scene` — the scene document: that it round
-  trips through its JSON form, that a tag expression selects what a pass
-  draws, and that a two-instance scene renders. Only the last needs a
-  device.
-- `cargo test -p wxsl-frame` — the render graph's scheduling, which is a
-  pure function and needs no GPU: pass ordering, transient texture reuse,
-  history rotation, buffer resources ordering without ever aliasing, the
-  policy stable-storage rule, and every pass-list mistake that is reported as a named
-  error rather than a `wgpu` complaint. Also the **preset parity** tests
-  (ADR 0033): the compiled forward/deferred preset documents equal the
-  hand-built reference pass lists field for field, schedule identically,
-  and each shipped preset file parses back to the document that generated
-  it. This is where a preset edit that drifts from the pipeline it claims
-  to be fails. And the **effect chain** tests (ADR 0034): a
-  lighting-into-a-resource-then-bloom document compiles and schedules,
-  both spellings of "what bloom reads" agree, and the un-compilable
-  chain shapes (`ImageFromPass`, an input the effect does not declare)
-  are named errors. And the **capability contract** tests (ADR 0044):
-  the setup's published capabilities, the check that reports *every*
-  scene mismatch by name, and the document-version rules — absent
-  version fields read as this build's, a newer one is refused by name,
-  saves stamp both.
-- `cargo test -p wxsl --test execution_policies` — the policies on a real
-  device (ADR 0035): a `once` compute bake (the BRDF LUT) records once and
-  its output is what later frames show, a pool reallocation bakes it
-  again, `on demand` sleeps until marked and stops after, and a
-  document's `policy` setting reaches the pass list with its target
-  promoted to stable storage. Skips with no adapter.
-- `cargo test -p wxsl --test buffer_resources` — buffers as graph
-  resources on a real device (ADR 0036): a compute effect fills a storage
-  buffer, a screen effect reads it as storage and draws it, and the
-  picture's direction proves the data arrived through the pass group.
-  Skips with no adapter.
-- `cargo test -p wxsl --test effect_params` — effect parameters on a real
-  device (ADR 0042): a parameter set through `set_pass_param` on the pass
-  label moves bloom's threshold at the next frame and moves it back, and
-  eleven moves leave `cache_stats().misses` and `pipeline_count()`
-  untouched; the declared defaults render as authored, and a tuned value
-  survives the pass list being replaced under the same label. Skips with
-  no adapter.
-- `cargo test -p wxsl --test semantic_channels` — the feature handshake
-  end to end (ADR 0037): a material pinning `wxsl_subsurface` under a
-  pipeline without the channel, a material resolved against another plan,
-  and the matched pair — each the named error or the picture it should
-  be. Also the load-time half of the contract (ADR 0044): a scene whose
-  material pins the channel is refused at `SceneResources::load_with_plan`
-  — before anything is built, every mismatch named — and loads under the
-  plan that carries it. Skips with no adapter.
-- `cargo test -p wxsl --features editor --test editor_frame` — drives the
-  editor for several frames on a real device: that it draws, that editing
-  recompiles, that a path switch changes the WGSL, that a frame of every
-  input event leaves it drawing, and that the two MSDF backends agree.
-  Also the pipeline canvas (ADR 0043): the deferred preset opened in the
-  editor's second canvas, a bloom drop landing in the *running* pass list
-  exactly one pass longer, a parameter move on it compiling nothing, and
-  the stock pass list coming back with the material canvas. Skips
-  with no adapter, like `render_cube`.
-- `cargo run -p wxsl --example pbr_cube -- --headless` — the fastest way
-  to see whether a change to the ABI or the pipelines still produces a
-  picture. Writes a PNG per path and reports how far apart they are.
-- `cargo run -p wxsl --example gallery -- --screenshot` — every pipeline
-  in one command: the stock presets, the minimal document, the
-  deferred-plus-bloom chain (as authored and again with its parameters
-  tuned live, ADR 0042), the policy/buffer/channel proofs
-  (BRDF-LUT bake, buffer ramp, subsurface channels), the bake demo (ADR
-  0045), the fxaa chain (ADR 0040), and the motion pair — the spinning
-  cube under TAA and the swept cube under its blur (ADR 0046), and the
-  peel demo — a torus and a sphere through each other (ADR 0047) — and
-  the two one-node expansions, `pass.bloom` and `pass.dof` (ADR 0065) —
-  one PNG each plus a contact sheet, or all of them live in one window
-  without the flag. The
-  fastest way to see whether a *pipeline* change (presets, effects, the
-  compiler) still renders — and the working example of composing a
-  pipeline as a document from an application.
-- `cargo run -p wxsl --features editor --example editor -- --screenshot out.png`
-  — the same for the editor: one frame, no window, reviewable as a PNG. Then
-  `cargo run -p wxsl-render --example glyph_field -- <FONT> c` when the
-  problem is a glyph rather than a panel; it prints the distance field as
-  text, and it is how the tie-break bug in `ui::msdf` was found.
+GPU tests skip when there is no adapter, and a skip is not a pass. CI has no
+GPU, so anything that can be tested without a device is factored so that it
+is: the scheduler, layouts, atlas packing, text layout, hit-testing and
+input. Shared layouts and ABI tables deserve both a focused test and a
+device test.
 
 ## Conventions
 
-- `unsafe` is forbidden in `wxsl-core` (see its `Cargo.toml` lints) and
-  should be avoidable everywhere else too; if you think you need it,
-  justify it in the PR description and keep the unsafe block minimal.
-- Keep `wxsl-core` free of `wgpu` and GUI-toolkit dependencies, full
-  stop — that boundary is the reason the crate exists.
-- `wxsl-frame` has the same device-free boundary and depends only on
-  `wxsl-core` within the workspace. It owns neutral frame descriptions,
-  scheduling, pipeline compilation, presets, capabilities and environment
-  data. `wxsl-render` adapts these to wgpu and re-exports shared APIs.
-- `wxsl-ffi` exposes shared computations as data (ADR 0049): versioned
-  JSON documents in, plans/WGSL/computed layouts out. It never depends on
-  a renderer normally; `wxsl-render` is a dev-dependency for parity tests.
-  Unsafe foreign-memory access stays in `ffi.rs`; its generated header is
-  test-pinned. `dawn/` consumes offline exports without linking Rust (ADR 0051).
-  Its optional runtime compiler dynamically loads that same data ABI (ADR 0052);
-  never duplicate variant keys, shader compilation or layout rules in C++.
-- New stdlib functions live under `crates/wxsl-stdlib/shaders/<category>/`
-  (see that directory's `README.md` for the category layout, the provenance
-  rule, and the authoring rules that keep a function reachable from a
-  graph). **The file is the node** (ADR 0020): there is no descriptor to
-  write in Rust. One `fn` per file; a label line then a documentation
-  paragraph in the leading comment block; one parameter per line, each with
-  its own trailing `// … @default <value>`.
-- The shader ABI has two halves that must be edited together:
-  `wxsl_core::abi`'s tables and `crates/wxsl-stdlib/shaders/wxsl/`.
-  Fixed host layouts are different: edit `wxsl_core::host`, never their
-  generated Rust/C/WXSL definitions (ADR 0050). Regenerate the checked-in
-  C header with `cargo run -p wxsl-frame --example export_host_header -- dawn/include/wxsl_host.h`.
-- A pipeline is **data**: a list of `wxsl_render::pass::PassDesc` over a set
-  of `ResourceDesc`, run by `wxsl_render::graph` (ADR 0021). Adding a pass
-  means building one more `PassDesc`, never writing `begin_render_pass`.
-  Since ADR 0033 the two *stock* pipelines are preset documents
-  (`crates/wxsl-frame/assets/presets/*.pipeline.json`) over the pipeline
-  node registry (`wxsl_core::pipeline`), compiled by
-  `wxsl_render::pipeline_doc` — never edit generated pass lists in Rust;
-  the hand-built `forward_graph`/`deferred_graph` are the reference the
-  preset-parity tests compile against, nothing more. A document error
-  names the document node; the scheduler's checks stay as the last line.
-  The editor's pipeline canvas edits these same documents and compiles
-  them live onto the preview's renderer — one editor, one renderer, a
-  mode rather than a second editor (ADR 0043); a screen effect appears in
-  its palette as a `pass.screen` row with the `effect` preset, never as a
-  derived node.
-- An **effect** is data (ADR 0034, extended to compute by ADR 0035): a
-  `wxsl_frame::effect::Effect` row (re-exported by `wxsl-render`) — declared inputs and outputs in
-  pass-group binding order, screen or compute entry points, and its
-  shader (generated, or a `.wxsl` file the effect owns, like
-  `crates/wxsl-frame/shaders/bloom.wxsl`). A pass names it by id; the
-  compiler validates wiring against `inputs`, and the descriptor-vs-shader
-  contract (bindings, entries) is pinned by tests in `effect.rs`. Adding
-  an effect is a row and a file, never a `PassKind` arm — `ScreenShader`
-  was deleted for exactly that reason, don't grow one back. Its
-  **parameters** are uniforms the descriptor declares (ADR 0042): one
-  `{ name, default }` row per knob, the layout computed by
-  `wxsl_core::resources`, the shader's struct generated from it (the file
-  reads `params.<name>` and states no struct), and the host tuning it
-  live through `Renderer::set_pass_param` on the pass label. A knob the
-  host tunes at runtime is a parameter; one that is the effect's
-  *structure* — bloom's kernel taps — stays a `const`.
-- A pass's **policy** (`wxsl_render::pass::Policy`, ADR 0035) says how
-  often it runs. A non-default policy may only write stable storage —
-  the scheduler checks — so a skipped pass leaves exactly its last
-  output behind. Compute is an effect kind, not raw entry/workgroup
-  strings on the pass.
-- A **material stage** is a row in `abi::MATERIAL_STAGES` (ADR 0022), and a
-  geometry pass names one. Adding a stage is that row plus the constant
-  naming it, plus whatever `codegen::write_entry_points` has to emit for
-  it — not a new arm in every match. The `velocity` stage (ADR 0046) is
-  the shape of the exceptions: its fragment reads no surface
-  (`needs_surface` is the material-function question), it carries two
-  extra clip varyings (the builtin arrives in a fragment as framebuffer
-  coordinates), and its target clears to *zero motion*, not the frame's
-  radiance. The peel stages (ADR 0047) are the other exception:
-  `pass.peel` draws only the `transparent` tag's peeled tier — a
-  material's `max_layers` (plan5 D5, ADR 0057) is its per-object peel
-  budget, zero meaning the sorted tier no peel reads — and
-  `wxsl_peel_layers` caps the geometry passes at eight; a
-  `pass.geometry` that names a peel stage is a document error. `RenderPath` is gone: which pass list
-  is `StockPipeline`, which variant is `MaterialStage`.
-  Anything the scheduler can check — attachment counts, depth formats, a
-  resource nothing writes, a cycle — is checked in `RenderGraph::schedule`,
-  which is pure and tested with no device; keep it that way.
-- A **lighting model** is a `.wxsl` file under
-  `shaders/lighting/models/` plus an entry in
-  `wxsl_core::lighting::DEFAULT_MODELS` (ADR 0028). The shading function,
-  the G-buffer struct/pack and the lighting pass are *generated* from the
-  enabled set — never edit generated text, and never re-add a fixed
-  `shading.wxsl`. Materials name models by name, not id; the G-buffer's
-  byte budget is checked in `Renderer::set_lighting`, and the cost table
-  in `pipeline::gbuffer_bytes_per_sample` mirrors the spec's numbers.
-- A **bake** is a graph-level declaration (`Graph::declare_bake`,
-  ADR 0045): "bake this node's output through this table" — never a node
-  of its own, so the graph reads the same under both arms of the toggle
-  (`MaterialConfig.bakes`, on by default). The effect is
-  `Effect::from_bake`, generated from the subgraph at registration; the
-  table is *host-owned* — created beside the material, bound like any
-  ADR 0023 texture, handed to the renderer with
-  `Renderer::import_resource` — and the pipeline writes it through a
-  `resource.color` with `imported: true`, labelled with the
-  declaration's texture name. The cone may read `input.uv` and nothing
-  else (a bake is a pure function of where it is sampled); the cone
-  belongs to the bake alone; and the bake pass is declared **before**
-  the pass that samples it, because the material's sample is a
-  dependency the scheduler cannot see.
-- **Motion** is a stage plus second copies in the frame group (ADR
-  0046): the `velocity` row transforms every vertex against this
-  frame's camera and instance row and the previous frame's
-  (`BINDING_PREVIOUS_INSTANCES`, `camera.previous_view_proj` — filled
-  by the host from `DrawItem::with_previous` and
-  `Environment::previous_camera`, both "no motion" by default), the
-  graph's vertex partition is evaluated twice through
-  `previous_vertex_context` rather than emitted twice, and a temporal
-  input's `history` lives on the effect's declaration — a screen effect
-  the fixed `pass.screen` cannot wire gets a derived
-  `pass.screen.<effect>` row whose sockets are the declaration, the
-  same mechanism the compute passes use.
-- A **material feature** is a row in `wxsl_core::lighting::FEATURES` plus
-  a `.wxsl` module under `shaders/wxsl/features/` (ADR 0037): the second
-  source of G-buffer channels, tagged in the collected
-  `GBufferPlan` beside the models' own. A feature's macro pin is what
-  turns it on per material, and `Renderer::set_features` is what gives a
-  pipeline the channel — the mismatch is a named error, not a silently
-  missing feature.
-- A **material's configuration** is one `wxsl_core::material::MaterialConfig`
-  (ADR 0038): macros, model name, the two shadow flags, tags, and the
-  pipeline's feature channels. It travels document → `Material::with_lighting`
-  → `CodegenOptions.material` without being respelled, and
-  `MaterialConfig::resolve` is the only place a name becomes an id or a flag
-  becomes a macro. A new per-material knob is a field there plus whatever
-  `resolve` does with it — never another options struct.
-- Registry ids are **namespaced `package.name`** (`math.add`, `wxsl.bloom`,
-  `wxsl.pbr` — the first segment owns the name; `wxsl_core::identity` is
-  the rule, ADR 0044). A *registration* without a package is refused —
-  `NodeRegistry::register` and `EffectRegistry::add` panic,
-  `LightingSet::new` returns a named error — while a *document* may spell
-  shipped ids bare, which resolve against `wxsl.`. Every serialized
-  document (node format, scene, pipeline) carries `version` and `abi`:
-  absent reads as this build's, a newer one is refused by name at parse,
-  and saves stamp both. A scene is checked against the setup it will run
-  under — `RenderSetup::check`, or `SceneResources::load_with_plan`,
-  which does it before anything is built — and *every* mismatch is
-  reported, by name, not the first one.
-- Everything a pass writes is **linear radiance** until the shipped
-  `tonemap` effect at the end of the chain, which curves and encodes it
-  (ADR 0039). A pipeline's clear colour is linear radiance too. Don't put
-  a display transform anywhere else, and don't threshold, blend or
-  accumulate against encoded values — if a pass needs to read what an
-  earlier one wrote, it is reading light.
-- A graph carries a **domain** — surface, screen or document (ADR 0040) —
-  and a node definition carries the domains it may be placed in. Don't add
-  a second registry, a second palette or a second serialization for a
-  domain: the mask is on the definition and the filter is
-  `NodeRegistry::in_domain`. A body that names one domain's ABI should say
-  so through `NodeDefinitionBuilder::build` rather than by hand, so a new
-  domain-bound body cannot be left in every palette by omission. And a new
-  post effect is a **screen graph** first — a `.wxsl` file plus a
-  descriptor is for what a graph cannot yet say (two image inputs, a
-  parameter block).
-- A **scene** (`wxsl_core::scene`) is what exists; an **environment**
-  (`wxsl_render::environment`) is camera and lights; a **draw list**
-  (`wxsl_render::draw`) is what a frame submits. Don't put a pipeline in a
-  scene, and don't teach `wxsl-core` about `wgpu` to avoid a translation
-  step — that translation is the facade's `wxsl::scene`.
-- The UI ABI kinds still have host/shader halves. Vertex fields and MSDF
-  upload buffers are generated by `wxsl-core::host` (ADR 0050). The MSDF
-  generator has two implementations that must agree — `ui::msdf` on the CPU
-  and `shaders/wxsl/msdf.wxsl` as a compute pass — and a test in
-  `crates/wxsl/tests/editor_frame.rs` compares them. See ADR 0013 and 0014.
-- Anything in the editor that can be tested without a device is factored so
-  that it is: distance fields, atlas packing, line breaking, caret and
-  hit-testing, draw-list batching, canvas geometry and input accumulation are
-  all pure functions over data. Keep it that way — CI has no GPU.
-- Anything a node needs that cannot be a socket value — a loop bound, a code
-  switch — is a macro variable (`wxsl_core::macros`), declared on the node
-  definition. Don't reach for string substitution or a second graph.
-- Prefer editing an existing ADR's "Consequences" section to record drift
-  over silently diverging from what it says.
+The ADR named on each line holds the reasoning.
+
+- **Safety.** `unsafe` is forbidden in `wxsl-core` and avoided elsewhere.
+  Foreign-memory access stays in `wxsl-ffi/src/ffi.rs`, whose header is
+  test-pinned.
+- **Generated code.**
+  - Logic lives in Rust and shader text in `.wxsl` templates; generators
+    fill holes (ADR 0031).
+  - Never edit generated text: the lighting pass, the G-buffer, material
+    modules, host layouts.
+  - Host layouts are edited in `wxsl_core::host` (ADR 0050). Regenerate
+    the C header with
+    `cargo run -p wxsl-frame --example export_host_header -- dawn/include/wxsl_host.h`.
+  - The shader ABI has two halves to edit together: `wxsl_core::abi` and
+    `crates/wxsl-stdlib/shaders/wxsl/`.
+- **Nodes.** The `.wxsl` file *is* the node (ADR 0020). It lives in
+  `crates/wxsl-stdlib/shaders/<category>/` and has:
+  - one `fn` per file;
+  - a label line and a documentation paragraph;
+  - one parameter per line, each with `// … @default <value>`.
+  A knob that cannot be a socket is a macro variable (`wxsl_core::macros`),
+  never string substitution.
+- **Pipelines are data** (ADRs 0021, 0033).
+  - The stock pipelines are documents in
+    `crates/wxsl-frame/assets/presets/`; never edit generated pass lists.
+  - Adding a pass means adding a `PassDesc`, never a `begin_render_pass`.
+  - Everything checkable is checked in the pure `RenderGraph::schedule`.
+  - A document error names the document node.
+- **Effects are data** (ADRs 0034, 0035, 0042).
+  - Adding an effect means an `Effect` row plus its shader, never a
+    `PassKind` arm.
+  - A knob the host tunes at runtime is a declared parameter. A structural
+    knob stays a `const`.
+  - A new post effect is a screen graph first (ADR 0040).
+- **Policies.** A non-default policy writes only stable storage
+  (ADR 0035).
+- **Material stages** are rows in `abi::MATERIAL_STAGES` (ADR 0022). The
+  exceptions are `velocity` (ADR 0046) and the peel stages
+  (ADRs 0047, 0057).
+- **Lighting models** are a `.wxsl` file under `shaders/lighting/models/`
+  plus a `DEFAULT_MODELS` entry (ADR 0028).
+- **Material features** are a `FEATURES` row plus a module under
+  `shaders/wxsl/features/` (ADR 0037).
+- **A material's configuration** is one `MaterialConfig` (ADR 0038). A new
+  knob is a field there; `resolve` is the only place a name becomes an id.
+- **Bakes** are graph declarations, never nodes (ADR 0045). The table is
+  host-owned, and the bake pass is declared before the pass that samples
+  it.
+- **Identity and versions** (ADR 0044).
+  - Registry ids are `package.name`, and a registration without a package
+    is refused.
+  - Documents carry `version` and `abi`: absent means this build, newer is
+    refused by name.
+  - Scene checks report every mismatch.
+- **Linear light.** Everything is linear radiance until the `tonemap`
+  effect (ADR 0039). Put no display transform anywhere else.
+- **Domains.** A graph's domain is surface, screen or document
+  (ADR 0040). Filter with `NodeRegistry::in_domain`; never add a second
+  registry or palette.
+- **Scene, environment, draw list.** A scene is what exists, an
+  environment is camera and lights, and a draw list is what a frame
+  submits. The renderer takes a draw list. Translating a scene into one is
+  the facade's job (`wxsl::scene`).
+- **Two implementations must agree.**
+  - The MSDF generator (CPU and compute) is checked in `editor_frame`.
+  - Forward and deferred are checked in `render_cube` and the other device
+    tests.
+  - The C ABI and wgpu are checked by the parity harness.
+- **One editor, several canvas modes.** The pipeline canvas is a mode of
+  the same editor (ADR 0043), not a second editor.
 
 ## Where things are
 
-- `crates/wxsl/examples/pbr_cube.rs` — the demo, and the shortest
-  complete example of the whole pipeline. `--dump-wesl` and `--dump-wgsl`
-  show what a graph compiles to, `--list-nodes` and `--list-macros` what is
-  available, and `--instances N` draws N copies from one instance buffer,
-  each reading its own tint out of it — the per-instance half of ADR 0024,
-  and the reason one copy is white: white is the identity for the multiply
-  the graph does with it, so the default image is unchanged.
-  `--models lambert,phong,pbr,clearcoat` widens the deferred G-buffer
-  with a dispatch-id channel and the clearcoat model's target, and
-  `--model` shades the material with a named model — the runtime half of
-  ADR 0028. It also shows the application's half of ADR 0023: it reads what the
-  material's graph *declared* and supplies it by name — which is why it
-  keeps working against a `--graph` it has never seen.
-- `crates/wxsl/examples/gallery.rs` — many demos, one window (arrow keys
-  or `1`–`9` to switch) or `--screenshot` for a PNG per demo plus a
-  contact sheet. Its deferred-bloom demos are the shipped preset's
-  document with two nodes added and one rewired, compiled by the public
-  `compile_pipeline` — the copyable example of ADR 0034's chains and of
-  "a pipeline is a document edit". The `bake` demo (ADR 0045) is the
-  whole of a bake from a command line: the material document
-  (`assets/bake_term.wxsl.json`, with its declaration commented) compiled
-  into both the effect's shader and the material, the table created and
-  imported by the host, the pass `once` in the pipeline document.
-- `crates/wxsl/examples/scene_check.rs` — the capability contract run
-  (ADR 0044): a scene document checked against the deferred setup before
-  anything is built, the mismatch named, and — with `--screenshot` — the
-  same scene loaded and rendered under the plan that carries its channel.
-  Its scene, `crates/wxsl/assets/scene_check.scene.json`, is the copyable
-  scene document, as `pbr_cube.wxsl.json` is for the node format.
-- `crates/wxsl/examples/cinema.rs` — the S2/S3/S4 node batches in one
-  picture: a molten torus (Worley cracks, simplex normal, fbm
-  displacement) through the full post chain — separable bloom, chromatic
-  aberration, vignette, film grain, and an ACES display transform the
-  demo registers itself, in the `wxsl::effects::tonemap` shape.
-  Windowed by default (`Esc`/`Q` quit, `Space` pause); `--screenshot`
-  for one headless PNG, `--frames N` for a spin sequence.
-- `crates/wxsl/assets/pbr_cube.wxsl.json` — the node format, with
-  comments in the file explaining it. The pipeline documents under
-  `crates/wxsl-frame/assets/presets/` are the same format over the
-  pipeline registry — read `deferred.pipeline.json` next to it to see
-  both.
-- `docs/architecture.md` — crate graph, data flow, the forward/deferred
-  shader-switching design, macro variables, feature-flag matrix.
-- `plan.md` → `plan2.md` → `plan3.md` → `plan4.md` — the planning chain and
-  current queue. Check the newest plan before starting feature-sized work.
-- `docs/adr/` — the decision log. Start at `docs/adr/README.md`.
-- `docs/glossary.md` — terms (WXSL vs WGSL, node graph vs render graph,
-  forward vs deferred, etc.) used without re-explanation elsewhere.
+- `crates/wxsl/examples/`:
+  - `pbr_cube` is the first demo (`--help` lists its options);
+  - `editor` is the node editor;
+  - `gallery` shows every pipeline, `--screenshot` for PNGs;
+  - `scene_check` runs the capability check;
+  - `cinema` runs the post chain.
+- `crates/wxsl/assets/`:
+  - `pbr_cube.wxsl.json` is the commented node format;
+  - `*.scene.json` are scene documents.
+- `docs/architecture.md` (the overall design), `docs/glossary.md` (terms),
+  `docs/adr/` (decisions).
