@@ -67,11 +67,6 @@ impl ShaderWatch {
         self.files.len()
     }
 
-    /// Whether nothing is watched — a wrong root, most likely.
-    pub fn is_empty(&self) -> bool {
-        self.files.is_empty()
-    }
-
     /// The files whose text changed since the last call. A touched file
     /// whose text is the same is not a change.
     pub fn poll(&mut self) -> Vec<ModuleChange> {

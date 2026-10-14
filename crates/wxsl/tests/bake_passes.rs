@@ -142,7 +142,7 @@ fn material_and_table(
     )
     .expect("the bake material compiles under both arms of the toggle");
     let decl = graph.bake(TABLE).expect("the declaration is there");
-    let format = wxsl::render::gbuffer_format(decl.precision);
+    let format = wxsl::render::pipeline::gbuffer_format(decl.precision);
     let [width, height] = decl.size;
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("roughness bake table"),

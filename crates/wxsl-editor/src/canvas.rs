@@ -357,16 +357,6 @@ impl Canvas {
         }
     }
 
-    /// What the canvas is doing.
-    pub fn interaction(&self) -> &Interaction {
-        &self.interaction
-    }
-
-    /// The node layouts as of the last drawn frame.
-    pub fn layouts(&self) -> &[NodeLayout] {
-        &self.layouts
-    }
-
     /// The single selected node, if exactly one is selected.
     pub fn selected_node(&self) -> Option<NodeId> {
         match self.selection.as_slice() {

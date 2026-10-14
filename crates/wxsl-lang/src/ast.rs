@@ -21,7 +21,8 @@
 //! in a later pass that has the module map, so the tree stays a faithful
 //! record of what was written.
 
-use crate::span::{Span, Spanned};
+use crate::span::Span;
+pub use crate::span::Spanned;
 
 /// One parsed source file.
 #[derive(Clone, Debug, Default, PartialEq)]

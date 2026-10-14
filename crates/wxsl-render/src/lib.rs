@@ -62,9 +62,11 @@
 //! # Stability
 //!
 //! The names re-exported at this root are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)),
-//! still being curated before `0.1`. Modules reached only by path, including
-//! [`ui`] and [`graph`], are unstable. [`wgpu`] and [`glam`] are re-exported at
-//! the versions this crate is built against.
+//! what a program needs to build, configure and render a frame. Modules
+//! reached only by path are unstable: [`ui`], and the machinery behind the
+//! renderer, such as the resource pool, the pipeline and variant caches and
+//! the shipped effects' ids. [`wgpu`] and [`glam`] are re-exported at the
+//! versions this crate is built against.
 
 #![warn(missing_docs)]
 
@@ -102,20 +104,18 @@ pub use wxsl_frame::profile::{self, Profile};
 pub use glam;
 pub use wgpu;
 
-pub use bindings::{BindingLayouts, MaterialBindings};
+pub use bindings::MaterialBindings;
 pub use draw::{DrawItem, DrawList, InstanceAttributes};
 pub use effect::{
     Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectOutput, EffectOutputShape,
-    EffectRegistry, EffectShader, BLOOM, BLOOM_MODULE, BLOOM_X, BLOOM_X_MODULE, BLOOM_Y,
-    BLOOM_Y_MODULE, BRDF_LUT, BRDF_LUT_MODULE, DEFERRED_LIGHTING, LUT_VIEW, LUT_VIEW_MODULE,
-    RAMP_FILL, RAMP_MODULE, RAMP_VIEW, RAMP_VIEW_MODULE,
+    EffectRegistry, EffectShader,
 };
 pub use environment::{
     Camera, Environment, FrameBindings, InstanceRowSet, InstanceRows, InstanceTransform, Light,
 };
 pub use error::RenderError;
 pub use gpu::{device_profile, DeviceCaps, GpuContext, OffscreenTarget};
-pub use graph::{PassBinding, RenderGraph, ResourcePool, Schedule};
+pub use graph::{RenderGraph, Schedule};
 pub use library::ShaderLibrary;
 pub use material::Material;
 pub use mesh::{AttributeValues, Mesh, MeshData, MeshKind, Vertex};
@@ -123,8 +123,8 @@ pub use pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassKind, PassState,
     Persistence, Policy, Read, ResourceDesc, ResourceId,
 };
-pub use pipeline::{gbuffer_format, PipelineCache, PipelineConfig, StockPipeline, TargetConfig};
+pub use pipeline::{PipelineConfig, StockPipeline, TargetConfig};
 pub use pipeline_doc::{compile as compile_pipeline, document_registry, PipelineError};
 pub use renderer::{single_draw, RenderRequest, Renderer};
 pub use swap::SwapProgress;
-pub use variants::{ShaderVariant, ShaderVariants};
+pub use variants::CacheStats;

@@ -3,7 +3,7 @@
 //! Build a shader graph by hand: see every node, link and unlink them, add
 //! new ones from the library, and watch the material, the WXSL it generates
 //! and the WGSL that compiles to, all update as you go. A second canvas
-//! ([`pipeline`]) edits the *pipeline* the preview runs through — the
+//! ([`CanvasMode::Pipeline`]) edits the *pipeline* the preview runs through — the
 //! document compiled live onto the same renderer.
 //!
 //! The editor **draws itself with `wxsl-render`**
@@ -60,17 +60,17 @@
 //!
 //! | Module | Holds |
 //! |---|---|
-//! | [`app`] | [`Editor`]: the panels, the frame, and the shortcuts |
-//! | [`buffer`] | the code editor's text model: caret, selection, lines, undo |
-//! | [`canvas`] | the pan/zoom node canvas: layout, links, hit-testing, dragging |
-//! | [`function`] | functions written in the editor, derived into `user.*` nodes on save |
-//! | [`highlight`] | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
-//! | [`palette`] | searching the node library |
-//! | [`pipeline`] | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
-//! | [`preview`] | the offscreen material preview, and the compiled WXSL and WGSL |
-//! | [`ui`] | the immediate-mode layer: identity, interaction, widgets |
-//! | [`widgets`] | editors for the values a socket can carry, and the colour picker |
-//! | [`theme`] | colours and metrics |
+//! | `app` | [`Editor`]: the panels, the frame, and the shortcuts |
+//! | `buffer` | the code editor's text model: caret, selection, lines, undo |
+//! | `canvas` | the pan/zoom node canvas: layout, links, hit-testing, dragging |
+//! | `function` | functions written in the editor, derived into `user.*` nodes on save |
+//! | `highlight` | colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer |
+//! | `palette` | searching the node library |
+//! | `pipeline` | the second canvas: the pipeline document, compiled live ([`CanvasMode`]) |
+//! | `preview` | the offscreen material preview, and the compiled WXSL and WGSL |
+//! | `ui` | the immediate-mode layer: identity, interaction, widgets |
+//! | `widgets` | editors for the values a socket can carry, and the colour picker |
+//! | `theme` | colours and metrics |
 //!
 //! # `wxsl-core` still knows nothing about how it looks
 //!
@@ -103,29 +103,32 @@
 //!
 //! # Stability
 //!
-//! The names re-exported at this root are the stable surface ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)),
-//! still being curated before `0.1`; [`Editor`] and [`EditorConfig`] are its
-//! core. The modules are unstable.
+//! The names re-exported at this root are the whole public surface, and
+//! stable ([ADR 0078](../../../docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)):
+//! [`Editor`] and [`EditorConfig`], and the types their methods return. The
+//! modules are private; `unnameable_types` keeps a public signature from
+//! leaking one of their types.
 
 #![warn(missing_docs)]
+#![warn(unnameable_types)]
 
-pub mod app;
-pub mod buffer;
-pub mod canvas;
-pub mod function;
-pub mod highlight;
-pub mod palette;
-pub mod pipeline;
-pub mod preview;
-pub mod reload;
+mod app;
+mod buffer;
+mod canvas;
+mod function;
+mod highlight;
+mod palette;
+mod pipeline;
+mod preview;
+mod reload;
 mod stepping;
-pub mod theme;
-pub mod ui;
-pub mod widgets;
+mod theme;
+mod ui;
+mod widgets;
 
-pub use app::{CodeTab, Editor, EditorConfig};
-pub use canvas::{Canvas, View};
-pub use palette::NodePicker;
-pub use pipeline::{CanvasMode, PipelineCanvas, PipelineTab};
-pub use preview::{Preview, PreviewStatus};
-pub use theme::{Theme, ThemeMode};
+pub use app::{Editor, EditorConfig};
+pub use canvas::View;
+pub use pipeline::CanvasMode;
+pub use preview::{Preview, PreviewStatus, StepView};
+pub use theme::{Metrics, Palette, Theme, ThemeMode};
+pub use ui::LineMark;

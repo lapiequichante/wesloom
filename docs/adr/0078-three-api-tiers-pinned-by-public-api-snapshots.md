@@ -102,9 +102,16 @@ can read them if someone wants HTML later.
 - Bumping the pinned nightly may change the output's formatting without
   any API change. The bump is then its own commit: re-bless, with no code
   change.
-- Root re-exports are now a commitment. The curation of `wxsl-render`'s
-  root (pools, caches, variants) and `wxsl-editor`'s (widgets, canvases)
-  is open C2 work, recorded in plan6.
+- Root re-exports are now a commitment. The first curation took the
+  renderer's machinery off `wxsl-render`'s root: the resource pool, the
+  pipeline and variant caches, and the shipped effects' ids. It also took
+  `mangle`, `Origins` and `Tok` off `wxsl-lang`'s. A type that appears in a
+  stable signature stays at the root (`CacheStats`, `SwapProgress`,
+  `DeviceCaps`, `Label`).
+- `wxsl-editor` is an application. Its modules are private, and its
+  surface is `Editor`, `EditorConfig` and what their methods return. Crates
+  with private modules enable `unnameable_types`, so a public signature
+  cannot leak a type nobody can name.
 - `wxsl-lang`'s passes can no longer be called one by one from outside. The
   corpus test uses the root re-exports.
 - The node format's and the C ABI's own version rules are unchanged;

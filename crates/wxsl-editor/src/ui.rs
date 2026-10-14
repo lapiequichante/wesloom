@@ -473,11 +473,6 @@ impl<'a> Ui<'a> {
         self.state.interaction.modal = None;
     }
 
-    /// Whether interaction is currently restricted to a region.
-    pub fn modal(&self) -> Option<Rect> {
-        self.state.interaction.modal
-    }
-
     /// Hit-test and update interaction state for a widget.
     ///
     /// The primitive every widget is built from. A widget becomes *active* on
@@ -1179,7 +1174,7 @@ impl<'a> Ui<'a> {
                 theme.palette.outline,
             );
         }
-        ScrollArea { rect, offset, max }
+        ScrollArea { rect, offset }
     }
 
     /// A read-only monospaced code panel with line numbers.
@@ -1615,8 +1610,6 @@ pub struct ScrollArea {
     pub rect: Rect,
     /// How far the content is scrolled, in pixels.
     pub offset: Vec2,
-    /// The largest offset the content allows.
-    pub max: Vec2,
 }
 
 impl ScrollArea {
@@ -1631,7 +1624,7 @@ impl ScrollArea {
     }
 }
 
-/// A compiler diagnostic's place in a [`Ui::code_editor`]'s buffer.
+/// A compiler diagnostic's place in a code editor's buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineMark {
     /// 0-based line.
@@ -1991,7 +1984,6 @@ mod tests {
         let area = ScrollArea {
             rect: Rect::new(10.0, 20.0, 100.0, 50.0),
             offset: Vec2::new(0.0, 15.0),
-            max: Vec2::new(0.0, 40.0),
         };
         assert_eq!(area.origin(), Vec2::new(10.0, 5.0));
     }

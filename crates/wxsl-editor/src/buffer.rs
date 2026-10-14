@@ -185,16 +185,6 @@ impl TextBuffer {
         self.last = None;
     }
 
-    /// Replace the whole text, as one undoable edit.
-    pub fn set_text(&mut self, text: &str) {
-        self.checkpoint(None);
-        self.text = text.to_string();
-        self.cursor = self.cursor.min(self.text.len());
-        self.cursor = floor_boundary(&self.text, self.cursor);
-        self.anchor = None;
-        self.changed();
-    }
-
     /// Type `text` over the selection.
     pub fn insert(&mut self, text: &str) {
         if text.is_empty() {
@@ -317,11 +307,6 @@ impl TextBuffer {
         self.undo.push(current);
         self.restore(snapshot);
         true
-    }
-
-    /// Whether [`TextBuffer::undo`] has anything to take back.
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
     }
 
     /// Apply one key press. `page` is how many lines a page key moves;

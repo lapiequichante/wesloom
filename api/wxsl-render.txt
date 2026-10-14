@@ -1,15 +1,6 @@
 pub mod wxsl_render
 pub use wxsl_render::Attachment
-pub use wxsl_render::BLOOM
-pub use wxsl_render::BLOOM_MODULE
-pub use wxsl_render::BLOOM_X
-pub use wxsl_render::BLOOM_X_MODULE
-pub use wxsl_render::BLOOM_Y
-pub use wxsl_render::BLOOM_Y_MODULE
-pub use wxsl_render::BRDF_LUT
-pub use wxsl_render::BRDF_LUT_MODULE
 pub use wxsl_render::Camera
-pub use wxsl_render::DEFERRED_LIGHTING
 pub use wxsl_render::DepthAttachment
 pub use wxsl_render::Dimension
 pub use wxsl_render::Downlevel
@@ -27,8 +18,6 @@ pub use wxsl_render::Extent
 pub use wxsl_render::InstanceRowSet
 pub use wxsl_render::InstanceRows
 pub use wxsl_render::InstanceTransform
-pub use wxsl_render::LUT_VIEW
-pub use wxsl_render::LUT_VIEW_MODULE
 pub use wxsl_render::Light
 pub use wxsl_render::PassDesc
 pub use wxsl_render::PassKind
@@ -38,10 +27,6 @@ pub use wxsl_render::PipelineConfig
 pub use wxsl_render::PipelineError
 pub use wxsl_render::Policy
 pub use wxsl_render::Profile
-pub use wxsl_render::RAMP_FILL
-pub use wxsl_render::RAMP_MODULE
-pub use wxsl_render::RAMP_VIEW
-pub use wxsl_render::RAMP_VIEW_MODULE
 pub use wxsl_render::Read
 pub use wxsl_render::ResourceDesc
 pub use wxsl_render::ResourceId
@@ -3060,36 +3045,6 @@ impl core::marker::Unpin for wxsl_render::mesh::MeshKind
 impl core::marker::UnsafeUnpin for wxsl_render::mesh::MeshKind
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::mesh::MeshKind
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::mesh::MeshKind
-pub enum wxsl_render::PassBinding
-pub wxsl_render::PassBinding::Buffer
-pub wxsl_render::PassBinding::Buffer::read_only: bool
-pub wxsl_render::PassBinding::Buffer::size: u64
-pub wxsl_render::PassBinding::StorageTexture
-pub wxsl_render::PassBinding::StorageTexture::format: wgpu_types::texture::format::TextureFormat
-pub wxsl_render::PassBinding::StorageTexture::view_dimension: wgpu_types::texture::TextureViewDimension
-pub wxsl_render::PassBinding::Texture
-pub wxsl_render::PassBinding::Texture::sample_type: wgpu_types::texture::TextureSampleType
-pub wxsl_render::PassBinding::Texture::view_dimension: wgpu_types::texture::TextureViewDimension
-pub wxsl_render::PassBinding::Uniform
-pub wxsl_render::PassBinding::Uniform::size: u32
-impl core::clone::Clone for wxsl_render::graph::PassBinding
-pub fn wxsl_render::graph::PassBinding::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_render::graph::PassBinding
-impl core::cmp::PartialEq for wxsl_render::graph::PassBinding
-pub fn wxsl_render::graph::PassBinding::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_render::graph::PassBinding
-pub fn wxsl_render::graph::PassBinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for wxsl_render::graph::PassBinding
-pub fn wxsl_render::graph::PassBinding::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for wxsl_render::graph::PassBinding
-impl core::marker::StructuralPartialEq for wxsl_render::graph::PassBinding
-impl core::marker::Freeze for wxsl_render::graph::PassBinding
-impl core::marker::Send for wxsl_render::graph::PassBinding
-impl core::marker::Sync for wxsl_render::graph::PassBinding
-impl core::marker::Unpin for wxsl_render::graph::PassBinding
-impl core::marker::UnsafeUnpin for wxsl_render::graph::PassBinding
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::graph::PassBinding
-impl core::panic::unwind_safe::UnwindSafe for wxsl_render::graph::PassBinding
 #[non_exhaustive] pub enum wxsl_render::RenderError
 pub wxsl_render::RenderError::AtlasFull
 pub wxsl_render::RenderError::AtlasFull::height: u32
@@ -3184,21 +3139,27 @@ impl core::marker::Unpin for wxsl_render::error::RenderError
 impl core::marker::UnsafeUnpin for wxsl_render::error::RenderError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::error::RenderError
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::error::RenderError
-pub struct wxsl_render::BindingLayouts
-impl wxsl_render::bindings::BindingLayouts
-pub fn wxsl_render::bindings::BindingLayouts::is_empty(&self) -> bool
-pub fn wxsl_render::bindings::BindingLayouts::layouts(&mut self, &wgpu::api::device::Device, &wxsl_core::resources::MaterialInterface) -> &wxsl_render::bindings::GroupLayouts
-pub fn wxsl_render::bindings::BindingLayouts::len(&self) -> usize
-pub fn wxsl_render::bindings::BindingLayouts::new() -> Self
-impl core::default::Default for wxsl_render::bindings::BindingLayouts
-pub fn wxsl_render::bindings::BindingLayouts::default() -> Self
-impl core::marker::Freeze for wxsl_render::bindings::BindingLayouts
-impl core::marker::Send for wxsl_render::bindings::BindingLayouts
-impl core::marker::Sync for wxsl_render::bindings::BindingLayouts
-impl core::marker::Unpin for wxsl_render::bindings::BindingLayouts
-impl core::marker::UnsafeUnpin for wxsl_render::bindings::BindingLayouts
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::bindings::BindingLayouts
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::bindings::BindingLayouts
+pub struct wxsl_render::CacheStats
+pub wxsl_render::CacheStats::hits: u64
+pub wxsl_render::CacheStats::misses: u64
+impl core::clone::Clone for wxsl_render::variants::CacheStats
+pub fn wxsl_render::variants::CacheStats::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_render::variants::CacheStats
+impl core::cmp::PartialEq for wxsl_render::variants::CacheStats
+pub fn wxsl_render::variants::CacheStats::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_render::variants::CacheStats
+pub fn wxsl_render::variants::CacheStats::default() -> Self
+impl core::fmt::Debug for wxsl_render::variants::CacheStats
+pub fn wxsl_render::variants::CacheStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_render::variants::CacheStats
+impl core::marker::StructuralPartialEq for wxsl_render::variants::CacheStats
+impl core::marker::Freeze for wxsl_render::variants::CacheStats
+impl core::marker::Send for wxsl_render::variants::CacheStats
+impl core::marker::Sync for wxsl_render::variants::CacheStats
+impl core::marker::Unpin for wxsl_render::variants::CacheStats
+impl core::marker::UnsafeUnpin for wxsl_render::variants::CacheStats
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::variants::CacheStats
+impl core::panic::unwind_safe::UnwindSafe for wxsl_render::variants::CacheStats
 pub struct wxsl_render::DeviceCaps
 pub wxsl_render::DeviceCaps::downlevel: wgpu_types::limits::DownlevelCapabilities
 pub wxsl_render::DeviceCaps::features: wgpu_types::features::Features
@@ -3462,24 +3423,6 @@ impl core::marker::Unpin for wxsl_render::gpu::OffscreenTarget
 impl core::marker::UnsafeUnpin for wxsl_render::gpu::OffscreenTarget
 impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::gpu::OffscreenTarget
 impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::gpu::OffscreenTarget
-pub struct wxsl_render::PipelineCache
-impl wxsl_render::pipeline::PipelineCache
-pub fn wxsl_render::pipeline::PipelineCache::clear(&mut self)
-pub fn wxsl_render::pipeline::PipelineCache::compute(&mut self, &wgpu::api::device::Device, core::option::Option<&wgpu::api::bind_group_layout::BindGroupLayout>, &wxsl_render::variants::ShaderVariant, &str, &[wxsl_render::graph::PassBinding]) -> &wgpu::api::compute_pipeline::ComputePipeline
-pub fn wxsl_render::pipeline::PipelineCache::geometry(&mut self, &wgpu::api::device::Device, &wgpu::api::bind_group_layout::BindGroupLayout, &wxsl_render::pipeline::MaterialGroups<'_>, core::option::Option<&wgpu::api::bind_group_layout::BindGroupLayout>, &wxsl_render::variants::ShaderVariant, core::option::Option<&str>, wxsl_frame::pass::PassState, &[core::option::Option<wgpu_types::render::ColorTargetState>], &[wxsl_render::graph::PassBinding]) -> &wgpu::api::render_pipeline::RenderPipeline
-pub fn wxsl_render::pipeline::PipelineCache::is_empty(&self) -> bool
-pub fn wxsl_render::pipeline::PipelineCache::len(&self) -> usize
-pub fn wxsl_render::pipeline::PipelineCache::new() -> Self
-pub fn wxsl_render::pipeline::PipelineCache::screen(&mut self, &wgpu::api::device::Device, &wgpu::api::bind_group_layout::BindGroupLayout, core::option::Option<&wgpu::api::bind_group_layout::BindGroupLayout>, &wxsl_render::variants::ShaderVariant, &str, &str, wxsl_frame::pass::PassState, &[core::option::Option<wgpu_types::render::ColorTargetState>], &[wxsl_render::graph::PassBinding]) -> &wgpu::api::render_pipeline::RenderPipeline
-impl core::default::Default for wxsl_render::pipeline::PipelineCache
-pub fn wxsl_render::pipeline::PipelineCache::default() -> Self
-impl core::marker::Freeze for wxsl_render::pipeline::PipelineCache
-impl core::marker::Send for wxsl_render::pipeline::PipelineCache
-impl core::marker::Sync for wxsl_render::pipeline::PipelineCache
-impl core::marker::Unpin for wxsl_render::pipeline::PipelineCache
-impl core::marker::UnsafeUnpin for wxsl_render::pipeline::PipelineCache
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::pipeline::PipelineCache
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::pipeline::PipelineCache
 pub struct wxsl_render::RenderGraph(_)
 impl wxsl_render::graph::RenderGraph
 pub const wxsl_render::graph::RenderGraph::STEP_INSPECT_PASS: &'static str
@@ -3577,24 +3520,6 @@ impl core::marker::Unpin for wxsl_render::renderer::Renderer
 impl core::marker::UnsafeUnpin for wxsl_render::renderer::Renderer
 impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::renderer::Renderer
 impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::renderer::Renderer
-pub struct wxsl_render::ResourcePool
-impl wxsl_render::graph::ResourcePool
-pub fn wxsl_render::graph::ResourcePool::buffer(&self, usize) -> core::option::Option<&wgpu::api::buffer::Buffer>
-pub fn wxsl_render::graph::ResourcePool::configure(&mut self, &wgpu::api::device::Device, &wxsl_frame::graph::Schedule, wxsl_render::pipeline::TargetConfig)
-pub fn wxsl_render::graph::ResourcePool::frame(&self) -> u64
-pub fn wxsl_render::graph::ResourcePool::generation(&self) -> u64
-pub fn wxsl_render::graph::ResourcePool::new() -> Self
-pub fn wxsl_render::graph::ResourcePool::slot_view(&self, usize) -> core::option::Option<&wgpu::api::texture_view::TextureView>
-pub fn wxsl_render::graph::ResourcePool::texture(&self, usize) -> core::option::Option<&wgpu::api::texture::Texture>
-impl core::default::Default for wxsl_render::graph::ResourcePool
-pub fn wxsl_render::graph::ResourcePool::default() -> Self
-impl core::marker::Freeze for wxsl_render::graph::ResourcePool
-impl core::marker::Send for wxsl_render::graph::ResourcePool
-impl core::marker::Sync for wxsl_render::graph::ResourcePool
-impl core::marker::Unpin for wxsl_render::graph::ResourcePool
-impl core::marker::UnsafeUnpin for wxsl_render::graph::ResourcePool
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::graph::ResourcePool
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::graph::ResourcePool
 pub struct wxsl_render::ShaderLibrary
 impl wxsl_render::library::ShaderLibrary
 pub fn wxsl_render::library::ShaderLibrary::check_abi(&self) -> core::result::Result<(), wxsl_render::error::RenderError>
@@ -3619,43 +3544,6 @@ impl core::marker::Unpin for wxsl_render::library::ShaderLibrary
 impl core::marker::UnsafeUnpin for wxsl_render::library::ShaderLibrary
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::library::ShaderLibrary
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::library::ShaderLibrary
-pub struct wxsl_render::ShaderVariant
-pub wxsl_render::ShaderVariant::key: wxsl_render::variants::VariantKey
-pub wxsl_render::ShaderVariant::label: alloc::string::String
-pub wxsl_render::ShaderVariant::module: wgpu::api::shader_module::ShaderModule
-pub wxsl_render::ShaderVariant::wgsl: alloc::string::String
-impl core::marker::Freeze for wxsl_render::variants::ShaderVariant
-impl core::marker::Send for wxsl_render::variants::ShaderVariant
-impl core::marker::Sync for wxsl_render::variants::ShaderVariant
-impl core::marker::Unpin for wxsl_render::variants::ShaderVariant
-impl core::marker::UnsafeUnpin for wxsl_render::variants::ShaderVariant
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::variants::ShaderVariant
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::variants::ShaderVariant
-pub struct wxsl_render::ShaderVariants
-impl wxsl_render::variants::ShaderVariants
-pub fn wxsl_render::variants::ShaderVariants::clear(&mut self)
-pub fn wxsl_render::variants::ShaderVariants::contains(&self, &wxsl_render::variants::VariantKey) -> bool
-pub fn wxsl_render::variants::ShaderVariants::effect(&mut self, &wgpu::api::device::Device, &wxsl_render::library::ShaderLibrary, wxsl_frame::effect::Effect, &wxsl_core::macros::MacroSet, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>, wxsl_render::error::RenderError>
-pub fn wxsl_render::variants::ShaderVariants::effect_key(&wxsl_frame::effect::Effect, &wxsl_core::macros::MacroSet, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> wxsl_render::variants::VariantKey
-pub fn wxsl_render::variants::ShaderVariants::get(&self, &wxsl_render::variants::VariantKey) -> core::option::Option<&alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>>
-pub fn wxsl_render::variants::ShaderVariants::insert(&mut self, &wgpu::api::device::Device, wxsl_render::variants::VariantKey, alloc::string::String, alloc::string::String) -> alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>
-pub fn wxsl_render::variants::ShaderVariants::is_empty(&self) -> bool
-pub fn wxsl_render::variants::ShaderVariants::len(&self) -> usize
-pub fn wxsl_render::variants::ShaderVariants::material(&mut self, &wgpu::api::device::Device, &wxsl_render::library::ShaderLibrary, &wxsl_render::material::Material, wxsl_core::abi::MaterialStage) -> core::result::Result<alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>, wxsl_render::error::RenderError>
-pub fn wxsl_render::variants::ShaderVariants::material_key(&wxsl_render::material::Material, wxsl_core::abi::MaterialStage) -> wxsl_render::variants::VariantKey
-pub fn wxsl_render::variants::ShaderVariants::new() -> Self
-pub fn wxsl_render::variants::ShaderVariants::pins(&self) -> &wxsl_core::macros::MacroSet
-pub fn wxsl_render::variants::ShaderVariants::stats(&self) -> wxsl_render::variants::CacheStats
-pub fn wxsl_render::variants::ShaderVariants::with_pins(wxsl_core::macros::MacroSet) -> Self
-impl core::default::Default for wxsl_render::variants::ShaderVariants
-pub fn wxsl_render::variants::ShaderVariants::default() -> Self
-impl core::marker::Freeze for wxsl_render::variants::ShaderVariants
-impl core::marker::Send for wxsl_render::variants::ShaderVariants
-impl core::marker::Sync for wxsl_render::variants::ShaderVariants
-impl core::marker::Unpin for wxsl_render::variants::ShaderVariants
-impl core::marker::UnsafeUnpin for wxsl_render::variants::ShaderVariants
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::variants::ShaderVariants
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::variants::ShaderVariants
 pub struct wxsl_render::SwapProgress
 pub wxsl_render::SwapProgress::done: usize
 pub wxsl_render::SwapProgress::total: usize
@@ -3734,5 +3622,4 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::mesh::Vertex
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::mesh::Vertex
 pub fn wxsl_render::compile_pipeline(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> core::result::Result<wxsl_render::graph::RenderGraph, wxsl_frame::pipeline_doc::PipelineError>
 pub fn wxsl_render::device_profile(&wgpu::api::device::Device) -> wxsl_frame::profile::Profile
-pub fn wxsl_render::gbuffer_format(wxsl_core::abi::GBufferPrecision) -> wgpu_types::texture::format::TextureFormat
 pub fn wxsl_render::single_draw<'a>(wxsl_render::draw::DrawItem<'a>) -> wxsl_render::draw::DrawList<'a>

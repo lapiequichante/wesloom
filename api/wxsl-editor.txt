@@ -1,1186 +1,116 @@
 pub mod wxsl_editor
-pub mod wxsl_editor::app
-pub enum wxsl_editor::app::CodeTab
-pub wxsl_editor::app::CodeTab::Features
-pub wxsl_editor::app::CodeTab::Frame
-pub wxsl_editor::app::CodeTab::Function
-pub wxsl_editor::app::CodeTab::Problems
-pub wxsl_editor::app::CodeTab::Wgsl
-pub wxsl_editor::app::CodeTab::Wxsl
-impl wxsl_editor::app::CodeTab
-pub const wxsl_editor::app::CodeTab::ALL: &'static [wxsl_editor::app::CodeTab]
-impl core::clone::Clone for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::app::CodeTab
-impl core::cmp::PartialEq for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::default() -> Self
-impl core::fmt::Debug for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::app::CodeTab
-impl core::marker::StructuralPartialEq for wxsl_editor::app::CodeTab
-impl core::marker::Freeze for wxsl_editor::app::CodeTab
-impl core::marker::Send for wxsl_editor::app::CodeTab
-impl core::marker::Sync for wxsl_editor::app::CodeTab
-impl core::marker::Unpin for wxsl_editor::app::CodeTab
-impl core::marker::UnsafeUnpin for wxsl_editor::app::CodeTab
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::CodeTab
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::CodeTab
-pub struct wxsl_editor::app::Editor
-impl wxsl_editor::app::Editor
-pub fn wxsl_editor::app::Editor::canvas_mode(&self) -> wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::app::Editor::canvas_rect(&self) -> wxsl_render::ui::draw::Rect
-pub fn wxsl_editor::app::Editor::canvas_view(&self) -> &wxsl_editor::canvas::View
-pub fn wxsl_editor::app::Editor::fit_next_frame(&mut self)
-pub fn wxsl_editor::app::Editor::frame(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_render::ui::renderer::UiTarget<'_>, f64) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::functions(&self) -> &wxsl_editor::function::Functions
-pub fn wxsl_editor::app::Editor::functions_mut(&mut self) -> &mut wxsl_editor::function::Functions
-pub fn wxsl_editor::app::Editor::graph(&self) -> &wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::handle_event(&mut self, wxsl_render::ui::input::UiEvent)
-pub fn wxsl_editor::app::Editor::is_modified(&self) -> bool
-pub fn wxsl_editor::app::Editor::is_typing(&self) -> bool
-pub fn wxsl_editor::app::Editor::mark_saved(&mut self)
-pub fn wxsl_editor::app::Editor::message(&self) -> &str
-pub fn wxsl_editor::app::Editor::msdf_backend(&self) -> wxsl_render::ui::msdf_gpu::MsdfBackend
-pub fn wxsl_editor::app::Editor::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, wxsl_editor::app::EditorConfig) -> core::result::Result<Self, wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::pipeline_graph(&self) -> core::option::Option<&wxsl_core::graph::Graph>
-pub fn wxsl_editor::app::Editor::pipeline_graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::pipeline_status(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::app::Editor::preview(&self) -> &wxsl_editor::preview::Preview
-pub fn wxsl_editor::app::Editor::previews_document(&self) -> bool
-pub fn wxsl_editor::app::Editor::registry(&self) -> &wxsl_core::node::NodeRegistry
-pub fn wxsl_editor::app::Editor::save_function(&mut self, &wgpu::api::device::Device) -> bool
-pub fn wxsl_editor::app::Editor::select(&mut self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_core::graph::NodeId>)
-pub fn wxsl_editor::app::Editor::selection(&self) -> &[wxsl_core::graph::NodeId]
-pub fn wxsl_editor::app::Editor::set_canvas_mode(&mut self, wxsl_editor::pipeline::CanvasMode)
-pub fn wxsl_editor::app::Editor::set_message(&mut self, impl core::convert::Into<alloc::string::String>)
-pub fn wxsl_editor::app::Editor::set_msdf_backend(&mut self, &wgpu::api::device::Device, wxsl_render::ui::msdf_gpu::MsdfBackend) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::theme(&self) -> wxsl_editor::theme::Theme
-pub fn wxsl_editor::app::Editor::watch_shaders(&mut self, impl core::convert::AsRef<std::path::Path>) -> usize
-impl core::marker::Freeze for wxsl_editor::app::Editor
-impl core::marker::Send for wxsl_editor::app::Editor
-impl !core::marker::Sync for wxsl_editor::app::Editor
-impl core::marker::Unpin for wxsl_editor::app::Editor
-impl core::marker::UnsafeUnpin for wxsl_editor::app::Editor
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::Editor
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::Editor
-pub struct wxsl_editor::app::EditorConfig
-pub wxsl_editor::app::EditorConfig::atlas_size: u32
-pub wxsl_editor::app::EditorConfig::graph: wxsl_core::graph::Graph
-pub wxsl_editor::app::EditorConfig::library: wxsl_render::library::ShaderLibrary
-pub wxsl_editor::app::EditorConfig::mono_font: alloc::vec::Vec<u8>
-pub wxsl_editor::app::EditorConfig::msdf_backend: wxsl_render::ui::msdf_gpu::MsdfBackend
-pub wxsl_editor::app::EditorConfig::registry: wxsl_core::node::NodeRegistry
-pub wxsl_editor::app::EditorConfig::scale: f32
-pub wxsl_editor::app::EditorConfig::ui_font: alloc::vec::Vec<u8>
-impl wxsl_editor::app::EditorConfig
-pub fn wxsl_editor::app::EditorConfig::new(wxsl_render::library::ShaderLibrary, wxsl_core::node::NodeRegistry, wxsl_core::graph::Graph, alloc::vec::Vec<u8>, alloc::vec::Vec<u8>) -> Self
-impl core::marker::Freeze for wxsl_editor::app::EditorConfig
-impl core::marker::Send for wxsl_editor::app::EditorConfig
-impl core::marker::Sync for wxsl_editor::app::EditorConfig
-impl core::marker::Unpin for wxsl_editor::app::EditorConfig
-impl core::marker::UnsafeUnpin for wxsl_editor::app::EditorConfig
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::EditorConfig
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::EditorConfig
-pub mod wxsl_editor::buffer
-pub struct wxsl_editor::buffer::KeyOutcome
-pub wxsl_editor::buffer::KeyOutcome::edited: bool
-pub wxsl_editor::buffer::KeyOutcome::handled: bool
-pub wxsl_editor::buffer::KeyOutcome::moved: bool
-impl core::clone::Clone for wxsl_editor::buffer::KeyOutcome
-pub fn wxsl_editor::buffer::KeyOutcome::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::buffer::KeyOutcome
-impl core::cmp::PartialEq for wxsl_editor::buffer::KeyOutcome
-pub fn wxsl_editor::buffer::KeyOutcome::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::buffer::KeyOutcome
-pub fn wxsl_editor::buffer::KeyOutcome::default() -> Self
-impl core::fmt::Debug for wxsl_editor::buffer::KeyOutcome
-pub fn wxsl_editor::buffer::KeyOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::buffer::KeyOutcome
-impl core::marker::StructuralPartialEq for wxsl_editor::buffer::KeyOutcome
-impl core::marker::Freeze for wxsl_editor::buffer::KeyOutcome
-impl core::marker::Send for wxsl_editor::buffer::KeyOutcome
-impl core::marker::Sync for wxsl_editor::buffer::KeyOutcome
-impl core::marker::Unpin for wxsl_editor::buffer::KeyOutcome
-impl core::marker::UnsafeUnpin for wxsl_editor::buffer::KeyOutcome
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::buffer::KeyOutcome
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::buffer::KeyOutcome
-pub struct wxsl_editor::buffer::TextBuffer
-impl wxsl_editor::buffer::TextBuffer
-pub fn wxsl_editor::buffer::TextBuffer::backspace(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::can_undo(&self) -> bool
-pub fn wxsl_editor::buffer::TextBuffer::cursor(&self) -> usize
-pub fn wxsl_editor::buffer::TextBuffer::delete(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::indent(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::insert(&mut self, &str)
-pub fn wxsl_editor::buffer::TextBuffer::key(&mut self, &wxsl_render::ui::input::KeyPress, usize, &mut alloc::string::String) -> wxsl_editor::buffer::KeyOutcome
-pub fn wxsl_editor::buffer::TextBuffer::line_column(&self, usize) -> (usize, usize)
-pub fn wxsl_editor::buffer::TextBuffer::line_count(&self) -> usize
-pub fn wxsl_editor::buffer::TextBuffer::line_range(&self, usize) -> core::ops::range::Range<usize>
-pub fn wxsl_editor::buffer::TextBuffer::new(impl core::convert::Into<alloc::string::String>) -> Self
-pub fn wxsl_editor::buffer::TextBuffer::newline(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::offset(&self, usize, usize) -> usize
-pub fn wxsl_editor::buffer::TextBuffer::outdent(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::redo(&mut self) -> bool
-pub fn wxsl_editor::buffer::TextBuffer::revision(&self) -> u64
-pub fn wxsl_editor::buffer::TextBuffer::select_all(&mut self)
-pub fn wxsl_editor::buffer::TextBuffer::select_word_at(&mut self, usize)
-pub fn wxsl_editor::buffer::TextBuffer::selected_text(&self) -> &str
-pub fn wxsl_editor::buffer::TextBuffer::selection(&self) -> core::option::Option<core::ops::range::Range<usize>>
-pub fn wxsl_editor::buffer::TextBuffer::set_cursor(&mut self, usize, bool)
-pub fn wxsl_editor::buffer::TextBuffer::set_text(&mut self, &str)
-pub fn wxsl_editor::buffer::TextBuffer::text(&self) -> &str
-pub fn wxsl_editor::buffer::TextBuffer::undo(&mut self) -> bool
-impl core::clone::Clone for wxsl_editor::buffer::TextBuffer
-pub fn wxsl_editor::buffer::TextBuffer::clone(&self) -> Self
-impl core::default::Default for wxsl_editor::buffer::TextBuffer
-pub fn wxsl_editor::buffer::TextBuffer::default() -> Self
-impl core::fmt::Debug for wxsl_editor::buffer::TextBuffer
-pub fn wxsl_editor::buffer::TextBuffer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for wxsl_editor::buffer::TextBuffer
-impl core::marker::Send for wxsl_editor::buffer::TextBuffer
-impl core::marker::Sync for wxsl_editor::buffer::TextBuffer
-impl core::marker::Unpin for wxsl_editor::buffer::TextBuffer
-impl core::marker::UnsafeUnpin for wxsl_editor::buffer::TextBuffer
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::buffer::TextBuffer
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::buffer::TextBuffer
-pub const wxsl_editor::buffer::TAB_WIDTH: usize
-pub mod wxsl_editor::canvas
-pub enum wxsl_editor::canvas::Interaction
-pub wxsl_editor::canvas::Interaction::DraggingLink
-pub wxsl_editor::canvas::Interaction::DraggingLink::from: wxsl_core::graph::SocketRef
-pub wxsl_editor::canvas::Interaction::DraggingLink::kind: wxsl_editor::canvas::PortKind
-pub wxsl_editor::canvas::Interaction::DraggingNode
-pub wxsl_editor::canvas::Interaction::DraggingNode::grab: glam::f32::vec2::Vec2
-pub wxsl_editor::canvas::Interaction::DraggingNode::node: wxsl_core::graph::NodeId
-pub wxsl_editor::canvas::Interaction::Idle
-pub wxsl_editor::canvas::Interaction::Panning
-impl core::clone::Clone for wxsl_editor::canvas::Interaction
-pub fn wxsl_editor::canvas::Interaction::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::Interaction
-pub fn wxsl_editor::canvas::Interaction::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::canvas::Interaction
-pub fn wxsl_editor::canvas::Interaction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::Interaction
-impl core::marker::Freeze for wxsl_editor::canvas::Interaction
-impl core::marker::Send for wxsl_editor::canvas::Interaction
-impl core::marker::Sync for wxsl_editor::canvas::Interaction
-impl core::marker::Unpin for wxsl_editor::canvas::Interaction
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::Interaction
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::Interaction
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::Interaction
-pub enum wxsl_editor::canvas::PortKind
-pub wxsl_editor::canvas::PortKind::Input
-pub wxsl_editor::canvas::PortKind::Output
-impl core::clone::Clone for wxsl_editor::canvas::PortKind
-pub fn wxsl_editor::canvas::PortKind::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::canvas::PortKind
-impl core::cmp::PartialEq for wxsl_editor::canvas::PortKind
-pub fn wxsl_editor::canvas::PortKind::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::canvas::PortKind
-pub fn wxsl_editor::canvas::PortKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::canvas::PortKind
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::PortKind
-impl core::marker::Freeze for wxsl_editor::canvas::PortKind
-impl core::marker::Send for wxsl_editor::canvas::PortKind
-impl core::marker::Sync for wxsl_editor::canvas::PortKind
-impl core::marker::Unpin for wxsl_editor::canvas::PortKind
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::PortKind
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::PortKind
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::PortKind
-pub struct wxsl_editor::canvas::Canvas
-pub wxsl_editor::canvas::Canvas::selection: alloc::vec::Vec<wxsl_core::graph::NodeId>
-pub wxsl_editor::canvas::Canvas::view: wxsl_editor::canvas::View
-impl wxsl_editor::canvas::Canvas
-pub fn wxsl_editor::canvas::Canvas::fit_to_graph(&mut self, &wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, wxsl_render::ui::draw::Rect, &wxsl_editor::theme::Theme)
-pub fn wxsl_editor::canvas::Canvas::interaction(&self) -> &wxsl_editor::canvas::Interaction
-pub fn wxsl_editor::canvas::Canvas::layouts(&self) -> &[wxsl_editor::canvas::NodeLayout]
-pub fn wxsl_editor::canvas::Canvas::new() -> Self
-pub fn wxsl_editor::canvas::Canvas::selected_node(&self) -> core::option::Option<wxsl_core::graph::NodeId>
-pub fn wxsl_editor::canvas::Canvas::show(&mut self, &mut wxsl_editor::ui::Ui<'_>, wxsl_render::ui::draw::Rect, &mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry) -> wxsl_editor::canvas::CanvasResponse
-impl core::default::Default for wxsl_editor::canvas::Canvas
-pub fn wxsl_editor::canvas::Canvas::default() -> Self
-impl core::marker::Freeze for wxsl_editor::canvas::Canvas
-impl core::marker::Send for wxsl_editor::canvas::Canvas
-impl core::marker::Sync for wxsl_editor::canvas::Canvas
-impl core::marker::Unpin for wxsl_editor::canvas::Canvas
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::Canvas
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::Canvas
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::Canvas
-pub struct wxsl_editor::canvas::CanvasResponse
-pub wxsl_editor::canvas::CanvasResponse::add_node_at: core::option::Option<glam::f32::vec2::Vec2>
-pub wxsl_editor::canvas::CanvasResponse::changed: bool
-pub wxsl_editor::canvas::CanvasResponse::message: core::option::Option<alloc::string::String>
-impl core::clone::Clone for wxsl_editor::canvas::CanvasResponse
-pub fn wxsl_editor::canvas::CanvasResponse::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::CanvasResponse
-pub fn wxsl_editor::canvas::CanvasResponse::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::canvas::CanvasResponse
-pub fn wxsl_editor::canvas::CanvasResponse::default() -> Self
-impl core::fmt::Debug for wxsl_editor::canvas::CanvasResponse
-pub fn wxsl_editor::canvas::CanvasResponse::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::CanvasResponse
-impl core::marker::Freeze for wxsl_editor::canvas::CanvasResponse
-impl core::marker::Send for wxsl_editor::canvas::CanvasResponse
-impl core::marker::Sync for wxsl_editor::canvas::CanvasResponse
-impl core::marker::Unpin for wxsl_editor::canvas::CanvasResponse
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::CanvasResponse
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::CanvasResponse
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::CanvasResponse
-pub struct wxsl_editor::canvas::NodeLayout
-pub wxsl_editor::canvas::NodeLayout::header: wxsl_render::ui::draw::Rect
-pub wxsl_editor::canvas::NodeLayout::id: wxsl_core::graph::NodeId
-pub wxsl_editor::canvas::NodeLayout::inputs: alloc::vec::Vec<wxsl_editor::canvas::PortLayout>
-pub wxsl_editor::canvas::NodeLayout::outputs: alloc::vec::Vec<wxsl_editor::canvas::PortLayout>
-pub wxsl_editor::canvas::NodeLayout::rect: wxsl_render::ui::draw::Rect
-impl wxsl_editor::canvas::NodeLayout
-pub fn wxsl_editor::canvas::NodeLayout::port_at(&self, glam::f32::vec2::Vec2, f32) -> core::option::Option<(wxsl_editor::canvas::PortKind, &wxsl_editor::canvas::PortLayout)>
-impl core::clone::Clone for wxsl_editor::canvas::NodeLayout
-pub fn wxsl_editor::canvas::NodeLayout::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::NodeLayout
-pub fn wxsl_editor::canvas::NodeLayout::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::canvas::NodeLayout
-pub fn wxsl_editor::canvas::NodeLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::NodeLayout
-impl core::marker::Freeze for wxsl_editor::canvas::NodeLayout
-impl core::marker::Send for wxsl_editor::canvas::NodeLayout
-impl core::marker::Sync for wxsl_editor::canvas::NodeLayout
-impl core::marker::Unpin for wxsl_editor::canvas::NodeLayout
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::NodeLayout
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::NodeLayout
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::NodeLayout
-pub struct wxsl_editor::canvas::PortLayout
-pub wxsl_editor::canvas::PortLayout::center: glam::f32::vec2::Vec2
-pub wxsl_editor::canvas::PortLayout::connected: bool
-pub wxsl_editor::canvas::PortLayout::constant: bool
-pub wxsl_editor::canvas::PortLayout::row: wxsl_render::ui::draw::Rect
-pub wxsl_editor::canvas::PortLayout::socket: alloc::string::String
-pub wxsl_editor::canvas::PortLayout::ty: wxsl_core::node::ValueType
-impl core::clone::Clone for wxsl_editor::canvas::PortLayout
-pub fn wxsl_editor::canvas::PortLayout::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::PortLayout
-pub fn wxsl_editor::canvas::PortLayout::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::canvas::PortLayout
-pub fn wxsl_editor::canvas::PortLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::PortLayout
-impl core::marker::Freeze for wxsl_editor::canvas::PortLayout
-impl core::marker::Send for wxsl_editor::canvas::PortLayout
-impl core::marker::Sync for wxsl_editor::canvas::PortLayout
-impl core::marker::Unpin for wxsl_editor::canvas::PortLayout
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::PortLayout
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::PortLayout
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::PortLayout
-pub struct wxsl_editor::canvas::SocketQueries<'a>
-pub wxsl_editor::canvas::SocketQueries::connected: &'a dyn core::ops::function::Fn(&str) -> bool
-pub wxsl_editor::canvas::SocketQueries::display_ty: &'a dyn core::ops::function::Fn(&wxsl_core::node::Socket) -> wxsl_core::node::ValueType
-impl<'a> core::marker::Freeze for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> !core::marker::Send for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> !core::marker::Sync for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> core::marker::Unpin for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> core::marker::UnsafeUnpin for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::SocketQueries<'a>
-impl<'a> !core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::SocketQueries<'a>
-pub struct wxsl_editor::canvas::View
-pub wxsl_editor::canvas::View::pan: glam::f32::vec2::Vec2
-pub wxsl_editor::canvas::View::scale: f32
-pub wxsl_editor::canvas::View::zoom: f32
-impl wxsl_editor::canvas::View
-pub const wxsl_editor::canvas::View::ZOOM_RANGE: (f32, f32)
-pub fn wxsl_editor::canvas::View::fit(&mut self, wxsl_render::ui::draw::Rect, (glam::f32::vec2::Vec2, glam::f32::vec2::Vec2))
-pub fn wxsl_editor::canvas::View::pan_by(&mut self, glam::f32::vec2::Vec2)
-pub fn wxsl_editor::canvas::View::pixels_per_unit(&self) -> f32
-pub fn wxsl_editor::canvas::View::to_graph(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
-pub fn wxsl_editor::canvas::View::to_screen(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
-pub fn wxsl_editor::canvas::View::zoom_about(&mut self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2, f32)
-impl core::clone::Clone for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::default() -> Self
-impl core::fmt::Debug for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::canvas::View
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::View
-impl core::marker::Freeze for wxsl_editor::canvas::View
-impl core::marker::Send for wxsl_editor::canvas::View
-impl core::marker::Sync for wxsl_editor::canvas::View
-impl core::marker::Unpin for wxsl_editor::canvas::View
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::View
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::View
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::auto_layout(&mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry)
-pub fn wxsl_editor::canvas::distance_to_link(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> f32
-pub fn wxsl_editor::canvas::graph_bounds(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_editor::theme::Theme) -> core::option::Option<(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2)>
-pub fn wxsl_editor::canvas::layout_graph(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_editor::canvas::View, wxsl_render::ui::draw::Rect, &wxsl_editor::theme::Theme) -> alloc::vec::Vec<wxsl_editor::canvas::NodeLayout>
-pub fn wxsl_editor::canvas::layout_node(wxsl_core::graph::NodeId, glam::f32::vec2::Vec2, &wxsl_core::node::NodeDefinition, &wxsl_editor::canvas::SocketQueries<'_>, &wxsl_editor::canvas::View, wxsl_render::ui::draw::Rect, &wxsl_editor::theme::Theme) -> wxsl_editor::canvas::NodeLayout
-pub fn wxsl_editor::canvas::link_controls(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> (glam::f32::vec2::Vec2, glam::f32::vec2::Vec2)
-pub fn wxsl_editor::canvas::place_new_node(&mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &str, glam::f32::vec2::Vec2) -> wxsl_core::graph::NodeId
-pub fn wxsl_editor::canvas::tidy_layout(&mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry)
-pub mod wxsl_editor::function
-pub struct wxsl_editor::function::FunctionSource
-pub wxsl_editor::function::FunctionSource::buffer: wxsl_editor::buffer::TextBuffer
-pub wxsl_editor::function::FunctionSource::marks: alloc::vec::Vec<wxsl_editor::ui::LineMark>
-pub wxsl_editor::function::FunctionSource::node: core::option::Option<alloc::string::String>
-impl wxsl_editor::function::FunctionSource
-pub fn wxsl_editor::function::FunctionSource::is_modified(&self) -> bool
-pub fn wxsl_editor::function::FunctionSource::name(&self) -> alloc::string::String
-pub fn wxsl_editor::function::FunctionSource::new(&str) -> Self
-pub fn wxsl_editor::function::FunctionSource::record(&mut self, core::result::Result<alloc::string::String, alloc::vec::Vec<wxsl_editor::ui::LineMark>>)
-pub fn wxsl_editor::function::FunctionSource::runs(&mut self) -> &[wxsl_editor::highlight::Run]
-impl core::clone::Clone for wxsl_editor::function::FunctionSource
-pub fn wxsl_editor::function::FunctionSource::clone(&self) -> Self
-impl core::fmt::Debug for wxsl_editor::function::FunctionSource
-pub fn wxsl_editor::function::FunctionSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for wxsl_editor::function::FunctionSource
-impl core::marker::Send for wxsl_editor::function::FunctionSource
-impl core::marker::Sync for wxsl_editor::function::FunctionSource
-impl core::marker::Unpin for wxsl_editor::function::FunctionSource
-impl core::marker::UnsafeUnpin for wxsl_editor::function::FunctionSource
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::function::FunctionSource
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::function::FunctionSource
-pub struct wxsl_editor::function::Functions
-pub wxsl_editor::function::Functions::buffers: alloc::vec::Vec<wxsl_editor::function::FunctionSource>
-pub wxsl_editor::function::Functions::current: usize
-impl wxsl_editor::function::Functions
-pub fn wxsl_editor::function::Functions::current(&self) -> &wxsl_editor::function::FunctionSource
-pub fn wxsl_editor::function::Functions::current_mut(&mut self) -> &mut wxsl_editor::function::FunctionSource
-pub fn wxsl_editor::function::Functions::open_new(&mut self)
-impl core::clone::Clone for wxsl_editor::function::Functions
-pub fn wxsl_editor::function::Functions::clone(&self) -> Self
-impl core::default::Default for wxsl_editor::function::Functions
-pub fn wxsl_editor::function::Functions::default() -> Self
-impl core::fmt::Debug for wxsl_editor::function::Functions
-pub fn wxsl_editor::function::Functions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for wxsl_editor::function::Functions
-impl core::marker::Send for wxsl_editor::function::Functions
-impl core::marker::Sync for wxsl_editor::function::Functions
-impl core::marker::Unpin for wxsl_editor::function::Functions
-impl core::marker::UnsafeUnpin for wxsl_editor::function::Functions
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::function::Functions
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::function::Functions
-pub const wxsl_editor::function::PACKAGE: &str
-pub const wxsl_editor::function::TEMPLATE: &str
-pub fn wxsl_editor::function::derive(&str, &wxsl_render::library::ShaderLibrary) -> core::result::Result<(alloc::string::String, wxsl_core::node::NodeDefinition), alloc::vec::Vec<wxsl_editor::ui::LineMark>>
-pub fn wxsl_editor::function::function_name(&str) -> core::option::Option<alloc::string::String>
-pub fn wxsl_editor::function::module_path(&str) -> alloc::string::String
-pub mod wxsl_editor::highlight
-pub enum wxsl_editor::highlight::Kind
-pub wxsl_editor::highlight::Kind::Attribute
-pub wxsl_editor::highlight::Kind::Comment
-pub wxsl_editor::highlight::Kind::Keyword
-pub wxsl_editor::highlight::Kind::Number
-pub wxsl_editor::highlight::Kind::Type
-impl wxsl_editor::highlight::Kind
-pub fn wxsl_editor::highlight::Kind::color(self, &wxsl_editor::theme::Palette) -> wxsl_render::ui::draw::Color
-impl core::clone::Clone for wxsl_editor::highlight::Kind
-pub fn wxsl_editor::highlight::Kind::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::highlight::Kind
-impl core::cmp::PartialEq for wxsl_editor::highlight::Kind
-pub fn wxsl_editor::highlight::Kind::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::highlight::Kind
-pub fn wxsl_editor::highlight::Kind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::highlight::Kind
-impl core::marker::StructuralPartialEq for wxsl_editor::highlight::Kind
-impl core::marker::Freeze for wxsl_editor::highlight::Kind
-impl core::marker::Send for wxsl_editor::highlight::Kind
-impl core::marker::Sync for wxsl_editor::highlight::Kind
-impl core::marker::Unpin for wxsl_editor::highlight::Kind
-impl core::marker::UnsafeUnpin for wxsl_editor::highlight::Kind
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::highlight::Kind
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::highlight::Kind
-pub struct wxsl_editor::highlight::Run
-pub wxsl_editor::highlight::Run::kind: wxsl_editor::highlight::Kind
-pub wxsl_editor::highlight::Run::range: core::ops::range::Range<usize>
-impl core::clone::Clone for wxsl_editor::highlight::Run
-pub fn wxsl_editor::highlight::Run::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::highlight::Run
-pub fn wxsl_editor::highlight::Run::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::highlight::Run
-pub fn wxsl_editor::highlight::Run::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::highlight::Run
-impl core::marker::Freeze for wxsl_editor::highlight::Run
-impl core::marker::Send for wxsl_editor::highlight::Run
-impl core::marker::Sync for wxsl_editor::highlight::Run
-impl core::marker::Unpin for wxsl_editor::highlight::Run
-impl core::marker::UnsafeUnpin for wxsl_editor::highlight::Run
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::highlight::Run
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::highlight::Run
-pub fn wxsl_editor::highlight::highlight(&str) -> alloc::vec::Vec<wxsl_editor::highlight::Run>
-pub mod wxsl_editor::palette
-pub struct wxsl_editor::palette::Match
-pub wxsl_editor::palette::Match::category: alloc::string::String
-pub wxsl_editor::palette::Match::id: alloc::string::String
-pub wxsl_editor::palette::Match::label: alloc::string::String
-pub wxsl_editor::palette::Match::preset: core::option::Option<(alloc::string::String, alloc::string::String)>
-pub wxsl_editor::palette::Match::score: i32
-impl core::clone::Clone for wxsl_editor::palette::Match
-pub fn wxsl_editor::palette::Match::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::palette::Match
-impl core::cmp::PartialEq for wxsl_editor::palette::Match
-pub fn wxsl_editor::palette::Match::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::palette::Match
-pub fn wxsl_editor::palette::Match::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::palette::Match
-impl core::marker::Freeze for wxsl_editor::palette::Match
-impl core::marker::Send for wxsl_editor::palette::Match
-impl core::marker::Sync for wxsl_editor::palette::Match
-impl core::marker::Unpin for wxsl_editor::palette::Match
-impl core::marker::UnsafeUnpin for wxsl_editor::palette::Match
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::palette::Match
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::palette::Match
-pub struct wxsl_editor::palette::NodePicker
-pub wxsl_editor::palette::NodePicker::category: core::option::Option<alloc::string::String>
-pub wxsl_editor::palette::NodePicker::highlighted: usize
-pub wxsl_editor::palette::NodePicker::open: bool
-pub wxsl_editor::palette::NodePicker::query: alloc::string::String
-pub wxsl_editor::palette::NodePicker::target: core::option::Option<glam::f32::vec2::Vec2>
-impl wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::close(&mut self)
-pub fn wxsl_editor::palette::NodePicker::highlighted<'a>(&self, &'a [wxsl_editor::palette::Match]) -> core::option::Option<&'a wxsl_editor::palette::Match>
-pub fn wxsl_editor::palette::NodePicker::matches(&self, &wxsl_core::node::NodeRegistry, wxsl_core::node::GraphDomain, usize) -> alloc::vec::Vec<wxsl_editor::palette::Match>
-pub fn wxsl_editor::palette::NodePicker::move_highlight(&mut self, i32, usize)
-pub fn wxsl_editor::palette::NodePicker::new() -> Self
-pub fn wxsl_editor::palette::NodePicker::open_at(&mut self, glam::f32::vec2::Vec2)
-impl core::clone::Clone for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::clone(&self) -> Self
-impl core::default::Default for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::default() -> Self
-impl core::fmt::Debug for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for wxsl_editor::palette::NodePicker
-impl core::marker::Send for wxsl_editor::palette::NodePicker
-impl core::marker::Sync for wxsl_editor::palette::NodePicker
-impl core::marker::Unpin for wxsl_editor::palette::NodePicker
-impl core::marker::UnsafeUnpin for wxsl_editor::palette::NodePicker
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::palette::NodePicker
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::palette::NodePicker
-pub mod wxsl_editor::pipeline
-pub enum wxsl_editor::pipeline::CanvasMode
-pub wxsl_editor::pipeline::CanvasMode::Material
-pub wxsl_editor::pipeline::CanvasMode::Pipeline
-impl wxsl_editor::pipeline::CanvasMode
-pub const wxsl_editor::pipeline::CanvasMode::ALL: &'static [wxsl_editor::pipeline::CanvasMode]
-pub fn wxsl_editor::pipeline::CanvasMode::name(self) -> &'static str
-pub fn wxsl_editor::pipeline::CanvasMode::other(self) -> Self
-impl core::clone::Clone for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::pipeline::CanvasMode
-impl core::cmp::PartialEq for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::default() -> Self
-impl core::fmt::Debug for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::pipeline::CanvasMode
-impl core::marker::StructuralPartialEq for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Freeze for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Send for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Sync for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Unpin for wxsl_editor::pipeline::CanvasMode
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::CanvasMode
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::CanvasMode
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::CanvasMode
-pub enum wxsl_editor::pipeline::PipelineTab
-pub wxsl_editor::pipeline::PipelineTab::Passes
-pub wxsl_editor::pipeline::PipelineTab::Problems
-impl core::clone::Clone for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::pipeline::PipelineTab
-impl core::cmp::PartialEq for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::default() -> Self
-impl core::fmt::Debug for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::pipeline::PipelineTab
-impl core::marker::StructuralPartialEq for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Freeze for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Send for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Sync for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Unpin for wxsl_editor::pipeline::PipelineTab
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::PipelineTab
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::PipelineTab
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::PipelineTab
-pub struct wxsl_editor::pipeline::PipelineCanvas
-impl wxsl_editor::pipeline::PipelineCanvas
-pub fn wxsl_editor::pipeline::PipelineCanvas::graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::pipeline::PipelineCanvas::open_on_preset(wxsl_frame::pipeline::StockPipeline) -> Self
-impl core::marker::Freeze for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Send for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Sync for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Unpin for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::PipelineCanvas
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::PipelineCanvas
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::PipelineCanvas
-pub fn wxsl_editor::pipeline::compile(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> (alloc::vec::Vec<alloc::string::String>, core::option::Option<wxsl_render::graph::RenderGraph>)
-pub fn wxsl_editor::pipeline::palette_categories(&wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry) -> alloc::vec::Vec<alloc::string::String>
-pub fn wxsl_editor::pipeline::palette_matches(&wxsl_editor::palette::NodePicker, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry) -> alloc::vec::Vec<wxsl_editor::palette::Match>
-pub mod wxsl_editor::preview
-pub enum wxsl_editor::preview::PreviewStatus
-pub wxsl_editor::preview::PreviewStatus::Empty
-pub wxsl_editor::preview::PreviewStatus::Failed(alloc::vec::Vec<alloc::string::String>)
-pub wxsl_editor::preview::PreviewStatus::Ok
-impl wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::errors(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::preview::PreviewStatus::is_ok(&self) -> bool
-impl core::clone::Clone for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::preview::PreviewStatus
-impl core::cmp::PartialEq for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::default() -> Self
-impl core::fmt::Debug for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::preview::PreviewStatus
-impl core::marker::Freeze for wxsl_editor::preview::PreviewStatus
-impl core::marker::Send for wxsl_editor::preview::PreviewStatus
-impl core::marker::Sync for wxsl_editor::preview::PreviewStatus
-impl core::marker::Unpin for wxsl_editor::preview::PreviewStatus
-impl core::marker::UnsafeUnpin for wxsl_editor::preview::PreviewStatus
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::preview::PreviewStatus
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::preview::PreviewStatus
-pub struct wxsl_editor::preview::Preview
-pub wxsl_editor::preview::Preview::spinning: bool
-pub wxsl_editor::preview::Preview::split: f32
-impl wxsl_editor::preview::Preview
-pub const wxsl_editor::preview::Preview::SIZE: u32
-pub fn wxsl_editor::preview::Preview::compare(&self) -> core::option::Option<wxsl_frame::pipeline::StockPipeline>
-pub fn wxsl_editor::preview::Preview::compare_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
-pub fn wxsl_editor::preview::Preview::compare_texture(&self) -> wxsl_render::ui::draw::TextureId
-pub fn wxsl_editor::preview::Preview::debug_view(&self) -> i32
-pub fn wxsl_editor::preview::Preview::debug_views(&self) -> alloc::vec::Vec<(wxsl_core::lighting::DebugView, bool)>
-pub fn wxsl_editor::preview::Preview::display_stage(&self) -> wxsl_core::abi::MaterialStage
-pub fn wxsl_editor::preview::Preview::drag(&mut self, f32)
-pub fn wxsl_editor::preview::Preview::effects(&self) -> &wxsl_frame::effect::EffectRegistry
-pub fn wxsl_editor::preview::Preview::features(&self) -> alloc::vec::Vec<&'static str>
-pub fn wxsl_editor::preview::Preview::frame_time(&self) -> core::option::Option<f32>
-pub fn wxsl_editor::preview::Preview::install_document(&mut self, wxsl_render::graph::RenderGraph) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::library(&self) -> &wxsl_render::library::ShaderLibrary
-pub fn wxsl_editor::preview::Preview::mark_pass(&mut self, &str)
-pub fn wxsl_editor::preview::Preview::material(&self) -> core::option::Option<&wxsl_render::material::Material>
-pub fn wxsl_editor::preview::Preview::material_params(&self) -> alloc::vec::Vec<(alloc::string::String, wxsl_core::node::Value)>
-pub fn wxsl_editor::preview::Preview::mesh_kind(&self) -> wxsl_render::mesh::MeshKind
-pub fn wxsl_editor::preview::Preview::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::ui::renderer::UiRenderer, wxsl_render::library::ShaderLibrary) -> core::result::Result<Self, wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::pass_draw_count(&self, &str) -> core::option::Option<u32>
-pub fn wxsl_editor::preview::Preview::pass_param(&self, &str, &str) -> core::option::Option<wxsl_core::node::Value>
-pub fn wxsl_editor::preview::Preview::pass_run_count(&self, &str) -> core::option::Option<u32>
-pub fn wxsl_editor::preview::Preview::pass_time(&self, &str) -> core::option::Option<f32>
-pub fn wxsl_editor::preview::Preview::pipeline(&self) -> wxsl_frame::pipeline::StockPipeline
-pub fn wxsl_editor::preview::Preview::pipeline_config(&self) -> &wxsl_frame::pipeline::PipelineConfig
-pub fn wxsl_editor::preview::Preview::read_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
-pub fn wxsl_editor::preview::Preview::rebuild(&mut self, &wgpu::api::device::Device, &wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_core::macros::MacroSet)
-pub fn wxsl_editor::preview::Preview::reload(&mut self, &wgpu::api::device::Device, impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, alloc::string::String)>) -> bool
-pub fn wxsl_editor::preview::Preview::reload_errors(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::preview::Preview::render(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, f32, f32) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::render_graph(&self) -> &wxsl_render::graph::RenderGraph
-pub fn wxsl_editor::preview::Preview::reset_runs(&mut self)
-pub fn wxsl_editor::preview::Preview::restore_stock(&mut self)
-pub fn wxsl_editor::preview::Preview::runs_document(&self) -> bool
-pub fn wxsl_editor::preview::Preview::set_compare(&mut self, &wgpu::api::device::Device, core::option::Option<wxsl_frame::pipeline::StockPipeline>) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_debug_view(&mut self, i32)
-pub fn wxsl_editor::preview::Preview::set_features(&mut self, &[&str]) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_material_param(&mut self, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_mesh(&mut self, &wgpu::api::device::Device, wxsl_render::mesh::MeshKind)
-pub fn wxsl_editor::preview::Preview::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_pipeline(&mut self, &wgpu::api::device::Device, wxsl_frame::pipeline::StockPipeline)
-pub fn wxsl_editor::preview::Preview::start_stepping(&mut self) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::status(&self) -> &wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::Preview::step_to(&mut self, usize, core::option::Option<wxsl_frame::pass::ResourceId>) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::stepping(&self) -> core::option::Option<wxsl_editor::preview::StepView>
-pub fn wxsl_editor::preview::Preview::stop_stepping(&mut self)
-pub fn wxsl_editor::preview::Preview::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
-pub fn wxsl_editor::preview::Preview::texture(&self) -> wxsl_render::ui::draw::TextureId
-pub fn wxsl_editor::preview::Preview::timed(&self) -> bool
-pub fn wxsl_editor::preview::Preview::variant_stats(&self) -> (usize, wxsl_render::variants::CacheStats)
-pub fn wxsl_editor::preview::Preview::wgsl(&self) -> &str
-pub fn wxsl_editor::preview::Preview::wgsl_highlight(&self) -> &[wxsl_editor::highlight::Run]
-pub fn wxsl_editor::preview::Preview::wxsl(&self) -> &str
-pub fn wxsl_editor::preview::Preview::wxsl_highlight(&self) -> &[wxsl_editor::highlight::Run]
-impl core::marker::Freeze for wxsl_editor::preview::Preview
-impl core::marker::Send for wxsl_editor::preview::Preview
-impl !core::marker::Sync for wxsl_editor::preview::Preview
-impl core::marker::Unpin for wxsl_editor::preview::Preview
-impl core::marker::UnsafeUnpin for wxsl_editor::preview::Preview
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::preview::Preview
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::preview::Preview
-pub struct wxsl_editor::preview::StepView
-pub wxsl_editor::preview::StepView::count: usize
-pub wxsl_editor::preview::StepView::passes: alloc::vec::Vec<alloc::string::String>
-pub wxsl_editor::preview::StepView::pinned: bool
-pub wxsl_editor::preview::StepView::resources: alloc::vec::Vec<(wxsl_frame::pass::ResourceId, alloc::string::String, bool)>
-pub wxsl_editor::preview::StepView::shown: core::option::Option<alloc::string::String>
-impl core::clone::Clone for wxsl_editor::preview::StepView
-pub fn wxsl_editor::preview::StepView::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::preview::StepView
-pub fn wxsl_editor::preview::StepView::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::preview::StepView
-pub fn wxsl_editor::preview::StepView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::preview::StepView
-impl core::marker::Freeze for wxsl_editor::preview::StepView
-impl core::marker::Send for wxsl_editor::preview::StepView
-impl core::marker::Sync for wxsl_editor::preview::StepView
-impl core::marker::Unpin for wxsl_editor::preview::StepView
-impl core::marker::UnsafeUnpin for wxsl_editor::preview::StepView
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::preview::StepView
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::preview::StepView
-pub fn wxsl_editor::preview::preview_environment(f32) -> wxsl_frame::environment::Environment
-pub mod wxsl_editor::reload
-pub struct wxsl_editor::reload::ModuleChange
-pub wxsl_editor::reload::ModuleChange::module: alloc::string::String
-pub wxsl_editor::reload::ModuleChange::path: std::path::PathBuf
-pub wxsl_editor::reload::ModuleChange::source: alloc::string::String
-impl core::clone::Clone for wxsl_editor::reload::ModuleChange
-pub fn wxsl_editor::reload::ModuleChange::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::reload::ModuleChange
-impl core::cmp::PartialEq for wxsl_editor::reload::ModuleChange
-pub fn wxsl_editor::reload::ModuleChange::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::reload::ModuleChange
-pub fn wxsl_editor::reload::ModuleChange::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::reload::ModuleChange
-impl core::marker::Freeze for wxsl_editor::reload::ModuleChange
-impl core::marker::Send for wxsl_editor::reload::ModuleChange
-impl core::marker::Sync for wxsl_editor::reload::ModuleChange
-impl core::marker::Unpin for wxsl_editor::reload::ModuleChange
-impl core::marker::UnsafeUnpin for wxsl_editor::reload::ModuleChange
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::reload::ModuleChange
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::reload::ModuleChange
-pub struct wxsl_editor::reload::ShaderWatch
-impl wxsl_editor::reload::ShaderWatch
-pub fn wxsl_editor::reload::ShaderWatch::is_empty(&self) -> bool
-pub fn wxsl_editor::reload::ShaderWatch::len(&self) -> usize
-pub fn wxsl_editor::reload::ShaderWatch::new(&std::path::Path, &wxsl_render::library::ShaderLibrary) -> Self
-pub fn wxsl_editor::reload::ShaderWatch::poll(&mut self) -> alloc::vec::Vec<wxsl_editor::reload::ModuleChange>
-impl core::marker::Freeze for wxsl_editor::reload::ShaderWatch
-impl core::marker::Send for wxsl_editor::reload::ShaderWatch
-impl core::marker::Sync for wxsl_editor::reload::ShaderWatch
-impl core::marker::Unpin for wxsl_editor::reload::ShaderWatch
-impl core::marker::UnsafeUnpin for wxsl_editor::reload::ShaderWatch
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::reload::ShaderWatch
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::reload::ShaderWatch
-pub mod wxsl_editor::theme
-pub enum wxsl_editor::theme::ThemeMode
-pub wxsl_editor::theme::ThemeMode::Dark
-pub wxsl_editor::theme::ThemeMode::Light
-impl wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::name(self) -> &'static str
-pub fn wxsl_editor::theme::ThemeMode::palette(self) -> wxsl_editor::theme::Palette
-pub fn wxsl_editor::theme::ThemeMode::toggled(self) -> Self
-impl core::clone::Clone for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::theme::ThemeMode
-impl core::cmp::PartialEq for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::ThemeMode
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::ThemeMode
-impl core::marker::Freeze for wxsl_editor::theme::ThemeMode
-impl core::marker::Send for wxsl_editor::theme::ThemeMode
-impl core::marker::Sync for wxsl_editor::theme::ThemeMode
-impl core::marker::Unpin for wxsl_editor::theme::ThemeMode
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::ThemeMode
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::ThemeMode
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::ThemeMode
-pub struct wxsl_editor::theme::Metrics
-pub wxsl_editor::theme::Metrics::bottom_panel_height: f32
-pub wxsl_editor::theme::Metrics::link_width: f32
-pub wxsl_editor::theme::Metrics::mono_text_size: f32
-pub wxsl_editor::theme::Metrics::node_header_height: f32
-pub wxsl_editor::theme::Metrics::node_width: f32
-pub wxsl_editor::theme::Metrics::outline_width: f32
-pub wxsl_editor::theme::Metrics::padding: f32
-pub wxsl_editor::theme::Metrics::panel_radius: f32
-pub wxsl_editor::theme::Metrics::port_radius: f32
-pub wxsl_editor::theme::Metrics::radius: f32
-pub wxsl_editor::theme::Metrics::row_gap: f32
-pub wxsl_editor::theme::Metrics::row_height: f32
-pub wxsl_editor::theme::Metrics::scrollbar_width: f32
-pub wxsl_editor::theme::Metrics::side_panel_width: f32
-pub wxsl_editor::theme::Metrics::small_text_size: f32
-pub wxsl_editor::theme::Metrics::status_height: f32
-pub wxsl_editor::theme::Metrics::text_size: f32
-impl wxsl_editor::theme::Metrics
-pub const wxsl_editor::theme::Metrics::DEFAULT: wxsl_editor::theme::Metrics
-pub fn wxsl_editor::theme::Metrics::scaled(&self, f32) -> wxsl_editor::theme::Metrics
-impl core::clone::Clone for wxsl_editor::theme::Metrics
-pub fn wxsl_editor::theme::Metrics::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::theme::Metrics
-pub fn wxsl_editor::theme::Metrics::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::theme::Metrics
-pub fn wxsl_editor::theme::Metrics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::Metrics
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::Metrics
-impl core::marker::Freeze for wxsl_editor::theme::Metrics
-impl core::marker::Send for wxsl_editor::theme::Metrics
-impl core::marker::Sync for wxsl_editor::theme::Metrics
-impl core::marker::Unpin for wxsl_editor::theme::Metrics
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::Metrics
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::Metrics
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::Metrics
-pub struct wxsl_editor::theme::Palette
-pub wxsl_editor::theme::Palette::accent: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::background: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::canvas: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::control: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::control_active: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::control_hover: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::error: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::grid: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::grid_major: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::link: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::link_hover: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::link_pending: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::node: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::node_header: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::outline: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::panel: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::panel_header: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::selection: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::syntax_attribute: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::syntax_comment: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::syntax_keyword: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::syntax_number: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::syntax_type: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::text: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::text_dim: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::text_on_accent: wxsl_render::ui::draw::Color
-pub wxsl_editor::theme::Palette::warning: wxsl_render::ui::draw::Color
-impl wxsl_editor::theme::Palette
-pub const wxsl_editor::theme::Palette::DARK: wxsl_editor::theme::Palette
-pub const wxsl_editor::theme::Palette::LIGHT: wxsl_editor::theme::Palette
-impl core::clone::Clone for wxsl_editor::theme::Palette
-pub fn wxsl_editor::theme::Palette::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::theme::Palette
-pub fn wxsl_editor::theme::Palette::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::theme::Palette
-pub fn wxsl_editor::theme::Palette::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::Palette
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::Palette
-impl core::marker::Freeze for wxsl_editor::theme::Palette
-impl core::marker::Send for wxsl_editor::theme::Palette
-impl core::marker::Sync for wxsl_editor::theme::Palette
-impl core::marker::Unpin for wxsl_editor::theme::Palette
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::Palette
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::Palette
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::Palette
-pub struct wxsl_editor::theme::Theme
-pub wxsl_editor::theme::Theme::metrics: wxsl_editor::theme::Metrics
-pub wxsl_editor::theme::Theme::mode: wxsl_editor::theme::ThemeMode
-pub wxsl_editor::theme::Theme::palette: wxsl_editor::theme::Palette
-pub wxsl_editor::theme::Theme::scale: f32
-impl wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::inner(&self, wxsl_render::ui::draw::Rect) -> wxsl_render::ui::draw::Rect
-pub fn wxsl_editor::theme::Theme::new(f32) -> Self
-pub fn wxsl_editor::theme::Theme::node_color(&self, &wxsl_core::graph::Node) -> wxsl_render::ui::draw::Color
-pub fn wxsl_editor::theme::Theme::set_scale(&mut self, f32)
-pub fn wxsl_editor::theme::Theme::toggle_mode(&mut self)
-pub fn wxsl_editor::theme::Theme::type_color(&self, wxsl_core::node::ValueType) -> wxsl_render::ui::draw::Color
-impl core::clone::Clone for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::default() -> Self
-impl core::fmt::Debug for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::Theme
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::Theme
-impl core::marker::Freeze for wxsl_editor::theme::Theme
-impl core::marker::Send for wxsl_editor::theme::Theme
-impl core::marker::Sync for wxsl_editor::theme::Theme
-impl core::marker::Unpin for wxsl_editor::theme::Theme
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::Theme
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::Theme
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::Theme
-pub mod wxsl_editor::ui
-pub enum wxsl_editor::ui::Align
-pub wxsl_editor::ui::Align::Center
-pub wxsl_editor::ui::Align::Left
-pub wxsl_editor::ui::Align::Right
-impl core::clone::Clone for wxsl_editor::ui::Align
-pub fn wxsl_editor::ui::Align::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::ui::Align
-impl core::cmp::PartialEq for wxsl_editor::ui::Align
-pub fn wxsl_editor::ui::Align::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::ui::Align
-pub fn wxsl_editor::ui::Align::default() -> Self
-impl core::fmt::Debug for wxsl_editor::ui::Align
-pub fn wxsl_editor::ui::Align::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::ui::Align
-impl core::marker::StructuralPartialEq for wxsl_editor::ui::Align
-impl core::marker::Freeze for wxsl_editor::ui::Align
-impl core::marker::Send for wxsl_editor::ui::Align
-impl core::marker::Sync for wxsl_editor::ui::Align
-impl core::marker::Unpin for wxsl_editor::ui::Align
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::Align
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::Align
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::Align
-pub struct wxsl_editor::ui::Id(pub u64)
-impl wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::new(&str) -> Self
-pub fn wxsl_editor::ui::Id::with(self, u64) -> Self
-impl core::clone::Clone for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::ui::Id
-impl core::cmp::Ord for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::cmp(&self, &Self) -> core::cmp::Ordering
-impl core::cmp::PartialEq for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::eq(&self, &Self) -> bool
-impl core::cmp::PartialOrd for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
-impl core::default::Default for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::default() -> Self
-impl core::fmt::Debug for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for wxsl_editor::ui::Id
-pub fn wxsl_editor::ui::Id::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for wxsl_editor::ui::Id
-impl core::marker::StructuralPartialEq for wxsl_editor::ui::Id
-impl core::marker::Freeze for wxsl_editor::ui::Id
-impl core::marker::Send for wxsl_editor::ui::Id
-impl core::marker::Sync for wxsl_editor::ui::Id
-impl core::marker::Unpin for wxsl_editor::ui::Id
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::Id
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::Id
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::Id
-pub struct wxsl_editor::ui::LineMark
-pub wxsl_editor::ui::LineMark::column: usize
-pub wxsl_editor::ui::LineMark::line: usize
-pub wxsl_editor::ui::LineMark::message: alloc::string::String
-impl core::clone::Clone for wxsl_editor::ui::LineMark
-pub fn wxsl_editor::ui::LineMark::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::ui::LineMark
-impl core::cmp::PartialEq for wxsl_editor::ui::LineMark
-pub fn wxsl_editor::ui::LineMark::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::ui::LineMark
-pub fn wxsl_editor::ui::LineMark::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::ui::LineMark
-impl core::marker::Freeze for wxsl_editor::ui::LineMark
-impl core::marker::Send for wxsl_editor::ui::LineMark
-impl core::marker::Sync for wxsl_editor::ui::LineMark
-impl core::marker::Unpin for wxsl_editor::ui::LineMark
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::LineMark
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::LineMark
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::LineMark
-pub struct wxsl_editor::ui::Response
-pub wxsl_editor::ui::Response::changed: bool
-pub wxsl_editor::ui::Response::clicked: bool
-pub wxsl_editor::ui::Response::double_clicked: bool
-pub wxsl_editor::ui::Response::drag_delta: glam::f32::vec2::Vec2
-pub wxsl_editor::ui::Response::drag_released: bool
-pub wxsl_editor::ui::Response::dragging: bool
-pub wxsl_editor::ui::Response::hovered: bool
-pub wxsl_editor::ui::Response::id: wxsl_editor::ui::Id
-pub wxsl_editor::ui::Response::pressed: bool
-pub wxsl_editor::ui::Response::rect: wxsl_render::ui::draw::Rect
-pub wxsl_editor::ui::Response::secondary_clicked: bool
-impl wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Response::none(wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect) -> Self
-impl core::clone::Clone for wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Response::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Response::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Response::default() -> Self
-impl core::fmt::Debug for wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Response::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::ui::Response
-impl core::marker::StructuralPartialEq for wxsl_editor::ui::Response
-impl core::marker::Freeze for wxsl_editor::ui::Response
-impl core::marker::Send for wxsl_editor::ui::Response
-impl core::marker::Sync for wxsl_editor::ui::Response
-impl core::marker::Unpin for wxsl_editor::ui::Response
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::Response
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::Response
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::Response
-pub struct wxsl_editor::ui::ScrollArea
-pub wxsl_editor::ui::ScrollArea::max: glam::f32::vec2::Vec2
-pub wxsl_editor::ui::ScrollArea::offset: glam::f32::vec2::Vec2
-pub wxsl_editor::ui::ScrollArea::rect: wxsl_render::ui::draw::Rect
-impl wxsl_editor::ui::ScrollArea
-pub fn wxsl_editor::ui::ScrollArea::end(self, &mut wxsl_editor::ui::Ui<'_>)
-pub fn wxsl_editor::ui::ScrollArea::origin(&self) -> glam::f32::vec2::Vec2
-impl core::clone::Clone for wxsl_editor::ui::ScrollArea
-pub fn wxsl_editor::ui::ScrollArea::clone(&self) -> Self
-impl core::fmt::Debug for wxsl_editor::ui::ScrollArea
-pub fn wxsl_editor::ui::ScrollArea::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::ui::ScrollArea
-impl core::marker::Freeze for wxsl_editor::ui::ScrollArea
-impl core::marker::Send for wxsl_editor::ui::ScrollArea
-impl core::marker::Sync for wxsl_editor::ui::ScrollArea
-impl core::marker::Unpin for wxsl_editor::ui::ScrollArea
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::ScrollArea
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::ScrollArea
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::ScrollArea
-pub struct wxsl_editor::ui::Ui<'a>
-pub wxsl_editor::ui::Ui::input: &'a wxsl_render::ui::input::InputState
-pub wxsl_editor::ui::Ui::state: &'a mut wxsl_editor::ui::UiState
-impl<'a> wxsl_editor::ui::Ui<'a>
-pub fn wxsl_editor::ui::Ui<'a>::button(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::button_colored(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str, core::option::Option<wxsl_render::ui::draw::Color>) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::checkbox(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str, &mut bool) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::claim_pointer(&mut self)
-pub fn wxsl_editor::ui::Ui<'a>::close_modal(&mut self)
-pub fn wxsl_editor::ui::Ui<'a>::code_editor(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &mut wxsl_editor::buffer::TextBuffer, &[wxsl_editor::highlight::Run], &[wxsl_editor::ui::LineMark]) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::code_view(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str)
-pub fn wxsl_editor::ui::Ui<'a>::color_picker_open(&self, wxsl_editor::ui::Id) -> bool
-pub fn wxsl_editor::ui::Ui<'a>::drag_value(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &mut f32, f32, core::option::Option<(f32, f32)>) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::draw(&mut self) -> &mut wxsl_render::ui::draw::DrawList
-pub fn wxsl_editor::ui::Ui<'a>::dropdown(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &[(&str, bool)], &mut usize) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::end_frame(&mut self)
-pub fn wxsl_editor::ui::Ui<'a>::error(&self) -> core::option::Option<&wxsl_render::error::RenderError>
-pub fn wxsl_editor::ui::Ui<'a>::highlighted_code_view(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str, &[wxsl_editor::highlight::Run])
-pub fn wxsl_editor::ui::Ui<'a>::interact(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::label(&mut self, wxsl_render::ui::draw::Rect, &str, wxsl_render::ui::draw::Color, wxsl_editor::ui::Align) -> f32
-pub fn wxsl_editor::ui::Ui<'a>::layout(&mut self, wxsl_render::ui::text::FontId, &str, wxsl_render::ui::text::TextOptions) -> wxsl_render::ui::text::TextLayout
-pub fn wxsl_editor::ui::Ui<'a>::layout_mono(&mut self, &str) -> wxsl_render::ui::text::TextLayout
-pub fn wxsl_editor::ui::Ui<'a>::layout_ui(&mut self, &str) -> wxsl_render::ui::text::TextLayout
-pub fn wxsl_editor::ui::Ui<'a>::measure_ui(&mut self, &str) -> glam::f32::vec2::Vec2
-pub fn wxsl_editor::ui::Ui<'a>::modal(&self) -> core::option::Option<wxsl_render::ui::draw::Rect>
-pub fn wxsl_editor::ui::Ui<'a>::mono_advance(&mut self) -> f32
-pub fn wxsl_editor::ui::Ui<'a>::mono_label(&mut self, wxsl_render::ui::draw::Rect, &str, wxsl_render::ui::draw::Color, wxsl_editor::ui::Align) -> f32
-pub fn wxsl_editor::ui::Ui<'a>::new(&'a mut wxsl_editor::ui::UiState, &'a wxsl_render::ui::input::InputState, &'a wgpu::api::device::Device, &'a wgpu::api::queue::Queue) -> Self
-pub fn wxsl_editor::ui::Ui<'a>::open_modal(&mut self, wxsl_render::ui::draw::Rect)
-pub fn wxsl_editor::ui::Ui<'a>::panel(&mut self, wxsl_render::ui::draw::Rect, core::option::Option<&str>) -> wxsl_render::ui::draw::Rect
-pub fn wxsl_editor::ui::Ui<'a>::pointer_claimed(&self) -> bool
-pub fn wxsl_editor::ui::Ui<'a>::scroll_area(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> wxsl_editor::ui::ScrollArea
-pub fn wxsl_editor::ui::Ui<'a>::separator(&mut self, wxsl_render::ui::draw::Rect)
-pub fn wxsl_editor::ui::Ui<'a>::show_popup(&mut self, wxsl_render::ui::draw::Rect)
-pub fn wxsl_editor::ui::Ui<'a>::small_label(&mut self, wxsl_render::ui::draw::Rect, &str, wxsl_render::ui::draw::Color, wxsl_editor::ui::Align) -> f32
-pub fn wxsl_editor::ui::Ui<'a>::tabs(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &[&str], usize) -> usize
-pub fn wxsl_editor::ui::Ui<'a>::text_field(&mut self, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &mut alloc::string::String) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::Ui<'a>::theme(&self) -> &wxsl_editor::theme::Theme
-pub fn wxsl_editor::ui::Ui<'a>::toggle_color_picker(&mut self, wxsl_editor::ui::Id)
-pub fn wxsl_editor::ui::Ui<'a>::truncated_label(&mut self, wxsl_render::ui::draw::Rect, &str, wxsl_render::ui::draw::Color, wxsl_editor::ui::Align) -> f32
-impl<'a> core::marker::Freeze for wxsl_editor::ui::Ui<'a>
-impl<'a> core::marker::Send for wxsl_editor::ui::Ui<'a>
-impl<'a> core::marker::Sync for wxsl_editor::ui::Ui<'a>
-impl<'a> core::marker::Unpin for wxsl_editor::ui::Ui<'a>
-impl<'a> core::marker::UnsafeUnpin for wxsl_editor::ui::Ui<'a>
-impl<'a> !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::Ui<'a>
-impl<'a> !core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::Ui<'a>
-pub struct wxsl_editor::ui::UiState
-pub wxsl_editor::ui::UiState::atlas: wxsl_render::ui::atlas::Atlas
-pub wxsl_editor::ui::UiState::draw: wxsl_render::ui::draw::DrawList
-pub wxsl_editor::ui::UiState::fonts: wxsl_render::ui::text::GlyphCache
-pub wxsl_editor::ui::UiState::mono_font: wxsl_render::ui::text::FontId
-pub wxsl_editor::ui::UiState::theme: wxsl_editor::theme::Theme
-pub wxsl_editor::ui::UiState::ui_font: wxsl_render::ui::text::FontId
-impl wxsl_editor::ui::UiState
-pub fn wxsl_editor::ui::UiState::clear_focus(&mut self)
-pub fn wxsl_editor::ui::UiState::color_picker_open(&self, wxsl_editor::ui::Id) -> bool
-pub fn wxsl_editor::ui::UiState::focus(&self) -> core::option::Option<wxsl_editor::ui::Id>
-pub fn wxsl_editor::ui::UiState::focus_code(&mut self, wxsl_editor::ui::Id)
-pub fn wxsl_editor::ui::UiState::focus_text(&mut self, wxsl_editor::ui::Id, &str)
-pub fn wxsl_editor::ui::UiState::interact(&mut self, &wxsl_render::ui::input::InputState, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect) -> wxsl_editor::ui::Response
-pub fn wxsl_editor::ui::UiState::is_editing(&self) -> bool
-pub fn wxsl_editor::ui::UiState::new(wxsl_render::ui::atlas::Atlas, wxsl_render::ui::text::GlyphCache, wxsl_render::ui::text::FontId, wxsl_render::ui::text::FontId, wxsl_editor::theme::Theme) -> Self
-pub fn wxsl_editor::ui::UiState::release_stale_active(&mut self, &wxsl_render::ui::input::InputState)
-pub fn wxsl_editor::ui::UiState::toggle_color_picker(&mut self, wxsl_editor::ui::Id)
-impl core::marker::Freeze for wxsl_editor::ui::UiState
-impl core::marker::Send for wxsl_editor::ui::UiState
-impl core::marker::Sync for wxsl_editor::ui::UiState
-impl core::marker::Unpin for wxsl_editor::ui::UiState
-impl core::marker::UnsafeUnpin for wxsl_editor::ui::UiState
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ui::UiState
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::ui::UiState
-pub fn wxsl_editor::ui::code_hit(glam::f32::vec2::Vec2, f32, f32) -> (usize, usize)
-pub fn wxsl_editor::ui::format_number(f32) -> alloc::string::String
-pub mod wxsl_editor::widgets
-pub fn wxsl_editor::widgets::color_picker(&mut wxsl_editor::ui::Ui<'_>, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &mut [f32]) -> bool
-pub fn wxsl_editor::widgets::color_picker_height(&wxsl_editor::theme::Theme, f32, bool) -> f32
-pub fn wxsl_editor::widgets::field_row(&mut wxsl_editor::ui::Ui<'_>, wxsl_render::ui::draw::Rect, &str, &str)
-pub fn wxsl_editor::widgets::looks_like_color(&wxsl_core::node::Value) -> bool
-pub fn wxsl_editor::widgets::macro_editor(&mut wxsl_editor::ui::Ui<'_>, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &wxsl_core::macros::MacroDef, &mut wxsl_core::macros::MacroValue) -> bool
-pub fn wxsl_editor::widgets::setting_editor(&mut wxsl_editor::ui::Ui<'_>, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &str, &[alloc::string::String]) -> core::option::Option<alloc::string::String>
-pub fn wxsl_editor::widgets::typed_summary(wxsl_core::node::ValueType, core::option::Option<&wxsl_core::node::Value>) -> alloc::string::String
-pub fn wxsl_editor::widgets::value_editor(&mut wxsl_editor::ui::Ui<'_>, wxsl_editor::ui::Id, wxsl_render::ui::draw::Rect, &mut wxsl_core::node::Value) -> bool
-pub fn wxsl_editor::widgets::value_editor_height(&wxsl_editor::ui::Ui<'_>, wxsl_editor::ui::Id, wxsl_core::node::ValueType, f32) -> f32
-pub fn wxsl_editor::widgets::value_summary(&wxsl_core::node::Value) -> alloc::string::String
 pub enum wxsl_editor::CanvasMode
 pub wxsl_editor::CanvasMode::Material
 pub wxsl_editor::CanvasMode::Pipeline
-impl wxsl_editor::pipeline::CanvasMode
-pub const wxsl_editor::pipeline::CanvasMode::ALL: &'static [wxsl_editor::pipeline::CanvasMode]
-pub fn wxsl_editor::pipeline::CanvasMode::name(self) -> &'static str
-pub fn wxsl_editor::pipeline::CanvasMode::other(self) -> Self
-impl core::clone::Clone for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::pipeline::CanvasMode
-impl core::cmp::PartialEq for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::default() -> Self
-impl core::fmt::Debug for wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::pipeline::CanvasMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::pipeline::CanvasMode
-impl core::marker::StructuralPartialEq for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Freeze for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Send for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Sync for wxsl_editor::pipeline::CanvasMode
-impl core::marker::Unpin for wxsl_editor::pipeline::CanvasMode
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::CanvasMode
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::CanvasMode
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::CanvasMode
-pub enum wxsl_editor::CodeTab
-pub wxsl_editor::CodeTab::Features
-pub wxsl_editor::CodeTab::Frame
-pub wxsl_editor::CodeTab::Function
-pub wxsl_editor::CodeTab::Problems
-pub wxsl_editor::CodeTab::Wgsl
-pub wxsl_editor::CodeTab::Wxsl
-impl wxsl_editor::app::CodeTab
-pub const wxsl_editor::app::CodeTab::ALL: &'static [wxsl_editor::app::CodeTab]
-impl core::clone::Clone for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::app::CodeTab
-impl core::cmp::PartialEq for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::default() -> Self
-impl core::fmt::Debug for wxsl_editor::app::CodeTab
-pub fn wxsl_editor::app::CodeTab::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::app::CodeTab
-impl core::marker::StructuralPartialEq for wxsl_editor::app::CodeTab
-impl core::marker::Freeze for wxsl_editor::app::CodeTab
-impl core::marker::Send for wxsl_editor::app::CodeTab
-impl core::marker::Sync for wxsl_editor::app::CodeTab
-impl core::marker::Unpin for wxsl_editor::app::CodeTab
-impl core::marker::UnsafeUnpin for wxsl_editor::app::CodeTab
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::CodeTab
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::CodeTab
-pub enum wxsl_editor::PipelineTab
-pub wxsl_editor::PipelineTab::Passes
-pub wxsl_editor::PipelineTab::Problems
-impl core::clone::Clone for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::pipeline::PipelineTab
-impl core::cmp::PartialEq for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::default() -> Self
-impl core::fmt::Debug for wxsl_editor::pipeline::PipelineTab
-pub fn wxsl_editor::pipeline::PipelineTab::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::pipeline::PipelineTab
-impl core::marker::StructuralPartialEq for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Freeze for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Send for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Sync for wxsl_editor::pipeline::PipelineTab
-impl core::marker::Unpin for wxsl_editor::pipeline::PipelineTab
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::PipelineTab
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::PipelineTab
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::PipelineTab
+impl wxsl_editor::CanvasMode
+pub const wxsl_editor::CanvasMode::ALL: &'static [wxsl_editor::CanvasMode]
+pub fn wxsl_editor::CanvasMode::name(self) -> &'static str
+pub fn wxsl_editor::CanvasMode::other(self) -> Self
+impl core::clone::Clone for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::CanvasMode
+impl core::cmp::PartialEq for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::default() -> Self
+impl core::fmt::Debug for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::CanvasMode
+impl core::marker::StructuralPartialEq for wxsl_editor::CanvasMode
+impl core::marker::Freeze for wxsl_editor::CanvasMode
+impl core::marker::Send for wxsl_editor::CanvasMode
+impl core::marker::Sync for wxsl_editor::CanvasMode
+impl core::marker::Unpin for wxsl_editor::CanvasMode
+impl core::marker::UnsafeUnpin for wxsl_editor::CanvasMode
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::CanvasMode
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::CanvasMode
 pub enum wxsl_editor::PreviewStatus
 pub wxsl_editor::PreviewStatus::Empty
 pub wxsl_editor::PreviewStatus::Failed(alloc::vec::Vec<alloc::string::String>)
 pub wxsl_editor::PreviewStatus::Ok
-impl wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::errors(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::preview::PreviewStatus::is_ok(&self) -> bool
-impl core::clone::Clone for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::preview::PreviewStatus
-impl core::cmp::PartialEq for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::default() -> Self
-impl core::fmt::Debug for wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::PreviewStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_editor::preview::PreviewStatus
-impl core::marker::Freeze for wxsl_editor::preview::PreviewStatus
-impl core::marker::Send for wxsl_editor::preview::PreviewStatus
-impl core::marker::Sync for wxsl_editor::preview::PreviewStatus
-impl core::marker::Unpin for wxsl_editor::preview::PreviewStatus
-impl core::marker::UnsafeUnpin for wxsl_editor::preview::PreviewStatus
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::preview::PreviewStatus
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::preview::PreviewStatus
+impl wxsl_editor::PreviewStatus
+pub fn wxsl_editor::PreviewStatus::errors(&self) -> &[alloc::string::String]
+pub fn wxsl_editor::PreviewStatus::is_ok(&self) -> bool
+impl core::clone::Clone for wxsl_editor::PreviewStatus
+pub fn wxsl_editor::PreviewStatus::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::PreviewStatus
+impl core::cmp::PartialEq for wxsl_editor::PreviewStatus
+pub fn wxsl_editor::PreviewStatus::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_editor::PreviewStatus
+pub fn wxsl_editor::PreviewStatus::default() -> Self
+impl core::fmt::Debug for wxsl_editor::PreviewStatus
+pub fn wxsl_editor::PreviewStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_editor::PreviewStatus
+impl core::marker::Freeze for wxsl_editor::PreviewStatus
+impl core::marker::Send for wxsl_editor::PreviewStatus
+impl core::marker::Sync for wxsl_editor::PreviewStatus
+impl core::marker::Unpin for wxsl_editor::PreviewStatus
+impl core::marker::UnsafeUnpin for wxsl_editor::PreviewStatus
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::PreviewStatus
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::PreviewStatus
 pub enum wxsl_editor::ThemeMode
 pub wxsl_editor::ThemeMode::Dark
 pub wxsl_editor::ThemeMode::Light
-impl wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::name(self) -> &'static str
-pub fn wxsl_editor::theme::ThemeMode::palette(self) -> wxsl_editor::theme::Palette
-pub fn wxsl_editor::theme::ThemeMode::toggled(self) -> Self
-impl core::clone::Clone for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::clone(&self) -> Self
-impl core::cmp::Eq for wxsl_editor::theme::ThemeMode
-impl core::cmp::PartialEq for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_editor::theme::ThemeMode
-pub fn wxsl_editor::theme::ThemeMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::ThemeMode
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::ThemeMode
-impl core::marker::Freeze for wxsl_editor::theme::ThemeMode
-impl core::marker::Send for wxsl_editor::theme::ThemeMode
-impl core::marker::Sync for wxsl_editor::theme::ThemeMode
-impl core::marker::Unpin for wxsl_editor::theme::ThemeMode
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::ThemeMode
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::ThemeMode
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::ThemeMode
-pub struct wxsl_editor::Canvas
-pub wxsl_editor::Canvas::selection: alloc::vec::Vec<wxsl_core::graph::NodeId>
-pub wxsl_editor::Canvas::view: wxsl_editor::canvas::View
-impl wxsl_editor::canvas::Canvas
-pub fn wxsl_editor::canvas::Canvas::fit_to_graph(&mut self, &wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, wxsl_render::ui::draw::Rect, &wxsl_editor::theme::Theme)
-pub fn wxsl_editor::canvas::Canvas::interaction(&self) -> &wxsl_editor::canvas::Interaction
-pub fn wxsl_editor::canvas::Canvas::layouts(&self) -> &[wxsl_editor::canvas::NodeLayout]
-pub fn wxsl_editor::canvas::Canvas::new() -> Self
-pub fn wxsl_editor::canvas::Canvas::selected_node(&self) -> core::option::Option<wxsl_core::graph::NodeId>
-pub fn wxsl_editor::canvas::Canvas::show(&mut self, &mut wxsl_editor::ui::Ui<'_>, wxsl_render::ui::draw::Rect, &mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry) -> wxsl_editor::canvas::CanvasResponse
-impl core::default::Default for wxsl_editor::canvas::Canvas
-pub fn wxsl_editor::canvas::Canvas::default() -> Self
-impl core::marker::Freeze for wxsl_editor::canvas::Canvas
-impl core::marker::Send for wxsl_editor::canvas::Canvas
-impl core::marker::Sync for wxsl_editor::canvas::Canvas
-impl core::marker::Unpin for wxsl_editor::canvas::Canvas
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::Canvas
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::Canvas
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::Canvas
+impl wxsl_editor::ThemeMode
+pub fn wxsl_editor::ThemeMode::name(self) -> &'static str
+pub fn wxsl_editor::ThemeMode::palette(self) -> wxsl_editor::Palette
+pub fn wxsl_editor::ThemeMode::toggled(self) -> Self
+impl core::clone::Clone for wxsl_editor::ThemeMode
+pub fn wxsl_editor::ThemeMode::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::ThemeMode
+impl core::cmp::PartialEq for wxsl_editor::ThemeMode
+pub fn wxsl_editor::ThemeMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::ThemeMode
+pub fn wxsl_editor::ThemeMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::ThemeMode
+impl core::marker::StructuralPartialEq for wxsl_editor::ThemeMode
+impl core::marker::Freeze for wxsl_editor::ThemeMode
+impl core::marker::Send for wxsl_editor::ThemeMode
+impl core::marker::Sync for wxsl_editor::ThemeMode
+impl core::marker::Unpin for wxsl_editor::ThemeMode
+impl core::marker::UnsafeUnpin for wxsl_editor::ThemeMode
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ThemeMode
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ThemeMode
 pub struct wxsl_editor::Editor
-impl wxsl_editor::app::Editor
-pub fn wxsl_editor::app::Editor::canvas_mode(&self) -> wxsl_editor::pipeline::CanvasMode
-pub fn wxsl_editor::app::Editor::canvas_rect(&self) -> wxsl_render::ui::draw::Rect
-pub fn wxsl_editor::app::Editor::canvas_view(&self) -> &wxsl_editor::canvas::View
-pub fn wxsl_editor::app::Editor::fit_next_frame(&mut self)
-pub fn wxsl_editor::app::Editor::frame(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_render::ui::renderer::UiTarget<'_>, f64) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::functions(&self) -> &wxsl_editor::function::Functions
-pub fn wxsl_editor::app::Editor::functions_mut(&mut self) -> &mut wxsl_editor::function::Functions
-pub fn wxsl_editor::app::Editor::graph(&self) -> &wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::handle_event(&mut self, wxsl_render::ui::input::UiEvent)
-pub fn wxsl_editor::app::Editor::is_modified(&self) -> bool
-pub fn wxsl_editor::app::Editor::is_typing(&self) -> bool
-pub fn wxsl_editor::app::Editor::mark_saved(&mut self)
-pub fn wxsl_editor::app::Editor::message(&self) -> &str
-pub fn wxsl_editor::app::Editor::msdf_backend(&self) -> wxsl_render::ui::msdf_gpu::MsdfBackend
-pub fn wxsl_editor::app::Editor::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, wxsl_editor::app::EditorConfig) -> core::result::Result<Self, wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::pipeline_graph(&self) -> core::option::Option<&wxsl_core::graph::Graph>
-pub fn wxsl_editor::app::Editor::pipeline_graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::app::Editor::pipeline_status(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::app::Editor::preview(&self) -> &wxsl_editor::preview::Preview
-pub fn wxsl_editor::app::Editor::previews_document(&self) -> bool
-pub fn wxsl_editor::app::Editor::registry(&self) -> &wxsl_core::node::NodeRegistry
-pub fn wxsl_editor::app::Editor::save_function(&mut self, &wgpu::api::device::Device) -> bool
-pub fn wxsl_editor::app::Editor::select(&mut self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_core::graph::NodeId>)
-pub fn wxsl_editor::app::Editor::selection(&self) -> &[wxsl_core::graph::NodeId]
-pub fn wxsl_editor::app::Editor::set_canvas_mode(&mut self, wxsl_editor::pipeline::CanvasMode)
-pub fn wxsl_editor::app::Editor::set_message(&mut self, impl core::convert::Into<alloc::string::String>)
-pub fn wxsl_editor::app::Editor::set_msdf_backend(&mut self, &wgpu::api::device::Device, wxsl_render::ui::msdf_gpu::MsdfBackend) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::app::Editor::theme(&self) -> wxsl_editor::theme::Theme
-pub fn wxsl_editor::app::Editor::watch_shaders(&mut self, impl core::convert::AsRef<std::path::Path>) -> usize
-impl core::marker::Freeze for wxsl_editor::app::Editor
-impl core::marker::Send for wxsl_editor::app::Editor
-impl !core::marker::Sync for wxsl_editor::app::Editor
-impl core::marker::Unpin for wxsl_editor::app::Editor
-impl core::marker::UnsafeUnpin for wxsl_editor::app::Editor
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::Editor
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::Editor
+impl wxsl_editor::Editor
+pub fn wxsl_editor::Editor::canvas_mode(&self) -> wxsl_editor::CanvasMode
+pub fn wxsl_editor::Editor::canvas_rect(&self) -> wxsl_render::ui::draw::Rect
+pub fn wxsl_editor::Editor::canvas_view(&self) -> &wxsl_editor::View
+pub fn wxsl_editor::Editor::fit_next_frame(&mut self)
+pub fn wxsl_editor::Editor::frame(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_render::ui::renderer::UiTarget<'_>, f64) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Editor::function_problems(&self) -> &[wxsl_editor::LineMark]
+pub fn wxsl_editor::Editor::function_text(&self) -> &str
+pub fn wxsl_editor::Editor::graph(&self) -> &wxsl_core::graph::Graph
+pub fn wxsl_editor::Editor::graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
+pub fn wxsl_editor::Editor::handle_event(&mut self, wxsl_render::ui::input::UiEvent)
+pub fn wxsl_editor::Editor::is_modified(&self) -> bool
+pub fn wxsl_editor::Editor::is_typing(&self) -> bool
+pub fn wxsl_editor::Editor::mark_saved(&mut self)
+pub fn wxsl_editor::Editor::message(&self) -> &str
+pub fn wxsl_editor::Editor::msdf_backend(&self) -> wxsl_render::ui::msdf_gpu::MsdfBackend
+pub fn wxsl_editor::Editor::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, wxsl_editor::EditorConfig) -> core::result::Result<Self, wxsl_render::error::RenderError>
+pub fn wxsl_editor::Editor::pipeline_graph(&self) -> core::option::Option<&wxsl_core::graph::Graph>
+pub fn wxsl_editor::Editor::pipeline_graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
+pub fn wxsl_editor::Editor::pipeline_status(&self) -> &[alloc::string::String]
+pub fn wxsl_editor::Editor::preview(&self) -> &wxsl_editor::Preview
+pub fn wxsl_editor::Editor::previews_document(&self) -> bool
+pub fn wxsl_editor::Editor::registry(&self) -> &wxsl_core::node::NodeRegistry
+pub fn wxsl_editor::Editor::save_function(&mut self, &wgpu::api::device::Device) -> bool
+pub fn wxsl_editor::Editor::select(&mut self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_core::graph::NodeId>)
+pub fn wxsl_editor::Editor::selection(&self) -> &[wxsl_core::graph::NodeId]
+pub fn wxsl_editor::Editor::set_canvas_mode(&mut self, wxsl_editor::CanvasMode)
+pub fn wxsl_editor::Editor::set_message(&mut self, impl core::convert::Into<alloc::string::String>)
+pub fn wxsl_editor::Editor::set_msdf_backend(&mut self, &wgpu::api::device::Device, wxsl_render::ui::msdf_gpu::MsdfBackend) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Editor::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Editor::theme(&self) -> wxsl_editor::Theme
+pub fn wxsl_editor::Editor::watch_shaders(&mut self, impl core::convert::AsRef<std::path::Path>) -> usize
+impl core::marker::Freeze for wxsl_editor::Editor
+impl core::marker::Send for wxsl_editor::Editor
+impl !core::marker::Sync for wxsl_editor::Editor
+impl core::marker::Unpin for wxsl_editor::Editor
+impl core::marker::UnsafeUnpin for wxsl_editor::Editor
+impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::Editor
+impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::Editor
 pub struct wxsl_editor::EditorConfig
 pub wxsl_editor::EditorConfig::atlas_size: u32
 pub wxsl_editor::EditorConfig::graph: wxsl_core::graph::Graph
@@ -1190,171 +120,253 @@ pub wxsl_editor::EditorConfig::msdf_backend: wxsl_render::ui::msdf_gpu::MsdfBack
 pub wxsl_editor::EditorConfig::registry: wxsl_core::node::NodeRegistry
 pub wxsl_editor::EditorConfig::scale: f32
 pub wxsl_editor::EditorConfig::ui_font: alloc::vec::Vec<u8>
-impl wxsl_editor::app::EditorConfig
-pub fn wxsl_editor::app::EditorConfig::new(wxsl_render::library::ShaderLibrary, wxsl_core::node::NodeRegistry, wxsl_core::graph::Graph, alloc::vec::Vec<u8>, alloc::vec::Vec<u8>) -> Self
-impl core::marker::Freeze for wxsl_editor::app::EditorConfig
-impl core::marker::Send for wxsl_editor::app::EditorConfig
-impl core::marker::Sync for wxsl_editor::app::EditorConfig
-impl core::marker::Unpin for wxsl_editor::app::EditorConfig
-impl core::marker::UnsafeUnpin for wxsl_editor::app::EditorConfig
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::app::EditorConfig
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::app::EditorConfig
-pub struct wxsl_editor::NodePicker
-pub wxsl_editor::NodePicker::category: core::option::Option<alloc::string::String>
-pub wxsl_editor::NodePicker::highlighted: usize
-pub wxsl_editor::NodePicker::open: bool
-pub wxsl_editor::NodePicker::query: alloc::string::String
-pub wxsl_editor::NodePicker::target: core::option::Option<glam::f32::vec2::Vec2>
-impl wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::close(&mut self)
-pub fn wxsl_editor::palette::NodePicker::highlighted<'a>(&self, &'a [wxsl_editor::palette::Match]) -> core::option::Option<&'a wxsl_editor::palette::Match>
-pub fn wxsl_editor::palette::NodePicker::matches(&self, &wxsl_core::node::NodeRegistry, wxsl_core::node::GraphDomain, usize) -> alloc::vec::Vec<wxsl_editor::palette::Match>
-pub fn wxsl_editor::palette::NodePicker::move_highlight(&mut self, i32, usize)
-pub fn wxsl_editor::palette::NodePicker::new() -> Self
-pub fn wxsl_editor::palette::NodePicker::open_at(&mut self, glam::f32::vec2::Vec2)
-impl core::clone::Clone for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::clone(&self) -> Self
-impl core::default::Default for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::default() -> Self
-impl core::fmt::Debug for wxsl_editor::palette::NodePicker
-pub fn wxsl_editor::palette::NodePicker::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for wxsl_editor::palette::NodePicker
-impl core::marker::Send for wxsl_editor::palette::NodePicker
-impl core::marker::Sync for wxsl_editor::palette::NodePicker
-impl core::marker::Unpin for wxsl_editor::palette::NodePicker
-impl core::marker::UnsafeUnpin for wxsl_editor::palette::NodePicker
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::palette::NodePicker
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::palette::NodePicker
-pub struct wxsl_editor::PipelineCanvas
-impl wxsl_editor::pipeline::PipelineCanvas
-pub fn wxsl_editor::pipeline::PipelineCanvas::graph_mut(&mut self) -> &mut wxsl_core::graph::Graph
-pub fn wxsl_editor::pipeline::PipelineCanvas::open_on_preset(wxsl_frame::pipeline::StockPipeline) -> Self
-impl core::marker::Freeze for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Send for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Sync for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::Unpin for wxsl_editor::pipeline::PipelineCanvas
-impl core::marker::UnsafeUnpin for wxsl_editor::pipeline::PipelineCanvas
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::pipeline::PipelineCanvas
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::pipeline::PipelineCanvas
+impl wxsl_editor::EditorConfig
+pub fn wxsl_editor::EditorConfig::new(wxsl_render::library::ShaderLibrary, wxsl_core::node::NodeRegistry, wxsl_core::graph::Graph, alloc::vec::Vec<u8>, alloc::vec::Vec<u8>) -> Self
+impl core::marker::Freeze for wxsl_editor::EditorConfig
+impl core::marker::Send for wxsl_editor::EditorConfig
+impl core::marker::Sync for wxsl_editor::EditorConfig
+impl core::marker::Unpin for wxsl_editor::EditorConfig
+impl core::marker::UnsafeUnpin for wxsl_editor::EditorConfig
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::EditorConfig
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::EditorConfig
+pub struct wxsl_editor::LineMark
+pub wxsl_editor::LineMark::column: usize
+pub wxsl_editor::LineMark::line: usize
+pub wxsl_editor::LineMark::message: alloc::string::String
+impl core::clone::Clone for wxsl_editor::LineMark
+pub fn wxsl_editor::LineMark::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::LineMark
+impl core::cmp::PartialEq for wxsl_editor::LineMark
+pub fn wxsl_editor::LineMark::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::LineMark
+pub fn wxsl_editor::LineMark::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_editor::LineMark
+impl core::marker::Freeze for wxsl_editor::LineMark
+impl core::marker::Send for wxsl_editor::LineMark
+impl core::marker::Sync for wxsl_editor::LineMark
+impl core::marker::Unpin for wxsl_editor::LineMark
+impl core::marker::UnsafeUnpin for wxsl_editor::LineMark
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::LineMark
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::LineMark
+pub struct wxsl_editor::Metrics
+pub wxsl_editor::Metrics::bottom_panel_height: f32
+pub wxsl_editor::Metrics::link_width: f32
+pub wxsl_editor::Metrics::mono_text_size: f32
+pub wxsl_editor::Metrics::node_header_height: f32
+pub wxsl_editor::Metrics::node_width: f32
+pub wxsl_editor::Metrics::outline_width: f32
+pub wxsl_editor::Metrics::padding: f32
+pub wxsl_editor::Metrics::panel_radius: f32
+pub wxsl_editor::Metrics::port_radius: f32
+pub wxsl_editor::Metrics::radius: f32
+pub wxsl_editor::Metrics::row_gap: f32
+pub wxsl_editor::Metrics::row_height: f32
+pub wxsl_editor::Metrics::scrollbar_width: f32
+pub wxsl_editor::Metrics::side_panel_width: f32
+pub wxsl_editor::Metrics::small_text_size: f32
+pub wxsl_editor::Metrics::status_height: f32
+pub wxsl_editor::Metrics::text_size: f32
+impl wxsl_editor::Metrics
+pub const wxsl_editor::Metrics::DEFAULT: wxsl_editor::Metrics
+pub fn wxsl_editor::Metrics::scaled(&self, f32) -> wxsl_editor::Metrics
+impl core::clone::Clone for wxsl_editor::Metrics
+pub fn wxsl_editor::Metrics::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_editor::Metrics
+pub fn wxsl_editor::Metrics::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::Metrics
+pub fn wxsl_editor::Metrics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::Metrics
+impl core::marker::StructuralPartialEq for wxsl_editor::Metrics
+impl core::marker::Freeze for wxsl_editor::Metrics
+impl core::marker::Send for wxsl_editor::Metrics
+impl core::marker::Sync for wxsl_editor::Metrics
+impl core::marker::Unpin for wxsl_editor::Metrics
+impl core::marker::UnsafeUnpin for wxsl_editor::Metrics
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::Metrics
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::Metrics
+pub struct wxsl_editor::Palette
+pub wxsl_editor::Palette::accent: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::background: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::canvas: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::control: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::control_active: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::control_hover: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::error: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::grid: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::grid_major: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::link: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::link_hover: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::link_pending: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::node: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::node_header: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::outline: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::panel: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::panel_header: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::selection: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::syntax_attribute: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::syntax_comment: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::syntax_keyword: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::syntax_number: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::syntax_type: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::text: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::text_dim: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::text_on_accent: wxsl_render::ui::draw::Color
+pub wxsl_editor::Palette::warning: wxsl_render::ui::draw::Color
+impl wxsl_editor::Palette
+pub const wxsl_editor::Palette::DARK: wxsl_editor::Palette
+pub const wxsl_editor::Palette::LIGHT: wxsl_editor::Palette
+impl core::clone::Clone for wxsl_editor::Palette
+pub fn wxsl_editor::Palette::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_editor::Palette
+pub fn wxsl_editor::Palette::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::Palette
+pub fn wxsl_editor::Palette::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::Palette
+impl core::marker::StructuralPartialEq for wxsl_editor::Palette
+impl core::marker::Freeze for wxsl_editor::Palette
+impl core::marker::Send for wxsl_editor::Palette
+impl core::marker::Sync for wxsl_editor::Palette
+impl core::marker::Unpin for wxsl_editor::Palette
+impl core::marker::UnsafeUnpin for wxsl_editor::Palette
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::Palette
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::Palette
 pub struct wxsl_editor::Preview
 pub wxsl_editor::Preview::spinning: bool
 pub wxsl_editor::Preview::split: f32
-impl wxsl_editor::preview::Preview
-pub const wxsl_editor::preview::Preview::SIZE: u32
-pub fn wxsl_editor::preview::Preview::compare(&self) -> core::option::Option<wxsl_frame::pipeline::StockPipeline>
-pub fn wxsl_editor::preview::Preview::compare_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
-pub fn wxsl_editor::preview::Preview::compare_texture(&self) -> wxsl_render::ui::draw::TextureId
-pub fn wxsl_editor::preview::Preview::debug_view(&self) -> i32
-pub fn wxsl_editor::preview::Preview::debug_views(&self) -> alloc::vec::Vec<(wxsl_core::lighting::DebugView, bool)>
-pub fn wxsl_editor::preview::Preview::display_stage(&self) -> wxsl_core::abi::MaterialStage
-pub fn wxsl_editor::preview::Preview::drag(&mut self, f32)
-pub fn wxsl_editor::preview::Preview::effects(&self) -> &wxsl_frame::effect::EffectRegistry
-pub fn wxsl_editor::preview::Preview::features(&self) -> alloc::vec::Vec<&'static str>
-pub fn wxsl_editor::preview::Preview::frame_time(&self) -> core::option::Option<f32>
-pub fn wxsl_editor::preview::Preview::install_document(&mut self, wxsl_render::graph::RenderGraph) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::library(&self) -> &wxsl_render::library::ShaderLibrary
-pub fn wxsl_editor::preview::Preview::mark_pass(&mut self, &str)
-pub fn wxsl_editor::preview::Preview::material(&self) -> core::option::Option<&wxsl_render::material::Material>
-pub fn wxsl_editor::preview::Preview::material_params(&self) -> alloc::vec::Vec<(alloc::string::String, wxsl_core::node::Value)>
-pub fn wxsl_editor::preview::Preview::mesh_kind(&self) -> wxsl_render::mesh::MeshKind
-pub fn wxsl_editor::preview::Preview::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::ui::renderer::UiRenderer, wxsl_render::library::ShaderLibrary) -> core::result::Result<Self, wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::pass_draw_count(&self, &str) -> core::option::Option<u32>
-pub fn wxsl_editor::preview::Preview::pass_param(&self, &str, &str) -> core::option::Option<wxsl_core::node::Value>
-pub fn wxsl_editor::preview::Preview::pass_run_count(&self, &str) -> core::option::Option<u32>
-pub fn wxsl_editor::preview::Preview::pass_time(&self, &str) -> core::option::Option<f32>
-pub fn wxsl_editor::preview::Preview::pipeline(&self) -> wxsl_frame::pipeline::StockPipeline
-pub fn wxsl_editor::preview::Preview::pipeline_config(&self) -> &wxsl_frame::pipeline::PipelineConfig
-pub fn wxsl_editor::preview::Preview::read_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
-pub fn wxsl_editor::preview::Preview::rebuild(&mut self, &wgpu::api::device::Device, &wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_core::macros::MacroSet)
-pub fn wxsl_editor::preview::Preview::reload(&mut self, &wgpu::api::device::Device, impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, alloc::string::String)>) -> bool
-pub fn wxsl_editor::preview::Preview::reload_errors(&self) -> &[alloc::string::String]
-pub fn wxsl_editor::preview::Preview::render(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, f32, f32) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::render_graph(&self) -> &wxsl_render::graph::RenderGraph
-pub fn wxsl_editor::preview::Preview::reset_runs(&mut self)
-pub fn wxsl_editor::preview::Preview::restore_stock(&mut self)
-pub fn wxsl_editor::preview::Preview::runs_document(&self) -> bool
-pub fn wxsl_editor::preview::Preview::set_compare(&mut self, &wgpu::api::device::Device, core::option::Option<wxsl_frame::pipeline::StockPipeline>) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_debug_view(&mut self, i32)
-pub fn wxsl_editor::preview::Preview::set_features(&mut self, &[&str]) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_material_param(&mut self, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_mesh(&mut self, &wgpu::api::device::Device, wxsl_render::mesh::MeshKind)
-pub fn wxsl_editor::preview::Preview::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::set_pipeline(&mut self, &wgpu::api::device::Device, wxsl_frame::pipeline::StockPipeline)
-pub fn wxsl_editor::preview::Preview::start_stepping(&mut self) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::status(&self) -> &wxsl_editor::preview::PreviewStatus
-pub fn wxsl_editor::preview::Preview::step_to(&mut self, usize, core::option::Option<wxsl_frame::pass::ResourceId>) -> core::result::Result<(), wxsl_render::error::RenderError>
-pub fn wxsl_editor::preview::Preview::stepping(&self) -> core::option::Option<wxsl_editor::preview::StepView>
-pub fn wxsl_editor::preview::Preview::stop_stepping(&mut self)
-pub fn wxsl_editor::preview::Preview::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
-pub fn wxsl_editor::preview::Preview::texture(&self) -> wxsl_render::ui::draw::TextureId
-pub fn wxsl_editor::preview::Preview::timed(&self) -> bool
-pub fn wxsl_editor::preview::Preview::variant_stats(&self) -> (usize, wxsl_render::variants::CacheStats)
-pub fn wxsl_editor::preview::Preview::wgsl(&self) -> &str
-pub fn wxsl_editor::preview::Preview::wgsl_highlight(&self) -> &[wxsl_editor::highlight::Run]
-pub fn wxsl_editor::preview::Preview::wxsl(&self) -> &str
-pub fn wxsl_editor::preview::Preview::wxsl_highlight(&self) -> &[wxsl_editor::highlight::Run]
-impl core::marker::Freeze for wxsl_editor::preview::Preview
-impl core::marker::Send for wxsl_editor::preview::Preview
-impl !core::marker::Sync for wxsl_editor::preview::Preview
-impl core::marker::Unpin for wxsl_editor::preview::Preview
-impl core::marker::UnsafeUnpin for wxsl_editor::preview::Preview
-impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::preview::Preview
-impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::preview::Preview
+impl wxsl_editor::Preview
+pub const wxsl_editor::Preview::SIZE: u32
+pub fn wxsl_editor::Preview::compare(&self) -> core::option::Option<wxsl_frame::pipeline::StockPipeline>
+pub fn wxsl_editor::Preview::compare_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
+pub fn wxsl_editor::Preview::compare_texture(&self) -> wxsl_render::ui::draw::TextureId
+pub fn wxsl_editor::Preview::debug_view(&self) -> i32
+pub fn wxsl_editor::Preview::debug_views(&self) -> alloc::vec::Vec<(wxsl_core::lighting::DebugView, bool)>
+pub fn wxsl_editor::Preview::display_stage(&self) -> wxsl_core::abi::MaterialStage
+pub fn wxsl_editor::Preview::drag(&mut self, f32)
+pub fn wxsl_editor::Preview::effects(&self) -> &wxsl_frame::effect::EffectRegistry
+pub fn wxsl_editor::Preview::features(&self) -> alloc::vec::Vec<&'static str>
+pub fn wxsl_editor::Preview::frame_time(&self) -> core::option::Option<f32>
+pub fn wxsl_editor::Preview::install_document(&mut self, wxsl_render::graph::RenderGraph) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::library(&self) -> &wxsl_render::library::ShaderLibrary
+pub fn wxsl_editor::Preview::mark_pass(&mut self, &str)
+pub fn wxsl_editor::Preview::material(&self) -> core::option::Option<&wxsl_render::material::Material>
+pub fn wxsl_editor::Preview::material_params(&self) -> alloc::vec::Vec<(alloc::string::String, wxsl_core::node::Value)>
+pub fn wxsl_editor::Preview::mesh_kind(&self) -> wxsl_render::mesh::MeshKind
+pub fn wxsl_editor::Preview::new(&wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::ui::renderer::UiRenderer, wxsl_render::library::ShaderLibrary) -> core::result::Result<Self, wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::pass_draw_count(&self, &str) -> core::option::Option<u32>
+pub fn wxsl_editor::Preview::pass_param(&self, &str, &str) -> core::option::Option<wxsl_core::node::Value>
+pub fn wxsl_editor::Preview::pass_run_count(&self, &str) -> core::option::Option<u32>
+pub fn wxsl_editor::Preview::pass_time(&self, &str) -> core::option::Option<f32>
+pub fn wxsl_editor::Preview::pipeline(&self) -> wxsl_frame::pipeline::StockPipeline
+pub fn wxsl_editor::Preview::pipeline_config(&self) -> &wxsl_frame::pipeline::PipelineConfig
+pub fn wxsl_editor::Preview::read_rgba8(&self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> alloc::vec::Vec<u8>
+pub fn wxsl_editor::Preview::rebuild(&mut self, &wgpu::api::device::Device, &wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_core::macros::MacroSet)
+pub fn wxsl_editor::Preview::reload(&mut self, &wgpu::api::device::Device, impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, alloc::string::String)>) -> bool
+pub fn wxsl_editor::Preview::reload_errors(&self) -> &[alloc::string::String]
+pub fn wxsl_editor::Preview::render(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, f32, f32) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::render_graph(&self) -> &wxsl_render::graph::RenderGraph
+pub fn wxsl_editor::Preview::reset_runs(&mut self)
+pub fn wxsl_editor::Preview::restore_stock(&mut self)
+pub fn wxsl_editor::Preview::runs_document(&self) -> bool
+pub fn wxsl_editor::Preview::set_compare(&mut self, &wgpu::api::device::Device, core::option::Option<wxsl_frame::pipeline::StockPipeline>) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::set_debug_view(&mut self, i32)
+pub fn wxsl_editor::Preview::set_features(&mut self, &[&str]) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::set_material_param(&mut self, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::set_mesh(&mut self, &wgpu::api::device::Device, wxsl_render::mesh::MeshKind)
+pub fn wxsl_editor::Preview::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::set_pipeline(&mut self, &wgpu::api::device::Device, wxsl_frame::pipeline::StockPipeline)
+pub fn wxsl_editor::Preview::start_stepping(&mut self) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::status(&self) -> &wxsl_editor::PreviewStatus
+pub fn wxsl_editor::Preview::step_to(&mut self, usize, core::option::Option<wxsl_frame::pass::ResourceId>) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Preview::stepping(&self) -> core::option::Option<wxsl_editor::StepView>
+pub fn wxsl_editor::Preview::stop_stepping(&mut self)
+pub fn wxsl_editor::Preview::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
+pub fn wxsl_editor::Preview::texture(&self) -> wxsl_render::ui::draw::TextureId
+pub fn wxsl_editor::Preview::timed(&self) -> bool
+pub fn wxsl_editor::Preview::variant_stats(&self) -> (usize, wxsl_render::variants::CacheStats)
+pub fn wxsl_editor::Preview::wgsl(&self) -> &str
+pub fn wxsl_editor::Preview::wxsl(&self) -> &str
+impl core::marker::Freeze for wxsl_editor::Preview
+impl core::marker::Send for wxsl_editor::Preview
+impl !core::marker::Sync for wxsl_editor::Preview
+impl core::marker::Unpin for wxsl_editor::Preview
+impl core::marker::UnsafeUnpin for wxsl_editor::Preview
+impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::Preview
+impl !core::panic::unwind_safe::UnwindSafe for wxsl_editor::Preview
+pub struct wxsl_editor::StepView
+pub wxsl_editor::StepView::count: usize
+pub wxsl_editor::StepView::passes: alloc::vec::Vec<alloc::string::String>
+pub wxsl_editor::StepView::pinned: bool
+pub wxsl_editor::StepView::resources: alloc::vec::Vec<(wxsl_frame::pass::ResourceId, alloc::string::String, bool)>
+pub wxsl_editor::StepView::shown: core::option::Option<alloc::string::String>
+impl core::clone::Clone for wxsl_editor::StepView
+pub fn wxsl_editor::StepView::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_editor::StepView
+pub fn wxsl_editor::StepView::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::StepView
+pub fn wxsl_editor::StepView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_editor::StepView
+impl core::marker::Freeze for wxsl_editor::StepView
+impl core::marker::Send for wxsl_editor::StepView
+impl core::marker::Sync for wxsl_editor::StepView
+impl core::marker::Unpin for wxsl_editor::StepView
+impl core::marker::UnsafeUnpin for wxsl_editor::StepView
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::StepView
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::StepView
 pub struct wxsl_editor::Theme
-pub wxsl_editor::Theme::metrics: wxsl_editor::theme::Metrics
-pub wxsl_editor::Theme::mode: wxsl_editor::theme::ThemeMode
-pub wxsl_editor::Theme::palette: wxsl_editor::theme::Palette
+pub wxsl_editor::Theme::metrics: wxsl_editor::Metrics
+pub wxsl_editor::Theme::mode: wxsl_editor::ThemeMode
+pub wxsl_editor::Theme::palette: wxsl_editor::Palette
 pub wxsl_editor::Theme::scale: f32
-impl wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::inner(&self, wxsl_render::ui::draw::Rect) -> wxsl_render::ui::draw::Rect
-pub fn wxsl_editor::theme::Theme::new(f32) -> Self
-pub fn wxsl_editor::theme::Theme::node_color(&self, &wxsl_core::graph::Node) -> wxsl_render::ui::draw::Color
-pub fn wxsl_editor::theme::Theme::set_scale(&mut self, f32)
-pub fn wxsl_editor::theme::Theme::toggle_mode(&mut self)
-pub fn wxsl_editor::theme::Theme::type_color(&self, wxsl_core::node::ValueType) -> wxsl_render::ui::draw::Color
-impl core::clone::Clone for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::default() -> Self
-impl core::fmt::Debug for wxsl_editor::theme::Theme
-pub fn wxsl_editor::theme::Theme::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::theme::Theme
-impl core::marker::StructuralPartialEq for wxsl_editor::theme::Theme
-impl core::marker::Freeze for wxsl_editor::theme::Theme
-impl core::marker::Send for wxsl_editor::theme::Theme
-impl core::marker::Sync for wxsl_editor::theme::Theme
-impl core::marker::Unpin for wxsl_editor::theme::Theme
-impl core::marker::UnsafeUnpin for wxsl_editor::theme::Theme
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::theme::Theme
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::theme::Theme
+impl wxsl_editor::Theme
+pub fn wxsl_editor::Theme::inner(&self, wxsl_render::ui::draw::Rect) -> wxsl_render::ui::draw::Rect
+pub fn wxsl_editor::Theme::new(f32) -> Self
+pub fn wxsl_editor::Theme::node_color(&self, &wxsl_core::graph::Node) -> wxsl_render::ui::draw::Color
+pub fn wxsl_editor::Theme::set_scale(&mut self, f32)
+pub fn wxsl_editor::Theme::toggle_mode(&mut self)
+pub fn wxsl_editor::Theme::type_color(&self, wxsl_core::node::ValueType) -> wxsl_render::ui::draw::Color
+impl core::clone::Clone for wxsl_editor::Theme
+pub fn wxsl_editor::Theme::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_editor::Theme
+pub fn wxsl_editor::Theme::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_editor::Theme
+pub fn wxsl_editor::Theme::default() -> Self
+impl core::fmt::Debug for wxsl_editor::Theme
+pub fn wxsl_editor::Theme::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::Theme
+impl core::marker::StructuralPartialEq for wxsl_editor::Theme
+impl core::marker::Freeze for wxsl_editor::Theme
+impl core::marker::Send for wxsl_editor::Theme
+impl core::marker::Sync for wxsl_editor::Theme
+impl core::marker::Unpin for wxsl_editor::Theme
+impl core::marker::UnsafeUnpin for wxsl_editor::Theme
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::Theme
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::Theme
 pub struct wxsl_editor::View
 pub wxsl_editor::View::pan: glam::f32::vec2::Vec2
 pub wxsl_editor::View::scale: f32
 pub wxsl_editor::View::zoom: f32
-impl wxsl_editor::canvas::View
-pub const wxsl_editor::canvas::View::ZOOM_RANGE: (f32, f32)
-pub fn wxsl_editor::canvas::View::fit(&mut self, wxsl_render::ui::draw::Rect, (glam::f32::vec2::Vec2, glam::f32::vec2::Vec2))
-pub fn wxsl_editor::canvas::View::pan_by(&mut self, glam::f32::vec2::Vec2)
-pub fn wxsl_editor::canvas::View::pixels_per_unit(&self) -> f32
-pub fn wxsl_editor::canvas::View::to_graph(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
-pub fn wxsl_editor::canvas::View::to_screen(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
-pub fn wxsl_editor::canvas::View::zoom_about(&mut self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2, f32)
-impl core::clone::Clone for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::eq(&self, &Self) -> bool
-impl core::default::Default for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::default() -> Self
-impl core::fmt::Debug for wxsl_editor::canvas::View
-pub fn wxsl_editor::canvas::View::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_editor::canvas::View
-impl core::marker::StructuralPartialEq for wxsl_editor::canvas::View
-impl core::marker::Freeze for wxsl_editor::canvas::View
-impl core::marker::Send for wxsl_editor::canvas::View
-impl core::marker::Sync for wxsl_editor::canvas::View
-impl core::marker::Unpin for wxsl_editor::canvas::View
-impl core::marker::UnsafeUnpin for wxsl_editor::canvas::View
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::canvas::View
-impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::canvas::View
+impl wxsl_editor::View
+pub const wxsl_editor::View::ZOOM_RANGE: (f32, f32)
+pub fn wxsl_editor::View::fit(&mut self, wxsl_render::ui::draw::Rect, (glam::f32::vec2::Vec2, glam::f32::vec2::Vec2))
+pub fn wxsl_editor::View::pan_by(&mut self, glam::f32::vec2::Vec2)
+pub fn wxsl_editor::View::pixels_per_unit(&self) -> f32
+pub fn wxsl_editor::View::to_graph(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
+pub fn wxsl_editor::View::to_screen(&self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
+pub fn wxsl_editor::View::zoom_about(&mut self, wxsl_render::ui::draw::Rect, glam::f32::vec2::Vec2, f32)
+impl core::clone::Clone for wxsl_editor::View
+pub fn wxsl_editor::View::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_editor::View
+pub fn wxsl_editor::View::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_editor::View
+pub fn wxsl_editor::View::default() -> Self
+impl core::fmt::Debug for wxsl_editor::View
+pub fn wxsl_editor::View::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_editor::View
+impl core::marker::StructuralPartialEq for wxsl_editor::View
+impl core::marker::Freeze for wxsl_editor::View
+impl core::marker::Send for wxsl_editor::View
+impl core::marker::Sync for wxsl_editor::View
+impl core::marker::Unpin for wxsl_editor::View
+impl core::marker::UnsafeUnpin for wxsl_editor::View
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::View
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::View

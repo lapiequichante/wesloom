@@ -44,7 +44,7 @@ use crate::pipeline::{self, CanvasMode, PipelineCanvas, PipelineTab};
 use crate::preview::Preview;
 use crate::reload::ShaderWatch;
 use crate::theme::Theme;
-use crate::ui::{Align, Id, Ui, UiState};
+use crate::ui::{Align, Id, LineMark, Ui, UiState};
 use crate::widgets;
 
 /// What the editor needs to start.
@@ -296,14 +296,15 @@ impl Editor {
         };
     }
 
-    /// The function buffers the code editor holds (plan3 M11).
-    pub fn functions(&self) -> &Functions {
-        &self.functions
+    /// The text of the function being written in the code editor (plan3
+    /// M11).
+    pub fn function_text(&self) -> &str {
+        self.functions.current().buffer.text()
     }
 
-    /// The function buffers, for a caller that wants to open or fill one.
-    pub fn functions_mut(&mut self) -> &mut Functions {
-        &mut self.functions
+    /// What the last save found wrong with that function, by line.
+    pub fn function_problems(&self) -> &[LineMark] {
+        &self.functions.current().marks
     }
 
     /// Whether a text field or the code editor has the keyboard — when an

@@ -610,8 +610,9 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
     // one frame back is what the frame before it wrote — not what this
     // frame is in the middle of writing (ADR 0021). Every temporal
     // technique there will ever be depends on exactly this.
+    use wxsl::render::graph::ResourcePool;
     use wxsl::render::pass::{Attachment, Read, ResourceDesc};
-    use wxsl::render::{wgpu, PassDesc, RenderGraph, ResourcePool};
+    use wxsl::render::{wgpu, PassDesc, RenderGraph};
 
     let Some(gpu) = gpu() else { return };
     const EDGE: u32 = 4;

@@ -142,15 +142,23 @@ This is moving and cutting, never rewriting.
   status code, and the C++ headers document every method, all readable by
   Doxygen.
 
+* **Root curation.**
+  * `wxsl-render`'s root lost the renderer's machinery: the resource pool,
+    the pipeline and variant caches, `gbuffer_format`, and the shipped
+    effects' ids. These are still reachable through their modules.
+  * `wxsl-lang` lost `mangle`, `Origins` and `Tok`.
+  * `wxsl-editor`'s modules are private. Its surface is `Editor`,
+    `EditorConfig` and what their methods return, which went from 1360 to
+    372 lines. `Editor::function_text` and `function_problems`
+    replace the `Functions` buffer handle.
+  * Crates with private modules enable `unnameable_types`.
+
 **Still open:**
 
-* **Curate the stable roots** before `0.1`. `wxsl-render`'s root exports
-  pools, caches and variants (`ResourcePool`, `PipelineCache`,
-  `ShaderVariants`, `gbuffer_format`, …). `wxsl-editor`'s exports canvases
-  and widgets. `wxsl-lang`'s exports `mangle`, `Origins`, `Tok` and
-  `Spanned`. Each should move behind its module or become private.
-* **Find more internal leaks** with the snapshots: a `pub` item nothing
-  outside its crate uses.
+* **More internal leaks.** The remaining candidates are in unstable modules:
+  `wxsl-core::abi` (mostly shader ABI constants, public by design),
+  `wxsl-render::ui` and `wxsl-lang::ast`. Revisit them when a module is
+  promoted to the root.
 * **Doctests** for the stable items that have none.
 
 ### C3 — Targeted cleanup

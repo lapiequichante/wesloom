@@ -39,6 +39,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![warn(unnameable_types)]
 
 pub mod ast;
 mod compile;
@@ -61,11 +62,9 @@ lalrpop_util::lalrpop_mod!(
 pub use ast::{Module, ModulePath};
 pub use compile::{compile, compile_to_wxsl, compile_with_macros, CompileError};
 pub use cond::{Bindings, Value};
-pub use diagnostic::{Diagnostic, Diagnostics, Severity};
+pub use diagnostic::{Diagnostic, Diagnostics, Label, Severity};
 pub use emit::{emit, emit_wgsl};
-pub use mono::Origins;
 pub use node::node_from_source;
 pub use parse::{parse, parse_expr};
-pub use resolve::{mangle, resolve, Modules};
-pub use span::{Span, Spanned};
-pub use token::Tok;
+pub use resolve::{resolve, Modules};
+pub use span::Span;

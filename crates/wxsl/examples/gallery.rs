@@ -2302,7 +2302,7 @@ impl BakeStage {
             &wxsl::render::material::MaterialConfig::default(),
             renderer.lighting(),
         )?;
-        let format = wxsl::render::gbuffer_format(decl.precision);
+        let format = wxsl::render::pipeline::gbuffer_format(decl.precision);
         let [width, height] = decl.size;
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("roughness bake table"),

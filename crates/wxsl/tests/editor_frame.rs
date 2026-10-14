@@ -1533,14 +1533,14 @@ fn a_function_written_in_the_editor_becomes_a_node() {
         editor.registry().contains("user.glow"),
         "saving registers the node: {}\n{}",
         editor.message(),
-        editor.functions().current().buffer.text()
+        editor.function_text()
     );
     assert!(
         editor.message().contains("user.glow"),
         "{}",
         editor.message()
     );
-    assert!(editor.functions().current().marks.is_empty());
+    assert!(editor.function_problems().is_empty());
     assert!(
         editor
             .registry()
@@ -1597,14 +1597,14 @@ fn a_function_written_in_the_editor_becomes_a_node() {
         editor.handle_event(UiEvent::Text(character));
     }
     tick(&mut editor);
-    let text = editor.functions().current().buffer.text().to_string();
+    let text = editor.function_text().to_string();
     assert_eq!(
         text.lines().nth(7).map(str::trim),
         Some("return color * 2.0 +;")
     );
     key(&mut editor, Key::Char('s'), command);
     tick(&mut editor);
-    let marks = &editor.functions().current().marks;
+    let marks = editor.function_problems();
     assert_eq!(
         marks.first().map(|mark| mark.line),
         Some(7),
@@ -1624,19 +1624,12 @@ fn a_function_written_in_the_editor_becomes_a_node() {
     key(&mut editor, Key::Char('z'), command);
     tick(&mut editor);
     assert_eq!(
-        editor
-            .functions()
-            .current()
-            .buffer
-            .text()
-            .lines()
-            .nth(7)
-            .map(str::trim),
+        editor.function_text().lines().nth(7).map(str::trim),
         Some("return color * 2.0;")
     );
     key(&mut editor, Key::Char('s'), command);
     tick(&mut editor);
-    assert!(editor.functions().current().marks.is_empty());
+    assert!(editor.function_problems().is_empty());
 
     // Escape leaves the buffer, and the single-key shortcuts come back.
     key(&mut editor, Key::Escape, Modifiers::NONE);

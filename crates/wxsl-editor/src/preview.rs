@@ -264,7 +264,7 @@ impl Preview {
     }
 
     /// [`Preview::wxsl`], coloured by [`crate::highlight`].
-    pub fn wxsl_highlight(&self) -> &[Run] {
+    pub(crate) fn wxsl_highlight(&self) -> &[Run] {
         &self.wxsl_highlight
     }
 
@@ -274,7 +274,7 @@ impl Preview {
     }
 
     /// [`Preview::wgsl`], coloured by [`crate::highlight`].
-    pub fn wgsl_highlight(&self) -> &[Run] {
+    pub(crate) fn wgsl_highlight(&self) -> &[Run] {
         &self.wgsl_highlight
     }
 

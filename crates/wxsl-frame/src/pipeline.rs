@@ -13,7 +13,7 @@
 //! by [`crate::pipeline_doc`]. [`forward_graph`] and [`deferred_graph`]
 //! stay as the hand-built references those presets are tested against.
 //!
-//! `wxsl_render::PipelineCache` is what survives from the oldest shape, generalized: a
+//! `wxsl_render::pipeline::PipelineCache` is what survives from the oldest shape, generalized: a
 //! `wgpu` pipeline is keyed on the shader variant *and* the pass state and
 //! target formats it was built for, so the same material draws opaque in
 //! one pass, blended in another and front-face-culled into a shadow map,

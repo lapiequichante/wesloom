@@ -81,7 +81,7 @@ fn every_material_stage_translates() {
 #[test]
 fn the_lighting_pass_translates_for_every_model() {
     for set in [LightingSet::default(), every_model()] {
-        let wgsl = effect_wgsl(&wxsl::render::DEFERRED_LIGHTING, &set);
+        let wgsl = effect_wgsl(&wxsl::render::effect::DEFERRED_LIGHTING, &set);
         let failures = glsl_es::translate(&format!("lighting ({})", set.signature()), &wgsl);
         assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     }
