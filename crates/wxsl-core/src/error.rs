@@ -750,13 +750,18 @@ impl From<GraphErrors> for CodegenError {
 /// than guessed at; so is an ABI revision other than the one this build
 /// implements, because a revision bump is exactly a change in what stored
 /// names mean. The `kind` is the document's own word for itself ("graph",
-/// "scene") so the error names it.
+/// "scene") so the error names it, and `schema` is the newest version
+/// this build reads for that kind (ADR 0079).
 ///
 /// The error is a `String` because the check runs inside the wire types'
 /// `try_from` conversions, where serde folds whatever the conversion says
 /// into the parse error the caller already handles.
-pub(crate) fn check_document_version(version: u32, abi: u32, kind: &str) -> Result<(), String> {
-    let schema = crate::graph::SCHEMA_VERSION;
+pub(crate) fn check_document_version(
+    version: u32,
+    schema: u32,
+    abi: u32,
+    kind: &str,
+) -> Result<(), String> {
     if version > schema {
         return Err(format!(
             "{kind} document has schema version {version}, but this build reads \

@@ -2501,6 +2501,56 @@ pub fn wxsl_core::resources::texel_loader(&str, &str, &str, &[(&str, wxsl_core::
 pub fn wxsl_core::resources::texel_rows(&[u8], usize) -> (alloc::vec::Vec<u8>, [u32; 2])
 pub fn wxsl_core::resources::texels_per_row(u32) -> u32
 pub mod wxsl_core::scene
+pub enum wxsl_core::scene::ColorSpace
+pub wxsl_core::scene::ColorSpace::Linear
+pub wxsl_core::scene::ColorSpace::Srgb
+impl core::clone::Clone for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::ColorSpace
+impl core::cmp::PartialEq for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::ColorSpace
+impl core::marker::StructuralPartialEq for wxsl_core::scene::ColorSpace
+impl serde_core::ser::Serialize for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::ColorSpace
+pub fn wxsl_core::scene::ColorSpace::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::ColorSpace
+impl core::marker::Send for wxsl_core::scene::ColorSpace
+impl core::marker::Sync for wxsl_core::scene::ColorSpace
+impl core::marker::Unpin for wxsl_core::scene::ColorSpace
+impl core::marker::UnsafeUnpin for wxsl_core::scene::ColorSpace
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::ColorSpace
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::ColorSpace
+pub enum wxsl_core::scene::Filter
+pub wxsl_core::scene::Filter::Linear
+pub wxsl_core::scene::Filter::Nearest
+impl core::clone::Clone for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::Filter
+impl core::cmp::PartialEq for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::Filter
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Filter
+impl serde_core::ser::Serialize for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Filter
+pub fn wxsl_core::scene::Filter::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::Filter
+impl core::marker::Send for wxsl_core::scene::Filter
+impl core::marker::Sync for wxsl_core::scene::Filter
+impl core::marker::Unpin for wxsl_core::scene::Filter
+impl core::marker::UnsafeUnpin for wxsl_core::scene::Filter
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Filter
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Filter
 pub enum wxsl_core::scene::MeshSource
 pub wxsl_core::scene::MeshSource::Cube
 pub wxsl_core::scene::MeshSource::Cube::size: f32
@@ -2532,13 +2582,47 @@ impl core::marker::Unpin for wxsl_core::scene::MeshSource
 impl core::marker::UnsafeUnpin for wxsl_core::scene::MeshSource
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::MeshSource
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::MeshSource
+pub enum wxsl_core::scene::NodeReferrer
+pub wxsl_core::scene::NodeReferrer::Camera(usize)
+pub wxsl_core::scene::NodeReferrer::Instance(usize)
+pub wxsl_core::scene::NodeReferrer::Light(usize)
+impl core::clone::Clone for wxsl_core::scene::NodeReferrer
+pub fn wxsl_core::scene::NodeReferrer::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::NodeReferrer
+impl core::cmp::PartialEq for wxsl_core::scene::NodeReferrer
+pub fn wxsl_core::scene::NodeReferrer::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::NodeReferrer
+pub fn wxsl_core::scene::NodeReferrer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_core::scene::NodeReferrer
+pub fn wxsl_core::scene::NodeReferrer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::NodeReferrer
+impl core::marker::StructuralPartialEq for wxsl_core::scene::NodeReferrer
+impl core::marker::Freeze for wxsl_core::scene::NodeReferrer
+impl core::marker::Send for wxsl_core::scene::NodeReferrer
+impl core::marker::Sync for wxsl_core::scene::NodeReferrer
+impl core::marker::Unpin for wxsl_core::scene::NodeReferrer
+impl core::marker::UnsafeUnpin for wxsl_core::scene::NodeReferrer
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::NodeReferrer
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::NodeReferrer
 pub enum wxsl_core::scene::SceneError
+pub wxsl_core::scene::SceneError::InvalidSpotCone
+pub wxsl_core::scene::SceneError::InvalidSpotCone::light: usize
 pub wxsl_core::scene::SceneError::NoSuchMaterial
 pub wxsl_core::scene::SceneError::NoSuchMaterial::instance: usize
 pub wxsl_core::scene::SceneError::NoSuchMaterial::material: usize
 pub wxsl_core::scene::SceneError::NoSuchMesh
 pub wxsl_core::scene::SceneError::NoSuchMesh::instance: usize
 pub wxsl_core::scene::SceneError::NoSuchMesh::mesh: usize
+pub wxsl_core::scene::SceneError::NoSuchNode
+pub wxsl_core::scene::SceneError::NoSuchNode::node: usize
+pub wxsl_core::scene::SceneError::NoSuchNode::referrer: wxsl_core::scene::NodeReferrer
+pub wxsl_core::scene::SceneError::NoSuchTexture
+pub wxsl_core::scene::SceneError::NoSuchTexture::material: usize
+pub wxsl_core::scene::SceneError::NoSuchTexture::slot: alloc::string::String
+pub wxsl_core::scene::SceneError::NoSuchTexture::texture: usize
+pub wxsl_core::scene::SceneError::ParentNotBefore
+pub wxsl_core::scene::SceneError::ParentNotBefore::node: usize
+pub wxsl_core::scene::SceneError::ParentNotBefore::parent: usize
 impl core::clone::Clone for wxsl_core::scene::SceneError
 pub fn wxsl_core::scene::SceneError::clone(&self) -> Self
 impl core::cmp::Eq for wxsl_core::scene::SceneError
@@ -2557,6 +2641,31 @@ impl core::marker::Unpin for wxsl_core::scene::SceneError
 impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneError
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneError
+pub enum wxsl_core::scene::SceneLightKind
+pub wxsl_core::scene::SceneLightKind::Directional
+pub wxsl_core::scene::SceneLightKind::Point
+pub wxsl_core::scene::SceneLightKind::Spot
+pub wxsl_core::scene::SceneLightKind::Spot::inner_angle: f32
+pub wxsl_core::scene::SceneLightKind::Spot::outer_angle: f32
+impl core::clone::Clone for wxsl_core::scene::SceneLightKind
+pub fn wxsl_core::scene::SceneLightKind::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::SceneLightKind
+pub fn wxsl_core::scene::SceneLightKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::SceneLightKind
+pub fn wxsl_core::scene::SceneLightKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::SceneLightKind
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SceneLightKind
+impl serde_core::ser::Serialize for wxsl_core::scene::SceneLightKind
+pub fn wxsl_core::scene::SceneLightKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SceneLightKind
+pub fn wxsl_core::scene::SceneLightKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SceneLightKind
+impl core::marker::Send for wxsl_core::scene::SceneLightKind
+impl core::marker::Sync for wxsl_core::scene::SceneLightKind
+impl core::marker::Unpin for wxsl_core::scene::SceneLightKind
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneLightKind
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneLightKind
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneLightKind
 pub enum wxsl_core::scene::TagExpr
 pub wxsl_core::scene::TagExpr::Always
 pub wxsl_core::scene::TagExpr::And(alloc::boxed::Box<wxsl_core::scene::TagExpr>, alloc::boxed::Box<wxsl_core::scene::TagExpr>)
@@ -2626,15 +2735,92 @@ impl core::marker::Unpin for wxsl_core::scene::TagExprError
 impl core::marker::UnsafeUnpin for wxsl_core::scene::TagExprError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::TagExprError
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::TagExprError
+pub enum wxsl_core::scene::TextureSource
+pub wxsl_core::scene::TextureSource::Embedded
+pub wxsl_core::scene::TextureSource::Embedded::index: usize
+pub wxsl_core::scene::TextureSource::File
+pub wxsl_core::scene::TextureSource::File::path: alloc::string::String
+impl core::clone::Clone for wxsl_core::scene::TextureSource
+pub fn wxsl_core::scene::TextureSource::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::TextureSource
+impl core::cmp::PartialEq for wxsl_core::scene::TextureSource
+pub fn wxsl_core::scene::TextureSource::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::TextureSource
+pub fn wxsl_core::scene::TextureSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::TextureSource
+impl serde_core::ser::Serialize for wxsl_core::scene::TextureSource
+pub fn wxsl_core::scene::TextureSource::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::TextureSource
+pub fn wxsl_core::scene::TextureSource::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::TextureSource
+impl core::marker::Send for wxsl_core::scene::TextureSource
+impl core::marker::Sync for wxsl_core::scene::TextureSource
+impl core::marker::Unpin for wxsl_core::scene::TextureSource
+impl core::marker::UnsafeUnpin for wxsl_core::scene::TextureSource
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::TextureSource
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::TextureSource
+pub enum wxsl_core::scene::Wrap
+pub wxsl_core::scene::Wrap::ClampToEdge
+pub wxsl_core::scene::Wrap::MirroredRepeat
+pub wxsl_core::scene::Wrap::Repeat
+impl core::clone::Clone for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::Wrap
+impl core::cmp::PartialEq for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::Wrap
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Wrap
+impl serde_core::ser::Serialize for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Wrap
+pub fn wxsl_core::scene::Wrap::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::Wrap
+impl core::marker::Send for wxsl_core::scene::Wrap
+impl core::marker::Sync for wxsl_core::scene::Wrap
+impl core::marker::Unpin for wxsl_core::scene::Wrap
+impl core::marker::UnsafeUnpin for wxsl_core::scene::Wrap
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Wrap
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Wrap
+pub struct wxsl_core::scene::Bindings
+pub wxsl_core::scene::Bindings::params: alloc::collections::btree::map::BTreeMap<alloc::string::String, wxsl_core::node::Value>
+pub wxsl_core::scene::Bindings::textures: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+impl wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::is_empty(&self) -> bool
+impl core::clone::Clone for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::Bindings
+impl serde_core::ser::Serialize for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::Bindings
+pub fn wxsl_core::scene::Bindings::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::Bindings
+impl core::marker::Send for wxsl_core::scene::Bindings
+impl core::marker::Sync for wxsl_core::scene::Bindings
+impl core::marker::Unpin for wxsl_core::scene::Bindings
+impl core::marker::UnsafeUnpin for wxsl_core::scene::Bindings
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Bindings
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Bindings
 pub struct wxsl_core::scene::Instance
 pub wxsl_core::scene::Instance::material: usize
 pub wxsl_core::scene::Instance::mesh: usize
 pub wxsl_core::scene::Instance::name: alloc::string::String
+pub wxsl_core::scene::Instance::node: core::option::Option<usize>
 pub wxsl_core::scene::Instance::tags: core::option::Option<wxsl_core::scene::Tags>
 pub wxsl_core::scene::Instance::transform: [f32; 16]
 impl wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::new(usize, usize) -> Self
 pub fn wxsl_core::scene::Instance::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::Instance::with_node(self, usize) -> Self
 pub fn wxsl_core::scene::Instance::with_tags(self, wxsl_core::scene::Tags) -> Self
 pub fn wxsl_core::scene::Instance::with_transform(self, [f32; 16]) -> Self
 impl core::clone::Clone for wxsl_core::scene::Instance
@@ -2653,6 +2839,7 @@ impl core::marker::UnsafeUnpin for wxsl_core::scene::Instance
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Instance
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Instance
 pub struct wxsl_core::scene::MaterialEntry
+pub wxsl_core::scene::MaterialEntry::bindings: wxsl_core::scene::Bindings
 pub wxsl_core::scene::MaterialEntry::config: wxsl_core::material::MaterialConfig
 pub wxsl_core::scene::MaterialEntry::graph: wxsl_core::graph::Graph
 pub wxsl_core::scene::MaterialEntry::name: alloc::string::String
@@ -2660,8 +2847,10 @@ impl wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::new(impl core::convert::Into<alloc::string::String>, wxsl_core::graph::Graph) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_lighting(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_macros(self, wxsl_core::macros::MacroSet) -> Self
+pub fn wxsl_core::scene::MaterialEntry::with_param(self, impl core::convert::Into<alloc::string::String>, wxsl_core::node::Value) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_shadows(self, bool, bool) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_tags(self, wxsl_core::scene::Tags) -> Self
+pub fn wxsl_core::scene::MaterialEntry::with_texture(self, impl core::convert::Into<alloc::string::String>, usize) -> Self
 impl core::clone::Clone for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::clone(&self) -> Self
 impl core::fmt::Debug for wxsl_core::scene::MaterialEntry
@@ -2697,17 +2886,53 @@ impl core::marker::Unpin for wxsl_core::scene::MeshEntry
 impl core::marker::UnsafeUnpin for wxsl_core::scene::MeshEntry
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::MeshEntry
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::MeshEntry
+pub struct wxsl_core::scene::SamplerEntry
+pub wxsl_core::scene::SamplerEntry::mag: wxsl_core::scene::Filter
+pub wxsl_core::scene::SamplerEntry::min: wxsl_core::scene::Filter
+pub wxsl_core::scene::SamplerEntry::mipmap: wxsl_core::scene::Filter
+pub wxsl_core::scene::SamplerEntry::wrap_u: wxsl_core::scene::Wrap
+pub wxsl_core::scene::SamplerEntry::wrap_v: wxsl_core::scene::Wrap
+impl core::clone::Clone for wxsl_core::scene::SamplerEntry
+pub fn wxsl_core::scene::SamplerEntry::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::scene::SamplerEntry
+impl core::cmp::PartialEq for wxsl_core::scene::SamplerEntry
+pub fn wxsl_core::scene::SamplerEntry::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::SamplerEntry
+pub fn wxsl_core::scene::SamplerEntry::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::SamplerEntry
+pub fn wxsl_core::scene::SamplerEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::scene::SamplerEntry
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SamplerEntry
+impl serde_core::ser::Serialize for wxsl_core::scene::SamplerEntry
+pub fn wxsl_core::scene::SamplerEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SamplerEntry where wxsl_core::scene::SamplerEntry: core::default::Default
+pub fn wxsl_core::scene::SamplerEntry::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SamplerEntry
+impl core::marker::Send for wxsl_core::scene::SamplerEntry
+impl core::marker::Sync for wxsl_core::scene::SamplerEntry
+impl core::marker::Unpin for wxsl_core::scene::SamplerEntry
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SamplerEntry
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SamplerEntry
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SamplerEntry
 pub struct wxsl_core::scene::Scene
+pub wxsl_core::scene::Scene::environment: core::option::Option<wxsl_core::scene::SceneEnvironment>
 pub wxsl_core::scene::Scene::instances: alloc::vec::Vec<wxsl_core::scene::Instance>
 pub wxsl_core::scene::Scene::materials: alloc::vec::Vec<wxsl_core::scene::MaterialEntry>
 pub wxsl_core::scene::Scene::meshes: alloc::vec::Vec<wxsl_core::scene::MeshEntry>
 pub wxsl_core::scene::Scene::name: alloc::string::String
+pub wxsl_core::scene::Scene::nodes: alloc::vec::Vec<wxsl_core::scene::SceneNode>
+pub wxsl_core::scene::Scene::textures: alloc::vec::Vec<wxsl_core::scene::TextureEntry>
 impl wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::add_instance(&mut self, wxsl_core::scene::Instance) -> usize
 pub fn wxsl_core::scene::Scene::add_material(&mut self, wxsl_core::scene::MaterialEntry) -> usize
 pub fn wxsl_core::scene::Scene::add_mesh(&mut self, wxsl_core::scene::MeshEntry) -> usize
+pub fn wxsl_core::scene::Scene::add_node(&mut self, wxsl_core::scene::SceneNode) -> usize
+pub fn wxsl_core::scene::Scene::add_texture(&mut self, wxsl_core::scene::TextureEntry) -> usize
 pub fn wxsl_core::scene::Scene::instance_tags<'a>(&'a self, &'a wxsl_core::scene::Instance) -> &'a wxsl_core::scene::Tags
+pub fn wxsl_core::scene::Scene::instance_world(&self, &wxsl_core::scene::Instance) -> [f32; 16]
 pub fn wxsl_core::scene::Scene::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::Scene::node_world(&self, usize) -> [f32; 16]
+pub fn wxsl_core::scene::Scene::placement(&self, core::option::Option<usize>) -> [f32; 16]
 pub fn wxsl_core::scene::Scene::validate(&self) -> alloc::vec::Vec<wxsl_core::scene::SceneError>
 impl core::clone::Clone for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::clone(&self) -> Self
@@ -2726,6 +2951,111 @@ impl core::marker::Unpin for wxsl_core::scene::Scene
 impl core::marker::UnsafeUnpin for wxsl_core::scene::Scene
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Scene
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Scene
+pub struct wxsl_core::scene::SceneCamera
+pub wxsl_core::scene::SceneCamera::far: f32
+pub wxsl_core::scene::SceneCamera::fov_y: f32
+pub wxsl_core::scene::SceneCamera::name: alloc::string::String
+pub wxsl_core::scene::SceneCamera::near: f32
+pub wxsl_core::scene::SceneCamera::node: core::option::Option<usize>
+impl wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::SceneCamera::with_node(self, usize) -> Self
+impl core::clone::Clone for wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SceneCamera
+impl serde_core::ser::Serialize for wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SceneCamera
+pub fn wxsl_core::scene::SceneCamera::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SceneCamera
+impl core::marker::Send for wxsl_core::scene::SceneCamera
+impl core::marker::Sync for wxsl_core::scene::SceneCamera
+impl core::marker::Unpin for wxsl_core::scene::SceneCamera
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneCamera
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneCamera
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneCamera
+pub struct wxsl_core::scene::SceneEnvironment
+pub wxsl_core::scene::SceneEnvironment::cameras: alloc::vec::Vec<wxsl_core::scene::SceneCamera>
+pub wxsl_core::scene::SceneEnvironment::lights: alloc::vec::Vec<wxsl_core::scene::SceneLight>
+impl core::clone::Clone for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::default() -> Self
+impl core::fmt::Debug for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SceneEnvironment
+impl serde_core::ser::Serialize for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SceneEnvironment
+pub fn wxsl_core::scene::SceneEnvironment::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SceneEnvironment
+impl core::marker::Send for wxsl_core::scene::SceneEnvironment
+impl core::marker::Sync for wxsl_core::scene::SceneEnvironment
+impl core::marker::Unpin for wxsl_core::scene::SceneEnvironment
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneEnvironment
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneEnvironment
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneEnvironment
+pub struct wxsl_core::scene::SceneLight
+pub wxsl_core::scene::SceneLight::casts_shadow: bool
+pub wxsl_core::scene::SceneLight::color: [f32; 3]
+pub wxsl_core::scene::SceneLight::intensity: f32
+pub wxsl_core::scene::SceneLight::kind: wxsl_core::scene::SceneLightKind
+pub wxsl_core::scene::SceneLight::name: alloc::string::String
+pub wxsl_core::scene::SceneLight::node: core::option::Option<usize>
+pub wxsl_core::scene::SceneLight::range: f32
+impl wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::new(impl core::convert::Into<alloc::string::String>, wxsl_core::scene::SceneLightKind) -> Self
+pub fn wxsl_core::scene::SceneLight::with_node(self, usize) -> Self
+impl core::clone::Clone for wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SceneLight
+impl serde_core::ser::Serialize for wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SceneLight
+pub fn wxsl_core::scene::SceneLight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SceneLight
+impl core::marker::Send for wxsl_core::scene::SceneLight
+impl core::marker::Sync for wxsl_core::scene::SceneLight
+impl core::marker::Unpin for wxsl_core::scene::SceneLight
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneLight
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneLight
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneLight
+pub struct wxsl_core::scene::SceneNode
+pub wxsl_core::scene::SceneNode::name: alloc::string::String
+pub wxsl_core::scene::SceneNode::parent: core::option::Option<usize>
+pub wxsl_core::scene::SceneNode::transform: [f32; 16]
+impl wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::SceneNode::with_parent(self, usize) -> Self
+pub fn wxsl_core::scene::SceneNode::with_transform(self, [f32; 16]) -> Self
+impl core::clone::Clone for wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::SceneNode
+impl serde_core::ser::Serialize for wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::SceneNode
+pub fn wxsl_core::scene::SceneNode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::SceneNode
+impl core::marker::Send for wxsl_core::scene::SceneNode
+impl core::marker::Sync for wxsl_core::scene::SceneNode
+impl core::marker::Unpin for wxsl_core::scene::SceneNode
+impl core::marker::UnsafeUnpin for wxsl_core::scene::SceneNode
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::SceneNode
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::SceneNode
 pub struct wxsl_core::scene::Tags(_)
 impl wxsl_core::scene::Tags
 pub const wxsl_core::scene::Tags::EMPTY: &'static wxsl_core::scene::Tags
@@ -2767,6 +3097,32 @@ impl core::marker::Unpin for wxsl_core::scene::Tags
 impl core::marker::UnsafeUnpin for wxsl_core::scene::Tags
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::Tags
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Tags
+pub struct wxsl_core::scene::TextureEntry
+pub wxsl_core::scene::TextureEntry::color_space: wxsl_core::scene::ColorSpace
+pub wxsl_core::scene::TextureEntry::name: alloc::string::String
+pub wxsl_core::scene::TextureEntry::sampler: wxsl_core::scene::SamplerEntry
+pub wxsl_core::scene::TextureEntry::source: wxsl_core::scene::TextureSource
+impl wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::new(impl core::convert::Into<alloc::string::String>, wxsl_core::scene::TextureSource) -> Self
+pub fn wxsl_core::scene::TextureEntry::with_color_space(self, wxsl_core::scene::ColorSpace) -> Self
+impl core::clone::Clone for wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_core::scene::TextureEntry
+impl serde_core::ser::Serialize for wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_core::scene::TextureEntry
+pub fn wxsl_core::scene::TextureEntry::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_core::scene::TextureEntry
+impl core::marker::Send for wxsl_core::scene::TextureEntry
+impl core::marker::Sync for wxsl_core::scene::TextureEntry
+impl core::marker::Unpin for wxsl_core::scene::TextureEntry
+impl core::marker::UnsafeUnpin for wxsl_core::scene::TextureEntry
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::scene::TextureEntry
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::TextureEntry
 pub const wxsl_core::scene::SCHEMA_VERSION: u32
 pub const wxsl_core::scene::TAG_OPAQUE: &str
 pub const wxsl_core::scene::TAG_TRANSPARENT: &str
@@ -3460,11 +3816,13 @@ pub struct wxsl_core::Instance
 pub wxsl_core::Instance::material: usize
 pub wxsl_core::Instance::mesh: usize
 pub wxsl_core::Instance::name: alloc::string::String
+pub wxsl_core::Instance::node: core::option::Option<usize>
 pub wxsl_core::Instance::tags: core::option::Option<wxsl_core::scene::Tags>
 pub wxsl_core::Instance::transform: [f32; 16]
 impl wxsl_core::scene::Instance
 pub fn wxsl_core::scene::Instance::new(usize, usize) -> Self
 pub fn wxsl_core::scene::Instance::with_name(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::Instance::with_node(self, usize) -> Self
 pub fn wxsl_core::scene::Instance::with_tags(self, wxsl_core::scene::Tags) -> Self
 pub fn wxsl_core::scene::Instance::with_transform(self, [f32; 16]) -> Self
 impl core::clone::Clone for wxsl_core::scene::Instance
@@ -3580,6 +3938,7 @@ impl core::marker::UnsafeUnpin for wxsl_core::material::MaterialConfig
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::material::MaterialConfig
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::material::MaterialConfig
 pub struct wxsl_core::MaterialEntry
+pub wxsl_core::MaterialEntry::bindings: wxsl_core::scene::Bindings
 pub wxsl_core::MaterialEntry::config: wxsl_core::material::MaterialConfig
 pub wxsl_core::MaterialEntry::graph: wxsl_core::graph::Graph
 pub wxsl_core::MaterialEntry::name: alloc::string::String
@@ -3587,8 +3946,10 @@ impl wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::new(impl core::convert::Into<alloc::string::String>, wxsl_core::graph::Graph) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_lighting(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_macros(self, wxsl_core::macros::MacroSet) -> Self
+pub fn wxsl_core::scene::MaterialEntry::with_param(self, impl core::convert::Into<alloc::string::String>, wxsl_core::node::Value) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_shadows(self, bool, bool) -> Self
 pub fn wxsl_core::scene::MaterialEntry::with_tags(self, wxsl_core::scene::Tags) -> Self
+pub fn wxsl_core::scene::MaterialEntry::with_texture(self, impl core::convert::Into<alloc::string::String>, usize) -> Self
 impl core::clone::Clone for wxsl_core::scene::MaterialEntry
 pub fn wxsl_core::scene::MaterialEntry::clone(&self) -> Self
 impl core::fmt::Debug for wxsl_core::scene::MaterialEntry
@@ -3840,16 +4201,24 @@ impl core::marker::UnsafeUnpin for wxsl_core::resources::ResourceBinding
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::resources::ResourceBinding
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::resources::ResourceBinding
 pub struct wxsl_core::Scene
+pub wxsl_core::Scene::environment: core::option::Option<wxsl_core::scene::SceneEnvironment>
 pub wxsl_core::Scene::instances: alloc::vec::Vec<wxsl_core::scene::Instance>
 pub wxsl_core::Scene::materials: alloc::vec::Vec<wxsl_core::scene::MaterialEntry>
 pub wxsl_core::Scene::meshes: alloc::vec::Vec<wxsl_core::scene::MeshEntry>
 pub wxsl_core::Scene::name: alloc::string::String
+pub wxsl_core::Scene::nodes: alloc::vec::Vec<wxsl_core::scene::SceneNode>
+pub wxsl_core::Scene::textures: alloc::vec::Vec<wxsl_core::scene::TextureEntry>
 impl wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::add_instance(&mut self, wxsl_core::scene::Instance) -> usize
 pub fn wxsl_core::scene::Scene::add_material(&mut self, wxsl_core::scene::MaterialEntry) -> usize
 pub fn wxsl_core::scene::Scene::add_mesh(&mut self, wxsl_core::scene::MeshEntry) -> usize
+pub fn wxsl_core::scene::Scene::add_node(&mut self, wxsl_core::scene::SceneNode) -> usize
+pub fn wxsl_core::scene::Scene::add_texture(&mut self, wxsl_core::scene::TextureEntry) -> usize
 pub fn wxsl_core::scene::Scene::instance_tags<'a>(&'a self, &'a wxsl_core::scene::Instance) -> &'a wxsl_core::scene::Tags
+pub fn wxsl_core::scene::Scene::instance_world(&self, &wxsl_core::scene::Instance) -> [f32; 16]
 pub fn wxsl_core::scene::Scene::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::scene::Scene::node_world(&self, usize) -> [f32; 16]
+pub fn wxsl_core::scene::Scene::placement(&self, core::option::Option<usize>) -> [f32; 16]
 pub fn wxsl_core::scene::Scene::validate(&self) -> alloc::vec::Vec<wxsl_core::scene::SceneError>
 impl core::clone::Clone for wxsl_core::scene::Scene
 pub fn wxsl_core::scene::Scene::clone(&self) -> Self

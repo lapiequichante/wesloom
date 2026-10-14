@@ -9,10 +9,13 @@
 use wxsl::core::graph::Graph;
 use wxsl::core::node::Value;
 use wxsl::core::scene::{
-    Instance, MaterialEntry, MeshEntry, MeshSource, Scene, SceneError, TagExpr, Tags,
+    ColorSpace, Instance, MaterialEntry, MeshEntry, MeshSource, Scene, SceneCamera,
+    SceneEnvironment, SceneError, SceneLight, SceneLightKind, SceneNode, TagExpr, Tags,
+    TextureEntry, TextureSource,
 };
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
 use wxsl::render::{Camera, Environment, RenderRequest, Renderer, TargetConfig};
+use wxsl::scene::SceneImage;
 
 const SIZE: u32 = 96;
 
@@ -199,11 +202,12 @@ fn a_scene_document_renders() {
     )
     .expect("the stdlib library satisfies the ABI");
 
-    // The document names meshes and materials but not images, so the
-    // texture the demo material samples is the application's to supply —
-    // and until it does, the scene says so by name rather than drawing
-    // black (ADR 0023).
-    resources.create_bindings(&gpu.device, &mut renderer);
+    // This document binds no image, so the texture the demo material
+    // samples is the application's to supply — and until it does, the
+    // scene says so by name rather than drawing black (ADR 0023).
+    resources
+        .create_bindings(&gpu.device, &gpu.queue, &mut renderer)
+        .expect("nothing to bind");
     let unbound = resources
         .upload(&gpu.device, &gpu.queue)
         .expect_err("the demo material declares a texture");
@@ -268,4 +272,183 @@ fn a_scene_document_renders() {
     // different meshes sharing one material.
     assert!(lit(SIZE / 4), "the cube is missing");
     assert!(lit(SIZE * 3 / 4), "the sphere is missing");
+}
+
+fn translation(x: f32, y: f32, z: f32) -> [f32; 16] {
+    glam::Mat4::from_translation(glam::Vec3::new(x, y, z)).to_cols_array()
+}
+
+#[test]
+fn an_environment_block_places_its_camera_and_lights_by_node() {
+    let mut scene = Scene::new("lit");
+    let rig = scene.add_node(SceneNode::new("rig").with_transform(translation(0.0, 1.0, 0.0)));
+    let eye = scene.add_node(
+        SceneNode::new("eye")
+            .with_parent(rig)
+            .with_transform(translation(0.0, 0.0, 5.0)),
+    );
+    // Turned to face down: its −Z is world −Y.
+    let down = scene.add_node(SceneNode::new("down").with_transform(
+        glam::Mat4::from_rotation_x(-core::f32::consts::FRAC_PI_2).to_cols_array(),
+    ));
+    scene.environment = Some(SceneEnvironment {
+        cameras: vec![SceneCamera::new("main").with_node(eye)],
+        lights: vec![
+            SceneLight::new("sun", SceneLightKind::Directional).with_node(down),
+            SceneLight::new("bulb", SceneLightKind::Point).with_node(eye),
+        ],
+    });
+
+    let environment = wxsl::scene::environment(&scene, 2.0).expect("the block is there");
+    assert_eq!(environment.camera.eye, glam::Vec3::new(0.0, 1.0, 5.0));
+    assert!((environment.camera.target - glam::Vec3::new(0.0, 1.0, 4.0)).length() < 1e-5);
+    assert_eq!(environment.camera.aspect, 2.0);
+    // A directional light stores the direction *towards* it: up.
+    assert!((environment.lights[0].position_or_direction - glam::Vec3::Y).length() < 1e-5);
+    assert_eq!(
+        environment.lights[1].position_or_direction,
+        glam::Vec3::new(0.0, 1.0, 5.0)
+    );
+
+    assert!(wxsl::scene::environment(&Scene::new("bare"), 1.0).is_none());
+}
+
+/// The demo material's textures, bound by the document itself: `albedo`
+/// from a PNG file next to the scene, the `linear` sampler from an
+/// embedded image. The cube sits under a node, not at its own transform.
+fn textured_scene() -> Scene {
+    let mut scene = Scene::new("textured");
+    let cube = scene.add_mesh(MeshEntry::new("cube", MeshSource::Cube { size: 1.6 }));
+    let red = scene.add_texture(TextureEntry::new(
+        "red",
+        TextureSource::File {
+            path: "red.png".to_string(),
+        },
+    ));
+    let sampler = scene.add_texture(
+        TextureEntry::new("sampler", TextureSource::Embedded { index: 0 })
+            .with_color_space(ColorSpace::Linear),
+    );
+    let paint = scene.add_material(
+        MaterialEntry::new("paint", demo_graph())
+            .with_texture("albedo", red)
+            .with_texture("linear", sampler),
+    );
+    let left = scene.add_node(SceneNode::new("left").with_transform(translation(-1.0, 0.0, 0.0)));
+    scene.add_instance(
+        Instance::new(cube, paint)
+            .with_node(left)
+            .with_transform(translation(1.0, 0.0, 0.0)),
+    );
+    scene
+}
+
+#[test]
+fn a_v2_document_binds_its_own_textures() {
+    let Some(gpu) = gpu() else { return };
+    let directory = std::env::temp_dir().join(format!("wxsl-scene-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("temp dir");
+    image::save_buffer(
+        directory.join("red.png"),
+        &[255, 0, 0, 255].repeat(16),
+        4,
+        4,
+        image::ExtendedColorType::Rgba8,
+    )
+    .expect("writes the png");
+
+    let registry = wxsl::stdlib::registry();
+    let scene = textured_scene();
+    let mut resources =
+        wxsl::scene::SceneResources::load(&gpu.device, &scene, &registry, Some(&directory))
+            .expect("the scene loads");
+    resources.set_images(vec![SceneImage::Rgba8 {
+        width: 1,
+        height: 1,
+        pixels: vec![0, 0, 0, 255],
+    }]);
+    let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
+    let mut renderer = Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(SIZE, SIZE, target.format()),
+    )
+    .expect("the stdlib library satisfies the ABI");
+    resources
+        .create_bindings(&gpu.device, &gpu.queue, &mut renderer)
+        .expect("the document's bindings are declared");
+    resources
+        .upload(&gpu.device, &gpu.queue)
+        .expect("the document bound everything");
+    resources
+        .instance_attributes_mut(0)
+        .expect("one instance")
+        .set("instance_tint", Value::Vec3([1.0, 1.0, 1.0]));
+
+    let draws = resources.draw_list();
+    let environment = Environment {
+        camera: Camera {
+            eye: glam::Vec3::new(0.0, 0.5, 4.0),
+            aspect: 1.0,
+            ..Camera::default()
+        },
+        lights: vec![wxsl::render::Light::directional(
+            glam::Vec3::new(0.3, 0.8, 1.0),
+            glam::Vec3::ONE,
+            3.0,
+        )],
+        ..Environment::default()
+    };
+    renderer
+        .render(
+            &gpu.device,
+            &gpu.queue,
+            &RenderRequest {
+                view: target.view(),
+                environment: &environment,
+                draws: &draws,
+            },
+        )
+        .expect("renders the scene");
+    gpu.wait();
+    let _ = std::fs::remove_dir_all(&directory);
+
+    // The node and the instance's own offset cancel: the cube is centred,
+    // and red because the file says so.
+    let image = target.read_rgba8(&gpu.device, &gpu.queue);
+    let centre = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
+    let [r, g, b] = [image[centre], image[centre + 1], image[centre + 2]];
+    assert!(r > 24 && r > g * 2 && r > b * 2, "centre is {r},{g},{b}");
+}
+
+#[test]
+fn a_binding_the_material_does_not_declare_is_refused_by_name() {
+    let Some(gpu) = gpu() else { return };
+    let registry = wxsl::stdlib::registry();
+    let mut scene = textured_scene();
+    scene.textures[0].source = TextureSource::Embedded { index: 0 };
+    let paint = &mut scene.materials[0];
+    paint.bindings.textures.insert("albedoo".to_string(), 0);
+
+    let mut resources = wxsl::scene::SceneResources::load(&gpu.device, &scene, &registry, None)
+        .expect("the scene loads");
+    resources.set_images(vec![SceneImage::Rgba8 {
+        width: 1,
+        height: 1,
+        pixels: vec![255; 4],
+    }]);
+    let mut renderer = Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(SIZE, SIZE, wgpu::TextureFormat::Rgba8UnormSrgb),
+    )
+    .expect("the stdlib library satisfies the ABI");
+    let error = resources
+        .create_bindings(&gpu.device, &gpu.queue, &mut renderer)
+        .expect_err("`albedoo` is not declared");
+    let message = error.to_string();
+    assert!(
+        message.contains("pbr cube") && message.contains("albedoo"),
+        "{message}"
+    );
 }

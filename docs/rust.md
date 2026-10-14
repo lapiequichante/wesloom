@@ -27,8 +27,8 @@ In the order a program meets them:
 | `Mesh`, `MeshData` | `wxsl::render` | Geometry on the GPU, and on the CPU. |
 | `Environment`, `Camera`, `Light` | `wxsl::render` | The frame's camera, lights, exposure and time. |
 | `DrawList`, `DrawItem` | `wxsl::render` | What one frame draws: a mesh, a material, a transform, tags and bindings. |
-| `Scene` | `wxsl::core` | The scene document: meshes, materials, instances. |
-| `SceneResources` | `wxsl::scene` | A scene loaded onto the GPU. `draw_list()` turns it into a `DrawList`. |
+| `Scene` | `wxsl::core` | The scene document: meshes, materials, instances, and since v2 textures, bindings, nodes and an optional environment. |
+| `SceneResources` | `wxsl::scene` | A scene loaded onto the GPU. `create_bindings()` uploads its textures and applies its bindings; `draw_list()` turns it into a `DrawList`; `wxsl::scene::environment` turns its environment block into an `Environment`. |
 | `Editor` | `wxsl::editor` | The visual editor, behind the `editor` feature. |
 
 The examples in `crates/wxsl/examples/` are complete programs:

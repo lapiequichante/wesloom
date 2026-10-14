@@ -13,13 +13,22 @@
 //!   (meshes by name,       (GPU meshes,                  (what the
 //!    graphs, instances)     compiled materials)           renderer takes)
 //! ```
+//!
+//! A version 2 document also names its textures and each material's
+//! bindings, which [`SceneResources::create_bindings`] resolves, and may
+//! carry lights and cameras, which [`environment`] translates
+//! ([ADR 0079](../../../docs/adr/0079-scene-document-v2-textures-bindings-nodes-environment.md)).
 
 use std::path::{Path, PathBuf};
 
 use wxsl_core::node::NodeRegistry;
-use wxsl_core::scene::{MeshSource, Scene, SceneError, Tags};
+use wxsl_core::scene::{
+    Bindings, ColorSpace, Filter, MeshSource, SamplerEntry, Scene, SceneError, SceneLightKind,
+    Tags, TextureEntry, TextureSource, Wrap,
+};
 use wxsl_render::bindings::MaterialBindings;
 use wxsl_render::draw::{DrawItem, DrawList, InstanceAttributes};
+use wxsl_render::environment::{Camera, Environment, Light};
 use wxsl_render::material::Material;
 use wxsl_render::mesh::Mesh;
 use wxsl_render::renderer::Renderer;
@@ -41,10 +50,42 @@ pub struct SceneResources {
     /// One per *instance*, not per material: what the draw supplies for
     /// the per-instance attributes its material declares. A scene
     /// document has no way to name these, so they start empty and the
-    /// application fills them in — the same gap
-    /// [`SceneResources::create_bindings`] leaves for textures.
+    /// application fills them in.
     attributes: Vec<InstanceAttributes>,
     instances: Vec<ResolvedInstance>,
+    /// What the document binds, per material, applied by
+    /// [`SceneResources::create_bindings`].
+    material_bindings: Vec<Bindings>,
+    /// The document's textures, uploaded by
+    /// [`SceneResources::create_bindings`].
+    texture_entries: Vec<TextureEntry>,
+    textures: Vec<SceneTexture>,
+    /// What an `embedded` texture source indexes.
+    images: Vec<SceneImage>,
+    base: Option<PathBuf>,
+}
+
+/// An image a host supplies with a scene document, for its `embedded`
+/// texture sources — a GLB's images, say.
+#[derive(Clone, Debug)]
+pub enum SceneImage {
+    /// Decoded pixels, 8-bit RGBA, rows top to bottom.
+    Rgba8 {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+        /// `width * height * 4` bytes.
+        pixels: Vec<u8>,
+    },
+    /// A PNG file's bytes, decoded on upload. Needs the `images` feature.
+    Encoded(Vec<u8>),
+}
+
+struct SceneTexture {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
 }
 
 struct ResolvedInstance {
@@ -150,7 +191,7 @@ impl SceneResources {
             .map(|instance| ResolvedInstance {
                 mesh: instance.mesh,
                 material: instance.material,
-                transform: glam::Mat4::from_cols_array(&instance.transform),
+                transform: glam::Mat4::from_cols_array(&scene.instance_world(instance)),
                 tags: scene.instance_tags(instance).clone(),
             })
             .collect();
@@ -161,7 +202,22 @@ impl SceneResources {
             bindings: Vec::new(),
             attributes: vec![InstanceAttributes::new(); instances.len()],
             instances,
+            material_bindings: scene
+                .materials
+                .iter()
+                .map(|entry| entry.bindings.clone())
+                .collect(),
+            texture_entries: scene.textures.clone(),
+            textures: Vec::new(),
+            images: Vec::new(),
+            base: base.map(Path::to_path_buf),
         })
+    }
+
+    /// Supply the images the document's `embedded` texture sources index,
+    /// before [`SceneResources::create_bindings`].
+    pub fn set_images(&mut self, images: Vec<SceneImage>) {
+        self.images = images;
     }
 
     /// The draws this scene contributes, in instance order.
@@ -205,24 +261,102 @@ impl SceneResources {
         self.instances.len()
     }
 
-    /// Give every material somewhere to put its parameters, textures and
-    /// samplers, at the values its graph declared.
+    /// Upload the document's textures and give every material its
+    /// parameters, textures and samplers: the values its graph declared,
+    /// overridden by what the document binds.
     ///
     /// Separate from [`SceneResources::load`] because it is the one step
     /// that needs a [`Renderer`]: a bind group needs a layout, and the
     /// layouts are shared per interface shape by the renderer that will
     /// draw with them.
     ///
-    /// Also separate from [`SceneResources::upload`], because a scene
-    /// document has no way to name an image yet: a material that declares
-    /// a texture is finished by the application, through
-    /// [`SceneResources::bindings_mut`], in between the two calls.
-    pub fn create_bindings(&mut self, device: &wgpu::Device, renderer: &mut Renderer) {
-        self.bindings = self
-            .materials
+    /// A binding naming a slot the material does not declare is an error
+    /// naming the material. A slot the document leaves unbound can still be
+    /// filled through [`SceneResources::bindings_mut`] before
+    /// [`SceneResources::upload`].
+    pub fn create_bindings(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut Renderer,
+    ) -> Result<(), LoadError> {
+        self.textures = self
+            .texture_entries
             .iter()
-            .map(|material| renderer.material_bindings(device, material))
-            .collect();
+            .map(|entry| {
+                let image = self.image_for(entry)?;
+                Ok(upload_texture(device, queue, entry, &image))
+            })
+            .collect::<Result<_, LoadError>>()?;
+
+        self.bindings = Vec::with_capacity(self.materials.len());
+        for (material, document) in self.materials.iter().zip(&self.material_bindings) {
+            let mut bindings = renderer.material_bindings(device, material);
+            let failed = |error| LoadError::Bindings {
+                material: material.name.clone(),
+                error,
+            };
+            for (name, value) in &document.params {
+                bindings.set(name, *value).map_err(failed)?;
+            }
+            for (slot, &texture) in &document.textures {
+                let texture = &self.textures[texture];
+                let is_sampler = material.interface().resources.iter().any(|resource| {
+                    resource.name.as_str() == slot
+                        && resource.ty == wxsl_core::node::ValueType::Sampler
+                });
+                if is_sampler {
+                    bindings.set_sampler(slot, &texture.sampler)
+                } else {
+                    bindings.set_texture(slot, &texture.view)
+                }
+                .map_err(failed)?;
+            }
+            self.bindings.push(bindings);
+        }
+        Ok(())
+    }
+
+    /// The decoded pixels for `entry`.
+    fn image_for(&self, entry: &TextureEntry) -> Result<Decoded, LoadError> {
+        let failed = |reason: String| LoadError::Texture {
+            texture: entry.name.clone(),
+            reason,
+        };
+        match &entry.source {
+            TextureSource::Embedded { index } => match self.images.get(*index) {
+                Some(SceneImage::Rgba8 {
+                    width,
+                    height,
+                    pixels,
+                }) => {
+                    if pixels.len() != (*width as usize) * (*height as usize) * 4 {
+                        return Err(failed(format!(
+                            "embedded image {index} is not {width}×{height} RGBA8"
+                        )));
+                    }
+                    Ok(Decoded {
+                        width: *width,
+                        height: *height,
+                        pixels: pixels.clone(),
+                    })
+                }
+                Some(SceneImage::Encoded(bytes)) => decode(bytes).map_err(failed),
+                None => Err(failed(format!(
+                    "no embedded image {index}; the host supplied {}",
+                    self.images.len()
+                ))),
+            },
+            TextureSource::File { path } => {
+                let resolved = match &self.base {
+                    Some(base) => base.join(path),
+                    None => PathBuf::from(path),
+                };
+                let bytes = std::fs::read(&resolved)
+                    .map_err(|error| failed(format!("{}: {error}", resolved.display())))?;
+                decode(&bytes).map_err(failed)
+            }
+        }
     }
 
     /// Push every material's parameters and resources to the GPU.
@@ -283,6 +417,256 @@ fn mesh_from(
     })
 }
 
+/// The lights and camera a document's environment block describes, for a
+/// viewport of `aspect` (width over height). `None` when the document has
+/// no environment block.
+///
+/// The first camera is the one returned; without one, the default camera.
+/// Every other field is the default environment's: ambient, exposure and
+/// time are the application's, not the document's.
+pub fn environment(scene: &Scene, aspect: f32) -> Option<Environment> {
+    let block = scene.environment.as_ref()?;
+    let placed = |node| glam::Mat4::from_cols_array(&scene.placement(node));
+    let camera = match block.cameras.first() {
+        Some(camera) => {
+            let world = placed(camera.node);
+            let eye = world.transform_point3(glam::Vec3::ZERO);
+            Camera {
+                eye,
+                target: eye + world.transform_vector3(glam::Vec3::NEG_Z),
+                up: world.transform_vector3(glam::Vec3::Y),
+                fov_y: camera.fov_y,
+                aspect,
+                near: camera.near,
+                far: camera.far,
+                ..Camera::default()
+            }
+        }
+        None => Camera {
+            aspect,
+            ..Camera::default()
+        },
+    };
+    let lights = block
+        .lights
+        .iter()
+        .map(|light| {
+            let world = placed(light.node);
+            let position = world.transform_point3(glam::Vec3::ZERO);
+            let forward = world
+                .transform_vector3(glam::Vec3::NEG_Z)
+                .normalize_or(glam::Vec3::NEG_Z);
+            let color = glam::Vec3::from_array(light.color);
+            let mut resolved = match light.kind {
+                // `position_or_direction` points *towards* the light.
+                SceneLightKind::Directional => Light::directional(-forward, color, light.intensity),
+                SceneLightKind::Point => Light::point(position, color, light.intensity),
+                SceneLightKind::Spot {
+                    inner_angle,
+                    outer_angle,
+                } => Light::spot(
+                    position,
+                    forward,
+                    inner_angle,
+                    outer_angle,
+                    color,
+                    light.intensity,
+                ),
+            };
+            resolved.range = light.range;
+            resolved.casts_shadow = light.casts_shadow;
+            resolved
+        })
+        .collect();
+    Some(Environment {
+        camera,
+        lights,
+        ..Environment::default()
+    })
+}
+
+/// An image as RGBA8, top row first.
+struct Decoded {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+#[cfg(feature = "images")]
+fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+    let image = image::load_from_memory(bytes)
+        .map_err(|error| error.to_string())?
+        .to_rgba8();
+    Ok(Decoded {
+        width: image.width(),
+        height: image.height(),
+        pixels: image.into_raw(),
+    })
+}
+
+#[cfg(not(feature = "images"))]
+fn decode(_bytes: &[u8]) -> Result<Decoded, String> {
+    Err("this build has no `images` feature to decode it".to_string())
+}
+
+/// Upload `image` with a full mip chain, generated on the CPU (ADR 0061).
+fn upload_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    entry: &TextureEntry,
+    image: &Decoded,
+) -> SceneTexture {
+    let srgb = entry.color_space == ColorSpace::Srgb;
+    let levels = mip_chain(image, srgb);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&entry.name),
+        size: wgpu::Extent3d {
+            width: image.width.max(1),
+            height: image.height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: if srgb {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        },
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip, level) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(level.width * 4),
+                rows_per_image: Some(level.height),
+            },
+            wgpu::Extent3d {
+                width: level.width,
+                height: level.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&sampler_descriptor(&entry.name, &entry.sampler));
+    SceneTexture {
+        _texture: texture,
+        view,
+        sampler,
+    }
+}
+
+fn sampler_descriptor<'a>(label: &'a str, sampler: &SamplerEntry) -> wgpu::SamplerDescriptor<'a> {
+    let filter = |filter| match filter {
+        Filter::Nearest => wgpu::FilterMode::Nearest,
+        Filter::Linear => wgpu::FilterMode::Linear,
+    };
+    let wrap = |wrap| match wrap {
+        Wrap::Repeat => wgpu::AddressMode::Repeat,
+        Wrap::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+        Wrap::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+    };
+    wgpu::SamplerDescriptor {
+        label: Some(label),
+        address_mode_u: wrap(sampler.wrap_u),
+        address_mode_v: wrap(sampler.wrap_v),
+        mag_filter: filter(sampler.mag),
+        min_filter: filter(sampler.min),
+        mipmap_filter: match sampler.mipmap {
+            Filter::Nearest => wgpu::MipmapFilterMode::Nearest,
+            Filter::Linear => wgpu::MipmapFilterMode::Linear,
+        },
+        ..Default::default()
+    }
+}
+
+/// Every mip level of `image`, the full-size one first, each a 2×2 box
+/// filter of the one above. An sRGB image is averaged in linear light, so a
+/// distant checker greys to its true mean rather than too dark.
+fn mip_chain(image: &Decoded, srgb: bool) -> Vec<Decoded> {
+    let to_linear = |byte: u8| {
+        let value = byte as f32 / 255.0;
+        if !srgb {
+            value
+        } else if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let from_linear = |value: f32| {
+        let encoded = if !srgb {
+            value
+        } else if value <= 0.0031308 {
+            value * 12.92
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        };
+        (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+
+    let mut levels = vec![Decoded {
+        width: image.width.max(1),
+        height: image.height.max(1),
+        pixels: image.pixels.clone(),
+    }];
+    loop {
+        let above = levels.last().expect("starts with one");
+        if above.width == 1 && above.height == 1 {
+            return levels;
+        }
+        let (width, height) = ((above.width / 2).max(1), (above.height / 2).max(1));
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let texel = |dx: u32, dy: u32| {
+                    let (sx, sy) = (
+                        (x * 2 + dx).min(above.width - 1),
+                        (y * 2 + dy).min(above.height - 1),
+                    );
+                    ((sy * above.width + sx) * 4) as usize
+                };
+                let corners = [texel(0, 0), texel(1, 0), texel(0, 1), texel(1, 1)];
+                for channel in 0..4 {
+                    let sum: f32 = corners
+                        .iter()
+                        .map(|&at| above.pixels[at + channel])
+                        // Alpha is linear in either colour space.
+                        .map(|byte| {
+                            if channel == 3 {
+                                byte as f32 / 255.0
+                            } else {
+                                to_linear(byte)
+                            }
+                        })
+                        .sum();
+                    let mean = sum / 4.0;
+                    pixels.push(if channel == 3 {
+                        (mean.clamp(0.0, 1.0) * 255.0).round() as u8
+                    } else {
+                        from_linear(mean)
+                    });
+                }
+            }
+        }
+        levels.push(Decoded {
+            width,
+            height,
+            pixels,
+        });
+    }
+}
+
 #[cfg(feature = "gltf")]
 fn load_file(
     device: &wgpu::Device,
@@ -337,13 +721,20 @@ pub enum LoadError {
         /// What the compiler said.
         error: RenderError,
     },
-    /// A material's bind group could not be finished — almost always a
-    /// texture the scene document has no way to name yet.
+    /// A material's bind group could not be finished: a binding naming a
+    /// slot the material does not declare, or a texture nobody bound.
     Bindings {
         /// Which material.
         material: String,
         /// What was missing.
         error: RenderError,
+    },
+    /// A texture's image could not be read or decoded.
+    Texture {
+        /// Which texture.
+        texture: String,
+        /// Why.
+        reason: String,
     },
     /// Something else the renderer refused, such as a file it cannot read.
     Render(RenderError),
@@ -372,6 +763,9 @@ impl core::fmt::Display for LoadError {
             LoadError::Bindings { material, error } => {
                 write!(f, "cannot bind material `{material}`: {error}")
             }
+            LoadError::Texture { texture, reason } => {
+                write!(f, "cannot load texture `{texture}`: {reason}")
+            }
             LoadError::Render(error) => write!(f, "{error}"),
         }
     }
@@ -383,7 +777,7 @@ impl std::error::Error for LoadError {
             LoadError::Material { error, .. }
             | LoadError::Bindings { error, .. }
             | LoadError::Render(error) => Some(error),
-            LoadError::Invalid(_) | LoadError::Incompatible(_) => None,
+            LoadError::Invalid(_) | LoadError::Incompatible(_) | LoadError::Texture { .. } => None,
         }
     }
 }
@@ -391,5 +785,38 @@ impl std::error::Error for LoadError {
 impl From<RenderError> for LoadError {
     fn from(value: RenderError) -> Self {
         LoadError::Render(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mip_chain_reaches_one_texel_and_averages_srgb_in_linear_light() {
+        // A 2×2 black-and-white checker, plus one odd edge to clamp.
+        let image = Decoded {
+            width: 3,
+            height: 2,
+            pixels: [
+                [0u8, 0, 0, 255],
+                [255; 4],
+                [255; 4],
+                [255; 4],
+                [0, 0, 0, 255],
+                [255; 4],
+            ]
+            .concat(),
+        };
+        let srgb = mip_chain(&image, true);
+        let sizes: Vec<_> = srgb
+            .iter()
+            .map(|level| (level.width, level.height))
+            .collect();
+        assert_eq!(sizes, [(3, 2), (1, 1)]);
+        // Half white in linear light is 188 in sRGB, not 128.
+        assert_eq!(srgb[1].pixels, [188, 188, 188, 255]);
+        let linear = mip_chain(&image, false);
+        assert_eq!(linear[1].pixels, [128, 128, 128, 255]);
     }
 }

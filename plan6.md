@@ -195,6 +195,13 @@ The scene must be able to say what a glTF file contains.
 * Every new field has a default, so v1 scenes still load and v1 is read
   as v2. The schema version becomes 2.
 
+**Landed (2026-10-14, ADR 0079):** all of the above.
+`SceneResources::create_bindings` now takes the queue, uploads the
+textures (CPU mips, averaged in linear light) and applies the bindings;
+`set_images` supplies embedded images; `wxsl::scene::environment` builds
+an `Environment`. Encoded images need the new `images` feature, which
+`gltf` implies. Each document type now has its own schema version.
+
 ### G2 — glTF/GLB import
 
 `wxsl::asset::import_gltf(path) -> ImportedScene` (document + mesh data +

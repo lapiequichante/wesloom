@@ -28,6 +28,9 @@ pub wxsl::scene::LoadError::Material
 pub wxsl::scene::LoadError::Material::error: wxsl_render::error::RenderError
 pub wxsl::scene::LoadError::Material::material: alloc::string::String
 pub wxsl::scene::LoadError::Render(wxsl_render::error::RenderError)
+pub wxsl::scene::LoadError::Texture
+pub wxsl::scene::LoadError::Texture::reason: alloc::string::String
+pub wxsl::scene::LoadError::Texture::texture: alloc::string::String
 impl core::convert::From<wxsl_render::error::RenderError> for wxsl::scene::LoadError
 pub fn wxsl::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
 impl core::error::Error for wxsl::scene::LoadError
@@ -43,10 +46,27 @@ impl core::marker::Unpin for wxsl::scene::LoadError
 impl core::marker::UnsafeUnpin for wxsl::scene::LoadError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl::scene::LoadError
 impl core::panic::unwind_safe::UnwindSafe for wxsl::scene::LoadError
+pub enum wxsl::scene::SceneImage
+pub wxsl::scene::SceneImage::Encoded(alloc::vec::Vec<u8>)
+pub wxsl::scene::SceneImage::Rgba8
+pub wxsl::scene::SceneImage::Rgba8::height: u32
+pub wxsl::scene::SceneImage::Rgba8::pixels: alloc::vec::Vec<u8>
+pub wxsl::scene::SceneImage::Rgba8::width: u32
+impl core::clone::Clone for wxsl::scene::SceneImage
+pub fn wxsl::scene::SceneImage::clone(&self) -> Self
+impl core::fmt::Debug for wxsl::scene::SceneImage
+pub fn wxsl::scene::SceneImage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl::scene::SceneImage
+impl core::marker::Send for wxsl::scene::SceneImage
+impl core::marker::Sync for wxsl::scene::SceneImage
+impl core::marker::Unpin for wxsl::scene::SceneImage
+impl core::marker::UnsafeUnpin for wxsl::scene::SceneImage
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl::scene::SceneImage
+impl core::panic::unwind_safe::UnwindSafe for wxsl::scene::SceneImage
 pub struct wxsl::scene::SceneResources
 impl wxsl::scene::SceneResources
 pub fn wxsl::scene::SceneResources::bindings_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::bindings::MaterialBindings>
-pub fn wxsl::scene::SceneResources::create_bindings(&mut self, &wgpu::api::device::Device, &mut wxsl_render::renderer::Renderer)
+pub fn wxsl::scene::SceneResources::create_bindings(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::renderer::Renderer) -> core::result::Result<(), wxsl::scene::LoadError>
 pub fn wxsl::scene::SceneResources::draw_list(&self) -> wxsl_render::draw::DrawList<'_>
 pub fn wxsl::scene::SceneResources::instance_attributes_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::draw::InstanceAttributes>
 pub fn wxsl::scene::SceneResources::instance_count(&self) -> usize
@@ -55,6 +75,7 @@ pub fn wxsl::scene::SceneResources::load_with_lighting(&wgpu::api::device::Devic
 pub fn wxsl::scene::SceneResources::load_with_plan(&wgpu::api::device::Device, &wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, core::option::Option<&std::path::Path>, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<Self, wxsl::scene::LoadError>
 pub fn wxsl::scene::SceneResources::materials(&self) -> &[wxsl_render::material::Material]
 pub fn wxsl::scene::SceneResources::meshes(&self) -> &[wxsl_render::mesh::Mesh]
+pub fn wxsl::scene::SceneResources::set_images(&mut self, alloc::vec::Vec<wxsl::scene::SceneImage>)
 pub fn wxsl::scene::SceneResources::upload(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue) -> core::result::Result<(), wxsl::scene::LoadError>
 impl core::marker::Freeze for wxsl::scene::SceneResources
 impl core::marker::Send for wxsl::scene::SceneResources
@@ -63,4 +84,5 @@ impl core::marker::Unpin for wxsl::scene::SceneResources
 impl core::marker::UnsafeUnpin for wxsl::scene::SceneResources
 impl !core::panic::unwind_safe::RefUnwindSafe for wxsl::scene::SceneResources
 impl !core::panic::unwind_safe::UnwindSafe for wxsl::scene::SceneResources
+pub fn wxsl::scene::environment(&wxsl_core::scene::Scene, f32) -> core::option::Option<wxsl_frame::environment::Environment>
 pub fn wxsl::stdlib_library() -> wxsl_render::library::ShaderLibrary

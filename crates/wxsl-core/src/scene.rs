@@ -21,6 +21,7 @@
 
 use core::fmt;
 use core::str::FromStr;
+use std::collections::BTreeMap;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -28,13 +29,18 @@ use serde::{Deserialize, Serialize};
 use crate::graph::Graph;
 use crate::macros::MacroSet;
 use crate::material::MaterialConfig;
+use crate::node::Value;
 
 /// The scene document's schema version, stamped into every serialized
 /// scene's `version` field and checked on load, exactly like the node
 /// format's ([`crate::graph::SCHEMA_VERSION`]). The ABI the scene's
 /// material vocabulary is written against is pinned separately, by the
 /// `abi` field, against [`crate::abi::REVISION`].
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 added textures, material bindings, nodes and an environment
+/// block, all defaulted, so a version 1 file reads unchanged
+/// ([ADR 0079](../../../docs/adr/0079-scene-document-v2-textures-bindings-nodes-environment.md)).
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A whole scene: the meshes it uses, the materials on them, and where each
 /// instance sits.
@@ -61,6 +67,16 @@ pub struct Scene {
     /// One entry per thing to draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub instances: Vec<Instance>,
+    /// The images materials bind, shared between them.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub textures: Vec<TextureEntry>,
+    /// The hierarchy instances, lights and cameras are placed in. Empty
+    /// for a flat scene.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub nodes: Vec<SceneNode>,
+    /// The lights and cameras the document came with, if any.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub environment: Option<SceneEnvironment>,
 }
 
 impl Scene {
@@ -90,6 +106,49 @@ impl Scene {
         self.instances.len() - 1
     }
 
+    /// Add a texture, returning its index.
+    pub fn add_texture(&mut self, entry: TextureEntry) -> usize {
+        self.textures.push(entry);
+        self.textures.len() - 1
+    }
+
+    /// Add a node, returning its index. Its parent, if any, must already
+    /// be in the scene.
+    pub fn add_node(&mut self, node: SceneNode) -> usize {
+        self.nodes.push(node);
+        self.nodes.len() - 1
+    }
+
+    /// Node `index`'s object-to-world matrix: its local transform under
+    /// every ancestor's. Identity for an index that does not exist.
+    ///
+    /// Follows only parents that come first, so a scene that fails
+    /// [`Scene::validate`] still answers rather than looping.
+    pub fn node_world(&self, index: usize) -> [f32; 16] {
+        let mut world = identity_transform();
+        let mut current = Some(index);
+        while let Some(at) = current {
+            let Some(node) = self.nodes.get(at) else {
+                break;
+            };
+            world = mul(&node.transform, &world);
+            current = node.parent.filter(|&parent| parent < at);
+        }
+        world
+    }
+
+    /// Where `node` puts something placed by it: its world matrix, or
+    /// identity for `None`.
+    pub fn placement(&self, node: Option<usize>) -> [f32; 16] {
+        node.map_or_else(identity_transform, |node| self.node_world(node))
+    }
+
+    /// An instance's object-to-world matrix: its node's world transform
+    /// times its own.
+    pub fn instance_world(&self, instance: &Instance) -> [f32; 16] {
+        mul(&self.placement(instance.node), &instance.transform)
+    }
+
     /// The tags an instance draws under: its own if it overrides them,
     /// otherwise its material's.
     ///
@@ -114,6 +173,11 @@ impl Scene {
     /// the same misery as fixing a graph one error at a time.
     pub fn validate(&self) -> Vec<SceneError> {
         let mut errors = Vec::new();
+        let check_node = |referrer: NodeReferrer, node: Option<usize>, errors: &mut Vec<_>| {
+            if let Some(node) = node.filter(|&node| node >= self.nodes.len()) {
+                errors.push(SceneError::NoSuchNode { referrer, node });
+            }
+        };
         for (index, instance) in self.instances.iter().enumerate() {
             if instance.mesh >= self.meshes.len() {
                 errors.push(SceneError::NoSuchMesh {
@@ -126,6 +190,46 @@ impl Scene {
                     instance: index,
                     material: instance.material,
                 });
+            }
+            check_node(NodeReferrer::Instance(index), instance.node, &mut errors);
+        }
+        for (index, material) in self.materials.iter().enumerate() {
+            for (slot, &texture) in &material.bindings.textures {
+                if texture >= self.textures.len() {
+                    errors.push(SceneError::NoSuchTexture {
+                        material: index,
+                        slot: slot.clone(),
+                        texture,
+                    });
+                }
+            }
+        }
+        for (index, entry) in self.nodes.iter().enumerate() {
+            if let Some(parent) = entry.parent.filter(|&parent| parent >= index) {
+                errors.push(SceneError::ParentNotBefore {
+                    node: index,
+                    parent,
+                });
+            }
+        }
+        if let Some(environment) = &self.environment {
+            for (index, light) in environment.lights.iter().enumerate() {
+                check_node(NodeReferrer::Light(index), light.node, &mut errors);
+                if let SceneLightKind::Spot {
+                    inner_angle,
+                    outer_angle,
+                } = light.kind
+                {
+                    if !(0.0 <= inner_angle
+                        && inner_angle < outer_angle
+                        && outer_angle < core::f32::consts::FRAC_PI_2)
+                    {
+                        errors.push(SceneError::InvalidSpotCone { light: index });
+                    }
+                }
+            }
+            for (index, camera) in environment.cameras.iter().enumerate() {
+                check_node(NodeReferrer::Camera(index), camera.node, &mut errors);
             }
         }
         errors
@@ -149,6 +253,56 @@ pub enum SceneError {
         /// The material index it named.
         material: usize,
     },
+    /// A material binds a texture index the scene does not have.
+    NoSuchTexture {
+        /// Index of the offending material.
+        material: usize,
+        /// The resource slot it was bound to.
+        slot: String,
+        /// The texture index it named.
+        texture: usize,
+    },
+    /// Something names a node index the scene does not have.
+    NoSuchNode {
+        /// What named it.
+        referrer: NodeReferrer,
+        /// The node index it named.
+        node: usize,
+    },
+    /// A node's parent does not come before it, which is how a cycle would
+    /// start.
+    ParentNotBefore {
+        /// Index of the offending node.
+        node: usize,
+        /// The parent it named.
+        parent: usize,
+    },
+    /// A spot light's cone is not `0 <= inner < outer < pi/2`.
+    InvalidSpotCone {
+        /// Index of the light in the environment block.
+        light: usize,
+    },
+}
+
+/// What named a node, in a [`SceneError::NoSuchNode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeReferrer {
+    /// An instance, by index.
+    Instance(usize),
+    /// An environment light, by index.
+    Light(usize),
+    /// An environment camera, by index.
+    Camera(usize),
+}
+
+impl fmt::Display for NodeReferrer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeReferrer::Instance(index) => write!(f, "instance {index}"),
+            NodeReferrer::Light(index) => write!(f, "light {index}"),
+            NodeReferrer::Camera(index) => write!(f, "camera {index}"),
+        }
+    }
 }
 
 impl fmt::Display for SceneError {
@@ -163,6 +317,25 @@ impl fmt::Display for SceneError {
             SceneError::NoSuchMaterial { instance, material } => write!(
                 f,
                 "instance {instance} names material {material}, which does not exist"
+            ),
+            SceneError::NoSuchTexture {
+                material,
+                slot,
+                texture,
+            } => write!(
+                f,
+                "material {material} binds texture {texture} to `{slot}`, which does not exist"
+            ),
+            SceneError::NoSuchNode { referrer, node } => {
+                write!(f, "{referrer} names node {node}, which does not exist")
+            }
+            SceneError::ParentNotBefore { node, parent } => write!(
+                f,
+                "node {node} names parent {parent}, which does not come before it"
+            ),
+            SceneError::InvalidSpotCone { light } => write!(
+                f,
+                "light {light} is a spot whose cone is not 0 <= inner < outer < pi/2"
             ),
         }
     }
@@ -257,6 +430,12 @@ pub struct MaterialEntry {
     /// Everything about this material that is not a node.
     #[cfg_attr(feature = "serde", serde(flatten))]
     pub config: MaterialConfig,
+    /// Values for what the graph declares, by name.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Bindings::is_empty")
+    )]
+    pub bindings: Bindings,
 }
 
 impl MaterialEntry {
@@ -267,7 +446,21 @@ impl MaterialEntry {
             name: name.into(),
             graph,
             config: MaterialConfig::default().with_tags(Tags::from_iter([TAG_OPAQUE])),
+            bindings: Bindings::default(),
         }
+    }
+
+    /// Set a declared parameter's value.
+    pub fn with_param(mut self, name: impl Into<String>, value: Value) -> Self {
+        self.bindings.params.insert(name.into(), value);
+        self
+    }
+
+    /// Bind texture `texture` of the scene to a declared texture or
+    /// sampler slot.
+    pub fn with_texture(mut self, slot: impl Into<String>, texture: usize) -> Self {
+        self.bindings.textures.insert(slot.into(), texture);
+        self
     }
 
     /// Shade this material with the named lighting model.
@@ -318,6 +511,13 @@ pub struct Instance {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub tags: Option<Tags>,
+    /// Index into [`Scene::nodes`] this instance is placed under; its
+    /// `transform` is then relative to that node.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub node: Option<usize>,
 }
 
 fn identity_transform() -> [f32; 16] {
@@ -338,7 +538,14 @@ impl Instance {
             material,
             transform: identity_transform(),
             tags: None,
+            node: None,
         }
+    }
+
+    /// Place it under node `node`.
+    pub fn with_node(mut self, node: usize) -> Self {
+        self.node = Some(node);
+        self
     }
 
     /// Name it.
@@ -356,6 +563,368 @@ impl Instance {
     /// Override the material's tags for this instance.
     pub fn with_tags(mut self, tags: Tags) -> Self {
         self.tags = Some(tags);
+        self
+    }
+}
+
+/// `a * b` for column-major 4×4 matrices.
+fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            out[column * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[column * 4 + k]).sum();
+        }
+    }
+    out
+}
+
+/// What a material supplies for what its graph declares, by name
+/// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
+///
+/// Names are checked against the compiled interface when the material is
+/// bound, not here: only the compiler knows what a graph declares.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Bindings {
+    /// Parameter values.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "BTreeMap::is_empty")
+    )]
+    pub params: BTreeMap<String, Value>,
+    /// Texture and sampler slots, each naming an index into
+    /// [`Scene::textures`]. A sampler slot takes that texture's sampler.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "BTreeMap::is_empty")
+    )]
+    pub textures: BTreeMap<String, usize>,
+}
+
+impl Bindings {
+    /// Whether nothing is bound.
+    pub fn is_empty(&self) -> bool {
+        self.params.is_empty() && self.textures.is_empty()
+    }
+}
+
+/// One image in a scene, and how it is sampled.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct TextureEntry {
+    /// Name, for the editor and for diagnostics.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    /// Where the pixels come from.
+    pub source: TextureSource,
+    /// How the stored values are encoded.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub color_space: ColorSpace,
+    /// How it is filtered and wrapped.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sampler: SamplerEntry,
+}
+
+impl TextureEntry {
+    /// A named texture from `source`, sRGB, sampled linearly and repeating.
+    pub fn new(name: impl Into<String>, source: TextureSource) -> Self {
+        TextureEntry {
+            name: name.into(),
+            source,
+            color_space: ColorSpace::default(),
+            sampler: SamplerEntry::default(),
+        }
+    }
+
+    /// Set the colour space.
+    pub fn with_color_space(mut self, color_space: ColorSpace) -> Self {
+        self.color_space = color_space;
+        self
+    }
+}
+
+/// Where a texture's pixels come from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "snake_case"))]
+pub enum TextureSource {
+    /// An image file, relative to the scene document.
+    File {
+        /// Path to the file.
+        path: String,
+    },
+    /// An image the host supplies with the document, by index — a GLB's
+    /// embedded images.
+    Embedded {
+        /// Index into the host's image list.
+        index: usize,
+    },
+}
+
+/// How a texture's stored values are encoded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum ColorSpace {
+    /// sRGB-encoded colour, decoded to linear when sampled: base colour,
+    /// emission.
+    #[default]
+    Srgb,
+    /// Data stored as is: normals, roughness, occlusion.
+    Linear,
+}
+
+/// How a texture is filtered and wrapped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
+pub struct SamplerEntry {
+    /// Magnification filter.
+    pub mag: Filter,
+    /// Minification filter.
+    pub min: Filter,
+    /// Filter between mip levels.
+    pub mipmap: Filter,
+    /// Wrap along u.
+    pub wrap_u: Wrap,
+    /// Wrap along v.
+    pub wrap_v: Wrap,
+}
+
+impl Default for SamplerEntry {
+    fn default() -> Self {
+        SamplerEntry {
+            mag: Filter::Linear,
+            min: Filter::Linear,
+            mipmap: Filter::Linear,
+            wrap_u: Wrap::Repeat,
+            wrap_v: Wrap::Repeat,
+        }
+    }
+}
+
+/// A texture filter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum Filter {
+    /// The nearest texel.
+    Nearest,
+    /// Linear interpolation.
+    #[default]
+    Linear,
+}
+
+/// What a texture coordinate outside `[0, 1]` reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum Wrap {
+    /// Tile.
+    #[default]
+    Repeat,
+    /// Tile, mirrored every other time.
+    MirroredRepeat,
+    /// Hold the edge texel.
+    ClampToEdge,
+}
+
+/// One node of a scene's hierarchy.
+///
+/// The hierarchy is for authoring — an outliner, a file's structure. The
+/// renderer never sees it: instances are drawn at the world transforms
+/// [`Scene::instance_world`] resolves.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SceneNode {
+    /// Name, for the outliner.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    /// Local-to-parent matrix, column-major.
+    #[cfg_attr(feature = "serde", serde(default = "identity_transform"))]
+    pub transform: [f32; 16],
+    /// Index of the parent node, which must come before this one.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub parent: Option<usize>,
+}
+
+impl SceneNode {
+    /// A root node called `name`, at the origin.
+    pub fn new(name: impl Into<String>) -> Self {
+        SceneNode {
+            name: name.into(),
+            transform: identity_transform(),
+            parent: None,
+        }
+    }
+
+    /// Place it, relative to its parent.
+    pub fn with_transform(mut self, transform: [f32; 16]) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Put it under `parent`.
+    pub fn with_parent(mut self, parent: usize) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+}
+
+/// The lights and cameras a scene document carries.
+///
+/// A document's half of an environment: what was authored, never the
+/// per-frame state (time, jitter, the previous camera) a renderer's
+/// environment also holds. The facade translates one into the other.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SceneEnvironment {
+    /// The lights.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub lights: Vec<SceneLight>,
+    /// The cameras; the first is the one a viewer starts from.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cameras: Vec<SceneCamera>,
+}
+
+/// A light, placed by a node and shining down its −Z.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SceneLight {
+    /// Name, for the outliner.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    /// Index into [`Scene::nodes`]; `None` is the origin, shining down −Z.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub node: Option<usize>,
+    /// What kind of light.
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub kind: SceneLightKind,
+    /// Linear-light colour.
+    #[cfg_attr(feature = "serde", serde(default = "white"))]
+    pub color: [f32; 3],
+    /// Intensity, in the renderer's units.
+    #[cfg_attr(feature = "serde", serde(default = "one"))]
+    pub intensity: f32,
+    /// Where a point or spot light's falloff reaches zero; zero is
+    /// unbounded (ADR 0076).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub range: f32,
+    /// Whether it renders a shadow map.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub casts_shadow: bool,
+}
+
+#[cfg(feature = "serde")]
+fn white() -> [f32; 3] {
+    [1.0; 3]
+}
+
+#[cfg(feature = "serde")]
+fn one() -> f32 {
+    1.0
+}
+
+impl SceneLight {
+    /// A white light of intensity one, at the origin.
+    pub fn new(name: impl Into<String>, kind: SceneLightKind) -> Self {
+        SceneLight {
+            name: name.into(),
+            node: None,
+            kind,
+            color: [1.0; 3],
+            intensity: 1.0,
+            range: 0.0,
+            casts_shadow: false,
+        }
+    }
+
+    /// Place it under node `node`.
+    pub fn with_node(mut self, node: usize) -> Self {
+        self.node = Some(node);
+        self
+    }
+}
+
+/// What kind of light a [`SceneLight`] is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "snake_case"))]
+pub enum SceneLightKind {
+    /// Infinitely far away, shining down the node's −Z.
+    Directional,
+    /// Radiating from the node's origin.
+    Point,
+    /// A cone down the node's −Z.
+    Spot {
+        /// Inner half-angle in radians, fully lit.
+        inner_angle: f32,
+        /// Outer half-angle in radians, where light reaches zero.
+        outer_angle: f32,
+    },
+}
+
+/// A perspective camera, placed by a node and looking down its −Z with +Y
+/// up. The aspect ratio is the viewport's, not the document's.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SceneCamera {
+    /// Name, for the outliner.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    /// Index into [`Scene::nodes`]; `None` is the origin.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub node: Option<usize>,
+    /// Vertical field of view, radians.
+    #[cfg_attr(feature = "serde", serde(default = "default_fov_y"))]
+    pub fov_y: f32,
+    /// Near plane distance.
+    #[cfg_attr(feature = "serde", serde(default = "default_near"))]
+    pub near: f32,
+    /// Far plane distance.
+    #[cfg_attr(feature = "serde", serde(default = "default_far"))]
+    pub far: f32,
+}
+
+#[cfg(feature = "serde")]
+fn default_fov_y() -> f32 {
+    SceneCamera::new("").fov_y
+}
+
+#[cfg(feature = "serde")]
+fn default_near() -> f32 {
+    SceneCamera::new("").near
+}
+
+#[cfg(feature = "serde")]
+fn default_far() -> f32 {
+    SceneCamera::new("").far
+}
+
+impl SceneCamera {
+    /// A 45° camera at the origin, seeing from 0.1 to 100.
+    pub fn new(name: impl Into<String>) -> Self {
+        SceneCamera {
+            name: name.into(),
+            node: None,
+            fov_y: 45.0_f32.to_radians(),
+            near: 0.1,
+            far: 100.0,
+        }
+    }
+
+    /// Place it under node `node`.
+    pub fn with_node(mut self, node: usize) -> Self {
+        self.node = Some(node);
         self
     }
 }
@@ -745,7 +1314,10 @@ mod wire {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{Instance, MaterialEntry, MeshEntry, Scene, SCHEMA_VERSION};
+    use super::{
+        Instance, MaterialEntry, MeshEntry, Scene, SceneEnvironment, SceneNode, TextureEntry,
+        SCHEMA_VERSION,
+    };
     use crate::abi;
     use crate::error::check_document_version;
 
@@ -778,6 +1350,12 @@ mod wire {
         pub materials: Vec<MaterialEntry>,
         #[serde(default)]
         pub instances: Vec<Instance>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub textures: Vec<TextureEntry>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub nodes: Vec<SceneNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub environment: Option<SceneEnvironment>,
     }
 
     impl From<Scene> for WireScene {
@@ -789,6 +1367,9 @@ mod wire {
                 meshes: scene.meshes,
                 materials: scene.materials,
                 instances: scene.instances,
+                textures: scene.textures,
+                nodes: scene.nodes,
+                environment: scene.environment,
             }
         }
     }
@@ -799,12 +1380,15 @@ mod wire {
         type Error = String;
 
         fn try_from(wire: WireScene) -> Result<Self, Self::Error> {
-            check_document_version(wire.version, wire.abi, "scene")?;
+            check_document_version(wire.version, SCHEMA_VERSION, wire.abi, "scene")?;
             Ok(Scene {
                 name: wire.name,
                 meshes: wire.meshes,
                 materials: wire.materials,
                 instances: wire.instances,
+                textures: wire.textures,
+                nodes: wire.nodes,
+                environment: wire.environment,
             })
         }
     }
@@ -926,6 +1510,78 @@ mod tests {
         // bounds on a scene someone is halfway through editing.
         assert!(scene.instance_tags(&scene.instances[0]).is_empty());
     }
+
+    fn translation(x: f32, y: f32, z: f32) -> [f32; 16] {
+        let mut matrix = identity_transform();
+        matrix[12..15].copy_from_slice(&[x, y, z]);
+        matrix
+    }
+
+    #[test]
+    fn an_instance_under_a_node_composes_every_ancestor() {
+        let mut scene = Scene::new("nested");
+        let root =
+            scene.add_node(SceneNode::new("root").with_transform(translation(1.0, 0.0, 0.0)));
+        let child = scene.add_node(
+            SceneNode::new("child")
+                .with_parent(root)
+                .with_transform(translation(0.0, 2.0, 0.0)),
+        );
+        let instance = Instance::new(0, 0)
+            .with_node(child)
+            .with_transform(translation(0.0, 0.0, 3.0));
+        assert_eq!(scene.instance_world(&instance)[12..15], [1.0, 2.0, 3.0]);
+        // Without a node, the instance's own transform is the world one.
+        assert_eq!(
+            scene.instance_world(&Instance::new(0, 0).with_transform(translation(4.0, 0.0, 0.0)))
+                [12..15],
+            [4.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn dangling_textures_and_nodes_and_late_parents_are_reported() {
+        let mut scene = Scene::new("broken v2");
+        scene.add_mesh(MeshEntry::new("cube", MeshSource::Cube { size: 1.0 }));
+        scene.add_material(
+            MaterialEntry::new("paint", Graph::new("paint")).with_texture("albedo", 2),
+        );
+        scene.add_node(SceneNode::new("self").with_parent(0));
+        scene.add_instance(Instance::new(0, 0).with_node(5));
+        scene.environment = Some(SceneEnvironment {
+            lights: vec![SceneLight::new(
+                "wide",
+                SceneLightKind::Spot {
+                    inner_angle: 0.5,
+                    outer_angle: 0.4,
+                },
+            )
+            .with_node(9)],
+            cameras: vec![SceneCamera::new("eye").with_node(0)],
+        });
+        assert_eq!(
+            scene.validate(),
+            vec![
+                SceneError::NoSuchNode {
+                    referrer: NodeReferrer::Instance(0),
+                    node: 5
+                },
+                SceneError::NoSuchTexture {
+                    material: 0,
+                    slot: "albedo".to_string(),
+                    texture: 2
+                },
+                SceneError::ParentNotBefore { node: 0, parent: 0 },
+                SceneError::NoSuchNode {
+                    referrer: NodeReferrer::Light(0),
+                    node: 9
+                },
+                SceneError::InvalidSpotCone { light: 0 },
+            ]
+        );
+        // A self-parented node still has an answer.
+        assert_eq!(scene.node_world(0), identity_transform());
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
@@ -972,10 +1628,77 @@ mod document_versions {
     }
 
     #[test]
+    fn a_version_1_scene_reads_as_version_2() {
+        let scene: Scene =
+            serde_json::from_str(&scene_text(r#""version": 1, "abi": 1"#)).expect("parses");
+        assert!(scene.textures.is_empty() && scene.nodes.is_empty());
+        assert!(scene.environment.is_none());
+    }
+
+    #[test]
+    fn every_v2_field_round_trips() {
+        let mut scene = Scene::new("v2");
+        scene.add_mesh(MeshEntry::new("cube", MeshSource::Cube { size: 1.0 }));
+        let texture = scene.add_texture(
+            TextureEntry::new("normal", TextureSource::Embedded { index: 3 })
+                .with_color_space(ColorSpace::Linear),
+        );
+        scene.add_material(
+            MaterialEntry::new("paint", Graph::new("paint"))
+                .with_param("tint", Value::Vec3([1.0, 0.5, 0.25]))
+                .with_texture("normal_map", texture),
+        );
+        let node = scene.add_node(SceneNode::new("root"));
+        scene.add_instance(Instance::new(0, 0).with_node(node));
+        scene.environment = Some(SceneEnvironment {
+            lights: vec![SceneLight::new(
+                "spot",
+                SceneLightKind::Spot {
+                    inner_angle: 0.2,
+                    outer_angle: 0.6,
+                },
+            )
+            .with_node(node)],
+            cameras: vec![SceneCamera::new("eye")],
+        });
+
+        let text = serde_json::to_string(&scene).expect("serializes");
+        let back: Scene = serde_json::from_str(&text).expect("parses");
+        assert_eq!(back.textures, scene.textures);
+        assert_eq!(back.materials[0].bindings, scene.materials[0].bindings);
+        assert_eq!(back.nodes, scene.nodes);
+        assert_eq!(back.instances[0].node, Some(node));
+        assert_eq!(back.environment, scene.environment);
+        assert!(back.validate().is_empty());
+    }
+
+    #[test]
+    fn a_v2_document_spells_its_fields_as_written() {
+        let scene: Scene = serde_json::from_str(
+            r#"{
+                "version": 2,
+                "textures": [{ "source": { "kind": "file", "path": "albedo.png" },
+                               "sampler": { "wrap_u": "clamp_to_edge" } }],
+                "environment": { "lights": [{ "kind": "point", "range": 5.0 }] }
+            }"#,
+        )
+        .expect("parses");
+        assert_eq!(scene.textures[0].color_space, ColorSpace::Srgb);
+        assert_eq!(scene.textures[0].sampler.wrap_u, Wrap::ClampToEdge);
+        assert_eq!(scene.textures[0].sampler.wrap_v, Wrap::Repeat);
+        let light = &scene.environment.as_ref().expect("present").lights[0];
+        assert_eq!(light.kind, SceneLightKind::Point);
+        assert_eq!(
+            (light.color, light.intensity, light.range),
+            ([1.0; 3], 1.0, 5.0)
+        );
+    }
+
+    #[test]
     fn a_saved_scene_stamps_its_version_and_abi() {
         let text = serde_json::to_string(&Scene::new("stamped")).expect("serializes");
         assert!(
-            text.contains(r#""version":1"#) && text.contains(r#""abi":1"#),
+            text.contains(r#""version":2"#) && text.contains(r#""abi":1"#),
             "the stamp is on the wire: {text}"
         );
     }

@@ -145,7 +145,7 @@ fn render(gpu: &GpuContext, scene: &Scene, registry: &NodeRegistry) -> Result<()
         renderer.lighting(),
         &features,
     )?;
-    resources.create_bindings(&gpu.device, &mut renderer);
+    resources.create_bindings(&gpu.device, &gpu.queue, &mut renderer)?;
     resources.upload(&gpu.device, &gpu.queue)?;
 
     let environment = Environment {

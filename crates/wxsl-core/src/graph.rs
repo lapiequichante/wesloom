@@ -2995,7 +2995,7 @@ mod wire {
         type Error = String;
 
         fn try_from(wire: WireGraph) -> Result<Self, Self::Error> {
-            check_document_version(wire.version, wire.abi, "graph")?;
+            check_document_version(wire.version, SCHEMA_VERSION, wire.abi, "graph")?;
             let nodes: BTreeMap<NodeId, Node> = wire
                 .nodes
                 .into_iter()
