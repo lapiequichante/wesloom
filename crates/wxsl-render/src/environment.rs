@@ -6,6 +6,7 @@ use wxsl_core::abi;
 use wxsl_core::resources::{texel_rows, texels_per_row};
 
 pub use wxsl_frame::environment::*;
+pub use wxsl_frame::light_grid::{GridMapping, LightGrid};
 
 // Capacity is backend allocation policy, not a frame-layout constraint.
 const INITIAL_INSTANCE_CAPACITY: usize = 64;
@@ -111,6 +112,14 @@ pub struct FrameBindings {
     /// ones and grown with them.
     previous_instances: RowStore,
     capacity: usize,
+    /// The clustered light list and the light grid
+    /// (`abi::BINDING_LOCAL_LIGHTS`, `abi::BINDING_LIGHT_GRID`, ADR 0076),
+    /// rebinned by the host every frame and grown like the instance rows.
+    /// Capacities in rows: one light, or one `vec4u` of grid words.
+    local_lights: RowStore,
+    local_light_capacity: usize,
+    light_grid: RowStore,
+    light_grid_capacity: usize,
     /// The shadow maps currently bound, and where they came from — the
     /// pool's generation and slot — so that rebinding the same texture is
     /// free. `None` while the placeholder is bound.
@@ -214,6 +223,14 @@ impl FrameBindings {
             capacity,
             row_textures,
         );
+        let local_lights = RowStore::new(
+            device,
+            "wxsl local lights",
+            size_of::<LightUniform>(),
+            1,
+            row_textures,
+        );
+        let light_grid = RowStore::new(device, "wxsl light grid", GRID_ROW, 1, row_textures);
 
         // A one-texel atlas, cleared to nothing and never rendered into:
         // a pipeline with no shadow passes still declares the bindings, and
@@ -420,6 +437,15 @@ impl FrameBindings {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
+                // Only shading reads the clustered lights.
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ..buffer(abi::BINDING_LOCAL_LIGHTS, true, false)
+                },
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ..buffer(abi::BINDING_LIGHT_GRID, true, false)
+                },
             ],
         });
         let mut bindings = FrameBindings {
@@ -430,6 +456,10 @@ impl FrameBindings {
             instances,
             previous_instances,
             capacity,
+            local_lights,
+            local_light_capacity: 1,
+            light_grid,
+            light_grid_capacity: 1,
             shadow_source: None,
             shadow_view,
             shadow_placeholder,
@@ -624,6 +654,14 @@ impl FrameBindings {
                     resource: wgpu::BindingResource::Sampler(&self.point_sampler),
                 },
                 wgpu::BindGroupEntry {
+                    binding: abi::BINDING_LOCAL_LIGHTS,
+                    resource: self.local_lights.resource(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: abi::BINDING_LIGHT_GRID,
+                    resource: self.light_grid.resource(),
+                },
+                wgpu::BindGroupEntry {
                     binding: abi::BINDING_LIGHT_COOKIES,
                     resource: wgpu::BindingResource::TextureView(&self.cookie_view),
                 },
@@ -696,6 +734,46 @@ impl FrameBindings {
         );
     }
 
+    /// Upload the clustered lights, growing either store (and rebuilding
+    /// the bind groups) when this frame's rows outgrow it.
+    fn write_light_grid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, grid: &LightGrid) {
+        let lights = grid.lights.len();
+        let rows = grid.words.len() / 4;
+        let mut grown = false;
+        if lights > self.local_light_capacity {
+            self.local_light_capacity = lights.next_power_of_two();
+            self.local_lights = RowStore::new(
+                device,
+                "wxsl local lights",
+                size_of::<LightUniform>(),
+                self.local_light_capacity,
+                self.row_textures,
+            );
+            grown = true;
+        }
+        if rows > self.light_grid_capacity {
+            self.light_grid_capacity = rows.next_power_of_two();
+            self.light_grid = RowStore::new(
+                device,
+                "wxsl light grid",
+                GRID_ROW,
+                self.light_grid_capacity,
+                self.row_textures,
+            );
+            grown = true;
+        }
+        if grown {
+            self.rebuild_groups(device);
+        }
+        self.local_lights.write(
+            queue,
+            bytemuck::cast_slice(&grid.lights),
+            size_of::<LightUniform>(),
+        );
+        self.light_grid
+            .write(queue, bytemuck::cast_slice(&grid.words), GRID_ROW);
+    }
+
     /// Grow the transform arrays and rebuild every bind group that points
     /// at them.
     fn grow_instances(&mut self, device: &wgpu::Device, rows: usize) {
@@ -759,6 +837,7 @@ impl FrameBindings {
         scene.environment_scale = self.environment_scale.unwrap_or(1.0);
         scene.environment_levels = self.environment_levels;
         queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
+        self.write_light_grid(device, queue, &environment.light_grid());
 
         self.grow_instances(device, transforms.len());
         let row = size_of::<InstanceTransform>();
@@ -820,6 +899,9 @@ impl FrameBindings {
         self.instance_group(BASE_SHAPE, shadows)
     }
 }
+
+/// Bytes in one row of the light grid: a `vec4u` of words.
+const GRID_ROW: usize = 16;
 
 /// [`BufferLayout::signature`] of a layout with no fields — what a
 /// material declaring no per-instance attributes asks for.

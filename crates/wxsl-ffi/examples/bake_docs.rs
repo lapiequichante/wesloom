@@ -25,7 +25,7 @@ use wxsl_frame::{
         Effect, EffectKind, EffectOutput, EffectOutputShape, EffectParameter, EffectRegistry,
         EffectShader, BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW,
     },
-    environment::{Camera, Environment, InstanceTransform, Light},
+    environment::{Camera, Environment, InstanceTransform, Light, LightUniform},
     graph::SlotShape,
     pass::{
         Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, Policy, Read, ResourceDesc,
@@ -101,6 +101,7 @@ fn environment(aspect: f32) -> Environment {
         previous_time: 1.0,
         previous_camera: None,
         origin: Default::default(),
+        cluster_lights: true,
     }
 }
 
@@ -372,6 +373,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut probes = false;
     let mut shadow_atlas = false;
     let mut refraction = false;
+    let mut local_lights = 0usize;
     let mut sample = None;
     let mut pipeline_path = None;
     let mut hdri_path = None;
@@ -397,6 +399,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--probes" => probes = true,
             "--shadow-atlas" => shadow_atlas = true,
             "--refraction" => refraction = true,
+            "--local-lights" => {
+                local_lights = args.next().ok_or("--local-lights needs a count")?.parse()?
+            }
             "--sample" => sample = Some(args.next().ok_or("--sample needs a category")?),
             "--pipeline" => {
                 pipeline_path = Some(PathBuf::from(
@@ -592,6 +597,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         env.ambient_sky = Vec3::ZERO;
         env.ambient_ground = Vec3::ZERO;
     }
+    // Ranged lamps in a ring round the scene (ADR 0076): every one a local
+    // light, so the bundle carries a real light grid for the backend.
+    env.lights.extend((0..local_lights).map(|index| {
+        let turn = index as f32 / local_lights as f32 * core::f32::consts::TAU;
+        let hue = index as f32 * 0.618;
+        Light::point(
+            Vec3::new(turn.cos() * 1.3, (turn * 3.0).sin() * 0.6, turn.sin() * 1.3),
+            Vec3::new(
+                0.6 + 0.4 * hue.sin(),
+                0.6 + 0.4 * (hue + 2.1).sin(),
+                0.6 + 0.4 * (hue + 4.2).sin(),
+            ),
+            1.2,
+        )
+        .with_range(1.1)
+    }));
     if shadow_atlas {
         // Exercise every resolution tier supported by the current light budget.
         env.lights = (0..abi::MAX_LIGHTS)
@@ -607,11 +628,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|instance| InstanceTransform::new(Mat4::from_cols_array(&instance.transform)))
         .collect::<Vec<_>>();
     let checker = checker();
+    // The clustered lights (ADR 0076), binned here once for the bundle.
+    let grid = env.light_grid();
     let mut manifest = json!({"version": 1, "abi": abi::REVISION, "host_layout": wxsl_core::host::schema_id().to_string(),
         "width": width, "height": height, "name": scene.name,
         "frame": {"views": save(&root, "views.bin", bytemuck::cast_slice(&env.views()))?,
             "scene": save(&root, "scene.bin", bytemuck::bytes_of(&env.uniform()))?,
             "instances": save(&root, "instances.bin", bytemuck::cast_slice(&transforms))?,
+            "local_lights": save(&root, "local_lights.bin", bytemuck::cast_slice(&grid.lights))?,
+            "light_grid": save(&root, "light_grid.bin", bytemuck::cast_slice(&grid.words))?,
             "profile": profile,
             "light_count": abi::MAX_LIGHTS, "lut_size": abi::ENVIRONMENT_LUT_SIZE},
         "checker": save(&root, "checker.bin", &checker)?, "checker_size": [64, 64],
@@ -626,6 +651,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             bytemuck::cast_slice(&transforms),
             size_of::<InstanceTransform>(),
         )?;
+        manifest["frame"]["local_light_texels"] = texels(
+            &root,
+            "local_lights",
+            bytemuck::cast_slice(&grid.lights),
+            size_of::<LightUniform>(),
+        )?;
+        manifest["frame"]["light_grid_texels"] =
+            texels(&root, "light_grid", bytemuck::cast_slice(&grid.words), 16)?;
     }
     let mut meshes = Vec::new();
     let mut cpu_meshes = Vec::new();

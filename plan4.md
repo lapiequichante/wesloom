@@ -97,7 +97,7 @@ Carried from plan3 (all still open there):
 | Item | What it is | Interplay with this plan |
 |---|---|---|
 | N6 | the subsurface lighting model | stdlib-adjacent; S2's BRDF batch feeds it the separation approximations it will want |
-| N7 | lighting at scale — atlas, cascades, point/area/spot shadows and projected cookies and sixteen uniform lights implemented (ADRs 0066, 0071–0073); compute/clustered light lists remain | reshapes frame-group bindings — the C ABI must carry *computed* layouts, never struct mirrors, so N7 can land after B2 without an ABI break (design rule under B2) |
+| ~~N7~~ | lighting at scale — *landed*: atlas, cascades, point/area/spot shadows and projected cookies (ADRs 0066, 0071–0073), and host-binned clustered local lights (ADR 0076) | reshapes frame-group bindings — the C ABI must carry *computed* layouts, never struct mirrors, so N7 can land after B2 without an ABI break (design rule under B2) |
 | ~~M10~~ | relative-to-eye, host half — *landed (ADR 0074)*: the floating origin and its `f64` helpers are in `wxsl-frame`, and `Scene.origin` is in the generated host layout, so a C++ host fills it like any other field | shared half, as planned |
 | ~~M11~~ | the code editor — *landed* | wgpu-only, unaffected |
 | N9 | the editor catches up | wgpu-only, unaffected; its palette work absorbs the stdlib's growth |

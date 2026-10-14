@@ -144,6 +144,7 @@ a requirement to run every test for every change:
 - Dawn runtime or category parity: `cargo test -p wxsl-ffi --example bake_docs`, then `bash dawn/tests/run_parity.sh` (requires an adapter)
 - stdlib or generated shader sources: `cargo test -p wxsl-stdlib --test lighting_models`
 - wgpu adapters, shader variants and renderer UI: `cargo test -p wxsl-render`
+- clustered local lights (ADR 0076): `cargo test -p wxsl-frame light_grid`, then `cargo test -p wxsl --test clustered_lights`
 - WXSL integration or material behavior: the matching `cargo test -p wxsl --test <name>`
 - editor/UI behavior: `cargo test -p wxsl --features editor --test editor_frame`
 - visual/pipeline smoke test: `cargo run -p wxsl --example pbr_cube -- --headless`

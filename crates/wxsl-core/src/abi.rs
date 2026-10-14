@@ -567,6 +567,51 @@ pub const ENVIRONMENT_LUT_SIZE: u32 = 64;
 /// the buffer's stride, not a per-fragment cost.
 pub const MAX_LIGHTS: usize = 16;
 
+/// [`GROUP_FRAME`] binding of the clustered light list: every *local*
+/// light of the frame — a point or spot light with a finite range and no
+/// shadow — as one `Light` row each, in the scene uniform's own row layout
+/// (ADR 0076). Read through `local_light`, never the array: under
+/// [`FEATURE_INSTANCE_TEXTURE`] the same rows live in an `rgba32uint`
+/// texture, exactly like the instance rows.
+pub const BINDING_LOCAL_LIGHTS: u32 = 13;
+
+/// [`GROUP_FRAME`] binding of the light grid: which local lights reach
+/// each cluster of the camera's frustum (ADR 0076).
+///
+/// One array of `u32` words in `vec4u` rows: [`LIGHT_GRID_CELLS`] pairs of
+/// (first, count) into the index list, then the index list itself. The
+/// mapping from a position to its cell is in the scene uniform
+/// (`light_grid_view_proj`, `light_grid`, `light_grid_depth`), so the
+/// shader and the host that binned the lights cannot disagree about it.
+pub const BINDING_LIGHT_GRID: u32 = 14;
+
+/// Clusters across, down and deep in the light grid (ADR 0076).
+///
+/// Across and down are in normalized device coordinates, so the grid is
+/// independent of the viewport's size; depth slices are exponential in
+/// view depth between the camera's near and far planes. 16 × 9 × 24 is
+/// the usual clustered-forward shape: tiles of about 120 pixels at 1080p,
+/// and slices that stay roughly cubic along the view.
+pub const LIGHT_GRID_DIMENSIONS: [u32; 3] = [16, 9, 24];
+
+/// How many cells the light grid has.
+pub const LIGHT_GRID_CELLS: usize =
+    (LIGHT_GRID_DIMENSIONS[0] * LIGHT_GRID_DIMENSIONS[1] * LIGHT_GRID_DIMENSIONS[2]) as usize;
+
+/// Most local lights one frame carries in [`BINDING_LOCAL_LIGHTS`].
+///
+/// A bound on the host's binning work and the list's size, not a stride:
+/// the list grows with the frame. Lights past it are dropped in list order
+/// and counted, the way lights past [`MAX_LIGHTS`] are for the uniform.
+pub const MAX_LOCAL_LIGHTS: usize = 4096;
+
+/// Most local lights one light-grid cell lists.
+///
+/// The per-fragment cost ceiling, and what bounds the index list at
+/// [`LIGHT_GRID_CELLS`] times this. A light that would overflow a cell is
+/// left out of that cell only, and counted.
+pub const MAX_LIGHTS_PER_CELL: usize = 256;
+
 /// Edge length in texels of the shadow atlas.
 ///
 /// One depth texture for every shadow tile ([`BINDING_SHADOW_MAPS`]), one
@@ -819,7 +864,8 @@ pub const FEATURE_PREVIOUS_FRAME: &str = "wxsl_previous_frame";
 ///
 /// The downlevel shape of [`BINDING_INSTANCES`],
 /// [`BINDING_PREVIOUS_INSTANCES`] and [`BINDING_INSTANCE_ATTRIBUTES`]
-/// (ADR 0075): WebGL2 and GLES 3.0 have no storage buffers, so the same
+/// (ADR 0075) — and of the clustered light rows, [`BINDING_LOCAL_LIGHTS`]
+/// and [`BINDING_LIGHT_GRID`] (ADR 0076): WebGL2 and GLES 3.0 have no storage buffers, so the same
 /// bytes go into `rgba32uint` textures [`INSTANCE_TEXTURE_WIDTH`] texels
 /// wide, and generated loaders fetch a row by `@builtin(instance_index)`.
 /// Readers never see the difference — they call `instance_row`,

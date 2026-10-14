@@ -604,6 +604,23 @@ fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "clustered",
+            blurb: "a thousand ranged lamps drifting over the floor — local lights \
+                    binned into the camera's light grid, each pixel looping only \
+                    over the lamps that reach it (ADR 0076)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "brdf-lut",
             blurb: "a compute effect bakes the split-sum BRDF LUT once (policy: once), \
                     and a per-frame view displays it — the execution-policy proof, \
@@ -1977,6 +1994,31 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
                 })
                 .collect()
         }
+        None if demo.name == "clustered" => {
+            // A 32 × 32 lattice of lamps a hand's width over the floor,
+            // each drifting on its own small orbit. Every one has a range,
+            // so none takes a uniform slot: the light grid carries them
+            // all, and the floor is a field of overlapping pools.
+            (0..1024)
+                .map(|index| {
+                    let (column, row) = ((index % 32) as f32, (index / 32) as f32);
+                    let phase = index as f32 * 2.399;
+                    let drift =
+                        Vec3::new((time + phase).cos(), 0.0, (time * 0.8 + phase).sin()) * 0.12;
+                    let hue = index as f32 * 2.39996;
+                    Light::point(
+                        Vec3::new(column * 0.36 - 5.6, -1.42, row * 0.36 - 5.6) + drift,
+                        Vec3::new(
+                            0.55 + 0.45 * hue.sin(),
+                            0.55 + 0.45 * (hue + 2.1).sin(),
+                            0.55 + 0.45 * (hue + 4.2).sin(),
+                        ),
+                        0.5,
+                    )
+                    .with_range(0.4)
+                })
+                .collect()
+        }
         None => vec![
             // Key: warm and close. The bloom demos turn this up far enough
             // that the specular highlight crosses the effect's threshold.
@@ -2031,7 +2073,7 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
             }
         } else if matches!(
             demo.name,
-            "point-shadow" | "spot-shadow" | "spot-cookie" | "sixteen"
+            "point-shadow" | "spot-shadow" | "spot-cookie" | "sixteen" | "clustered"
         ) {
             // Level with the lamp ring: the cube's shadow spreading outward
             // and the sixteen pools of colour both read from a low angle.
@@ -2059,6 +2101,7 @@ fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environment {
         // object motion only — and `None` says exactly that.
         previous_camera: None,
         origin: Default::default(),
+        cluster_lights: true,
     }
 }
 
@@ -3414,7 +3457,7 @@ impl Stage {
             )?;
             return Ok(());
         }
-        if demo.name == "sixteen" {
+        if matches!(demo.name, "sixteen" | "clustered") {
             // The whole light budget: sixteen coloured lamps in a ring
             // around one cube. Every lamp's row reaches the shader, so the
             // floor is a wheel of coloured pools and nothing is dropped.

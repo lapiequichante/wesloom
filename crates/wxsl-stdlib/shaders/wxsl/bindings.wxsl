@@ -61,6 +61,38 @@ fn previous_instance_row(index: u32) -> Instance {
 @if(wxsl_instance_texture)
 @group(0) @binding(8) var previous_instance_texels: texture_2d<u32>;
 
+// The clustered light list and the light grid (ADR 0076): every local
+// light of the frame — a point or spot light with a range and no shadow —
+// and, per cluster of the binning view, which of them reach it. Read
+// through `local_light` and `light_grid_word`; under
+// `wxsl_instance_texture` the same bytes live in `rgba32uint` textures.
+@if(!wxsl_instance_texture)
+@group(0) @binding(13) var<storage, read> local_lights: array<Light>;
+@if(!wxsl_instance_texture)
+@group(0) @binding(14) var<storage, read> light_grid_words: array<vec4u>;
+
+@if(!wxsl_instance_texture)
+fn local_light(index: u32) -> Light {
+    return local_lights[index];
+}
+
+@if(!wxsl_instance_texture)
+fn light_grid_word(index: u32) -> u32 {
+    return light_grid_words[index / 4u][index % 4u];
+}
+
+@if(wxsl_instance_texture)
+@group(0) @binding(13) var local_light_texels: texture_2d<u32>;
+@if(wxsl_instance_texture)
+@group(0) @binding(14) var light_grid_texels: texture_2d<u32>;
+
+@if(wxsl_instance_texture)
+fn light_grid_word(index: u32) -> u32 {
+    let width = textureDimensions(light_grid_texels).x;
+    let row = index / 4u;
+    return textureLoad(light_grid_texels, vec2u(row % width, row / width), 0)[index % 4u];
+}
+
 ${INSTANCE_LOADERS}
 // Where every world-space position in the shader ABI is measured from.
 //
@@ -178,7 +210,10 @@ const AREA_NODES = array<f32, 4>(-0.8611363115940526, -0.3399810435848563,
 const AREA_WEIGHTS = array<f32, 4>(0.3478548451374539, 0.6521451548625461,
     0.6521451548625461, 0.3478548451374539);
 fn light_sample_position(index: u32, sample: u32) -> vec3f {
-    let light = scene.lights[index];
+    return light_value_sample_position(scene.lights[index], sample);
+}
+
+fn light_value_sample_position(light: Light, sample: u32) -> vec3f {
     if light.kind != LIGHT_KIND_RECTANGLE {
         return light.position_or_direction;
     }
@@ -192,14 +227,19 @@ fn sample_light(index: u32, world_position: vec3f) -> LightSample {
 }
 
 fn sample_light_at(index: u32, sample: u32, world_position: vec3f) -> LightSample {
-    let light = scene.lights[index];
+    return sample_light_value(scene.lights[index], sample, world_position);
+}
+
+// One light's sample at a point, from the light itself rather than its
+// slot: the uniform's lights and the clustered list's share this.
+fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> LightSample {
     var out: LightSample;
     if light.kind == LIGHT_KIND_DIRECTIONAL {
         out.direction = normalize(light.position_or_direction);
         out.radiance = light.color * light.intensity;
         return out;
     }
-    let offset = light_sample_position(index, sample) - world_origin() - world_position;
+    let offset = light_value_sample_position(light, sample) - world_origin() - world_position;
     let distance_squared = max(dot(offset, offset), 1e-4);
     out.direction = offset / sqrt(distance_squared);
     var weight = 1.0;
@@ -229,8 +269,41 @@ fn sample_light_at(index: u32, sample: u32, world_position: vec3f) -> LightSampl
             }
         }
     }
+    // A ranged light's inverse square is windowed to reach exactly zero at
+    // its range — the (1 - (d/r)^4)^2 window — which is what makes binning
+    // it into clusters exact rather than approximate (ADR 0076). Zero range
+    // is unbounded.
+    if light.range > 0.0 && light.kind != LIGHT_KIND_RECTANGLE {
+        let ratio = distance_squared / (light.range * light.range);
+        let window = saturate(1.0 - ratio * ratio);
+        weight = weight * window * window;
+    }
     out.radiance = light.color * light.intensity * weight * cookie / distance_squared;
     return out;
+}
+
+// Which local lights can reach `world_position` (ADR 0076): the first
+// word of its cell's run in the index list, and the run's length.
+//
+// The grid covers what the host binned against — the camera's frustum,
+// in `light_grid_view_proj` — and lights wholly outside it were culled. A
+// point outside reads the nearest edge cell, which may miss a light it
+// would have seen; every pass that shades draws from the camera, so none
+// is outside.
+fn local_light_span(world_position: vec3f) -> vec2u {
+    let grid = scene.light_grid;
+    let clip = scene.light_grid_view_proj * vec4f(world_position + world_origin(), 1.0);
+    if grid.w == 0u || !(clip.w > 0.0) {
+        return vec2u(0u);
+    }
+    let ndc = clip.xy / clip.w;
+    let x = u32(clamp(floor((ndc.x * 0.5 + 0.5) * f32(grid.x)), 0.0, f32(grid.x - 1u)));
+    let y = u32(clamp(floor((ndc.y * 0.5 + 0.5) * f32(grid.y)), 0.0, f32(grid.y - 1u)));
+    let depth = scene.light_grid_depth;
+    let slice = log(max(clip.w, depth.x) / depth.x) * depth.y;
+    let z = u32(clamp(floor(slice), 0.0, f32(grid.z - 1u)));
+    let cell = (z * grid.y + y) * grid.x + x;
+    return vec2u(light_grid_word(cell * 2u), light_grid_word(cell * 2u + 1u));
 }
 
 // The upper 3x3 of an instance's normal matrix.

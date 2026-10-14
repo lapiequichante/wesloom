@@ -761,6 +761,13 @@ point-light cube faces, one perspective tile for a spotlight, or 96 faces
 for a rectangular emitter's sixteen samples.
 A whole run that cannot fit receives no shadows (ADRs 0066, 0071–0073).
 
+Lights without shadows can scale past sixteen. A point or spot light
+with a finite range and no shadow is *local*: `wxsl-frame` bins it on the
+host into a 16 × 9 × 24 light grid over the camera's frustum, and the
+frame group carries the light rows and the per-cluster index runs beside
+the uniform. Each fragment loops over the sixteen uniform lights and then
+over its own cluster's run (ADR 0076).
+
 A pass renders from a **view**: `PassDesc::view` selects the camera or a shadow
 tile, with a dynamic camera-binding offset. Both stock pipelines declare one
 pass per tile; unused slots draw nothing. The first clears the atlas and later

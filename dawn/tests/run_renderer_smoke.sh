@@ -17,6 +17,14 @@ for profile in webgl2 compat; do
     target/dawn-render/pbr_cube_cpp --headless --assets "target/dawn-assets/pbr-$profile" \
         --out "target/dawn-images/pbr-$profile" --verify
 done
+# Clustered local lights (ADR 0076): the host-binned grid, read by both
+# backends from the same bytes — as buffers, and as textures under webgl2.
+for profile in full webgl2; do
+    cargo run -p wxsl-ffi --example bake_docs -- --out "target/dawn-assets/local-lights-$profile" \
+        --reference --local-lights 64 --profile "$profile"
+    target/dawn-render/pbr_cube_cpp --headless --assets "target/dawn-assets/local-lights-$profile" \
+        --out "target/dawn-images/local-lights-$profile" --verify
+done
 cargo run -p wxsl-ffi --example bake_docs -- --out target/dawn-assets/shadow-atlas \
     --shadow-atlas --reference --width 320 --height 240
 target/dawn-render/pbr_cube_cpp --headless --assets target/dawn-assets/shadow-atlas \

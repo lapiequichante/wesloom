@@ -10,6 +10,7 @@ use glam::{DMat4, DVec3, Mat4, Vec2, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
 
+use crate::light_grid::{GridMapping, LightGrid};
 use crate::pass::PassView;
 
 /// Maximum lights the scene uniform carries.
@@ -223,6 +224,15 @@ pub struct Light {
     /// [`MAX_SHADOW_CASCADES`]; meaningless for a point or area light, whose
     /// faces are not negotiable.
     pub shadow_cascades: u32,
+    /// Where a point or spot light's falloff reaches zero, in world units.
+    ///
+    /// Zero — the default — is the unbounded inverse square every light
+    /// had before the field. A finite range windows the falloff to exactly
+    /// zero there, and a ranged light that casts no shadow is a *local*
+    /// light: it leaves the scene uniform's [`MAX_LIGHTS`] slots for the
+    /// clustered list, which is how a frame carries thousands of them
+    /// ([`crate::light_grid`], ADR 0076).
+    pub range: f32,
 }
 
 impl Light {
@@ -247,6 +257,7 @@ impl Light {
         shadow_distance: 32.0,
         shadow_normal_bias: 0.03,
         shadow_cascades: 1,
+        range: 0.0,
     };
 
     /// A point light at `position`.
@@ -382,6 +393,21 @@ impl Light {
     pub fn with_cascades(mut self, count: u32) -> Self {
         self.shadow_cascades = count.clamp(1, MAX_SHADOW_CASCADES);
         self
+    }
+
+    /// Bound the light's reach at `range` world units (see
+    /// [`Light::range`]); zero or less keeps it unbounded.
+    pub fn with_range(mut self, range: f32) -> Self {
+        self.range = range.max(0.0);
+        self
+    }
+
+    /// Whether this light goes to the clustered list rather than the scene
+    /// uniform: a ranged point or spot light that casts no shadow.
+    pub fn is_local(&self) -> bool {
+        self.range > 0.0
+            && matches!(self.kind, LightKind::Point | LightKind::Spot)
+            && !self.casts_shadow
     }
 
     /// Set the normal-offset bias, in world units.
@@ -593,7 +619,7 @@ impl Light {
         out
     }
 
-    fn uniform(&self, tile_first: u32, tile_count: u32) -> LightUniform {
+    pub(crate) fn uniform(&self, tile_first: u32, tile_count: u32) -> LightUniform {
         LightUniform {
             position_or_direction: self.position_or_direction.to_array(),
             kind: match self.kind {
@@ -607,7 +633,7 @@ impl Light {
             shadow_normal_bias: self.shadow_normal_bias,
             tile_first,
             tile_count,
-            _padding: 0.0,
+            range: self.range,
             area_u: self.area_u.to_array(),
             _padding1: 0.0,
             area_v: self.area_v.to_array(),
@@ -644,8 +670,16 @@ pub const CUBE_FACE_DIRECTIONS: [Vec3; 6] = [
 pub struct Environment {
     /// The camera.
     pub camera: Camera,
-    /// Lights. Only the first [`MAX_LIGHTS`] reach the shader.
+    /// Lights. Local ones ([`Light::is_local`]) go to the clustered list,
+    /// at most [`abi::MAX_LOCAL_LIGHTS`]; of the rest, only the first
+    /// [`MAX_LIGHTS`] reach the shader.
     pub lights: Vec<Light>,
+    /// Whether local lights are clustered (ADR 0076). On — the default —
+    /// they leave the uniform's slots for the light grid; off, every light
+    /// competes for the [`MAX_LIGHTS`] slots in list order, as before the
+    /// grid. The same picture either way for a frame whose lights fit:
+    /// the switch is the grid's A/B instrument.
+    pub cluster_lights: bool,
     /// Ambient light from above.
     pub ambient_sky: Vec3,
     /// Ambient light bounced from below.
@@ -698,6 +732,7 @@ impl Default for Environment {
         Environment {
             camera: Camera::default(),
             lights: Vec::new(),
+            cluster_lights: true,
             ambient_sky: Vec3::new(0.32, 0.40, 0.55),
             ambient_ground: Vec3::new(0.10, 0.08, 0.07),
             exposure: 1.0,
@@ -756,7 +791,7 @@ impl Environment {
     pub fn shadow_tiles(&self) -> Vec<ShadowTileView> {
         let camera = self.camera;
         let mut tiles = Vec::new();
-        for (index, light) in self.lights.iter().take(MAX_LIGHTS).enumerate() {
+        for (index, light) in self.uniform_lights().into_iter().enumerate() {
             let views = light.shadow_views_at(&camera, tiles.len() as u32);
             if tiles.len() + views.len() > abi::MAX_SHADOW_TILES {
                 break;
@@ -771,13 +806,56 @@ impl Environment {
         tiles
     }
 
+    /// The lights the scene uniform carries, in slot order: every light
+    /// that is not local, or every light when clustering is off — the
+    /// first [`MAX_LIGHTS`] of them.
+    pub fn uniform_lights(&self) -> Vec<&Light> {
+        self.lights
+            .iter()
+            .filter(|light| !(self.cluster_lights && light.is_local()))
+            .take(MAX_LIGHTS)
+            .collect()
+    }
+
+    /// The lights the light grid bins, in list order: the local ones,
+    /// when clustering is on. Not truncated — [`crate::light_grid::LightGrid`]
+    /// keeps the first [`abi::MAX_LOCAL_LIGHTS`] and counts the rest.
+    pub fn local_lights(&self) -> Vec<&Light> {
+        if !self.cluster_lights {
+            return Vec::new();
+        }
+        self.lights
+            .iter()
+            .filter(|light| light.is_local())
+            .collect()
+    }
+
+    /// How the light grid maps a position to its cell: the camera's own
+    /// view and depth range.
+    pub fn grid_mapping(&self) -> GridMapping {
+        let near = self.camera.near.max(1e-4);
+        GridMapping {
+            view_proj: self.camera.view_proj(),
+            near,
+            far: self.camera.far.max(near * 1.001),
+        }
+    }
+
+    /// This frame's clustered lights, binned against the camera — the
+    /// bytes behind `abi::BINDING_LOCAL_LIGHTS` and
+    /// `abi::BINDING_LIGHT_GRID`, to upload beside [`Environment::uniform`].
+    pub fn light_grid(&self) -> LightGrid {
+        LightGrid::build(&self.grid_mapping(), &self.local_lights())
+    }
+
     /// The uniform this environment fills in.
     ///
     /// Lights beyond [`MAX_LIGHTS`] are dropped: the alternative is silently
     /// overrunning a host-shared array.
     pub fn uniform(&self) -> SceneUniform {
         let mut lights = [LightUniform::zeroed(); MAX_LIGHTS];
-        let count = self.lights.len().min(MAX_LIGHTS);
+        let uniform_lights = self.uniform_lights();
+        let count = uniform_lights.len();
         let tiles = self.shadow_tiles();
         let mut shadow_tiles = [ShadowTileUniform::zeroed(); abi::MAX_SHADOW_TILES];
         let atlas = abi::SHADOW_ATLAS_SIZE as f32;
@@ -796,6 +874,8 @@ impl Environment {
                 _host_padding3: [0; 4],
             };
         }
+        let mapping = self.grid_mapping();
+        let local_count = self.local_lights().len().min(abi::MAX_LOCAL_LIGHTS);
         for (index, slot) in lights.iter_mut().take(count).enumerate() {
             // The light's tiles are its own run of the table, in slot
             // order; a light that claimed none gets a zero count, which
@@ -813,7 +893,7 @@ impl Environment {
                 }
                 None => (0, 0),
             };
-            *slot = self.lights[index].uniform(tile_first, tile_count);
+            *slot = uniform_lights[index].uniform(tile_first, tile_count);
         }
         SceneUniform {
             lights,
@@ -829,6 +909,14 @@ impl Environment {
             origin: self.origin.as_vec3().to_array(),
             // The host that binds an environment says how deep it is.
             environment_levels: 1,
+            light_grid_view_proj: mapping.view_proj.to_cols_array_2d(),
+            light_grid: [
+                abi::LIGHT_GRID_DIMENSIONS[0],
+                abi::LIGHT_GRID_DIMENSIONS[1],
+                abi::LIGHT_GRID_DIMENSIONS[2],
+                local_count as u32,
+            ],
+            light_grid_depth: mapping.depth(),
         }
     }
 
@@ -1081,7 +1169,8 @@ mod tests {
         assert_eq!(size_of::<ShadowTileUniform>(), 96);
         assert_eq!(
             size_of::<SceneUniform>(),
-            MAX_LIGHTS * 112 + abi::MAX_SHADOW_TILES * 96 + 64,
+            // The tail: the light grid's matrix, size and depth slicing.
+            MAX_LIGHTS * 112 + abi::MAX_SHADOW_TILES * 96 + 64 + 96,
             "scene uniform layout drifted from bindings.wxsl"
         );
         assert!(

@@ -33,7 +33,7 @@ typedef struct WxslLightUniform {
     float shadow_normal_bias;
     uint32_t tile_first;
     uint32_t tile_count;
-    float _padding;
+    float range;
     float area_u[3];
     float _padding1;
     float area_v[3];
@@ -52,7 +52,7 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, intensity) == 28, "LightUniform.in
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_normal_bias) == 32, "LightUniform.shadow_normal_bias offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_first) == 36, "LightUniform.tile_first offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_count) == 40, "LightUniform.tile_count offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding) == 44, "LightUniform._padding offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, range) == 44, "LightUniform.range offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_u) == 48, "LightUniform.area_u offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding1) == 60, "LightUniform._padding1 offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_v) == 64, "LightUniform.area_v offset");
@@ -87,8 +87,11 @@ typedef struct WxslSceneUniform {
     float previous_time;
     float origin[3];
     uint32_t environment_levels;
+    float light_grid_view_proj[4][4];
+    uint32_t light_grid[4];
+    float light_grid_depth[4];
 } WxslSceneUniform;
-WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12608, "SceneUniform size");
+WXSL_LAYOUT_ASSERT(sizeof(WxslSceneUniform) == 12704, "SceneUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, lights) == 0, "SceneUniform.lights offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, shadow_tiles) == 1792, "SceneUniform.shadow_tiles offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, ambient_sky) == 12544, "SceneUniform.ambient_sky offset");
@@ -101,6 +104,9 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, exposure) == 12584, "SceneUniform.
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, previous_time) == 12588, "SceneUniform.previous_time offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, origin) == 12592, "SceneUniform.origin offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, environment_levels) == 12604, "SceneUniform.environment_levels offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_grid_view_proj) == 12608, "SceneUniform.light_grid_view_proj offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_grid) == 12672, "SceneUniform.light_grid offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslSceneUniform, light_grid_depth) == 12688, "SceneUniform.light_grid_depth offset");
 typedef struct WxslInstanceTransform {
     float model[4][4];
     float normal_matrix[4][4];
@@ -193,11 +199,13 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_ENVIRONMENT_LUT 6u
 #define WXSL_BINDING_LIGHT_COOKIES 11u
 #define WXSL_BINDING_POINT_SAMPLER 12u
+#define WXSL_BINDING_LOCAL_LIGHTS 13u
+#define WXSL_BINDING_LIGHT_GRID 14u
 #define WXSL_INSTANCE_TEXTURE_WIDTH 1024u
 #define WXSL_BINDING_ENVIRONMENT_DIFFUSE 9u
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "10887100410495500099"
+#define WXSL_HOST_LAYOUT_ID "5311037746504389822"
 #undef WXSL_LAYOUT_ASSERT
 #endif

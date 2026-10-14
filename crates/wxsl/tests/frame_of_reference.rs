@@ -82,6 +82,7 @@ fn at(previous: f32, now: f32) -> Environment {
         previous_time: previous,
         previous_camera: None,
         origin: Default::default(),
+        cluster_lights: true,
     };
     environment.advance(now);
     environment

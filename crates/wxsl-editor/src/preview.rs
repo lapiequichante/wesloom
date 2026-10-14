@@ -1231,6 +1231,7 @@ pub fn preview_environment(time: f32) -> Environment {
         previous_time: time,
         previous_camera: None,
         origin: Default::default(),
+        cluster_lights: true,
     }
 }
 

@@ -383,11 +383,12 @@ mod tests {
             .collect();
         assert_eq!(
             frame,
-            vec![abi::GROUP_FRAME; 12],
-            "camera, scene, object, the previous-frame object — each of those \
-             two in its storage and its texel shape (ADR 0075) — and the \
-             environment-BRDF table, its sampler, two environment cubes, spotlight cookies (ADRs 0063, 0073) \
-             and the depth point sampler"
+            vec![abi::GROUP_FRAME; 16],
+            "camera, scene, object, the previous-frame object, the local lights \
+             and the light grid — each of those four in its storage and its \
+             texel shape (ADRs 0075, 0076) — and the environment-BRDF table, \
+             its sampler, two environment cubes, spotlight cookies (ADRs 0063, \
+             0073) and the depth point sampler"
         );
 
         // The lighting pass is generated now (wxsl_core::lighting), so its
@@ -416,6 +417,12 @@ mod tests {
             (
                 abi::BINDING_PREVIOUS_INSTANCES,
                 "var<storage, read> previous_instances",
+            ),
+            // The clustered lights (ADR 0076).
+            (abi::BINDING_LOCAL_LIGHTS, "var<storage, read> local_lights"),
+            (
+                abi::BINDING_LIGHT_GRID,
+                "var<storage, read> light_grid_words",
             ),
         ] {
             let declaration = format!(

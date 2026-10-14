@@ -10,7 +10,7 @@ written: N9, the editor catching up with everything the last stretch
 shipped, and N10 — the WebGL2 decision, which reopens one of plan.md's
 accepted costs on purpose.
 
-Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11, M10 (ADR 0074) and N10 (ADR 0075). The shipped state it starts from is
+Status: P7, N1, M7, N3, N4, P5, P8, N5, N2 and M8 have landed — ADRs 0038 through 0047 —, and since then N6, N9, M11, M10 (ADR 0074), N10 (ADR 0075) and N7 (ADRs 0066, 0071–0073, 0076). The shipped state it starts from is
 plan.md's M0–M6, plan2's P1–P4 and P9–P12 (ADRs 0029–0037), and the
 editor through its MSDF/UI layer (ADR 0013/0014). Each numbered item
 becomes an ADR when it lands and moves its reasoning there, exactly as the
@@ -554,7 +554,9 @@ the demo runs the single-model set — the shape the budget allows).
 
 ### N7 — Lighting at scale
 
-**In progress (2026-10-11):** shadow quality and kinds are implemented.
+**Done (2026-10-14, ADR 0076):** clustered local lights close the item —
+see the end of this section. Shadow quality and kinds landed first
+(2026-10-11):
 The shared frame carries sixteen lights and 112 shadow tiles in a
 2048² atlas. The original sixteen rectangles are preserved; ninety-six 64²
 tiles occupy the remaining space (ADRs 0066, 0071, 0072).
@@ -574,11 +576,19 @@ tiles occupy the remaining space (ADRs 0066, 0071, 0072).
 * Shared host layouts and offline exports carry computed data; regenerate the
   C header and rebake bundles after the light stride/tile-budget changes.
 
-**Still open:** compute-built or clustered light lists. Sixteen is a fixed
-uniform budget, not a scalable GPU light-list implementation. The original
-visible acceptance cases are present, but N7 remains in progress until this
-remaining lighting-scale work is decided and implemented. Increasing area
-integration quality beyond sixteen points is a separate quality/performance task.
+**Clustered light lists (2026-10-14, ADR 0076).** A ranged, unshadowed
+point or spot light is *local*. It leaves the sixteen uniform slots for a
+list that `wxsl-frame` bins on the host into a 16 × 9 × 24 froxel grid over
+the camera. Each fragment loops over its cluster's run after the uniform
+lights. The decision was clusters built on the host, not by compute: one
+pure function serves both backends and WebGL2 (through the instance-texture
+fallback), and a compute builder could later fill the same two bindings.
+Range windows the falloff to zero, and zero range keeps every existing
+scene unchanged. Gallery: `clustered` (1024 lamps). Tests: the grid's unit
+tests, `clustered_lights.rs` (grid ≡ uniform, forward and deferred, both
+profiles; a thousand lamps light only their reach), and Dawn's
+`local-lights` smoke bundles. Increasing area integration quality beyond
+sixteen points remains a separate quality/performance task.
 
 Validation: core/frame layout and scheduling tests, shader corpus compilation,
 GPU shadow tests (including penumbra and emitter sidedness), gallery renders,
@@ -921,8 +931,8 @@ none of it knows or cares which backend is underneath.
    `transparent` tag, eight geometry passes at most, the count a macro.
 9. ~~**N6**~~ — *landed (no ADR owed; the model is a registry entry, the
    dispatch plumbing is codegen)*: the subsurface model over the feature
-   channel. **N7** (lighting scale) — feature work on top of a finished
-   frame.
+   channel. ~~**N7**~~ — *landed (ADR 0076 closing it)*: lighting scale,
+   feature work on top of a finished frame.
 10. ~~**M11**~~, ~~**M10**~~ — *landed*, M10 with ADR 0074 —, ~~**N9**~~ — the editor's code editor, the precision
     host work, and the editor catching up; all unblocked at any time, so
     they slot in wherever a pause wants filling. N9's panels are the

@@ -27,6 +27,14 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
                 * shadow;
         }
     }
+    // Local lights, through the light grid (ADR 0076): only those whose
+    // range reaches this point's cluster, one sample each, never shadowed.
+    let span = local_light_span(ctx.world_position);
+    for (var item = 0u; item < span.y; item = item + 1u) {
+        let local = light_grid_word(span.x + item);
+        let light = sample_light_value(local_light(local), 0u, ctx.world_position);
+        lit = lit + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS});
+    }
 
     // Ambient stands in for everything the light loop cannot see,
     // so it is what ambient occlusion attenuates. The environment BRDF

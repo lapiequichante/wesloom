@@ -9,6 +9,7 @@
 pub mod effect;
 pub mod environment;
 pub mod graph;
+pub mod light_grid;
 pub mod pass;
 pub mod pipeline;
 pub mod pipeline_doc;

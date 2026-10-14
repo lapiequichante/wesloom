@@ -108,7 +108,10 @@ pub fn structures() -> Vec<Structure> {
                 field("shadow_normal_bias", "shadow_normal_bias", F32),
                 field("tile_first", "tile_first", U32),
                 field("tile_count", "tile_count", U32),
-                field("_padding", "_pad0", F32),
+                // Where a local light's windowed falloff reaches zero, in
+                // world units; zero is the unbounded inverse square every
+                // light had before the field (ADR 0076).
+                field("range", "range", F32),
                 field("area_u", "area_u", Vector(3)),
                 field("_padding1", "_pad1", F32),
                 field("area_v", "area_v", Vector(3)),
@@ -164,6 +167,13 @@ pub fn structures() -> Vec<Structure> {
                 // has: the roughness-to-LOD scale. Host-supplied because
                 // GLSL ES 3.00 has no `textureQueryLevels` (ADR 0075).
                 field("environment_levels", "environment_levels", U32),
+                // The light grid's cell mapping (ADR 0076): the matrix the
+                // host binned the local lights with, the grid's size with
+                // the local light count in `w`, and its exponential depth
+                // slicing as (near, slices / ln(far / near)).
+                field("light_grid_view_proj", "light_grid_view_proj", Matrix),
+                field("light_grid", "light_grid", UVector(4)),
+                field("light_grid_depth", "light_grid_depth", Vector(4)),
             ],
         },
         Structure {
@@ -484,6 +494,8 @@ pub fn c_header() -> String {
         ("BINDING_ENVIRONMENT_LUT", abi::BINDING_ENVIRONMENT_LUT),
         ("BINDING_LIGHT_COOKIES", abi::BINDING_LIGHT_COOKIES),
         ("BINDING_POINT_SAMPLER", abi::BINDING_POINT_SAMPLER),
+        ("BINDING_LOCAL_LIGHTS", abi::BINDING_LOCAL_LIGHTS),
+        ("BINDING_LIGHT_GRID", abi::BINDING_LIGHT_GRID),
         ("INSTANCE_TEXTURE_WIDTH", abi::INSTANCE_TEXTURE_WIDTH),
         (
             "BINDING_ENVIRONMENT_DIFFUSE",
@@ -532,6 +544,8 @@ pub fn schema_id() -> u64 {
             abi::BINDING_ENVIRONMENT_SPECULAR,
             abi::BINDING_LIGHT_COOKIES,
             abi::BINDING_POINT_SAMPLER,
+            abi::BINDING_LOCAL_LIGHTS,
+            abi::BINDING_LIGHT_GRID,
             abi::INSTANCE_TEXTURE_WIDTH
         ]
     )
@@ -596,46 +610,50 @@ pub fn shader_template(name: &str, source: &str) -> String {
     crate::template::fill(source, &[("HOST_LAYOUTS", &shader_source(names))])
 }
 
-/// The downlevel readers of the two instance-row arrays (ADR 0075): the
-/// same rows, fetched from `rgba32uint` textures under
-/// `wxsl_instance_texture`, generated from this table like every other
-/// view of the layout.
+/// The downlevel readers of the row arrays (ADR 0075): the two instance
+/// arrays and the clustered light list (ADR 0076), the same rows fetched
+/// from `rgba32uint` textures under `wxsl_instance_texture`, generated
+/// from this table like every other view of the layout.
 fn instance_loaders() -> String {
-    let structure = structures()
-        .into_iter()
-        .find(|structure| structure.name == "InstanceTransform")
-        .expect("the instance row is declared");
-    let fields: Vec<(&str, ValueType, u32)> = structure
-        .fields
-        .iter()
-        .zip(structure.offsets())
-        .map(|(field, offset)| {
-            let ty = match field.ty {
-                Type::F32 => ValueType::F32,
-                Type::I32 => ValueType::I32,
-                Type::U32 => ValueType::U32,
-                Type::Vector(2) => ValueType::Vec2,
-                Type::Vector(3) => ValueType::Vec3,
-                Type::Vector(4) => ValueType::Vec4,
-                Type::Matrix => ValueType::Mat4,
-                other => panic!("the instance row cannot carry a {other:?}"),
-            };
-            (field.shader_name, ty, offset as u32)
-        })
-        .collect();
-    let stride = structure.size() as u32;
     let mut out = String::new();
-    for (function, texture) in [
-        ("instance_row", "instance_texels"),
-        ("previous_instance_row", "previous_instance_texels"),
+    for (row, function, texture) in [
+        ("InstanceTransform", "instance_row", "instance_texels"),
+        (
+            "InstanceTransform",
+            "previous_instance_row",
+            "previous_instance_texels",
+        ),
+        ("LightUniform", "local_light", "local_light_texels"),
     ] {
+        let structure = structures()
+            .into_iter()
+            .find(|structure| structure.name == row)
+            .expect("the row is declared");
+        let fields: Vec<(&str, ValueType, u32)> = structure
+            .fields
+            .iter()
+            .zip(structure.offsets())
+            .map(|(field, offset)| {
+                let ty = match field.ty {
+                    Type::F32 => ValueType::F32,
+                    Type::I32 => ValueType::I32,
+                    Type::U32 => ValueType::U32,
+                    Type::Vector(2) => ValueType::Vec2,
+                    Type::Vector(3) => ValueType::Vec3,
+                    Type::Vector(4) => ValueType::Vec4,
+                    Type::Matrix => ValueType::Mat4,
+                    other => panic!("a texel row cannot carry a {other:?}"),
+                };
+                (field.shader_name, ty, offset as u32)
+            })
+            .collect();
         out.push_str("@if(wxsl_instance_texture)\n");
         out.push_str(&crate::resources::texel_loader(
             function,
             structure.shader_name,
             texture,
             &fields,
-            stride,
+            structure.size() as u32,
         ));
         out.push('\n');
     }
@@ -653,7 +671,7 @@ mod tests {
             ("CameraUniform", 224),
             ("LightUniform", 112),
             ("ShadowTileUniform", 96),
-            ("SceneUniform", 16 * 112 + 112 * 96 + 64),
+            ("SceneUniform", 16 * 112 + 112 * 96 + 64 + 96),
             ("InstanceTransform", 128),
             ("Vertex", 48),
             ("UiInstance", 68),

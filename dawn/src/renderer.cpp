@@ -219,11 +219,11 @@ struct Renderer::Impl {
   gpu::Queue queue;
   gpu::Limits limits;
   gpu::BindGroupLayout frame_layout, empty_layout;
-  gpu::Buffer camera, scene, transforms, empty_attributes;
+  gpu::Buffer camera, scene, transforms, empty_attributes, local_lights, light_grid;
   // The bundle's device profile (ADR 0075): instance rows from textures when
   // it has no storage buffers, the LUT baked by fragments when no compute.
   bool row_textures = false, lut_by_fragment = false;
-  gpu::TextureView transform_texels, empty_attribute_texels;
+  gpu::TextureView transform_texels, empty_attribute_texels, local_light_texels, light_grid_texels;
   gpu::Texture lut, checker, fallback;
   gpu::TextureView lut_view, checker_view, fallback_view, environment_placeholder, cookie_view;
   gpu::Sampler checker_sampler, lut_sampler, shadow_sampler, point_sampler;
@@ -669,6 +669,14 @@ struct Renderer::Impl {
     entry.visibility = gpu::ShaderStage::Fragment;
     entry.sampler.type = gpu::SamplerBindingType::NonFiltering;
     entries.push_back(entry);
+    // The clustered light list and grid (ADR 0076): shading reads them.
+    for (const auto binding : {WXSL_BINDING_LOCAL_LIGHTS, WXSL_BINDING_LIGHT_GRID}) {
+      entry = row_textures
+          ? layout_entry(binding, {{"kind", "texture"}, {"sample_type", "uint"}, {"dimension", "d2"}})
+          : layout_entry(binding, {{"kind", "buffer"}, {"read_only", true}, {"size", 0}});
+      entry.visibility = gpu::ShaderStage::Fragment;
+      entries.push_back(entry);
+    }
     frame_layout = layout(entries);
     point_sampler = device.CreateSampler();
     const auto views = read(root, data.at("frame").at("views"));
@@ -688,7 +696,13 @@ struct Renderer::Impl {
     transforms = buffer(read(root, data.at("frame").at("instances")), gpu::BufferUsage::Storage,
                         sizeof(WxslInstanceTransform));
     empty_attributes = buffer({}, gpu::BufferUsage::Storage);
+    // Binned by the exporter, the same bytes the wgpu host uploads.
+    local_lights = buffer(read(root, data.at("frame").at("local_lights")),
+                          gpu::BufferUsage::Storage, sizeof(WxslLightUniform));
+    light_grid = buffer(read(root, data.at("frame").at("light_grid")), gpu::BufferUsage::Storage, 16);
     if (row_textures) {
+      local_light_texels = texels(data.at("frame").at("local_light_texels"));
+      light_grid_texels = texels(data.at("frame").at("light_grid_texels"));
       transform_texels = texels(data.at("frame").at("instance_texels"));
       // One zero line: what a material declaring no attributes binds.
       empty_attribute_texels = texels_zero();
@@ -958,6 +972,18 @@ struct Renderer::Impl {
     entry.binding = WXSL_BINDING_POINT_SAMPLER;
     entry.sampler = point_sampler;
     entries.push_back(entry);
+    for (const auto binding : {WXSL_BINDING_LOCAL_LIGHTS, WXSL_BINDING_LIGHT_GRID}) {
+      const bool lights = binding == WXSL_BINDING_LOCAL_LIGHTS;
+      entry = {};
+      entry.binding = binding;
+      if (row_textures) {
+        entry.textureView = lights ? local_light_texels : light_grid_texels;
+      } else {
+        entry.buffer = lights ? local_lights : light_grid;
+        entry.size = entry.buffer.GetSize();
+      }
+      entries.push_back(entry);
+    }
     const auto maps = current.at("graph").value("environment_maps", Json(nullptr));
     for (size_t index = 0; index < 2; ++index) {
       entry = {};

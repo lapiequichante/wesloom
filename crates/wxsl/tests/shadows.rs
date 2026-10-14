@@ -73,6 +73,7 @@ fn lit(casting: bool) -> Environment {
         previous_time: 0.0,
         previous_camera: None,
         origin: Default::default(),
+        cluster_lights: true,
     }
 }
 
