@@ -7,7 +7,7 @@
 set -euo pipefail
 
 TOOLCHAIN=nightly-2026-10-13
-CRATES=(wxsl-core wxsl-lang wxsl-frame wxsl-stdlib wxsl-render wxsl-editor wxsl-ffi wxsl)
+CRATES=(wxsl-core wxsl-lang wxsl-frame wxsl-stdlib wxsl-gltf wxsl-render wxsl-editor wxsl-ffi wxsl)
 
 cd "$(dirname "$0")/.."
 bless=false

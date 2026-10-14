@@ -30,16 +30,17 @@ truth.
 | `wxsl-core`: graph model, codegen, documents | nothing | no |
 | `wxsl-lang`: WXSL → WGSL compiler | `wxsl-core` | no |
 | `wxsl-frame`: frame plans, scheduling, presets, effects | `wxsl-core` | no (ADR 0048) |
-| `wxsl-ffi`: data-only C ABI | `core`, `frame`, `lang`, `stdlib` | no (ADR 0049) |
+| `wxsl-ffi`: data-only C ABI | `core`, `frame`, `lang`, `stdlib`, `gltf` | no (ADR 0049) |
 | `wxsl-stdlib`: node library | `wxsl-core` (+ `wxsl-lang` at build time) | no |
-| `wxsl-render`: wgpu renderer and UI layer | `core`, `frame`, `lang` | yes |
+| `wxsl-gltf`: glTF import, scene documents out | `core`, `frame` (the registry is an argument) | no (ADR 0080) |
+| `wxsl-render`: wgpu renderer and UI layer | `core`, `frame`, `lang` (+ `gltf` behind its feature) | yes |
 | `wxsl-editor`: node editor, draws itself | `core`, `render`, `lang` | yes (ADR 0013) |
 | `wxsl`: facade, behind features | all of the above | via `render`/`editor` |
 
 Boundaries that must hold (ADR 0002):
 
-- `wxsl-core`, `wxsl-frame` and `wxsl-ffi` never depend on wgpu, a GUI
-  toolkit or the renderer. `wxsl-render` is only a dev-dependency of
+- `wxsl-core`, `wxsl-frame`, `wxsl-gltf` and `wxsl-ffi` never depend on
+  wgpu, a GUI toolkit or the renderer; `wxsl-gltf` never on `wxsl-stdlib`. `wxsl-render` is only a dev-dependency of
   `wxsl-ffi`, used for parity tests.
 - `wxsl-core` and `wxsl-render` never depend on `wxsl-editor` or
   `wxsl-stdlib`.
@@ -118,7 +119,8 @@ Each test file's header says what it covers.
 | `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
-| a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, or `gallery -- --screenshot` |
+| glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
+| a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, `gallery -- --screenshot`, or `viewer -- <demo> --screenshot out.png` |
 
 The wasm check is
 `cargo check -p wxsl --features editor,webgl --target wasm32-unknown-unknown`.
@@ -207,9 +209,12 @@ The ADR named on each line holds the reasoning.
 - `crates/wxsl/examples/`:
   - `pbr_cube` is the first demo (`--help` lists its options);
   - `editor` is the node editor;
-  - `gallery` shows every pipeline, `--screenshot` for PNGs;
+  - `gallery` shows every pipeline, `--screenshot` for PNGs (one module
+    per concern under `examples/gallery/`);
+  - `viewer` opens a glTF file under an HDR (`--features gltf`);
   - `scene_check` runs the capability check;
   - `cinema` runs the post chain.
+- `resources/glb/`: Khronos sample models and their licenses.
 - `crates/wxsl/assets/`:
   - `pbr_cube.wxsl.json` is the commented node format;
   - `*.scene.json` are scene documents.

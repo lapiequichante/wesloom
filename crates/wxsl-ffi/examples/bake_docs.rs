@@ -677,6 +677,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .into())
             }
+            MeshSource::Embedded { index } => {
+                return Err(format!("offline demo has no supplied mesh {index}").into())
+            }
         };
         meshes.push(json!({"vertices": save(&root, &format!("mesh{index}.vertices.bin"), bytemuck::cast_slice(&vertices))?,
             "indices": save(&root, &format!("mesh{index}.indices.bin"), bytemuck::cast_slice(&indices))?, "index_count": indices.len()}));

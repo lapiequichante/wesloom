@@ -152,6 +152,56 @@ impl SceneResources {
         lighting: &wxsl_core::lighting::LightingSet,
         features: &[wxsl_core::lighting::ChannelRequest],
     ) -> Result<Self, LoadError> {
+        Self::load_supplied(device, scene, registry, base, lighting, features, &[])
+    }
+
+    /// An imported glTF file's scene (ADR 0080), with its meshes and
+    /// images, against the pipeline's plan as in
+    /// [`SceneResources::load_with_plan`]. The lighting set must enable
+    /// every model the import names; [`ImportedScene::lighting`] is that
+    /// set.
+    ///
+    /// [`ImportedScene::lighting`]: crate::asset::ImportedScene::lighting
+    #[cfg(feature = "gltf")]
+    pub fn load_imported(
+        device: &wgpu::Device,
+        imported: &crate::asset::ImportedScene,
+        registry: &NodeRegistry,
+        lighting: &wxsl_core::lighting::LightingSet,
+        features: &[wxsl_core::lighting::ChannelRequest],
+    ) -> Result<Self, LoadError> {
+        let mut resources = Self::load_supplied(
+            device,
+            &imported.scene,
+            registry,
+            imported.directory.as_deref(),
+            lighting,
+            features,
+            &imported
+                .meshes
+                .iter()
+                .map(wxsl_render::gltf::mesh_data)
+                .collect::<Vec<_>>(),
+        )?;
+        resources.set_images(
+            imported
+                .images
+                .iter()
+                .map(|bytes| SceneImage::Encoded(bytes.clone()))
+                .collect(),
+        );
+        Ok(resources)
+    }
+
+    fn load_supplied(
+        device: &wgpu::Device,
+        scene: &Scene,
+        registry: &NodeRegistry,
+        base: Option<&Path>,
+        lighting: &wxsl_core::lighting::LightingSet,
+        features: &[wxsl_core::lighting::ChannelRequest],
+        supplied: &[wxsl_render::mesh::MeshData],
+    ) -> Result<Self, LoadError> {
         let invalid = scene.validate();
         if !invalid.is_empty() {
             return Err(LoadError::Invalid(invalid));
@@ -163,7 +213,13 @@ impl SceneResources {
 
         let mut meshes = Vec::with_capacity(scene.meshes.len());
         for entry in &scene.meshes {
-            meshes.push(mesh_from(device, &entry.name, &entry.source, base)?);
+            meshes.push(mesh_from(
+                device,
+                &entry.name,
+                &entry.source,
+                base,
+                supplied,
+            )?);
         }
 
         let mut materials = Vec::with_capacity(scene.materials.len());
@@ -398,6 +454,7 @@ fn mesh_from(
     name: &str,
     source: &MeshSource,
     base: Option<&Path>,
+    supplied: &[wxsl_render::mesh::MeshData],
 ) -> Result<Mesh, LoadError> {
     Ok(match source {
         MeshSource::Cube { size } => Mesh::cube(device, *size),
@@ -414,6 +471,15 @@ fn mesh_from(
             };
             load_file(device, name, &resolved, *primitive)?
         }
+        MeshSource::Embedded { index } => match supplied.get(*index) {
+            Some(data) => Mesh::upload(device, name, data),
+            None => {
+                return Err(LoadError::Render(RenderError::Import {
+                    path: name.to_string(),
+                    reason: format!("no supplied mesh {index}"),
+                }))
+            }
+        },
     })
 }
 

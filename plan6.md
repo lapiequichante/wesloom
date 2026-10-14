@@ -233,6 +233,29 @@ image bytes), device-free, behind the `gltf` feature.
   runs on native, WebGPU and WebGL2. This closes `todo.md`'s "good PBR
   demo" item.
 
+**Landed (2026-10-14, ADR 0080), native part:**
+
+- The import lives in a new device-free crate, `wxsl-gltf`, which takes
+  the node registry as an argument. It is reused by:
+  - `wxsl::asset` with `SceneResources::load_imported`;
+  - `wxsl-render`'s `file` meshes;
+  - the C ABI (`wxsl_import_gltf`, `wxsl_import_glb`, with the meshes in
+    the `WxslVertex` layout and the images encoded), checked by the C and
+    C++ smoke tests.
+- The mappings above are done. Extension textures are reported rather
+  than mapped.
+- The Khronos samples (DamagedHelmet, CarConcept, GlamVelvetSofa, with
+  their licenses) are in `resources/glb/`, not `refs/`. A test compiles
+  every material.
+- `viewer` shows them under the lakeside HDR, with the car's glass
+  through the refraction tier.
+- Not yet done:
+  - the viewer on WebGPU and WebGL2;
+  - the `DamagedHelmet` reference image;
+  - the release gate over `gltf_pbr`.
+
+The `gallery` example was split into modules under `examples/gallery/`.
+
 ### G3 — Large scenes
 
 Large scenes are what the editor will show. The renderer stays

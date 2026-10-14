@@ -59,6 +59,28 @@ pub struct Response {
     pub params: Vec<u8>,
     /// Computed layout rows.
     pub fields: Vec<ComputedField>,
+    /// A glTF import's binary outputs; `None` for every other call.
+    pub import: Option<Box<ImportOutput>>,
+}
+
+/// What a glTF import returns beside its JSON (ADR 0080).
+pub struct ImportOutput {
+    /// One per scene mesh.
+    pub meshes: Vec<ImportedMesh>,
+    /// The embedded images, still encoded (PNG or JPEG).
+    pub images: Vec<Vec<u8>>,
+}
+
+/// One imported primitive as native-endian bytes.
+pub struct ImportedMesh {
+    /// `WxslVertex` rows (`wxsl_host.h`), 48 bytes each.
+    pub vertices: Vec<u8>,
+    /// `uint32_t` triangle indices.
+    pub indices: Vec<u8>,
+    /// `float[4]` per vertex (`COLOR_0`), or empty.
+    pub colors: Vec<u8>,
+    /// `float[2]` per vertex (`TEXCOORD_1`), or empty.
+    pub uv1: Vec<u8>,
 }
 
 impl Response {
@@ -77,6 +99,7 @@ impl Response {
             wgsl: Vec::new(),
             params: Vec::new(),
             fields: Vec::new(),
+            import: None,
         }
     }
 
@@ -511,4 +534,78 @@ fn check_impl(bytes: &[u8]) -> Result<Response> {
         status,
         json!({"incompatibilities": errors, "capabilities": capabilities}),
     ))
+}
+
+#[derive(Deserialize)]
+struct ImportRequest {
+    path: String,
+}
+
+/// Import a glTF or GLB file named by the request's `path` as a scene
+/// document, its geometry and its embedded images (ADR 0080).
+pub fn import_gltf(bytes: &[u8]) -> Response {
+    match parse::<ImportRequest>(bytes) {
+        Ok(request) => imported(wxsl_gltf::import(&request.path, &wxsl_stdlib::registry())),
+        Err(error) => error,
+    }
+}
+
+/// Import a GLB from its bytes; external buffers are an error.
+pub fn import_glb(bytes: &[u8]) -> Response {
+    imported(wxsl_gltf::import_slice(bytes, &wxsl_stdlib::registry()))
+}
+
+fn imported(
+    result: std::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>,
+) -> Response {
+    let imported = match result {
+        Ok(imported) => imported,
+        Err(error) => return invalid(error),
+    };
+    let lighting = match imported.lighting() {
+        Ok(set) => set,
+        Err(error) => return compile_error(error),
+    };
+    let scene = match serde_json::to_value(&imported.scene) {
+        Ok(scene) => scene,
+        Err(error) => return invalid(error),
+    };
+    let mut response = Response::new(
+        WxslStatus::Success,
+        json!({
+            "scene": scene,
+            "directory": imported.directory.as_ref().map(|path| path.display().to_string()),
+            "lighting_models": lighting.models().iter().map(|model| model.name).collect::<Vec<_>>(),
+            "warnings": imported.warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }),
+    );
+    let floats = |values: &mut dyn Iterator<Item = f32>| -> Vec<u8> {
+        values.flat_map(f32::to_ne_bytes).collect()
+    };
+    let meshes = imported
+        .meshes
+        .iter()
+        .map(|geometry| ImportedMesh {
+            vertices: floats(&mut geometry.vertices.iter().flat_map(|vertex| {
+                vertex
+                    .position
+                    .into_iter()
+                    .chain(vertex.normal)
+                    .chain(vertex.tangent)
+                    .chain(vertex.uv)
+            })),
+            indices: geometry
+                .indices
+                .iter()
+                .flat_map(|index| index.to_ne_bytes())
+                .collect(),
+            colors: floats(&mut geometry.colors.iter().flatten().flatten().copied()),
+            uv1: floats(&mut geometry.uv1.iter().flatten().flatten().copied()),
+        })
+        .collect();
+    response.import = Some(Box::new(ImportOutput {
+        meshes,
+        images: imported.images,
+    }));
+    response
 }

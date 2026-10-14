@@ -19,12 +19,13 @@ glam = { workspace = true }
 ttf-parser = { workspace = true }
 # glTF/GLB geometry import, optional: a renderer that cannot load a mesh is
 # a toy, and a renderer that always pulls in an asset pipeline is a tax.
-gltf = { workspace = true, optional = true }
+# The reading itself is wxsl-gltf's, which has no device (ADR 0080).
+wxsl-gltf = { workspace = true, optional = true }
 
 [features]
 default = []
 # Read geometry from glTF/GLB files (`crate::gltf`).
-gltf = ["dep:gltf"]
+gltf = ["dep:wxsl-gltf"]
 # On wasm32, also compile wgpu's WebGL2 backend, the fallback profile for a
 # browser without WebGPU (ADR 0075). WebGPU is wgpu's default web backend.
 webgl = ["wgpu/webgl"]

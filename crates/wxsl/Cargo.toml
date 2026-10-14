@@ -15,6 +15,7 @@ wxsl-render = { workspace = true, optional = true }
 wxsl-editor = { workspace = true, optional = true }
 wxsl-stdlib = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
+wxsl-gltf = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -37,13 +38,19 @@ default = ["render", "stdlib"]
 render = ["dep:wxsl-render"]
 editor = ["dep:wxsl-editor", "render"]
 stdlib = ["dep:wxsl-stdlib"]
-# Decode PNG images, for scene textures given as files or encoded bytes
-# (ADR 0079).
+# Decode PNG and JPEG images, for scene textures given as files or encoded
+# bytes (ADR 0079).
 images = ["render", "dep:image"]
-# glTF/GLB geometry import, for scenes whose meshes come from a file.
-gltf = ["render", "wxsl-render/gltf", "images"]
+# glTF/GLB import: geometry for `file` meshes, and with `stdlib` whole
+# scenes through `wxsl::asset` (ADR 0080).
+gltf = ["render", "wxsl-render/gltf", "images", "dep:wxsl-gltf"]
 # WebGL2 as the browser fallback behind WebGPU (ADR 0075); wasm32 only.
 webgl = ["render", "wxsl-render/webgl"]
+
+[[example]]
+name = "viewer"
+# A glTF file imported as a scene document (ADR 0080), lit by an HDR.
+required-features = ["gltf", "stdlib"]
 
 [[example]]
 name = "pbr_cube"
@@ -85,6 +92,11 @@ name = "editor_frame"
 # Drives the editor for a few frames on a real device; skips when there is no
 # adapter, like render_cube.rs.
 required-features = ["editor", "stdlib"]
+
+[[test]]
+name = "gltf_import"
+# Imported glTF scenes on a device (ADR 0080); skips without an adapter.
+required-features = ["gltf", "stdlib"]
 
 [[test]]
 name = "scene"

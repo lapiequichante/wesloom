@@ -116,6 +116,8 @@ documents keep their own version checks.
 | `wxsl_compile_shader` | exactly one of `root` (a module path) or `effect` (a shipped effect id) | `library`, `macros`, `config` |
 | `wxsl_compile_material` | `graph`: a surface graph; `stage`: a stage name such as `forward_lit` or `gbuffer` | `material`, `config`, `library` |
 | `wxsl_check_setup` | `pipeline` and `scene` documents | `config`, `library` |
+| `wxsl_import_gltf` | `path`: a `.gltf` or `.glb` file | none |
+| `wxsl_import_glb` | the request *is* the GLB's bytes, not JSON | none |
 
 **`config`** describes the frame the request is for. Every field is
 optional:
@@ -148,8 +150,9 @@ example `{"model":"wxsl.pbr","macros":{...}}`. Its features come from
 - `modules` maps module paths to WXSL source;
 - `node_modules` lists the paths that are also derived as function nodes.
 
-There are no callbacks and no file access. Custom effects and lighting
-models cannot be registered through the ABI yet.
+There are no callbacks, and no file access except `wxsl_import_gltf`
+reading the file it names. Custom effects and lighting models cannot be
+registered through the ABI yet.
 
 ### Responses
 
@@ -168,6 +171,7 @@ carries the complete `data.incompatibilities` list.
 | shader | for `root`, the module path; for `effect`, the effect's declaration: inputs, outputs, parameters and their layout | WGSL; for an effect, parameter bytes and field rows |
 | material | see the list below | WGSL, parameter bytes, field rows |
 | setup check | `incompatibilities` (empty on success) and the setup's `capabilities`: stages, effects, lighting models, G-buffer layout | none |
+| glTF import | see below | meshes and images |
 
 **A pipeline's `data`:**
 
@@ -212,6 +216,25 @@ bytes are already padded to the layout.
 
 Camera, light and vertex structs never cross this ABI; they are the fixed
 layouts in `wxsl_host.h`.
+
+**A glTF import's `data`**
+([ADR 0080](adr/0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)):
+
+- `scene`: a scene document (v2). Its nodes keep the file's hierarchy,
+  and each material is a generated `gltf_pbr` graph to compile with
+  `wxsl_compile_material`, whose texture slots `bindings.textures` maps
+  to the document's `textures`;
+- `lighting_models`: the set to pass as `config.lighting_models`;
+- `directory`: what `file` textures are relative to;
+- `warnings`: everything the import could not map, by name.
+
+`wxsl_result_meshes` returns `wxsl_result_mesh_count` `WxslMesh` rows,
+indexed by the scene's `embedded` mesh sources. Each has `vertices` as
+`WxslVertex` rows (48 bytes), `indices` as `uint32_t`, and the optional
+`colors` (`float[4]`) and `uv1` (`float[2]`) streams, empty when absent.
+`wxsl_result_images` returns the embedded images, still PNG or JPEG,
+indexed by `embedded` texture sources; decoding them and building mips is
+the host's job.
 
 ## The C++ classes
 

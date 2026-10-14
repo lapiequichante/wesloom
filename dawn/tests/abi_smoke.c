@@ -15,7 +15,9 @@
     X(wxsl_abi_version) X(wxsl_compile_pipeline) X(wxsl_compile_shader) \
     X(wxsl_compile_material) X(wxsl_check_setup) X(wxsl_result_status) \
     X(wxsl_result_json) X(wxsl_result_wgsl) X(wxsl_result_params) \
-    X(wxsl_result_field_count) X(wxsl_result_fields) X(wxsl_result_free)
+    X(wxsl_result_field_count) X(wxsl_result_fields) X(wxsl_result_free) \
+    X(wxsl_import_glb) X(wxsl_result_mesh_count) X(wxsl_result_meshes) \
+    X(wxsl_result_image_count) X(wxsl_result_images)
 #define DECLARE(name) static wxsl_fn_##name api_##name;
 FUNCTIONS(DECLARE)
 
@@ -168,11 +170,33 @@ int main(int argc, char **argv) {
         REQUIRE(contains(api_wxsl_result_json(result), "unavailable"));
         api_wxsl_result_free(result);
     }
+    {
+        /* A glTF import: the document as JSON, the geometry in the host
+           vertex layout, the embedded image still encoded. */
+        size_t length = 0;
+        char *glb = read_file(argv[3], "triangle.glb", &length);
+        WxslBytes view = {(const uint8_t *)glb, length};
+        WxslResult *result = api_wxsl_import_glb(WXSL_ABI_VERSION, view);
+        const WxslMesh *mesh;
+        WxslVertex first;
+        expect(result, WXSL_STATUS_SUCCESS);
+        REQUIRE(contains(api_wxsl_result_json(result), "\"gltf_pbr\""));
+        REQUIRE(api_wxsl_result_mesh_count(result) == 1);
+        mesh = api_wxsl_result_meshes(result);
+        REQUIRE(mesh->vertices.len == 3 * sizeof(WxslVertex));
+        REQUIRE(mesh->indices.len == 3 * sizeof(uint32_t));
+        memcpy(&first, mesh->vertices.data, sizeof(first));
+        REQUIRE(first.position[0] == -1.0f && first.normal[2] == 1.0f);
+        REQUIRE(api_wxsl_result_image_count(result) == 1);
+        REQUIRE(memcmp(api_wxsl_result_images(result)->data, "\x89PNG", 4) == 0);
+        api_wxsl_result_free(result);
+        free(glb);
+    }
 #ifdef _WIN32
     REQUIRE(FreeLibrary(library) != 0);
 #else
     REQUIRE(dlclose(library) == 0);
 #endif
-    puts("C ABI: presets, eleven native WGSL variants, field tables, capability/version refusals passed");
+    puts("C ABI: presets, eleven native WGSL variants, field tables, capability/version refusals, glTF import passed");
     return 0;
 }

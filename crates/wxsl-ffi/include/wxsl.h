@@ -60,6 +60,18 @@ typedef struct WxslField {
     uint32_t buffer_align;
 } WxslField;
 
+/** One imported mesh (`wxsl_import_gltf`), as views into its result. */
+typedef struct WxslMesh {
+    /** `WxslVertex` rows (`wxsl_host.h`), 48 bytes each. */
+    WxslBytes vertices;
+    /** `uint32_t` triangle indices, three per triangle. */
+    WxslBytes indices;
+    /** `float[4]` per vertex from `COLOR_0`, or empty. */
+    WxslBytes colors;
+    /** `float[2]` per vertex from `TEXCOORD_1`, or empty. */
+    WxslBytes uv1;
+} WxslMesh;
+
 /** ABI revision. Compare before using the rest of the generated header. */
 uint32_t wxsl_abi_version(void);
 
@@ -100,6 +112,25 @@ typedef WxslResult * (*wxsl_fn_wxsl_compile_material)(uint32_t abi_version, Wxsl
 WxslResult * wxsl_check_setup(uint32_t abi_version, WxslBytes request);
 
 typedef WxslResult * (*wxsl_fn_wxsl_check_setup)(uint32_t abi_version, WxslBytes request);
+
+/**
+ * Import a glTF or GLB file: `{"path": "..."}` in, the scene document as
+ * `data.scene` in the JSON, its meshes and embedded images as views.
+ * # Safety
+ * `request.data` must reference `request.len` readable bytes for the duration of the call.
+ */
+WxslResult * wxsl_import_gltf(uint32_t abi_version, WxslBytes request);
+
+typedef WxslResult * (*wxsl_fn_wxsl_import_gltf)(uint32_t abi_version, WxslBytes request);
+
+/**
+ * Import a GLB from its bytes, as `wxsl_import_gltf` does from a file.
+ * # Safety
+ * `glb.data` must reference `glb.len` readable bytes for the duration of the call.
+ */
+WxslResult * wxsl_import_glb(uint32_t abi_version, WxslBytes glb);
+
+typedef WxslResult * (*wxsl_fn_wxsl_import_glb)(uint32_t abi_version, WxslBytes glb);
 
 /**
  * Status of a result, or InvalidArgument for null.
@@ -154,6 +185,44 @@ typedef size_t (*wxsl_fn_wxsl_result_field_count)(const WxslResult * result);
 const WxslField * wxsl_result_fields(const WxslResult * result);
 
 typedef const WxslField * (*wxsl_fn_wxsl_result_fields)(const WxslResult * result);
+
+/**
+ * Number of imported meshes (zero for null or a non-import result).
+ * # Safety
+ * A non-null pointer must be a live result returned by this library.
+ */
+size_t wxsl_result_mesh_count(const WxslResult * result);
+
+typedef size_t (*wxsl_fn_wxsl_result_mesh_count)(const WxslResult * result);
+
+/**
+ * Contiguous imported meshes, indexed by the scene's `embedded` mesh
+ * sources (null when empty). Borrowed from the result.
+ * # Safety
+ * A non-null pointer must be a live result returned by this library.
+ */
+const WxslMesh * wxsl_result_meshes(const WxslResult * result);
+
+typedef const WxslMesh * (*wxsl_fn_wxsl_result_meshes)(const WxslResult * result);
+
+/**
+ * Number of embedded images (zero for null or a non-import result).
+ * # Safety
+ * A non-null pointer must be a live result returned by this library.
+ */
+size_t wxsl_result_image_count(const WxslResult * result);
+
+typedef size_t (*wxsl_fn_wxsl_result_image_count)(const WxslResult * result);
+
+/**
+ * Contiguous encoded images (PNG or JPEG), indexed by the scene's
+ * `embedded` texture sources (null when empty). Borrowed from the result.
+ * # Safety
+ * A non-null pointer must be a live result returned by this library.
+ */
+const WxslBytes * wxsl_result_images(const WxslResult * result);
+
+typedef const WxslBytes * (*wxsl_fn_wxsl_result_images)(const WxslResult * result);
 
 /**
  * Release a result and all its views; null is a no-op.

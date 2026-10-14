@@ -10,7 +10,8 @@
 //! | `render` | yes | [`wxsl_render`] | you need wgpu pipelines (forward/deferred) driven by a graph |
 //! | `stdlib` | yes | [`wxsl_stdlib`] | you want the built-in library of base nodes (math, color, lighting, SDFs, …) |
 //! | `editor` | no | [`wxsl_editor`] (implies `render`) | you're building a UI that lets users edit graphs visually |
-//! | `gltf` | no | `wxsl-render`'s importer (implies `render`) | you load geometry from `.gltf`/`.glb` files |
+//! | `images` | no | PNG and JPEG decoding (implies `render`) | a scene's textures come from image files |
+//! | `gltf` | no | the glTF importer (implies `images`) | you load `.gltf`/`.glb` files: geometry, or with `stdlib` whole scenes (`wxsl::asset`) |
 //!
 //! [`wxsl_core`] (the graph model) is always available; it has no wgpu
 //! or GUI dependency regardless of which features are enabled. See
@@ -88,6 +89,9 @@ pub mod effects;
 
 #[cfg(all(feature = "render", feature = "stdlib"))]
 pub mod scene;
+
+#[cfg(all(feature = "gltf", feature = "stdlib"))]
+pub mod asset;
 
 #[cfg(feature = "render")]
 pub use wxsl_render as render;

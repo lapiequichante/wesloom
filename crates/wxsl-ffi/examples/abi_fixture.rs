@@ -34,5 +34,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         std::fs::write(dir.join(format!("{}.wgsl", stage.name())), wgsl)?;
     }
+    // A one-triangle GLB with an embedded PNG, for the import smoke test.
+    let mut glb = gltf_support::Glb::default();
+    let red = glb.png([255, 0, 0, 255]);
+    let texture = glb.texture(red);
+    let material = glb.material(serde_json::json!({
+        "pbrMetallicRoughness": { "baseColorTexture": { "index": texture } }
+    }));
+    let mesh = glb.triangle(Some(material), false);
+    glb.node(serde_json::json!({ "mesh": mesh }), None);
+    std::fs::write(dir.join("triangle.glb"), glb.finish())?;
     Ok(())
 }
+
+#[path = "../../wxsl-gltf/tests/support/mod.rs"]
+mod gltf_support;

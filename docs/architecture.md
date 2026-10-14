@@ -24,6 +24,7 @@ graph LR
     frame["wxsl-frame<br/>frame plans, scheduling"]
     ffi["wxsl-ffi<br/>data-only C ABI"]
     stdlib["wxsl-stdlib<br/>node library"]
+    gltf["wxsl-gltf<br/>glTF import"]
     render["wxsl-render<br/>wgpu renderer + UI layer"]
     editor["wxsl-editor<br/>visual editor"]
     facade["wxsl<br/>facade"]
@@ -32,8 +33,10 @@ graph LR
     frame --> core
     stdlib --> core
     stdlib -. "build only" .-> lang
-    ffi --> core & frame & lang & stdlib
+    gltf --> core & frame
+    ffi --> core & frame & lang & stdlib & gltf
     render --> core & frame & lang
+    render -. "gltf feature" .-> gltf
     editor --> core & render & lang
     facade --> core
     facade -. features .-> render & editor & stdlib
@@ -51,8 +54,13 @@ and lists which edges must never appear. Three edges need explaining:
 - **`editor → lang`.** The code panels reuse the compiler's lexer for
   syntax highlighting
   ([ADR 0016](adr/0016-syntax-highlighting-reuses-wxsl-langs-lexer.md)).
+- **`wxsl-gltf` takes the registry as an argument.** It never depends on
+  `wxsl-stdlib`, so `wxsl-render` can reuse its geometry reader and C++
+  gets the same import through `wxsl-ffi`
+  ([ADR 0080](adr/0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)).
 
-`wxsl-core`, `wxsl-frame`, `wxsl-lang` and `wxsl-ffi` never touch a device.
+`wxsl-core`, `wxsl-frame`, `wxsl-lang`, `wxsl-gltf` and `wxsl-ffi` never
+touch a device.
 That is what lets the scheduler, layouts and compiler be tested in CI
 without a GPU, and shared with Dawn
 ([ADR 0048](adr/0048-the-frame-plan-is-device-free.md)).
@@ -64,7 +72,8 @@ without a GPU, and shared with Dawn
 | `render` | on | `wxsl-render` |
 | `stdlib` | on | `wxsl-stdlib`, and `wxsl::stdlib_library()` to hand it to the renderer |
 | `editor` | off | `wxsl-editor` (implies `render`) |
-| `gltf` | off | glTF/GLB geometry import |
+| `images` | off | PNG and JPEG decoding for scene textures (implies `render`) |
+| `gltf` | off | glTF/GLB import: `file` meshes, and with `stdlib` whole scenes through `wxsl::asset` (implies `images`) |
 | `webgl` | off | wgpu's WebGL2 backend on `wasm32` |
 
 With `default-features = false`, `wxsl` is the graph model alone: no wgpu,

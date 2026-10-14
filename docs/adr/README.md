@@ -111,6 +111,7 @@ The ten decisions the rest of the log builds on:
 | [0077](0077-gate-a-release-on-every-shipped-shader-through-the-c-abi.md) | Gate a release on every shipped shader, compiled through the C ABI | Accepted |
 | [0078](0078-three-api-tiers-pinned-by-public-api-snapshots.md) | Three API tiers, pinned by public-API snapshots | Accepted |
 | [0079](0079-scene-document-v2-textures-bindings-nodes-environment.md) | Scene document v2: textures, bindings, a node hierarchy and an optional environment | Accepted |
+| [0080](0080-gltf-import-produces-a-scene-document-with-generated-graphs.md) | glTF import produces a scene document with generated graphs, in a device-free crate | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

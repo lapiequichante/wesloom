@@ -2927,6 +2927,7 @@ dependencies = [
  "winit",
  "wxsl-core",
  "wxsl-editor",
+ "wxsl-gltf",
  "wxsl-render",
  "wxsl-stdlib",
 ]
@@ -2965,6 +2966,7 @@ dependencies = [
  "wxsl",
  "wxsl-core",
  "wxsl-frame",
+ "wxsl-gltf",
  "wxsl-lang",
  "wxsl-render",
  "wxsl-stdlib",
@@ -2983,6 +2985,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wxsl-gltf"
+version = "0.0.0"
+dependencies = [
+ "glam",
+ "gltf",
+ "image",
+ "serde_json",
+ "wxsl-core",
+ "wxsl-frame",
+ "wxsl-stdlib",
+]
+
+[[package]]
 name = "wxsl-lang"
 version = "0.0.0"
 dependencies = [
@@ -2997,11 +3012,11 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "glam",
- "gltf",
  "ttf-parser",
  "wgpu",
  "wxsl-core",
  "wxsl-frame",
+ "wxsl-gltf",
  "wxsl-lang",
 ]
 

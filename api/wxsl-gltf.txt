@@ -1,0 +1,169 @@
+pub mod wxsl_gltf
+pub mod wxsl_gltf::geometry
+pub struct wxsl_gltf::geometry::Geometry
+pub wxsl_gltf::geometry::Geometry::colors: core::option::Option<alloc::vec::Vec<[f32; 4]>>
+pub wxsl_gltf::geometry::Geometry::indices: alloc::vec::Vec<u32>
+pub wxsl_gltf::geometry::Geometry::uv1: core::option::Option<alloc::vec::Vec<[f32; 2]>>
+pub wxsl_gltf::geometry::Geometry::vertices: alloc::vec::Vec<wxsl_gltf::geometry::Vertex>
+impl core::clone::Clone for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::default() -> Self
+impl core::fmt::Debug for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::geometry::Geometry
+impl core::marker::Freeze for wxsl_gltf::geometry::Geometry
+impl core::marker::Send for wxsl_gltf::geometry::Geometry
+impl core::marker::Sync for wxsl_gltf::geometry::Geometry
+impl core::marker::Unpin for wxsl_gltf::geometry::Geometry
+impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Geometry
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Geometry
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Geometry
+#[repr(C)] pub struct wxsl_gltf::geometry::Vertex
+pub wxsl_gltf::geometry::Vertex::normal: [f32; 3]
+pub wxsl_gltf::geometry::Vertex::position: [f32; 3]
+pub wxsl_gltf::geometry::Vertex::tangent: [f32; 4]
+pub wxsl_gltf::geometry::Vertex::uv: [f32; 2]
+impl core::clone::Clone for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::default() -> Self
+impl core::fmt::Debug for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_gltf::geometry::Vertex
+impl core::marker::StructuralPartialEq for wxsl_gltf::geometry::Vertex
+impl core::marker::Freeze for wxsl_gltf::geometry::Vertex
+impl core::marker::Send for wxsl_gltf::geometry::Vertex
+impl core::marker::Sync for wxsl_gltf::geometry::Vertex
+impl core::marker::Unpin for wxsl_gltf::geometry::Vertex
+impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Vertex
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Vertex
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Vertex
+pub const wxsl_gltf::geometry::COLOR_ATTRIBUTE: &str
+pub const wxsl_gltf::geometry::UV1_ATTRIBUTE: &str
+pub fn wxsl_gltf::geometry::load_baked(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<alloc::vec::Vec<wxsl_gltf::geometry::Geometry>, wxsl_gltf::ImportError>
+#[non_exhaustive] pub enum wxsl_gltf::ImportWarning
+pub wxsl_gltf::ImportWarning::Image
+pub wxsl_gltf::ImportWarning::Image::image: alloc::string::String
+pub wxsl_gltf::ImportWarning::Image::message: alloc::string::String
+pub wxsl_gltf::ImportWarning::Material
+pub wxsl_gltf::ImportWarning::Material::material: alloc::string::String
+pub wxsl_gltf::ImportWarning::Material::message: alloc::string::String
+pub wxsl_gltf::ImportWarning::Mesh
+pub wxsl_gltf::ImportWarning::Mesh::mesh: alloc::string::String
+pub wxsl_gltf::ImportWarning::Mesh::message: alloc::string::String
+pub wxsl_gltf::ImportWarning::Node
+pub wxsl_gltf::ImportWarning::Node::message: alloc::string::String
+pub wxsl_gltf::ImportWarning::Node::node: alloc::string::String
+pub wxsl_gltf::ImportWarning::UnsupportedExtension
+pub wxsl_gltf::ImportWarning::UnsupportedExtension::name: alloc::string::String
+impl core::clone::Clone for wxsl_gltf::ImportWarning
+pub fn wxsl_gltf::ImportWarning::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::ImportWarning
+pub fn wxsl_gltf::ImportWarning::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::ImportWarning
+pub fn wxsl_gltf::ImportWarning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_gltf::ImportWarning
+pub fn wxsl_gltf::ImportWarning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::ImportWarning
+impl core::marker::Freeze for wxsl_gltf::ImportWarning
+impl core::marker::Send for wxsl_gltf::ImportWarning
+impl core::marker::Sync for wxsl_gltf::ImportWarning
+impl core::marker::Unpin for wxsl_gltf::ImportWarning
+impl core::marker::UnsafeUnpin for wxsl_gltf::ImportWarning
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportWarning
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportWarning
+pub struct wxsl_gltf::Geometry
+pub wxsl_gltf::Geometry::colors: core::option::Option<alloc::vec::Vec<[f32; 4]>>
+pub wxsl_gltf::Geometry::indices: alloc::vec::Vec<u32>
+pub wxsl_gltf::Geometry::uv1: core::option::Option<alloc::vec::Vec<[f32; 2]>>
+pub wxsl_gltf::Geometry::vertices: alloc::vec::Vec<wxsl_gltf::geometry::Vertex>
+impl core::clone::Clone for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::default() -> Self
+impl core::fmt::Debug for wxsl_gltf::geometry::Geometry
+pub fn wxsl_gltf::geometry::Geometry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::geometry::Geometry
+impl core::marker::Freeze for wxsl_gltf::geometry::Geometry
+impl core::marker::Send for wxsl_gltf::geometry::Geometry
+impl core::marker::Sync for wxsl_gltf::geometry::Geometry
+impl core::marker::Unpin for wxsl_gltf::geometry::Geometry
+impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Geometry
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Geometry
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Geometry
+pub struct wxsl_gltf::ImportError
+pub wxsl_gltf::ImportError::path: alloc::string::String
+pub wxsl_gltf::ImportError::reason: alloc::string::String
+impl core::clone::Clone for wxsl_gltf::ImportError
+pub fn wxsl_gltf::ImportError::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::ImportError
+pub fn wxsl_gltf::ImportError::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_gltf::ImportError
+impl core::fmt::Debug for wxsl_gltf::ImportError
+pub fn wxsl_gltf::ImportError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_gltf::ImportError
+pub fn wxsl_gltf::ImportError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::ImportError
+impl core::marker::Freeze for wxsl_gltf::ImportError
+impl core::marker::Send for wxsl_gltf::ImportError
+impl core::marker::Sync for wxsl_gltf::ImportError
+impl core::marker::Unpin for wxsl_gltf::ImportError
+impl core::marker::UnsafeUnpin for wxsl_gltf::ImportError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportError
+pub struct wxsl_gltf::ImportedScene
+pub wxsl_gltf::ImportedScene::directory: core::option::Option<std::path::PathBuf>
+pub wxsl_gltf::ImportedScene::images: alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub wxsl_gltf::ImportedScene::meshes: alloc::vec::Vec<wxsl_gltf::geometry::Geometry>
+pub wxsl_gltf::ImportedScene::scene: wxsl_core::scene::Scene
+pub wxsl_gltf::ImportedScene::warnings: alloc::vec::Vec<wxsl_gltf::ImportWarning>
+impl wxsl_gltf::ImportedScene
+pub fn wxsl_gltf::ImportedScene::lighting(&self) -> core::result::Result<wxsl_core::lighting::LightingSet, wxsl_core::lighting::LightingError>
+impl core::clone::Clone for wxsl_gltf::ImportedScene
+pub fn wxsl_gltf::ImportedScene::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_gltf::ImportedScene
+pub fn wxsl_gltf::ImportedScene::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_gltf::ImportedScene
+impl core::marker::Send for wxsl_gltf::ImportedScene
+impl core::marker::Sync for wxsl_gltf::ImportedScene
+impl core::marker::Unpin for wxsl_gltf::ImportedScene
+impl core::marker::UnsafeUnpin for wxsl_gltf::ImportedScene
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportedScene
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportedScene
+#[repr(C)] pub struct wxsl_gltf::Vertex
+pub wxsl_gltf::Vertex::normal: [f32; 3]
+pub wxsl_gltf::Vertex::position: [f32; 3]
+pub wxsl_gltf::Vertex::tangent: [f32; 4]
+pub wxsl_gltf::Vertex::uv: [f32; 2]
+impl core::clone::Clone for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::default() -> Self
+impl core::fmt::Debug for wxsl_gltf::geometry::Vertex
+pub fn wxsl_gltf::geometry::Vertex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_gltf::geometry::Vertex
+impl core::marker::StructuralPartialEq for wxsl_gltf::geometry::Vertex
+impl core::marker::Freeze for wxsl_gltf::geometry::Vertex
+impl core::marker::Send for wxsl_gltf::geometry::Vertex
+impl core::marker::Sync for wxsl_gltf::geometry::Vertex
+impl core::marker::Unpin for wxsl_gltf::geometry::Vertex
+impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Vertex
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Vertex
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Vertex
+pub const wxsl_gltf::COLOR_ATTRIBUTE: &str
+pub const wxsl_gltf::GLTF_PBR_GRAPH: &str
+pub const wxsl_gltf::MAPPED_EXTENSIONS: &[&str]
+pub const wxsl_gltf::TAG_DOUBLE_SIDED: &str
+pub const wxsl_gltf::TAG_REFRACTIVE: &str
+pub const wxsl_gltf::UV1_ATTRIBUTE: &str
+pub fn wxsl_gltf::import(impl core::convert::AsRef<std::path::Path>, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>
+pub fn wxsl_gltf::import_slice(&[u8], &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>

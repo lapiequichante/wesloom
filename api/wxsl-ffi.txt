@@ -18,8 +18,31 @@ impl core::marker::Unpin for wxsl_ffi::api::ComputedField
 impl core::marker::UnsafeUnpin for wxsl_ffi::api::ComputedField
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::ComputedField
 impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::ComputedField
+pub struct wxsl_ffi::api::ImportOutput
+pub wxsl_ffi::api::ImportOutput::images: alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub wxsl_ffi::api::ImportOutput::meshes: alloc::vec::Vec<wxsl_ffi::api::ImportedMesh>
+impl core::marker::Freeze for wxsl_ffi::api::ImportOutput
+impl core::marker::Send for wxsl_ffi::api::ImportOutput
+impl core::marker::Sync for wxsl_ffi::api::ImportOutput
+impl core::marker::Unpin for wxsl_ffi::api::ImportOutput
+impl core::marker::UnsafeUnpin for wxsl_ffi::api::ImportOutput
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::ImportOutput
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::ImportOutput
+pub struct wxsl_ffi::api::ImportedMesh
+pub wxsl_ffi::api::ImportedMesh::colors: alloc::vec::Vec<u8>
+pub wxsl_ffi::api::ImportedMesh::indices: alloc::vec::Vec<u8>
+pub wxsl_ffi::api::ImportedMesh::uv1: alloc::vec::Vec<u8>
+pub wxsl_ffi::api::ImportedMesh::vertices: alloc::vec::Vec<u8>
+impl core::marker::Freeze for wxsl_ffi::api::ImportedMesh
+impl core::marker::Send for wxsl_ffi::api::ImportedMesh
+impl core::marker::Sync for wxsl_ffi::api::ImportedMesh
+impl core::marker::Unpin for wxsl_ffi::api::ImportedMesh
+impl core::marker::UnsafeUnpin for wxsl_ffi::api::ImportedMesh
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::ImportedMesh
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::ImportedMesh
 pub struct wxsl_ffi::api::Response
 pub wxsl_ffi::api::Response::fields: alloc::vec::Vec<wxsl_ffi::api::ComputedField>
+pub wxsl_ffi::api::Response::import: core::option::Option<alloc::boxed::Box<wxsl_ffi::api::ImportOutput>>
 pub wxsl_ffi::api::Response::json: alloc::vec::Vec<u8>
 pub wxsl_ffi::api::Response::params: alloc::vec::Vec<u8>
 pub wxsl_ffi::api::Response::status: wxsl_ffi::ffi::WxslStatus
@@ -35,6 +58,8 @@ impl core::marker::UnsafeUnpin for wxsl_ffi::api::Response
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::api::Response
 impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::api::Response
 pub fn wxsl_ffi::api::check(&[u8]) -> wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::import_glb(&[u8]) -> wxsl_ffi::api::Response
+pub fn wxsl_ffi::api::import_gltf(&[u8]) -> wxsl_ffi::api::Response
 pub fn wxsl_ffi::api::material(&[u8]) -> wxsl_ffi::api::Response
 pub fn wxsl_ffi::api::pipeline(&[u8]) -> wxsl_ffi::api::Response
 pub fn wxsl_ffi::api::shader(&[u8]) -> wxsl_ffi::api::Response
@@ -96,6 +121,18 @@ impl core::marker::Unpin for wxsl_ffi::ffi::WxslField
 impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslField
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslField
 impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslField
+#[repr(C)] pub struct wxsl_ffi::ffi::WxslMesh
+pub wxsl_ffi::ffi::WxslMesh::colors: wxsl_ffi::ffi::WxslBytes
+pub wxsl_ffi::ffi::WxslMesh::indices: wxsl_ffi::ffi::WxslBytes
+pub wxsl_ffi::ffi::WxslMesh::uv1: wxsl_ffi::ffi::WxslBytes
+pub wxsl_ffi::ffi::WxslMesh::vertices: wxsl_ffi::ffi::WxslBytes
+impl core::marker::Freeze for wxsl_ffi::ffi::WxslMesh
+impl !core::marker::Send for wxsl_ffi::ffi::WxslMesh
+impl !core::marker::Sync for wxsl_ffi::ffi::WxslMesh
+impl core::marker::Unpin for wxsl_ffi::ffi::WxslMesh
+impl core::marker::UnsafeUnpin for wxsl_ffi::ffi::WxslMesh
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_ffi::ffi::WxslMesh
+impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslMesh
 pub struct wxsl_ffi::ffi::WxslResult
 impl core::marker::Freeze for wxsl_ffi::ffi::WxslResult
 impl !core::marker::Send for wxsl_ffi::ffi::WxslResult
@@ -109,10 +146,16 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_ffi::ffi::WxslResult
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_material(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_pipeline(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_compile_shader(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_import_glb(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_import_gltf(u32, wxsl_ffi::ffi::WxslBytes) -> *mut wxsl_ffi::ffi::WxslResult
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_field_count(*const wxsl_ffi::ffi::WxslResult) -> usize
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_fields(*const wxsl_ffi::ffi::WxslResult) -> *const wxsl_ffi::ffi::WxslField
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_free(*mut wxsl_ffi::ffi::WxslResult)
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_image_count(*const wxsl_ffi::ffi::WxslResult) -> usize
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_images(*const wxsl_ffi::ffi::WxslResult) -> *const wxsl_ffi::ffi::WxslBytes
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_json(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_mesh_count(*const wxsl_ffi::ffi::WxslResult) -> usize
+#[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_meshes(*const wxsl_ffi::ffi::WxslResult) -> *const wxsl_ffi::ffi::WxslMesh
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_params(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_status(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslStatus
 #[no_mangle] pub unsafe c fn wxsl_ffi::ffi::wxsl_result_wgsl(*const wxsl_ffi::ffi::WxslResult) -> wxsl_ffi::ffi::WxslBytes

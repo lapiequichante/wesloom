@@ -2554,6 +2554,8 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_core::scene::Filter
 pub enum wxsl_core::scene::MeshSource
 pub wxsl_core::scene::MeshSource::Cube
 pub wxsl_core::scene::MeshSource::Cube::size: f32
+pub wxsl_core::scene::MeshSource::Embedded
+pub wxsl_core::scene::MeshSource::Embedded::index: usize
 pub wxsl_core::scene::MeshSource::File
 pub wxsl_core::scene::MeshSource::File::path: alloc::string::String
 pub wxsl_core::scene::MeshSource::File::primitive: core::option::Option<usize>
@@ -3437,6 +3439,8 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_core::macros::MacroValue
 pub enum wxsl_core::MeshSource
 pub wxsl_core::MeshSource::Cube
 pub wxsl_core::MeshSource::Cube::size: f32
+pub wxsl_core::MeshSource::Embedded
+pub wxsl_core::MeshSource::Embedded::index: usize
 pub wxsl_core::MeshSource::File
 pub wxsl_core::MeshSource::File::path: alloc::string::String
 pub wxsl_core::MeshSource::File::primitive: core::option::Option<usize>

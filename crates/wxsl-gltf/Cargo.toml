@@ -1,0 +1,22 @@
+[package]
+name = "wxsl-gltf"
+description = "Device-free glTF 2.0 import for wxsl: geometry, and whole files as scene documents with generated material graphs."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+# The G-buffer budget a lighting set must fit; device-free (ADR 0048).
+wxsl-frame = { workspace = true }
+gltf = { workspace = true }
+glam = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wxsl-stdlib = { workspace = true }
+image = { workspace = true }

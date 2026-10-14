@@ -554,3 +554,78 @@ fn independent_calls_can_run_concurrently() {
         thread.join().unwrap();
     }
 }
+
+#[path = "../../wxsl-gltf/tests/support/mod.rs"]
+mod gltf_support;
+
+#[test]
+fn a_glb_imports_through_the_c_abi_as_the_rust_importer_reads_it() {
+    let mut glb = gltf_support::Glb::default();
+    let red = glb.png([255, 0, 0, 255]);
+    let texture = glb.texture(red);
+    let material = glb.material(json!({
+        "name": "red", "pbrMetallicRoughness": { "baseColorTexture": { "index": texture } }
+    }));
+    let mesh = glb.triangle(Some(material), true);
+    glb.node(json!({ "mesh": mesh }), None);
+    let bytes = glb.finish();
+    let native =
+        wxsl_gltf::import_slice(&bytes, &wxsl_stdlib::registry()).expect("the GLB imports");
+
+    // SAFETY: input stays readable during the call; the guard frees the result.
+    let result = ResultOwner(unsafe {
+        wxsl_import_glb(
+            wxsl_abi_version(),
+            WxslBytes {
+                data: bytes.as_ptr(),
+                len: bytes.len(),
+            },
+        )
+    });
+    // SAFETY: the result is live until the guard drops; every view is read
+    // within that lifetime.
+    unsafe {
+        assert_eq!(wxsl_result_status(result.0), WxslStatus::Success);
+        let json = wxsl_result_json(result.0);
+        let envelope: Json =
+            serde_json::from_slice(std::slice::from_raw_parts(json.data, json.len)).unwrap();
+        assert_eq!(
+            envelope["data"]["scene"],
+            serde_json::to_value(&native.scene).unwrap()
+        );
+        assert_eq!(envelope["data"]["lighting_models"], json!(["wxsl.pbr"]));
+
+        assert_eq!(wxsl_result_mesh_count(result.0), 1);
+        let mesh = &*wxsl_result_meshes(result.0);
+        let geometry = &native.meshes[0];
+        assert_eq!(mesh.vertices.len, geometry.vertices.len() * 48);
+        assert_eq!(mesh.indices.len, geometry.indices.len() * 4);
+        assert_eq!(mesh.uv1.len, geometry.vertices.len() * 8);
+        assert_eq!(mesh.colors.len, 0);
+        // The first vertex's position, in the `WxslVertex` layout.
+        let position: Vec<u8> = geometry.vertices[0]
+            .position
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
+        assert_eq!(
+            std::slice::from_raw_parts(mesh.vertices.data, 12),
+            &position[..]
+        );
+
+        assert_eq!(wxsl_result_image_count(result.0), 1);
+        let image = &*wxsl_result_images(result.0);
+        assert_eq!(
+            std::slice::from_raw_parts(image.data, image.len),
+            &native.images[0][..]
+        );
+    }
+
+    // A path that does not exist is a document error naming it.
+    let missing = ResultOwner::call(wxsl_import_gltf, json!({ "path": "no/such.glb" }));
+    // SAFETY: as above.
+    unsafe {
+        assert_eq!(wxsl_result_status(missing.0), WxslStatus::InvalidDocument);
+        assert_eq!(wxsl_result_mesh_count(missing.0), 0);
+    }
+}

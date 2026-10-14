@@ -73,10 +73,25 @@ pub struct WxslField {
     pub buffer_align: u32,
 }
 
+/// One imported mesh (`wxsl_import_gltf`), as views into its result.
+#[repr(C)]
+pub struct WxslMesh {
+    /// `WxslVertex` rows (`wxsl_host.h`), 48 bytes each.
+    pub vertices: WxslBytes,
+    /// `uint32_t` triangle indices, three per triangle.
+    pub indices: WxslBytes,
+    /// `float[4]` per vertex from `COLOR_0`, or empty.
+    pub colors: WxslBytes,
+    /// `float[2]` per vertex from `TEXCOORD_1`, or empty.
+    pub uv1: WxslBytes,
+}
+
 /// Opaque to C. All views remain valid until this result is freed.
 pub struct WxslResult {
     response: Response,
     fields: Vec<WxslField>,
+    meshes: Vec<WxslMesh>,
+    images: Vec<WxslBytes>,
 }
 
 impl WxslResult {
@@ -97,7 +112,26 @@ impl WxslResult {
                 buffer_align: field.buffer_align,
             })
             .collect();
-        Box::into_raw(Box::new(Self { response, fields }))
+        let (meshes, images) = match &response.import {
+            Some(import) => (&import.meshes[..], &import.images[..]),
+            None => (&[][..], &[][..]),
+        };
+        let meshes = meshes
+            .iter()
+            .map(|mesh| WxslMesh {
+                vertices: WxslBytes::view(&mesh.vertices),
+                indices: WxslBytes::view(&mesh.indices),
+                colors: WxslBytes::view(&mesh.colors),
+                uv1: WxslBytes::view(&mesh.uv1),
+            })
+            .collect();
+        let images = images.iter().map(|image| WxslBytes::view(image)).collect();
+        Box::into_raw(Box::new(Self {
+            response,
+            fields,
+            meshes,
+            images,
+        }))
     }
 }
 
@@ -150,6 +184,25 @@ pub unsafe extern "C" fn wxsl_compile_material(
 pub unsafe extern "C" fn wxsl_check_setup(abi_version: u32, request: WxslBytes) -> *mut WxslResult {
     // SAFETY: same input-span contract as compile_pipeline.
     unsafe { run(abi_version, request, api::check) }
+}
+
+/// Import a glTF or GLB file: `{"path": "..."}` in, the scene document as
+/// `data.scene` in the JSON, its meshes and embedded images as views.
+/// # Safety
+/// `request.data` must reference `request.len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_import_gltf(abi_version: u32, request: WxslBytes) -> *mut WxslResult {
+    // SAFETY: same input-span contract as compile_pipeline.
+    unsafe { run(abi_version, request, api::import_gltf) }
+}
+
+/// Import a GLB from its bytes, as `wxsl_import_gltf` does from a file.
+/// # Safety
+/// `glb.data` must reference `glb.len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_import_glb(abi_version: u32, glb: WxslBytes) -> *mut WxslResult {
+    // SAFETY: same input-span contract as compile_pipeline.
+    unsafe { run(abi_version, glb, api::import_glb) }
 }
 
 unsafe fn run(
@@ -246,6 +299,48 @@ pub unsafe extern "C" fn wxsl_result_fields(result: *const WxslResult) -> *const
     unsafe { result.as_ref() }
         .filter(|r| !r.fields.is_empty())
         .map_or(std::ptr::null(), |r| r.fields.as_ptr())
+}
+
+/// Number of imported meshes (zero for null or a non-import result).
+/// # Safety
+/// A non-null pointer must be a live result returned by this library.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_result_mesh_count(result: *const WxslResult) -> usize {
+    // SAFETY: caller owns a live result, or passes null.
+    unsafe { result.as_ref() }.map_or(0, |r| r.meshes.len())
+}
+
+/// Contiguous imported meshes, indexed by the scene's `embedded` mesh
+/// sources (null when empty). Borrowed from the result.
+/// # Safety
+/// A non-null pointer must be a live result returned by this library.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_result_meshes(result: *const WxslResult) -> *const WxslMesh {
+    // SAFETY: caller owns a live result, or passes null.
+    unsafe { result.as_ref() }
+        .filter(|r| !r.meshes.is_empty())
+        .map_or(std::ptr::null(), |r| r.meshes.as_ptr())
+}
+
+/// Number of embedded images (zero for null or a non-import result).
+/// # Safety
+/// A non-null pointer must be a live result returned by this library.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_result_image_count(result: *const WxslResult) -> usize {
+    // SAFETY: caller owns a live result, or passes null.
+    unsafe { result.as_ref() }.map_or(0, |r| r.images.len())
+}
+
+/// Contiguous encoded images (PNG or JPEG), indexed by the scene's
+/// `embedded` texture sources (null when empty). Borrowed from the result.
+/// # Safety
+/// A non-null pointer must be a live result returned by this library.
+#[no_mangle]
+pub unsafe extern "C" fn wxsl_result_images(result: *const WxslResult) -> *const WxslBytes {
+    // SAFETY: caller owns a live result, or passes null.
+    unsafe { result.as_ref() }
+        .filter(|r| !r.images.is_empty())
+        .map_or(std::ptr::null(), |r| r.images.as_ptr())
 }
 
 /// Release a result and all its views; null is a no-op.

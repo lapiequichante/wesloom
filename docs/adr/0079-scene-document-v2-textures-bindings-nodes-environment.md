@@ -78,3 +78,6 @@ file reads as v2 unchanged.
   variants.
 - Light intensity is stored in the renderer's units. Converting from
   glTF's photometric units is the importer's job (G2).
+- [ADR 0080](0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)
+  adds an `embedded` mesh source, for geometry supplied with the
+  document, within schema 2.

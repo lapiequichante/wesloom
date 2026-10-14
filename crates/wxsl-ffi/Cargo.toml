@@ -17,6 +17,7 @@ wxsl-core = { workspace = true }
 wxsl-frame = { workspace = true }
 wxsl-lang = { workspace = true }
 wxsl-stdlib = { workspace = true }
+wxsl-gltf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

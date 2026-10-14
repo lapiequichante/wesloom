@@ -8,6 +8,7 @@ members = [
     "crates/wxsl-render",
     "crates/wxsl-editor",
     "crates/wxsl-stdlib",
+    "crates/wxsl-gltf",
     "crates/wxsl",
 ]
 
@@ -26,6 +27,7 @@ wxsl-frame = { path = "crates/wxsl-frame", version = "0.0.0" }
 wxsl-render = { path = "crates/wxsl-render", version = "0.0.0" }
 wxsl-editor = { path = "crates/wxsl-editor", version = "0.0.0" }
 wxsl-stdlib = { path = "crates/wxsl-stdlib", version = "0.0.0" }
+wxsl-gltf = { path = "crates/wxsl-gltf", version = "0.0.0" }
 
 # Parser generator for the WXSL shading language (ADR 0011). Build
 # dependency of wxsl-lang only; `lalrpop-util` is the runtime half.
@@ -44,17 +46,27 @@ serde = { version = "1.0", features = ["derive"] }
 # Glyph outlines for the renderer's MSDF text stack (ADR 0014). Pure Rust,
 # no transitive dependencies; the MSDF generation itself is ours.
 ttf-parser = "0.25"
-# glTF geometry import for wxsl-render's optional `gltf` feature (ADR 0021).
-# Default features minus the ones that pull in an image decoder: this reads
-# geometry, never textures.
-gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
+# glTF import, used only by wxsl-gltf (ADR 0080). The extension features are
+# the ones the importer maps; `extensions` exposes the rest as raw JSON.
+gltf = { version = "1.4", default-features = false, features = [
+    "import",
+    "utils",
+    "names",
+    "extensions",
+    "KHR_lights_punctual",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "KHR_materials_volume",
+    "KHR_texture_transform",
+] }
 
 serde_json = "1.0"
 
 # Demo/example-only (dev-dependencies; never in a library's dependency list).
 winit = "0.30"
 pollster = "1.0"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.dev.package."*"]
 opt-level = 1

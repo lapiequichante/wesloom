@@ -366,9 +366,10 @@ impl MeshEntry {
 
 /// Where a mesh's geometry comes from.
 ///
-/// A generated primitive or a file on disk. The renderer resolves both; the
-/// document only records which, so a scene stays a few kilobytes of text
-/// rather than a vertex dump.
+/// A generated primitive, a file on disk, or geometry supplied with the
+/// document. The facade resolves all three; the document only records
+/// which, so a scene stays a few kilobytes of text rather than a vertex
+/// dump.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "snake_case"))]
@@ -407,6 +408,13 @@ pub enum MeshSource {
         /// every primitive into one mesh.
         #[cfg_attr(feature = "serde", serde(default))]
         primitive: Option<usize>,
+    },
+    /// Geometry the host supplies with the document, by index: an imported
+    /// file's primitives, say (ADR 0080). Like an `embedded` texture, the
+    /// document only records which.
+    Embedded {
+        /// Index into the meshes supplied with the document.
+        index: usize,
     },
 }
 
