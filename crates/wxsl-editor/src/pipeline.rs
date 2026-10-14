@@ -1,6 +1,6 @@
 //! The pipeline canvas: the editor's second document, over the pipeline
 //! registry
-//! ([plan3 P5](../../../plan3.md)).
+//! ([plan3 P5](../../../docs/history/plan3.md)).
 //!
 //! A pipeline is a [`Graph`] like a material is; what differs is the
 //! registry it is edited against and what an edit *does*. A material edit

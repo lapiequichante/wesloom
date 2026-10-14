@@ -5,11 +5,12 @@ Terms used elsewhere in this repo's docs without re-explanation.
 **WGSL** — WebGPU Shading Language: the shader language `wgpu`/WebGPU
 consumes natively. No imports, no conditional compilation.
 
-**WXSL** ("WGSL Extended") — a superset of WGSL adding imports/modules and
-`@if`/`@elif`/`@else` conditional compilation, developed at
-[wesl-lang.dev](https://wesl-lang.dev). Compiles down to plain WGSL via the
-`wxsl-lang` crate / `wesl-cli` tool. See
-[ADR 0003](adr/0003-wesl-as-the-shading-language.md).
+**WXSL** ("WGSL Extended") — this project's shading language: WGSL plus
+templates, imports, `@if`/`@elif`/`@else` conditional translation and
+`@macro const` values. `wxsl-lang` compiles it to plain WGSL. It began as
+[WESL](https://wesl-lang.dev) and became its own language when WESL's
+generics fell short; see
+[ADR 0011](adr/0011-own-the-shading-language.md).
 
 **Node graph** — the user-facing/data-model representation of a shader as
 connected nodes and sockets (`wxsl_core::graph`). Compiles to a WXSL

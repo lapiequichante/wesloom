@@ -16,12 +16,12 @@ shipped ones were still authored as hand-written Rust:
 `forward_graph` and `deferred_graph` built their pass lists in functions.
 `PassKind::Screen` took a hardcoded enum naming the one fullscreen shader
 that existed. plan2's review called this what it was — "everything looks
-hard-coded" — and [request.md](../../../request.md) asks for the pipeline
+hard-coded" — and [request.md](../history/request.md) asks for the pipeline
 to be a graph the way the material already is: sources, passes,
 resources and a present step, composed as data, with the forward and
 deferred pipelines as two *instances* rather than two functions.
 
-[plan2-architecture.md](../../../plan2-architecture.md) sketched the
+[plan2-architecture.md](../history/plan2-architecture.md) sketched the
 layers — document in `wxsl-core`, compiler in `wxsl-render`, presets as
 shipped files, canvas in the editor — with the instruction that nothing
 in it is decided until it lands.

@@ -10,7 +10,7 @@
 //! pattern is a **template**: a `.wxsl` file under
 //! `templates/`, readable and editable as shader except for its holes,
 //! which the generator fills at generation time
-//! ([plan2 P1](../../../plan2.md)). The generator owns the *logic* — which
+//! ([plan2 P1](../../../docs/history/plan2.md)). The generator owns the *logic* — which
 //! models, which targets, which ids — and a table of hole → text; the file
 //! owns everything else.
 //!

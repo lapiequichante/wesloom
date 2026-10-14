@@ -83,24 +83,26 @@ or overturn it before the first ADR is written.
 The goal is that a newcomer can find what they need in three documents.
 This is moving and cutting, never rewriting.
 
-* **History moves to `docs/history/`:** `plan.md`–`plan5.md`,
-  `plan2-architecture.md`, `request.md`, and the S2–S4 guide once its last
-  items (S4 preset, AgX) are closed. At the root stay only `README.md`,
-  `AGENTS.md`, `CONTRIBUTING.md` and the current plan.
-* **`README.md`:** what it is, one picture, install, three commands, links.
-  About 80 lines.
-* **`docs/architecture.md`:** about 400 lines.
-  * Kept: the crate graph, the data flow and one section per concept, each
-    a paragraph plus links to its ADR and module.
-  * Moved: the deep explanations, into module docs, since they already
-    describe themselves.
-  * Deleted: the "Current status" table.
+* **History:** *done.* `plan.md`–`plan5.md`, `plan2-architecture.md` and
+  `request.md` moved to `docs/history/`, with their links fixed. The S2–S4
+  guide follows once its last items (S4 preset, AgX) close. `todo.md` is
+  gone: its WebGL2 item was done (ADR 0075), its GLB demo is G2, and the
+  bloom banding question is under C3.
+* **`README.md`:** *done.* 193 → 80 lines: what it is, one picture, the
+  commands, the crates, links.
+* **`docs/architecture.md`:** *done.* 1085 → 460 lines.
+  * One section per concept: a summary, a link to its ADR, a link to its
+    module.
+  * Removed: the demo walkthroughs, the status table, the test list.
+  * New in it: transparency, forward shading, light kinds and the C ABI
+    backend, which it barely mentioned.
+* **`CONTRIBUTING.md` and the glossary:** *done.* They had drifted from
+  ADRs 0053 and 0011 (no ports allowed, WXSL described as WESL).
 * **`AGENTS.md`:** *done (2026-10-14).* Down from 575 to 210 lines. The
   test routing is a table (change → command), the per-test detail is left
   to the test files' headers, and each convention is one line plus its ADR.
-* **`docs/adr/README.md`:** gains a status column (Accepted / Superseded /
-  Amended by), checked once by hand. A short "read these ten first" list
-  goes at the top.
+* **`docs/adr/README.md`:** *done.* The index already had a status column.
+  It gains a "read these first" list of ten ADRs.
 * **Two guides, short and runnable:**
   * `docs/guide/` "write a node", "write an effect", "load a scene", with
     their snippets checked the way `check_shader_guide` checks the S2–S4
@@ -137,8 +139,8 @@ This work is driven by C2, never by style.
   * the editor's `app.rs` (3k), which M0 will split anyway.
 * Remove dead code and orphan examples, and reconcile the `wxsl_render`
   re-exports of `wxsl_frame` so each type has one canonical path.
-* Close `todo.md` (the bloom banding question) and remove the file.
-  Short-term items go into the current plan.
+* **Open question (from the old `todo.md`):** why the blurred bloom
+  shows bands.
 
 ### G1 — Scene document v2 *(prerequisite for G2 and E1)*
 

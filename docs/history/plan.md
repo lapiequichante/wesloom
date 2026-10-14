@@ -27,11 +27,11 @@ superseding its row, not by quietly diverging inside a milestone.
 | Portability target | **WebGPU baseline, native fast paths behind a feature.** Every pass must have a path that runs on the WebGPU baseline; a native path may be faster or higher quality, and both are tested. |
 | Culling | **Convention, as a per-pass knob.** The opaque pass culls back faces; an outline pass culls front faces. `cull_mode` is a field of a pass description, never a constant in the code. |
 | How an object picks its queue | **Tags on the material, a tag expression on the pass.** The material declares what it *is* (`opaque`, `transparent`, `outlined`); a geometry pass declares what it *draws*. No introspection of graphs, and a draw may override its tags. |
-| How a node is declared | **The `.wxsl` file is the definition.** *Done — [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md).* Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
-| How a material declares a uniform | *Done — [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md).* **A `param` node, with the layout computed rather than mirrored.** `const` inlines into the shader, so editing one compiles a new variant; `param` is a field of group 1's uniform buffer, so editing one only writes bytes. `wxsl-core` computes the WGSL layout — `vec3f`'s 16-byte alignment makes a hand-written Rust mirror impossible — and emits an offset table `wxsl-render` writes through. |
-| How a material uses the application's slot | *Done — [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md).* **It declares a block and hands out the layout; the application hands back a bind group.** Group 2 stays the application's and holds nothing of ours, but a material may now state what it expects to find there. `wgpu` validates the match, so there is no checking code of ours to keep in sync. |
-| How a material requires a *vertex* attribute | *Done — [ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md).* **The base four are ABI and always present; declared extras are separate vertex buffers at locations 4 and up.** Read with one `input.attribute` node carrying the name, so `NodeRegistry` stays global and static. A mesh that lacks a declared attribute is reported when the frame is compiled, naming both sides. |
-| How a material requires an *instance* attribute | *Done — [ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md).* **A storage array in the frame group, not an instance-step vertex buffer.** Same declaration in the editor, different backing, and for the reason already settled two rows up: one binding however many attributes, no vertex-slot pressure, and it survives a GPU culling pass that emits instance *indices*. A fragment stage reads them by passing `instance_index` down as one flat varying and re-indexing. It is a *second* array beside the transforms rather than a widening of them — see the ADR. |
+| How a node is declared | **The `.wxsl` file is the definition.** *Done — [ADR 0020](../adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md).* Its signature, its returned struct and its `@macro const`s derive into sockets, outputs and macro declarations; its leading comment block carries the label and doc, and `// @default` annotations carry socket defaults. The derivation is a public `wxsl-lang` function, called at build time for the stdlib and at runtime for files the user writes. |
+| How a material declares a uniform | *Done — [ADR 0023](../adr/0023-a-material-declares-its-resources.md).* **A `param` node, with the layout computed rather than mirrored.** `const` inlines into the shader, so editing one compiles a new variant; `param` is a field of group 1's uniform buffer, so editing one only writes bytes. `wxsl-core` computes the WGSL layout — `vec3f`'s 16-byte alignment makes a hand-written Rust mirror impossible — and emits an offset table `wxsl-render` writes through. |
+| How a material uses the application's slot | *Done — [ADR 0023](../adr/0023-a-material-declares-its-resources.md).* **It declares a block and hands out the layout; the application hands back a bind group.** Group 2 stays the application's and holds nothing of ours, but a material may now state what it expects to find there. `wgpu` validates the match, so there is no checking code of ours to keep in sync. |
+| How a material requires a *vertex* attribute | *Done — [ADR 0024](../adr/0024-a-material-declares-the-geometry-it-requires.md).* **The base four are ABI and always present; declared extras are separate vertex buffers at locations 4 and up.** Read with one `input.attribute` node carrying the name, so `NodeRegistry` stays global and static. A mesh that lacks a declared attribute is reported when the frame is compiled, naming both sides. |
+| How a material requires an *instance* attribute | *Done — [ADR 0024](../adr/0024-a-material-declares-the-geometry-it-requires.md).* **A storage array in the frame group, not an instance-step vertex buffer.** Same declaration in the editor, different backing, and for the reason already settled two rows up: one binding however many attributes, no vertex-slot pressure, and it survives a GPU culling pass that emits instance *indices*. A fragment stage reads them by passing `instance_index` down as one flat varying and re-indexing. It is a *second* array beside the transforms rather than a widening of them — see the ADR. |
 | Lighting models | **A registry of WXSL functions, hand-written first.** A model is one function of fixed signature plus a small id; whether that function was written or generated is invisible to the dispatch, so graph-authored models land later against the same registry. |
 | Compute passes | **In the engine from M1, first used in M7.** The repo already runs a compute pass — MSDF generation (ADR 0014) — so the pipeline, bind-group and variant machinery exists and the render graph generalizes it rather than inventing it. |
 | Antialiasing | **Post-process only.** No MSAA anywhere: FXAA/SMAA in M7, TAA once persistent resources exist. One behaviour across forward, deferred and peeling, so the editor's preview always represents the final frame. |
@@ -109,7 +109,7 @@ needs a material stage that returns three). Everything else is bookkeeping.
 
 ### 2. Material stages replace `RenderPath`
 
-*Done — [ADR 0022](docs/adr/0022-material-stages-replace-the-render-path-enum.md).*
+*Done — [ADR 0022](../adr/0022-material-stages-replace-the-render-path-enum.md).*
 
 `RenderPath` stops being the compile axis. A surface graph compiles once per
 **stage**, where a stage says which entry points to emit and what the
@@ -243,7 +243,7 @@ it owes. Nothing here is a refactor with no observable end state.
 
 ### M0 — A `.wxsl` file *is* a node definition — **done**
 
-Landed as [ADR 0020](docs/adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md),
+Landed as [ADR 0020](../adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md),
 which is now where the reasoning lives. What shipped, and the three things a
 later milestone needs to know:
 
@@ -291,7 +291,7 @@ API rather than as a build script.
 
 ### M1 — The render graph, with today's two paths on it — **done**
 
-Landed as [ADR 0021](docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md),
+Landed as [ADR 0021](../adr/0021-a-declarative-render-graph-and-a-scene-document.md),
 which is now where the reasoning lives. What shipped, and the four things a
 later milestone needs to know:
 
@@ -330,7 +330,7 @@ stage does not exist until M2, and `variant` already carries the path.
 
 ### M2 — Stages in the ABI and codegen — **done**
 
-Landed as [ADR 0022](docs/adr/0022-material-stages-replace-the-render-path-enum.md),
+Landed as [ADR 0022](../adr/0022-material-stages-replace-the-render-path-enum.md),
 which is now where the reasoning lives. What shipped, and the four things a
 later milestone needs to know:
 
@@ -380,7 +380,7 @@ previous frame, so what `Velocity` still needs is the *transform* at
 
 ### M3 — What a material declares: uniforms, textures, samplers — **done**
 
-Landed as [ADR 0023](docs/adr/0023-a-material-declares-its-resources.md),
+Landed as [ADR 0023](../adr/0023-a-material-declares-its-resources.md),
 which is now where the reasoning lives. What shipped, and the five things
 a later milestone needs to know:
 
@@ -444,7 +444,7 @@ deliberately outside `ValueType::ALL`. Groups 1 and 2 arrive on the draw.
 
 ### M4 — The interface a material requires of its geometry — **done**
 
-Landed as [ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md), which is now where the reasoning lives. What
+Landed as [ADR 0024](../adr/0024-a-material-declares-the-geometry-it-requires.md), which is now where the reasoning lives. What
 shipped, and the five things a later milestone needs to know:
 
 `Graph::attributes` is a list of `AttributeDecl { name, ty, frequency }`,
@@ -537,8 +537,8 @@ changed at all.
 
 ### M5 — Multiple outputs, partitioning, and shadows — **done**
 
-Recorded as [ADR 0025](docs/adr/0025-a-material-graph-spans-shader-stages.md) (a graph spans shader stages),
-[ADR 0026](docs/adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md) (shadows), and [ADR 0027](docs/adr/0027-a-graph-computes-its-own-interpolants.md) (interpolants the graph
+Recorded as [ADR 0025](../adr/0025-a-material-graph-spans-shader-stages.md) (a graph spans shader stages),
+[ADR 0026](../adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md) (shadows), and [ADR 0027](../adr/0027-a-graph-computes-its-own-interpolants.md) (interpolants the graph
 computes).
 
 Five things a later milestone needs to know, and one that is not obvious
@@ -600,7 +600,7 @@ hardware, beside a test that forward and deferred agree pixel for pixel.
 
 ### M6 — Lighting models, by ID in the G-buffer — **done**
 
-Landed as [ADR 0028](docs/adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md),
+Landed as [ADR 0028](../adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md),
 which is now where the reasoning lives. What shipped, and the four things a
 later milestone needs to know:
 

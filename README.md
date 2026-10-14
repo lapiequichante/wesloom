@@ -1,193 +1,85 @@
 # WXSL
 
-Shader node graphs on `wgpu`, with its own shading language, an optional
-visual node editor, and a library of original and audited permissively ported shader
-nodes.
+Shader node graphs, a render pipeline you author as data, and a visual
+editor, for Rust on [`wgpu`](https://wgpu.rs). The same documents also run
+on C++ through [Dawn](dawn/README.md).
 
-> **Status: working, editor included.** Graphs are authored in code, in the
-> node format, or in the visual editor, and rendered through a forward or
-> deferred `wgpu` pipeline. The editor draws itself with this project's own
-> renderer — no GUI toolkit
-> ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)).
-> See [Current status](docs/architecture.md#current-status).
+![The cinema demo](gallery/cinema.png)
 
-## What this is
+- **WXSL** is WGSL plus imports, conditional compilation, macro constants
+  and templates. Graphs, hand-written shaders and the node library all
+  compose through the same imports.
+- **One material graph serves every pass.** It compiles separately for
+  each pass that draws it (forward colour, G-buffer, depth, shadow,
+  velocity), so switching between forward and deferred needs nothing from
+  the graph's author.
+- **Pipelines are documents.** A pipeline is a list of passes over
+  resources, which the engine schedules, allocates and records. Forward and
+  deferred are two shipped presets, and effects (bloom, TAA, depth of
+  field, …) are nodes you wire in.
+- **A library of about 100 base nodes:** math, colour, noise, SDFs, PBR and
+  other lighting models, sky. They are original or audited permissive ports
+  ([ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)).
+- **An optional node editor.** It draws itself with the renderer, so it
+  pulls in no GUI toolkit
+  ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)).
+- **Targets:** native through wgpu, the browser on WebGPU or WebGL2, and
+  C++ through a data-only C ABI.
 
-- A Rust library, built around [`wgpu`](https://wgpu.rs), for authoring
-  shaders as node graphs compiled to **WXSL** — a shading language that is
-  WGSL plus imports, conditional translation, macro constants and templates
-  — so graphs, hand-written shaders, and the bundled node library all
-  compose through the same import mechanism.
-- A `wgpu` renderer whose pipeline is *data*: a list of passes over a set of
-  render targets, which the engine orders, allocates and records. Forward
-  and deferred are two such lists, and switching between them recompiles
-  nothing the graph author has to think about — each pass names the
-  material *stage* it draws with, and one graph compiles for all of them.
-- Materials that **declare what they need from outside themselves**:
-  uniform parameters the host changes with a buffer write and no
-  recompile, textures and samplers it binds by name, and a block the
-  *application* fills and this library never looks inside. The uniform
-  layout is computed from the graph rather than written twice, because
-  there is no fixed struct to mirror
-  ([ADR 0023](docs/adr/0023-a-material-declares-its-resources.md)).
-- Materials that **span shader stages**: a graph can move the vertex,
-  discard the fragment and hand itself interpolants as well as shade, and
-  each of those is compiled from its own subgraph into the passes that
-  need it. A depth or shadow pass compiles the displacement and the alpha
-  test and leaves the rest of the material out of the module
-  ([ADR 0025](docs/adr/0025-a-material-graph-spans-shader-stages.md),
-  [ADR 0027](docs/adr/0027-a-graph-computes-its-own-interpolants.md)).
-- **Shadows** that follow what the graph did: a displacing material casts
-  a displaced shadow and an alpha-tested one casts a perforated shadow,
-  because the shadow pass compiles those parts of the graph and no
-  others. PCF over shared depth-atlas tiles, biased by normal
-  offset, read from the same function in both render paths
-  ([ADR 0026](docs/adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
-  N7 also provides camera-following cascades, six-face point shadows and
-  rectangular area lights with sixteen shadowed integration samples. The
-  gallery demos `cascade`, `point-shadow`, `area-shadow`, `spot-shadow`, `spot-cookie` and `sixteen`
-  show these features, including textured spotlight masks. Sixteen lights remain a fixed uniform budget;
-  compute/clustered light lists are still pending.
-- Materials that **declare what they require of their geometry** too: a
-  per-vertex stream the mesh must carry — a second UV set, a vertex
-  colour, a wind weight — or a per-instance value the draw supplies, read
-  by the same node either way. A mesh that cannot supply one is an error
-  naming the material, the attribute and the mesh, rather than a frame
-  that looks wrong
-  ([ADR 0024](docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
-- A built-in library of granular base nodes (math, color, lighting, SDFs,
-  noise, …), in the spirit of libraries like [LYGIA](https://lygia.xyz) but
-  original functions plus audited permissive ports — see
-  [ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)
-  for the provenance and redistribution rules.
-- An optional visual node editor, strictly opt-in via a Cargo feature, so a
-  headless/runtime consumer never compiles it just to use the graph model or
-  renderer. It has no GUI-toolkit dependency at all: it draws itself with
-  `wxsl-render`, through a WXSL shader compiled by this project's own
-  compiler, with MSDF text generated in-tree on the CPU or in a compute pass
-  ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md),
-  [ADR 0014](docs/adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md)).
-
-## The editor
+## Try it
 
 ```sh
-cargo run -p wxsl --features editor --example editor              # the shipped demo graph
-cargo run -p wxsl --features editor --example editor -- --graph my.wxsl.json
-cargo run -p wxsl --features editor --example editor -- --msdf gpu
+cargo run -p wxsl --example pbr_cube                        # one material, F/D switch pipeline
+cargo run -p wxsl --example gallery                         # every pipeline feature, arrow keys to browse
+cargo run -p wxsl --features editor --example editor        # the node editor
 cargo run -p wxsl --features editor --example editor -- --screenshot out.png
 ```
 
-```text
- ┌─────────────────────────────────────────────────────────────┐
- │ toolbar: name · path · mesh · MSDF backend · add · fit      │
- ├───────────┬──────────────────────────────┬──────────────────┤
- │ palette   │ node canvas                  │ live preview    │
- │ (search,  │ (pan, zoom, link, unlink,    │ selected node   │
- │  category)│  move, delete)               │ macro variables │
- ├───────────┴──────────────────────────────┴──────────────────┤
- │ WXSL │ WGSL │ problems                                      │
- ├─────────────────────────────────────────────────────────────┤
- │ status: nodes · variants · atlas · glyphs · last message    │
- └─────────────────────────────────────────────────────────────┘
-```
+`pbr_cube`'s material is
+[a node graph in a JSON file](crates/wxsl/assets/pbr_cube.wxsl.json), with
+comments explaining the format. Each example's `--help` lists its options.
 
-Every node in the graph, with its ports coloured by type; drag between ports
-to link, drag a connected input to move that link, right-click one to cut it.
-The preview is the real renderer on the real pipelines, and the two code
-panels are the WXSL the graph generated and the WGSL that compiled to — which
-is most of what makes a shader graph debuggable.
-
-The editor itself needs no window: it takes input events and records two
-passes into an encoder, so it embeds in an application that already has an
-event loop. `crates/wxsl/examples/editor.rs` is the winit half, and the only
-file in the workspace that knows winit exists. Fonts come from the
-application (the renderer embeds none); the example finds a platform default
-or takes `--font`/`--mono`.
-
-## The demo
-
-```sh
-cargo run -p wxsl --example pbr_cube               # windowed; F/D switch pipeline
-cargo run -p wxsl --example pbr_cube -- --headless # one PNG per path, and their difference
-cargo run -p wxsl --example pbr_cube -- --dump-wgsl --path deferred
-```
-
-A cube whose PBR material — noise-driven roughness, stepped metallic
-patches, an sRGB albedo converted to linear light, a pulsing emissive — is
-[a node graph in a JSON file](crates/wxsl/assets/pbr_cube.wxsl.json),
-not code. Nothing in that graph mentions forward or deferred: the pipeline is
-a list of passes the renderer holds, and each pass names the material *stage*
-it draws with — a final colour, a G-buffer, or depth and nothing at all. In
-the window, `F` and `D` switch pipeline (compiled in the background, so the
-frame never stutters) and `N`/`T`/`R`/`Up`/`Down` change macro variables,
-each of which compiles a new shader variant once and then hits the cache.
-
-The same graph samples a texture the example generates and multiplies in a
-`tint` **parameter**, and `[`/`]` change that parameter live: a field of
-the material's uniform buffer, so the compile count printed beside it does
-not move. That is the difference between a `param` node and the `const`
-one row above it in the same graph.
-
-It also multiplies in a **per-instance** tint, which the graph declares
-and the draw supplies, so `--instances 6` is six differently coloured
-cubes out of one draw list, one material and one bind group — the tints
-are rows of a storage buffer the fragment stage indexes, not anything
-rebound per object.
-
-```text
-        forward pipeline                      deferred pipeline
-  ┌────────────┐  ┌──────────────┐   ┌──────────────────┐  ┌────────────────┐
-  │ depth_only │─>│ forward_lit  │   │ gbuffer          │─>│ G-buffer ->    │
-  │ (no pixels)│  │ -> colour    │   │ -> 3 targets     │  │ shade -> colour│
-  └────────────┘  └──────────────┘   └──────────────────┘  └────────────────┘
-        one graph, one module per stage, one entry point in each
-```
-
-## Workspace layout
-
-| Crate | What it is |
-|---|---|
-| [`wxsl-core`](crates/wxsl-core) | The typed, acyclic node/socket/graph model, its serialized node format, macro variables, the shader ABI, the computed layout of what a material declares, and graph → WXSL codegen. No `wgpu`, no GUI toolkit. |
-| [`wxsl-render`](crates/wxsl-render) | The `wgpu` renderer: the render graph that turns a list of passes into a frame, WXSL → WGSL compilation, the shader variant cache, a material's bind groups, and the forward and deferred pass lists. |
-| [`wxsl-render`](crates/wxsl-render)'s [`ui`](crates/wxsl-render/src/ui) | The 2D layer the editor is drawn with: a texture atlas, MSDF text from glyph outlines (CPU or compute pass), an instanced draw list, and windowing-agnostic input. Useful without the editor. |
-| [`wxsl-editor`](crates/wxsl-editor) | The visual node editor: pan/zoom canvas, node palette, live material preview, and the generated WXSL and WGSL. Draws itself with `wxsl-render`; no GUI toolkit. |
-| [`wxsl-stdlib`](crates/wxsl-stdlib) | Granular shader nodes, original or attributed permissive ports, plus the WXSL side of the shader ABI. |
-| [`wxsl`](crates/wxsl) | The facade crate most consumers depend on; re-exports the above behind Cargo features. |
-
-Full crate graph, data flow diagrams, and the "why" behind this split live
-in [`docs/architecture.md`](docs/architecture.md).
-
-## Feature flags
+## Use it
 
 ```toml
 [dependencies]
-# Default: wgpu renderer + base node library, no visual editor.
-wxsl = "0"
-
-# Headless: graph model + codegen only, no wgpu, no GUI toolkit, no stdlib.
-wxsl = { version = "0", default-features = false }
-
-# With the visual editor (implies `render`):
-wxsl = { version = "0", features = ["editor"] }
+wxsl = "0"                                              # renderer + node library
+wxsl = { version = "0", default-features = false }      # graph model and codegen only, no wgpu
+wxsl = { version = "0", features = ["editor"] }         # plus the editor
+wxsl = { version = "0", features = ["gltf"] }           # plus glTF/GLB geometry import
 ```
 
-## Licensing
+The `wxsl` crate's documentation (`cargo doc -p wxsl --open`) starts with a
+minimal program.
 
-Workspace-owned code is dual-licensed
-MIT / Apache-2.0 — see [`LICENSE-MIT`](LICENSE-MIT) and
-[`LICENSE-APACHE`](LICENSE-APACHE). Audited shader ports retain their original
-licenses and required notices; see [NOTICE](NOTICE) and
-[ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md).
-Binary applications can redistribute the complete stdlib attributions from
+## Crates
+
+| Crate | Role |
+|---|---|
+| [`wxsl-core`](crates/wxsl-core) | Graph model, documents, shader ABI, codegen. No wgpu. |
+| [`wxsl-lang`](crates/wxsl-lang) | The WXSL → WGSL compiler. |
+| [`wxsl-frame`](crates/wxsl-frame) | Device-free frame plans: pipeline documents, scheduling, effects. |
+| [`wxsl-stdlib`](crates/wxsl-stdlib) | The node library, one `.wxsl` file per node. |
+| [`wxsl-render`](crates/wxsl-render) | The wgpu renderer and its 2D UI layer. |
+| [`wxsl-editor`](crates/wxsl-editor) | The visual editor. |
+| [`wxsl-ffi`](crates/wxsl-ffi) | The C ABI that the Dawn backend uses. |
+| [`wxsl`](crates/wxsl) | The facade: re-exports the above behind features. |
+
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md): how the pieces fit together.
+- [`docs/glossary.md`](docs/glossary.md): the terms used throughout.
+- [`docs/adr/`](docs/adr/README.md): every design decision, with its reasoning.
+- [`plan6.md`](plan6.md): the current plan. Earlier plans are in
+  [`docs/history/`](docs/history).
+- [`AGENTS.md`](AGENTS.md): working on the repo (commands, tests, rules),
+  for humans and coding agents alike. See also
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## License
+
+Workspace code is dual-licensed MIT / Apache-2.0
+([`LICENSE-MIT`](LICENSE-MIT), [`LICENSE-APACHE`](LICENSE-APACHE)). Shader
+ports keep their original licenses and notices: see [`NOTICE`](NOTICE).
+Applications can redistribute the attributions from
 `wxsl_stdlib::THIRD_PARTY_NOTICES`.
-
-## Working on this repo
-
-Start with [`AGENTS.md`](AGENTS.md) — it covers the build/lint/test
-commands, the crate-boundary rules, and when to write a new
-[ADR](docs/adr/README.md). It applies equally whether you're a human or an
-AI coding agent.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).

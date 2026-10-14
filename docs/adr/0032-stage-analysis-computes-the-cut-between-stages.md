@@ -27,7 +27,7 @@ wiring ritual. A vertex-only read (object space) under a fragment terminal
 was a flat error — `GraphError::WrongStage` — even though interpolating
 object space down is exactly what the stage boundary is *for*. And moving
 a computation between stages meant rewiring, when it is semantically one
-edit ([request.md](../../../request.md)).
+edit ([request.md](../history/request.md)).
 
 ## Decision
 

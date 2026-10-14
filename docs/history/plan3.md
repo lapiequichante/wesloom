@@ -363,7 +363,7 @@ runs the real renderer, so a pipeline edit is live by construction.
   model wants one, as plan2-architecture noted.
 
 **Landed as written**, and the two-canvas state model did want its ADR —
-[0043](docs/adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md)
+[0043](../adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md)
 records it: the canvas is a *mode* over the one editor and the one
 renderer, the edit loop is validate → compile → `set_graph` against the
 renderer's own config (new `Renderer::pipeline_config`), a failed compile

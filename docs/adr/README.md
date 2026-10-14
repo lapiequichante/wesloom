@@ -11,6 +11,21 @@ Numbers are sequential and never reused. Superseded ADRs stay in the repo
 with an updated `Status` line pointing at whatever replaced them — history
 is signal, don't delete it.
 
+## Read these first
+
+The ten decisions the rest of the log builds on:
+
+* [0002](0002-cargo-workspace-crate-boundaries.md): the crate boundaries.
+* [0011](0011-own-the-shading-language.md): WXSL, our own shading language.
+* [0020](0020-a-node-definition-is-derived-from-its-wxsl-source.md): a node is its `.wxsl` file.
+* [0022](0022-material-stages-replace-the-render-path-enum.md): one material, many stages.
+* [0025](0025-a-material-graph-spans-shader-stages.md): a material spans the vertex and fragment stages.
+* [0028](0028-lighting-models-dispatched-by-a-g-buffer-id.md): lighting models and generated shading.
+* [0033](0033-pipelines-are-documents.md): pipelines are documents.
+* [0034](0034-effects-are-first-class-units.md): effects are declared units.
+* [0038](0038-a-materials-configuration-is-one-value.md): a material's configuration is one value.
+* [0049](0049-share-the-core-through-a-data-only-c-abi.md): the data-only C ABI behind the second backend.
+
 ## Index
 
 | # | Title | Status |

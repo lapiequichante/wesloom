@@ -148,7 +148,7 @@ splits in two, and the seam is exactly where the `wgpu` references stop.
 
 ### B2 — The C ABI
 
-**Completed on 2026-10-08** — [ADR 0049](docs/adr/0049-share-the-core-through-a-data-only-c-abi.md).
+**Completed on 2026-10-08** — [ADR 0049](../adr/0049-share-the-core-through-a-data-only-c-abi.md).
 `wxsl-ffi` exports pipeline compilation/scheduling, raw/effect WXSL→WGSL,
 material-stage compilation with computed layouts, and scene/setup checks.
 The header is generated from Rust declarations; results own JSON, WGSL,

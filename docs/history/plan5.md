@@ -116,7 +116,7 @@ three layers downstream.
 * ADR: "Fragment-only is a node constraint the stage analysis checks."
 
 **Landed on 2026-10-09** ([ADR
-0054](docs/adr/0054-fragment-only-is-a-node-constraint-the-stage-analysis-checks.md)),
+0054](../adr/0054-fragment-only-is-a-node-constraint-the-stage-analysis-checks.md)),
 as written. The constraint is a `fragment_only` flag on the
 `NodeDefinition`, set by the derivation's word-shaped scan of the body
 (`dpdx`, `dpdy`, `dpdCoarse`, `dpdFine`, `fwidth`; comments excluded)
@@ -180,7 +180,7 @@ where "forward pass bolted onto deferred" was not.
   ADR 0022's stage contract and records the model-spelling decision.
 
 **Landed on 2026-10-10**
-([ADR 0056](docs/adr/0056-a-material-may-shade-forward-under-either-pipeline.md)),
+([ADR 0056](../adr/0056-a-material-may-shade-forward-under-either-pipeline.md)),
 with two decisions the design phase settled against the written sketch:
 
 * **The radiance travels in the emissive target, not the albedo** — the
@@ -250,7 +250,7 @@ camera — a pure function over data, which is what makes it testable in
   amends ADR 0005's application-owns-order note.
 
 **Landed on 2026-10-10** ([ADR
-0055](docs/adr/0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md)),
+0055](../adr/0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md)),
 with one simplification the design phase found: sorting never touches
 the rows at all, because each recorded draw already carries its own
 instance index — a sorted pass draws row *k* whenever it likes, and the
@@ -376,7 +376,7 @@ have settled. The proposal splits the `transparent` tag into two tiers:
 * ADR: "Transparency is tiered: sorted by default, peeled on request."
 
 **Landed on 2026-10-10**
-([ADR 0057](docs/adr/0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md)),
+([ADR 0057](../adr/0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md)),
 with the plumbing one piece simpler than the sketch feared and one
 document rule amended:
 

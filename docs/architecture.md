@@ -1,1085 +1,458 @@
-# Architecture map
+# Architecture
 
-This is the map; the ADRs in `docs/adr/` are the territory's legal record.
-When the two disagree, trust the ADRs and fix this file.
+How the pieces fit together. Each section is a summary that links to the
+ADR holding the reasoning and to the module holding the detail. When this
+file and an ADR disagree, the ADR wins; fix this file.
 
-## Vision, one paragraph
+## In one paragraph
 
-`wxsl` lets you build a material/shader as a node graph (visually, via
-`wxsl-editor`, or programmatically against `wxsl-core` directly),
-compiles that graph to [WXSL](https://wesl-lang.dev), and runs it through a
-`wgpu` renderer (`wxsl-render`) that can switch between forward and
-deferred rendering without you maintaining two graphs. A library of
-granular base nodes (`wxsl-stdlib`) — math,
-color, lighting, SDFs, noise, and so on, in the spirit of libraries like
-[LYGIA](https://lygia.xyz) but not derived from one — ships as part of the
-default build (ADR 0007, amended by ADR 0053 for audited permissive ports).
+A material is a **node graph** (authored in the editor, in code, or as a
+JSON document). It compiles to **WXSL**, which `wxsl-lang` lowers to WGSL.
+A **pipeline** is another graph, over a vocabulary of passes and resources,
+which compiles to a list of passes the scheduler orders and allocates. One
+material graph compiles into every pass that draws it, so forward,
+deferred, shadows and motion vectors never require the author to write
+anything twice. Everything up to the device is device-free Rust, shared by
+two backends: wgpu in Rust, and Dawn in C++ through a data-only C ABI.
 
-## Crate graph
+## Crates
 
 ```mermaid
 graph LR
-    core["wxsl-core<br/>(graph model + WXSL codegen)<br/>no wgpu, no GUI"]
-    lang["wxsl-lang<br/>(WXSL compiler:<br/>parser + WGSL backend)"]
-    frame["wxsl-frame<br/>(frame plans, scheduling, presets)<br/>no wgpu, no GUI"]
-    ffi["wxsl-ffi<br/>(data-only C ABI)<br/>no wgpu, no GUI"]
-    render["wxsl-render<br/>(wgpu pipelines,<br/>forward/deferred switching)"]
-    editor["wxsl-editor<br/>(visual node editor,<br/>draws itself with wxsl-render)"]
-    stdlib["wxsl-stdlib<br/>(base nodes + attributed ports)<br/>permissive licences"]
-    facade["wxsl<br/>(facade crate, feature-gated re-exports)"]
+    core["wxsl-core<br/>graph model, documents, codegen"]
+    lang["wxsl-lang<br/>WXSL → WGSL compiler"]
+    frame["wxsl-frame<br/>frame plans, scheduling"]
+    ffi["wxsl-ffi<br/>data-only C ABI"]
+    stdlib["wxsl-stdlib<br/>node library"]
+    render["wxsl-render<br/>wgpu renderer + UI layer"]
+    editor["wxsl-editor<br/>visual editor"]
+    facade["wxsl<br/>facade"]
 
-    render --> core
-    render --> frame
-    frame --> core
-    ffi --> core
-    ffi --> frame
-    ffi --> lang
-    ffi --> stdlib
-    render --> lang
-    editor --> core
-    editor --> render
-    editor --> lang
     lang --> core
+    frame --> core
     stdlib --> core
     stdlib -. "build only" .-> lang
-    facade -. "render feature (default)" .-> render
-    facade -. "editor feature" .-> editor
-    facade -. "stdlib feature (default)" .-> stdlib
+    ffi --> core & frame & lang & stdlib
+    render --> core & frame & lang
+    editor --> core & render & lang
     facade --> core
+    facade -. features .-> render & editor & stdlib
 ```
 
-Arrows point from dependent to dependency. The only crate every build
-includes is `wxsl-core`. See
-[ADR 0002](adr/0002-cargo-workspace-crate-boundaries.md) for why the split
-exists and which edges must never appear, and
-[ADR 0016](adr/0016-syntax-highlighting-reuses-wxsl-langs-lexer.md) for why
-`editor --> lang` exists (the code panels' syntax highlighting reuses the
-compiler's own lexer).
+Arrows point from dependent to dependency.
+[ADR 0002](adr/0002-cargo-workspace-crate-boundaries.md) explains the split
+and lists which edges must never appear. Three edges need explaining:
 
-Two of those edges are about node definitions being read out of shader
-sources ([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
-`lang --> core` is there because the derivation answers in the graph model's
-terms — it hands back a `NodeDefinition`. `stdlib -. build only .-> lang` is
-dashed for a reason worth knowing: the compiler is a **build**-dependency of
-the node library, so the library derives its nodes at build time and the
-shipped crate carries no compiler. `cargo tree -p wxsl-stdlib -e normal`
-shows `wxsl-core` and nothing else.
+- **`stdlib → lang` is build-only.** Nodes are derived from their `.wxsl`
+  files at build time, so the shipped library carries no compiler
+  ([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
+- **`editor → render`.** The editor draws itself with the renderer
+  ([ADR 0013](adr/0013-the-editor-draws-itself-with-wxsl-render.md)).
+- **`editor → lang`.** The code panels reuse the compiler's lexer for
+  syntax highlighting
+  ([ADR 0016](adr/0016-syntax-highlighting-reuses-wxsl-langs-lexer.md)).
 
-## Module map
+`wxsl-core`, `wxsl-frame`, `wxsl-lang` and `wxsl-ffi` never touch a device.
+That is what lets the scheduler, layouts and compiler be tested in CI
+without a GPU, and shared with Dawn
+([ADR 0048](adr/0048-the-frame-plan-is-device-free.md)).
 
-The device-free plan lives in `wxsl-frame`
-([ADR 0048](adr/0048-the-frame-plan-is-device-free.md)). Backends consume
-the same descriptions, scheduler and pipeline compiler; wgpu allocation
-and recording remain in `wxsl-render`. Shared APIs are re-exported under
-the existing renderer module paths.
+### Facade features
 
-`cargo run -p wxsl-frame --example plan_frame` compiles and schedules both
-stock presets without a GPU or WXSL compiler. The `effect_interfaces`
-example inspects effect declarations and generated parameter blocks.
-
-What lives where, now that the crates have contents. Each module's own doc
-comment is the detailed version.
-
-**`wxsl-core`** — `node` (value types, sockets, `WeslFunction`
-descriptors, `NodeDefinition`, the registry), `graph` (nodes, edges,
-validation, traversal, the serialized node format — and the bake
-declarations, ADR 0045), `codegen` (graph → WXSL: materials, screen
-effects, and `generate_bake` for a subgraph as a bake module), `macros` (macro variables), `abi` (the
-shader ABI's names and field tables), `lighting` (the lighting-model
-registry, and the shading function, G-buffer pack and lighting pass
-generated from a set of models), `stages` (the stage analysis, plan2 P9),
-`pipeline` (the pipeline *document* vocabulary, plan2 P3 — a different
-registry over the same graph model), `template` (strict hole-filling for
-the generated shader text), `scene` (the scene document), `wesl`
-(identifier/float/hash helpers), `error`.
-
-**`wxsl-stdlib`** — `shaders` (the embedded `.wxsl` sources, keyed by
-module path), `registry` (the operators as node definitions, plus the
-function nodes `build.rs` derived from the sources).
-
-**`wxsl-frame`** — `types` (neutral formats, graphics state and usage flags),
-`pass` (pass/resource descriptions), `graph` (validation, scheduling and
-slot allocation), `pipeline` (config, presets and reference pass lists),
-`pipeline_doc` (document compilation), `effect` (declarations, shaders,
-parameters and registry), `setup` (capabilities and scene checks), and
-`environment` (camera, lights, frame values and host layouts).
-
-**`wxsl-ffi`** — `api` (JSON requests delegating to core/frame/compiler),
-`ffi` (C byte/table views and result ownership), plus a build-generated C
-header. No GPU dependency: `wxsl-render` is a dev-dependency only, for exact
-variant parity tests. The shipped vocabulary is embedded; applications may
-overlay WXSL modules and derive additional function nodes. The contract is
-data, never renderer behavior ([ADR 0049](adr/0049-share-the-core-through-a-data-only-c-abi.md)).
-`bash dawn/tests/run_abi_smoke.sh` dynamically loads the cdylib from both C
-and C++, validates both presets and compares all eleven WGSL material stages
-with native Rust variants.
-
-**`dawn/`** — Conan-managed, pinned Dawn SDK; `wxsl_render_cpp` implements
-only the headless device half. `wxsl-ffi`'s `bake_docs` example exports the
-shared schedules, binding layouts, WGSL and upload bytes. The C++ binary
-links no Rust; optional `wxsl_compiler_cpp` dynamically loads the C ABI for
-synchronous runtime compilation and transactional same-layout material edits
-(ADR 0052). Both stock presets render the PBR and scene documents with Rust
-image agreement (ADR 0051); the parity list adds a gallery document and all
-stdlib categories. GPU CI requires a provisioned `wxsl-gpu` runner.
-`wxsl-core::host` generates fixed Rust/C/WXSL layouts, base vertex/UI
-attributes and MSDF buffers (ADR 0050); computed material layouts remain
-in `wxsl-core::resources`.
-
-**`wxsl-render`** — `graph` (resource pools and wgpu recording over the
-shared plan), `pipeline` (native target adapters and pipeline caches),
-`types` (exhaustive neutral ↔ wgpu mappings), `environment` (GPU frame
-bindings), `library` (`ShaderLibrary`), `material` (graph → WXSL),
-`variants` (WXSL → WGSL and the variant cache), `renderer` (frame submission
-and pipeline switching), `draw` (draw lists and transforms), `mesh`
-(geometry), `gpu` (device setup and readback), `error`, `swap`, and `ui`
-(the renderer's 2D layer, ADR 0013). `pass`, `effect` and `setup`
-re-export the shared APIs; `pipeline_doc` adapts its compiled graph to the
-wgpu recording wrapper.
-
-**`wxsl-editor`** — `app` (the `Editor`: panels, frame, shortcuts), `buffer`
-(the code editor's text model: caret, selection, lines, per-buffer undo),
-`canvas` (the pan/zoom node canvas: layout, links, hit-testing, dragging),
-`function` (functions written in the editor, derived by `node_from_source`
-into `user.*` nodes when saved — plan3 M11), `highlight`
-(colouring the WXSL/WGSL code panels, from `wxsl-lang`'s own lexer), `palette`
-(searching the node library), `pipeline` (the second canvas: the pipeline
-document, compiled live onto the same renderer — ADR 0043), `preview` (the
-offscreen material preview and the compiled WXSL and WGSL), `ui` (the
-immediate-mode layer: identity, interaction, widgets), `widgets` (editors
-per socket type, and the colour picker), `theme`.
-
-**`wxsl`** — feature-gated re-exports, plus `stdlib_library()`, the one
-line that hands the node library's WXSL to the renderer.
-
-## Feature flags (`wxsl` facade crate)
-
-| Feature | Default | Adds | Implies |
-|---|---|---|---|
-| `render` | **on** | `wxsl-render` (wgpu pipelines) | — |
-| `stdlib` | **on** | `wxsl-stdlib` (base nodes) | — |
-| `editor` | off | `wxsl-editor` (visual node editor) | `render` |
-| `gltf` | off | glTF/GLB geometry import (`wxsl_render::gltf`) | `render` |
-| `webgl` | off | wgpu's WebGL2 backend on `wasm32` (ADR 0075) | `render` |
-
-A headless runtime that just loads and runs a pre-authored graph can use
-`default-features = false, features = ["render"]` — no GUI toolkit anywhere
-in its dependency tree. A build with nothing but `wxsl-core` (e.g. an
-offline graph validator/exporter) uses `default-features = false` with no
-features at all.
-
-The device decides the **profile**, not a feature (ADR 0075). A device
-without compute or storage buffers (WebGL2, GLES 3.0, old GL, some Dawn
-compatibility devices) runs the same documents through fallbacks. Instance
-rows come from data textures, compute effects with a `Fragment` arm run as
-screen passes, and native-only effects are refused by name. `webgl` only
-adds the backend.
-
-## Data flow: authoring to pixels
-
-```mermaid
-graph TD
-    author["Graph authored<br/>(editor UI, or built programmatically,<br/>or loaded from the node format)"] --> model
-    model["wxsl_core::graph::Graph<br/>(typed, acyclic, validated)"] --> codegen["wxsl_core::codegen<br/>(graph -> WXSL source)"]
-    codegen --> weslsrc["one WXSL module:<br/>imports + wxsl_material()<br/>+ @if-gated entry points"]
-    codegen --> macromod["generated macro module<br/>(numeric macro variables<br/>as const declarations)"]
-    library["wxsl_render::ShaderLibrary<br/>(the ABI + node functions,<br/>supplied by the application)"] --> compiler
-    weslsrc --> compiler["wesl<br/>(WXSL -> WGSL: resolves imports,<br/>evaluates @if/@elif/@else)"]
-    macromod --> compiler
-    compiler --> variants["wxsl_render::variants<br/>cache: (source+macros hash, stage)<br/>-> wgpu shader module"]
-    path["MaterialStage of the pass<br/>(forward_lit | gbuffer | depth_only)"] --> variants
-    variants --> record
-    passes["wxsl_render::pipeline<br/>(forward: prepass + shading;<br/>deferred: G-buffer + lighting)"] --> schedule["wxsl_render::graph::Schedule<br/>(order, transient reuse,<br/>history rotation)"]
-    schedule --> record["record: attachments, pass<br/>bind groups, draws"]
-    record --> gpu["wgpu render passes"]
-```
-
-A **material stage** is a property of the *pass*, never of the *graph* — a
-material graph is written once and works under every stage, because a stage
-changes which entry point codegen emits, not what the graph says. The
-stages are a table in `wxsl_core::abi`, so adding one is a row rather than
-an arm in every match. See
-[ADR 0005](adr/0005-render-pipeline-abstraction-and-shader-switching.md)
-and [ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
-
-| Stage | Fragment returns | Used by |
+| Feature | Default | Adds |
 |---|---|---|
-| `forward_lit` | one `vec4f` colour | the forward pipeline's shading pass |
-| `gbuffer` | the `GBuffer` struct | the deferred pipeline's material pass (the struct is generated per lighting-model set) |
-| `depth_only` | nothing — no fragment stage at all | the forward pipeline's depth prepass |
+| `render` | on | `wxsl-render` |
+| `stdlib` | on | `wxsl-stdlib`, and `wxsl::stdlib_library()` to hand it to the renderer |
+| `editor` | off | `wxsl-editor` (implies `render`) |
+| `gltf` | off | glTF/GLB geometry import |
+| `webgl` | off | wgpu's WebGL2 backend on `wasm32` |
 
-## How a frame is drawn
+With `default-features = false`, `wxsl` is the graph model alone: no wgpu,
+no GUI. The renderer ships no shaders of its own; the application supplies
+a `ShaderLibrary` ([ADR 0009](adr/0009-the-application-supplies-the-shader-library.md)).
 
-A pipeline is not a Rust struct: it is a list of `PassDesc`s over a set of
-`ResourceDesc`s — a `wxsl_render::graph::RenderGraph`. Where the list comes
-from has two spellings, tested to agree
-([ADR 0033](adr/0033-pipelines-are-documents.md)):
+## Documents
 
-* **As a document.** A pipeline is a `wxsl_core::graph::Graph` over the
-  *pipeline node registry* (`wxsl_core::pipeline`): sources
-  (`source.scene`, `source.lights`), resources (`resource.gbuffer`,
-  `resource.color`, `resource.depth`, `resource.buffer`), passes
-  (`pass.geometry`, `pass.shadow`, `pass.screen`, and one
-  `pass.compute.<effect>` per registered compute effect — sockets derived
-  from the effect's declaration, ADR 0041) and one `output.present`
-  terminal. Every serialized document — this, the node format, the scene —
-  carries a `version` and the `abi` revision its vocabulary is written
-  against: absent reads as this build's, a newer one is refused by name at
-  parse (ADR 0044).
-  Edges carry render-graph resources (`DrawQueue`, `ColorTarget`,
-  `DepthTarget`, `ShadowMaps`, `GBuffer`, `StorageBuffer` — handle types
-  outside `ValueType::ALL`, like the texture sockets).
-  `wxsl_frame::pipeline_doc::compile` is a pure function turning the
-  document into a `RenderGraph`; every error names the document node. The
-  two stock pipelines are preset files
-  (`crates/wxsl-frame/assets/presets/*.pipeline.json`) that
-  `StockPipeline::graph` loads and compiles.
-* **As hand-built Rust.** `forward_graph` and `deferred_graph` stay as the
-  reference pass lists the presets' parity tests compile against; an
-  application building its own graph hands it to `Renderer::set_graph`.
+Everything a user authors is a versioned JSON document. Each one carries
+`version` and `abi` fields. A missing field means "this build". A version
+newer than the build is refused by name. Saving stamps both fields. Registry
+ids are namespaced `package.name`
+([ADR 0044](adr/0044-identity-versions-and-the-capability-check.md)).
 
-The two shipped pass lists are `StockPipeline::{Forward, Deferred}`.
-Forward is a depth prepass (`depth_only`) followed by a shading pass
-(`forward_lit`) that tests `LessEqual` without writing depth; deferred is a
-G-buffer pass (`gbuffer`) followed by a fullscreen lighting pass.
+There is **one graph model with three domains**
+([ADR 0040](adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
+A node definition lists the domains it may appear in, and
+`NodeRegistry::in_domain` filters the palette.
 
-A `pass.screen` node names an **effect** by id
-([ADR 0034](adr/0034-effects-are-first-class-units.md)): a
-`wxsl_frame::effect::Effect` (also available through `wxsl_render::effect`)
-— declared inputs in pass-group binding
-order, entry points, and the shader (generated for the lighting set, or a
-WXSL file the effect owns). The shipped registry holds the migrated
-lighting pass and bloom, whose chain — lighting into a `resource.color`,
-bloom over it, `into` unconnected so bloom writes the frame's target — is
-how a pipeline composes; applications register more with
-`Renderer::add_effect`, which is ADR 0009's rule extended from shaders to
-passes. Compute effects are the same shape with
-[`EffectKind::Compute`](adr/0035-execution-policies.md) — entry point and
-workgroup count on the descriptor, storage writes declared as outputs —
-and a compute effect joins the document vocabulary as a
-`pass.compute.<effect>` node whose sockets are its declaration
-([ADR 0041](adr/0041-compute-and-buffers-join-the-document-vocabulary.md);
-`document_registry` supplies the derived rows). A screen effect whose
-wiring the fixed socket set cannot name — a resolve with two image
-inputs and a history — gets a derived `pass.screen.<effect>` row the
-same way, its sockets the declaration and an input's `history` saying
-which frame it reads
-([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md)). The BRDF-LUT and
-buffer-ramp demos are documents — a `pass.compute` node and, for the
-ramp, a `resource.buffer` both passes wire from. An effect can declare
-**parameters** ([ADR 0042](adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md))
-— one `{ name, default }` per knob; the layout is computed by
-`wxsl_core::resources`, the shader's struct is generated from it and
-appended to the module (imports remain first), and the uniform block rides the pass group as
-the binding after the inputs and the outputs. Values are host state per
-pass label — `Renderer::set_pass_param` writes, the next frame presents,
-and nothing recompiles; the variant key folds the layout, never a value.
-Programmatic plans can author initial `PassDesc.parameters` values over the
-descriptor defaults (ADR 0062). Both backends consume the same computed bytes;
-same-label/layout replacement preserves live tuning. `effect::ibl::append_bake`
-uses these values for Once equirect-to-cube, irradiance/PI and GGX roughness-mip
-face passes. `append_filtered_bake` additionally filters a complete source chain
-through separate staging cubes (ADR 0063). A graph declares its diffuse/GGX
-environment resources: scheduler-only reads order forward/deferred lighting
-after every face writer, without adding pass-group bindings. The frame group
-samples them along world normal/reflection with trilinear roughness LOD. Without
-this declaration, the historical analytic environment remains unchanged.
-Applications decode HDR; `upload_environment_image` validates and reversibly
-scales linear RGB before float16 convolution. Replacing a view/effect invalidates
-Once passes; in-place changes call `invalidate_bakes`. The gallery demonstrates
-the local HDR or `--ibl-source sky`. `pass.environment` expands that same filtered
-recipe from an authored image resource, cube/diffuse sizes, mip count and scale
-(ADR 0064). Its radiance output feeds the depth-aware `environment_background`
-effect: colour, opaque depth and radiance cube are explicit reads, camera rays
-are unprojected from the frame's inverse matrix, and exposure is applied before
-tonemap. A `DepthImage` effect input derives a typed depth-target socket.
-Dawn accepts linear RGB imports by resource label and returns the same HDR safety
-scale; the C++ application decodes Radiance files with its existing stb dependency.
-Neither backend library acquires a file decoder dependency.
-`gallery --start ibl-mirror` isolates the reflections on a white metallic sphere
-with exactly zero roughness and no direct lamps.
-`ibl-grid` and `ibl-grid-sky` compare the same stationary 5×5 spheres and matte
-grey floor under HDR and Rayleigh/Mie IBL. Columns sweep roughness 0–1; rows
-from front to back sweep metallic 0–1. One shader uses 25 independent uniform
-blocks. The sky bake binds an extent-only image matching its output so its
-screen-domain UVs do not depend on the HDR file's dimensions.
-Bright HDR emitters are integrated deterministically for diffuse and broad GGX
-lobes, using solid-angle-weighted texels of the filtered source chain. Sharp GGX
-lobes retain importance sampling. This avoids sparse-hit irradiance speckles;
-finite texture resolution and mirror/pixel aliasing are still approximations.
-
-`pass.refraction` gathers the nearest optical interfaces from the `refractive`
-tag, including back faces. `surface_count` budgets 1–4 closed-volume crossings,
-each entry/exit pair costing four baseline geometry passes. The glass demo
-budgets three crossings: one sphere and two torus crossings (six interfaces).
-Two texture arrays avoid growing the texture-binding count. The
-`refraction_surface` stage stores world normal/device depth at full float
-precision and unit-distance transmission/IOR in a second HDR target. A
-bounded screen-space composition processes entry/exit pairs back to front,
-using front/back thickness, Snell refraction, Fresnel and Beer absorption.
-Colour and nearest depth ping-pong so nearer glass warps the already composed
-background. Missing/off-screen hits use the explicit environment cube.
-The previous expensive ray marcher remains opt-in with `quality: "precise"`;
-the default `quality: "layered"` performs no ray search (ADR 0068).
-Surface sockets `ior` and `attenuation_distance` control the optics;
-`base_color` is the transmitted colour at that distance, not alpha. This
-clear-glass approximation is for disjoint closed solids, not arbitrary
-nested media, rough transmission or caustics. Ordinary alpha
-sorting/peeling remains unchanged. `gallery --start glass` shows the local
-HDR through a clear sphere and a blue smoked torus; orbit to overlap them.
-Use `--refraction-quality precise` to compare the retained precision path.
-
-`glass-probes` adds a third, mirror sphere and three application-owned local
-colour/distance cubemaps. Each owner is excluded from its six captures. All
-three objects render opaque, with no blending or screen-colour composition.
-The sphere computes its analytic exit and samples only its probe; only the
-torus self-peels four interfaces for refraction and thickness-dependent blue
-absorption. Objects form a triangle, and every probe is generated twice:
-all three first capture against global HDR, then all three capture against
-the complete first generation into separate final cubes. The mirror therefore
-sees the glass refractions and the glass sees the mirror reflections, without
-mixing generations or capture-order feedback. The bake records 36 cube views
-and then stays cached. Local sampling validates an intersection of the outgoing
-world ray with radial depth, including the exit-position offset; misses use
-the separate global HDR cube, not uncorrected local colour. The bounded query
-can still miss thin surfaces or geometry hidden from the probe.
-There is no recursive capture or colour ping-pong. Capture colour and radial distance
-are flipped together into WebGPU cube orientation. There is no ground plane.
-The static captures survive orbit, resize and demo switching; HDR/sky changes
-invalidate them. Live geometry/material edits would also need invalidation.
-This is a finite-resolution, radial-parallax approximation (ADR 0070), not
-recursive scene ray tracing. The original `glass` demo remains unchanged.
-
-`cargo run -p wxsl --example gallery -- --screenshot` renders
-the stock pipelines, the minimal document, the bloom chain (as authored
-and tuned live), the policy/buffer/channel proofs, the bake demo (ADR
-0045), the fxaa chain, and the motion pair — the spinning cube under TAA
-and the swept cube under its blur (ADR 0046) — side by side.
-
-A pass also carries a **policy** — `per frame`, `once`, `on resize` or
-`on demand` (plan2 P10). The renderer's frame loop honours it: a pass
-whose target survives frames may skip, and what it last wrote is what a
-later frame reads. `Renderer::pass_run_count` and `mark_pass` are the
-observable halves.
-
-**Bakes** ([ADR 0045](adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md))
-run on the same rails: the effect is generated from the material
-subgraph, the pass is a `pass.compute` node with a policy, and the table
-it writes is an *imported* resource the host owns — created beside the
-material that samples it, handed to the renderer with
-`Renderer::import_resource` under the declaration's name. A bake pass
-must be declared before the pass that samples its table: the material's
-sample is a dependency the scheduler cannot see, and declaration order is
-its tie-break.
-
-**Motion** ([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md))
-is a stage like the others: the `velocity` row's vertex entry transforms
-each vertex against this frame's camera and instance row *and* last
-frame's — the frame group carries second copies beside the current ones
-(`BINDING_PREVIOUS_INSTANCES`, `camera.previous_view_proj`), filled by
-the host from each draw's `previous` transform and
-`Environment::previous_camera` — and the fragment writes the interpolated
-difference, uv per frame, `y` down. TAA is the policy'd chain over it: a
-`resource.color` with `history: 1`, the resolve reading its own last
-output through the ring, and the tonemap after. A velocity target clears
-to zero — its empty value is *no motion*, not the frame's radiance.
-
-`RenderGraph::schedule` is a pure function and is tested without a device.
-It orders the passes by what they read and write (never by declaration
-order), validates them, and decides which physical texture serves each
-resource. Resources are textures *or buffers*
-([ADR 0036](adr/0036-buffers-are-graph-resources.md)): a compute pass can
-fill a storage buffer and a later pass read it as storage, with the read
-ordering them exactly as a texture read would. `ResourcePool` then owns
-the textures and buffers, and `RenderGraph::record` opens each pass,
-resolves its attachments, builds its pass bind group from its declared
-reads and writes and hands it to the renderer to draw into.
-
-Three properties of a resource are worth knowing before you need them:
-
-* **Persistence.** `Transient` is created at first write and its texture is
-  reusable after its last read; `Persistent { history: n }` is a ring of
-  `n + 1` textures, so a pass can read what a previous frame wrote. Reading
-  history creates no ordering edge — that is what keeps a temporal pass from
-  being a cycle. Buffers never alias — their rule is "never" for now.
-* **Dimension.** 2D, 2D array, cube or 3D, because cascaded shadows,
-  reflection probes and volumetrics each want a different one.
-* **Mip chain.** `mip_levels` defaults to one. Fixed-size textures can
-  allocate more; colour/depth attachments select one `layer` and `mip`, while
-  sampled views expose the whole chain. The scheduler checks counts, selectors
-  and fixed attachment extents; mip counts prevent incompatible aliasing.
-  Both wgpu and Dawn record these views (ADR 0061). Imported views remain
-  host-selected; storage writes cannot yet select mips or use cube views.
-
-The frame's own target is resource 0, `RenderGraph::TARGET`, and is
-*imported*: the caller supplies a view for it each frame.
-
-## Swapping pipeline
-
-`Renderer::set_pipeline` switches now and compiles whatever is missing
-during the next frame, which is a hitch. `Renderer::request_pipeline`
-switches when it is ready: the missing stages compile on a worker thread
-while the current pipeline keeps presenting, and the swap lands in one
-frame. `Renderer::swap_progress` is what a `compiling 3/7` indicator reads,
-and the editor's `F`/`D` keys are the second kind.
-
-Only the WXSL-to-WGSL half runs on the worker — a pure function over text,
-no device in it. On a single-threaded target there is no worker and the
-swap blocks, which is what the indicator is for. See
-[ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md).
-`wxsl_lang::compile_with_macros` is the shared compilation entry point for
-these workers and the C ABI; the renderer only adapts its diagnostic type.
-
-## What a frame draws
-
-A **scene** — `wxsl_core::scene::Scene` — is meshes, materials and
-instances, and it is pure serializable data with no `wgpu` in it. It says
-what exists; it says nothing about how it is drawn, because the pipeline
-belongs to the renderer.
-
-The renderer takes a `DrawList`: geometry, a material, a transform and the
-`Tags` the material was authored with. A geometry pass draws a **tag
-expression** over it (`opaque`, `opaque && !outlined`, `*`), so the material
-says what it *is* and the pass says what it *draws*. Translating a scene
-document into a draw list needs the node registry and a device at once, so
-it is the facade's job: `wxsl::scene::SceneResources`.
-
-`wxsl_render::environment::Environment` is the other half of a frame:
-camera, lights, ambient, exposure, time. Every draw's transform goes into
-one storage buffer in the frame group, indexed by
-`@builtin(instance_index)`, so a draw's position in the list is its row.
-See [ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
-Every position a frame uploads is measured from `Environment::origin`, an
-`f64` floating origin the host can put on the eye (`look_from`,
-`local_transform`), so a scene far from the origin never becomes a large
-`f32` — [ADR 0074](adr/0074-rebase-each-frame-onto-an-f64-floating-origin.md).
-
-## What a graph is responsible for
-
-A material graph describes a *surface*, not a whole shader: it compiles to
-one function taking the per-fragment `SurfaceContext` and returning a
-`Surface` (base colour, metallic, roughness, normal, emissive, occlusion,
-alpha). Codegen wraps that in the entry points; the vertex stage is
-hand-written WXSL in `wxsl-stdlib`; and the light loop, the lighting-model
-dispatch and the G-buffer packing are *generated* — see "Lighting models"
-below.
-
-`wxsl_core::abi` is where the two halves agree on names and field
-layouts, and where the render-path flag and the macro variables the ABI
-honours are declared. See
-[ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md).
-
-Both paths shade through the *same generator* — `wxsl_core::lighting`
-writes `shade_surface` for the forward fragment entry (calling that
-material's model directly) and for the deferred lighting pass (switching
-over the model id the G-buffer carries) — so the two cannot drift apart in
-what lighting means. `crates/wxsl/tests/` asserts they render the same
-image, with mixed lighting models in the frame.
-
-## Lighting models
-
-A *lighting model* is one WXSL function of a fixed signature plus a small
-integer id; a registry entry in `wxsl_core::lighting` names it. A material
-says which model shades it (by name, in `MaterialConfig::model` — the same
-value whether it came from a scene document or an application); a deferred
-pipeline enables a
-**`LightingSet`**, which decides three things at once:
-
-* the **G-buffer layout** — base targets, plus a scalar id channel when
-  the set dispatches, plus one target per model that requests one;
-* the **generated dispatch** — a direct call in a forward module, a
-  `switch` over the id in the lighting pass;
-* the **cost** — the set's layout is checked against WebGPU's
-  bytes-per-sample attachment budget by name, in `Renderer::set_lighting`.
-
-The default set is one model, the library's PBR: no dispatch, no id
-channel, a G-buffer shaped exactly as it always was. The shipped models —
-`lambert`, `phong`, `pbr`, `clearcoat` — live under
-`shaders/lighting/models/`, deliberately outside the node derivation:
-they are shaded through the registry's contract, not placed on a canvas.
-See [ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md).
-
-`wxsl.iridescent` reads graph-authored film strength, thickness (nm) and
-IOR from the surface output. Its HDR extra target fills the 32-byte budget
-in a single-model set, so it is selected explicitly from `DEFAULT_MODELS`;
-the historical `default_set()` keeps its six-model, 30-byte layout.
-Forward packs the film once; deferred hands the stored channel to the same
-light loop, even for one model. Position is reconstructed from depth and
-the inverse camera matrix, never stored in the G-buffer. Ambient remains
-the shared GGX approximation pending S3's spectral IBL work. See
-[ADR 0058](adr/0058-iridescence-is-authored-on-the-surface-and-carried-by-a-model-channel.md).
-
-`wxsl.sheen` adds a Charlie/Neubelt layer over PBR, with independent
-`sheen_color` and `sheen_roughness` surface sockets. Its HDR channel also
-fills a single-model 32-byte layout. Model entries can name an optional
-ambient function; the generated loop uses the same id and stored extra to
-select it, falling back to the historical GGX ambient for existing models.
-Sheen attenuates the base and uses the shipped Charlie hemispherical fit
-for the analytic sky/ground environment. Cubemap prefiltering remains S3.
-The historical cloth model and six-model demo set retain their behavior.
-See [ADR 0059](adr/0059-sheen-is-a-surface-layer-with-model-owned-ambient.md).
-
-Models are one *source* of G-buffer channels. A material **feature** is
-the second ([ADR 0037](adr/0037-semantic-channels.md)): a registry entry
-in `wxsl_core::lighting::FEATURES` — subsurface is the first — that asks
-for a channel on the models' behalf, turns itself on per material with a
-macro pin, and is enabled for a pipeline with `Renderer::set_features`.
-All requests, models' and features', join one **plan**
-(`LightingSet::plan`) that names each channel's source, rejects a field
-claimed twice by naming both claimants, and is what the layout, the
-generated pack, the lighting pass and the budget check all read.
-
-## Bind groups
-
-WebGPU guarantees only four bind groups, so all four are allocated up front,
-ordered by how often their contents change — a backend may disturb
-higher-numbered groups when a lower one is rebound.
-
-| # | Slot | Rebound | Holds |
+| Domain | Graph means | Compiled by | Into |
 |---|---|---|---|
-| 0 | `frame` | per frame | Camera, scene lighting, the instance transform buffer |
-| 1 | `material` | per material | A graph's uniform parameters, textures and samplers, all of them declared by the graph |
-| 2 | `user` | per material | Nothing wxsl binds. A material may *declare* the block it expects here; the application fills it |
-| 3 | `pass` | per pass | Whatever a pass declares it reads, then its effect's uniform parameters (ADR 0042): the G-buffer; the UI pass's viewport and atlas; the MSDF compute pass's buffers |
+| `surface` | a material | `codegen::generate` | one module per material stage |
+| `screen` | a post effect | `codegen::generate_screen` | one fullscreen pass |
+| `document` | a pipeline | `wxsl_frame::pipeline_doc::compile` | a `RenderGraph` |
 
-Instance transforms share the frame group despite changing per draw, as one
-read-only storage buffer: one binding and one upload serve the whole frame,
-where a group of their own would cost a quarter of the budget. (ADR 0010
-chose a per-object uniform at a dynamic offset for this; ADR 0021 took the
-storage buffer it had already named as the later option, once a frame drew
-more than one thing.) That leaves the application one free slot, not two —
-the honest cost of the deferred path needing somewhere to put the G-buffer
-while a graph still has to compile for either path.
-`wxsl_core::abi::BIND_GROUPS` is the single declaration, and a test in
-`wxsl-stdlib` asserts the shipped `.wxsl` binds the groups it names. See
-[ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md) and
-[ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md).
+The **scene document** (`wxsl_core::scene`) lists the meshes, materials and
+instances that exist, and says nothing about how they are drawn
+([ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
+`RenderSetup::check` checks a scene against the pipeline it will run
+under, and reports every mismatch.
 
-The pass group is no longer hand-written per pipeline: it is built from a
-pass's `reads`, in declaration order, at bindings 0..n — then a pass's
-non-attachment writes, then one uniform block of the pass's effect
-parameters when its effect declares any (ADR 0042). The deferred
-lighting pass's G-buffer bindings are what that produces for the deferred
-pass list, and a screen effect's inputs will be what it produces later.
+## Materials
 
-Groups 1 and 2 have no fixed layout at all, because a *material* decides
-them. `wxsl_core::resources::MaterialInterface` is that decision, computed
-from the reachable part of the graph: the uniform parameters and their
-offsets, the textures and samplers and their bindings, and the block the
-application is expected to supply. Codegen emits the declarations from it
-and `wxsl_render::bindings` builds the bind groups from it, so the two
-halves cannot disagree — see the next section. Both groups arrive on the
-*draw* (`DrawItem::bindings` and `DrawItem::user`), because the resources
-behind them belong to the application, which is the same rule that keeps
-the renderer scene-graph-free.
-[ADR 0023](adr/0023-a-material-declares-its-resources.md).
+### Terminals and stages
 
-## What a material graph is
+A material graph has several outputs:
 
-Several terminals, not one.
-
-* **`output.surface`** — the material, evaluated per fragment. Required,
-  and unique.
-* **`output.vertex`** — an object-space offset added to the vertex before
-  it is transformed. Optional.
-* **`output.discard`** — throw this fragment away. Optional, and not the
-  same thing as `alpha`: alpha is a blend weight the deferred path cannot
-  honour and does not stop depth being written, while a discarded
-  fragment leaves a hole that a shadow can shine through.
-* **`output.varying`** — one per declared interpolant: a value the vertex
-  stage computes and the fragment stage reads back
+- **`output.surface`**, required: a `Surface` (base colour, metallic,
+  roughness, normal, emissive, occlusion, alpha).
+- **`output.vertex`**, optional: an object-space offset added to each
+  vertex.
+- **`output.discard`**, optional: an alpha test.
+- **`output.varying`**, one per declared interpolant
   ([ADR 0027](adr/0027-a-graph-computes-its-own-interpolants.md)).
 
-Codegen partitions the graph by reachability **from each terminal
-separately**, and emits one function per partition: `wxsl_vertex`,
-`wxsl_discard`, `wxsl_material`. Where each node *runs* is decided first,
-by stage analysis ([ADR 0032](adr/0032-stage-analysis-computes-the-cut-between-stages.md)):
-every node defaults to `Auto` — the earliest stage that can produce it and
-satisfy every consumer — so a node both stages read is computed once, per
-vertex, and the fragment side reads a *synthesized* interpolant the
-analysis declared (named `autoN`, from the same location budget as a
-hand-wired one). A node can pin `Vertex` or `Fragment` to override that;
-what cannot ride an interpolant is computed in both stages, as below.
+Codegen partitions the graph by what each output reaches. A **material
+stage** decides which parts are compiled: a depth or shadow pass gets the
+vertex offset and the discard test, never the shading. That is why a
+displaced object casts a displaced shadow
+([ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md)).
 
-A node feeding two terminals used to be compiled into both unconditionally
-— two `let` bindings in two functions, on the grounds that a shader
-compiler's common-subexpression pass is cheaper than an inter-stage
-location ([ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md)).
-The analysis keeps that as the fallback for un-interpolable types and
-spent budgets, and as the explicit `Fragment` choice, but the default is
-now to share through the stage boundary rather than always pay twice.
+Stages are rows in `abi::MATERIAL_STAGES`:
 
-**A stage compiles only the partitions it needs.** A pass that writes no
-colour — a depth prepass, a shadow pass — wants the vertex offset and the
-alpha test and nothing else, so the material function is not in its
-module at all. A material that does not discard gets no fragment stage
-there either. That is why a displaced object casts a displaced shadow and
-a perforated one casts a perforated shadow: the parts that decide those
-things are compiled into the pass that draws them, and the rest is not.
-[ADR 0025](adr/0025-a-material-graph-spans-shader-stages.md).
+- `forward_lit`, `gbuffer`, `depth_only`;
+- `velocity` ([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md));
+- the peel and refraction stages.
 
-The vertex side reads a `VertexContext`, which is a *superset* of the
-`SurfaceContext` the fragment side reads: same field names, same types,
-computed before any displacement. So `input.uv` is one node that works in
-either stage, and the only vertex-only inputs are the two object-space
-ones. Those are what stage analysis is for: an object-space read the
-fragment stage wants is computed per vertex and interpolated down. The
-named errors remain for the decisions that cannot be honoured — an
-object-space node *pinned* to the fragment stage, a computed interpolant
-read in the stage that computes it
+A pass names its stage; the graph never does
+([ADR 0022](adr/0022-material-stages-replace-the-render-path-enum.md)).
+
+**Stage analysis** decides where each node runs
 ([ADR 0032](adr/0032-stage-analysis-computes-the-cut-between-stages.md)).
+By default a node runs in the earliest stage that can produce it, and its
+value crosses to the fragment stage as a synthesized interpolant. A node
+that uses derivatives is fragment-only, and placing it anywhere else is a
+named error
+([ADR 0054](adr/0054-fragment-only-is-a-node-constraint-the-stage-analysis-checks.md)).
 
-## What a material declares
+### What a material declares
 
-A graph does not only compute. Three things it can ask for from outside
-itself, and the difference between the first and a `const` node is the
-point of all of it:
+`wxsl_core::resources::MaterialInterface` is computed from the reachable
+graph. Codegen and the bind-group builder both read it, so the two cannot
+disagree
+([ADRs 0023](adr/0023-a-material-declares-its-resources.md),
+[0024](adr/0024-a-material-declares-the-geometry-it-requires.md)).
 
-* **Uniform parameters** (`param.value`). A field of one buffer in group
-  1, so changing one is a buffer write — no new shader variant, no new
-  pipeline. A `const` is inlined into the generated WXSL, so changing one
-  *is* a recompile. Both look like a value on the canvas; only one is a
-  slider.
-* **Textures and samplers** (`texture.texture_2d`, `texture.sampler`),
-  bound by name in group 1 and read by `sample.texture_2d`. These are the
-  first socket types that carry a *handle* rather than a value, so they
-  live in `ValueType` but not in `ValueType::ALL`.
-* **The application's block** (`Graph::user_block`, read by `input.user`).
-  Different in kind: the material does not own it. It states the shape,
-  `Renderer::user_layout` hands out the `BindGroupLayout`, and the
-  application hands back a `BindGroup`. `wgpu` checks that they agree, so
-  there is no validation of ours to keep in sync.
+- **Parameters** (`param.value`) are fields of a uniform buffer. Changing
+  one is a buffer write, not a recompile. A `const`, by contrast, is
+  inlined.
+- **Textures and samplers** are bound by name.
+- **The user block** is shaped by the material and filled by the
+  application.
+- **Attributes** come per vertex (a named mesh stream), per instance (a row
+  supplied with the draw), or computed (the graph's vertex stage writes
+  them).
 
-A fourth thing it can ask for does not come in through a bind group at
-all:
+There is no `#[repr(C)]` mirror of these layouts: `BufferLayout` computes
+WGSL's alignment rules and is the only thing that knows them.
 
-* **Attributes** (`Graph::attributes`, read by `input.attribute`). Per
-  vertex, and the mesh must carry a stream of that name; per instance,
-  and the draw must supply a value; or **computed**, and the graph's own
-  vertex stage writes it through `output.varying`. Which of the three is
-  part of the *declaration* and not of the reading node, so moving an
-  attribute between them rewires nothing. A mesh or a draw that cannot
-  supply one is an error naming the material, the attribute and the mesh
-  — reported while the frame is compiled, before a pass is opened.
+Everything that is configuration rather than a node is one value,
+`MaterialConfig`:
 
-And two flags, which are facts about the material in the way its tags
-are: **`cast_shadow`**, whether the shadow passes draw it, and
-**`receive_shadow`**, whether its shading is attenuated by the maps. The
-first is a selection and changes no generated code; the second is a macro
-and so a variant of its own ([ADR 0026](adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md)).
+- macros;
+- the lighting model's name;
+- the shadow flags;
+- tags;
+- forward shading;
+- `max_layers`;
+- feature channels.
 
-Both flags, the macro overrides, the model name, the tags and the
-pipeline's feature channels are one value — **`MaterialConfig`**
-(`wxsl_core::material`) — carried from the scene document through
-`Material::with_lighting` into `CodegenOptions`, and resolved in exactly
-one place: `MaterialConfig::resolve` turns a model *name* into an id in the
-enabled set and a `receive_shadow` *flag* into its macro, and the feature
-handshake is checked there rather than a frame later
-([ADR 0038](adr/0038-a-materials-configuration-is-one-value.md)). The next
-per-material knob is a field on it.
+`MaterialConfig::resolve` is the only place a name becomes an id
+([ADR 0038](adr/0038-a-materials-configuration-is-one-value.md)).
 
-## Where the frame stops being light
+### Macro variables
 
-Everything a pass writes is **linear radiance** until the last one. The
-generated `shade_surface` returns `lit * scene.exposure` and nothing more;
-the shipped **`tonemap`** effect — one screen pass at the end of every
-stock chain — applies the filmic curve and encodes for the display into the
-frame's own target
+A value that must be known at compile time, such as a loop bound or a code
+switch, is a macro (`wxsl_core::macros`).
+
+- A `Flag` becomes an `@if` feature.
+- An `Int` or `Float` becomes a module `const`.
+
+Precedence, weakest first:
+
+1. the file's default;
+2. the node's default;
+3. the graph's pin;
+4. the application's override.
+
+The whole set is part of the variant cache key.
+
+## Lighting
+
+**Lighting models** are WXSL functions with a fixed signature, under
+`shaders/lighting/models/`, registered in `lighting::DEFAULT_MODELS`
+([ADR 0028](adr/0028-lighting-models-dispatched-by-a-g-buffer-id.md)).
+
+- A material names its model.
+- A pipeline enables a `LightingSet`. The set determines:
+  - the G-buffer layout;
+  - the generated dispatch: a direct call when forward, a `switch` on an id
+    channel when deferred;
+  - the attachment-budget check.
+- **Material features** such as subsurface add channels on the models'
+  behalf ([ADR 0037](adr/0037-semantic-channels.md)).
+
+The shading function, the G-buffer pack and the lighting pass are
+generated from the set; never edit the generated text. Forward and deferred
+call the same generated `shade_surface`, and tests assert they produce the
+same image.
+
+A material may also **shade forward under a deferred pipeline**. Its
+radiance passes through the G-buffer unchanged. This is the route for
+screen-space and derivative effects
+([ADR 0056](adr/0056-a-material-may-shade-forward-under-either-pipeline.md)).
+
+**Lights** come in two kinds:
+
+- **Up to sixteen slots in the scene uniform**, for any type: directional,
+  point, spot, rectangle. These lights can cast shadows, drawn into one
+  depth atlas of shared tiles:
+  - cascades for directional lights;
+  - six faces for point lights;
+  - sixteen samples for area lights;
+  - cookies on spotlights.
+
+  See ADRs [0026](adr/0026-shadows-a-view-per-light-and-two-flags-on-the-material.md),
+  [0066](adr/0066-pack-shadow-slots-into-a-depth-atlas.md) and
+  [0071–0073](adr/0071-fit-cascades-and-pack-point-shadow-faces.md).
+- **Thousands of ranged lights without shadows.** The host bins them into a
+  16 × 9 × 24 grid over the camera frustum
+  ([ADR 0076](adr/0076-bin-ranged-lights-into-a-host-built-light-grid.md)).
+
+**Ambient light and the environment** have three parts:
+
+- **The split-sum BRDF table** is baked once by a compute effect
+  ([ADR 0039](adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+- **Environment cubes** are explicit frame resources, prefiltered from an
+  HDR image or from the sky node through face passes
+  ([ADRs 0062](adr/0062-prefilter-environments-through-parameterized-face-passes.md)–[0064](adr/0064-author-environment-bakes-and-depth-aware-backgrounds.md)).
+- **Without them**, the analytic environment remains.
+
+**Light stays linear** until the last pass. Every pass writes linear
+radiance; the `tonemap` effect at the end of the chain applies the curve
+and the display encoding
 ([ADR 0039](adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
+Nothing thresholds or blends encoded values.
 
-Three things follow. Both render paths hand the same numbers to the same
-pass, so there is one display transform rather than two that have to
-agree. Anything reading a chain's intermediate reads light — which is why
-bloom thresholds at 1.0, diffuse white, rather than at a number tuned
-against an encoded range. And a pipeline's clear colour is linear radiance
-that the head of the chain clears to, so the background goes through the
-curve like everything drawn.
+## Pipelines
 
-A pipeline that does not end in the effect presents linear — right for a
-chain that goes on to another effect, wrong on a screen. `pass.geometry`
-has an `into` for the same reason `pass.screen` does: a forward pass can
-start a chain rather than only end one.
+A pipeline is **data**: `PassDesc`s over `ResourceDesc`s, held in a
+`RenderGraph`
+([ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
+It is usually authored as a document over the pipeline vocabulary
+(`wxsl_core::pipeline`), which contains:
 
-The **environment-BRDF table** is the other half of that ADR. The
-`brdf_lut` compute effect's shader bakes the split-sum (scale, bias) table
-once, before the first frame's first pass, into a texture in the frame
-group; `ambient_environment` takes the pair for its surface's N·V and
-roughness and its specular term becomes `irradiance * (F0 * scale +
-bias)`. In the frame group for the shadow maps' reason: one lookup, both
-paths.
+- sources;
+- resources (`resource.color`, `resource.depth`, `resource.buffer`, …);
+- passes (`pass.geometry`, `pass.shadow`, `pass.screen`, `pass.compute.*`,
+  …);
+- `output.present`.
 
-## Three kinds of graph
+The stock forward and deferred pipelines are preset documents in
+`crates/wxsl-frame/assets/presets/`
+([ADR 0033](adr/0033-pipelines-are-documents.md)). The hand-built
+`forward_graph`/`deferred_graph` exist only as the reference the parity
+tests compare against.
 
-A graph carries a **domain** — `surface`, `screen` or `document` — and a
-node definition carries the set of domains it may be placed in
-([ADR 0040](adr/0040-screen-domain-graphs-postprocess-is-a-material-over-the-frame.md)).
-Most of the library is in all three, because `math.add` does not care what
-it is adding for; what is restricted is what touches a domain's ABI, and
-most of that restricts itself — a body that reads a surface context or
-declares a material's bind group is surface-domain by construction.
-`Graph::validate` reports a node outside its graph's domain by name, and
-`NodeRegistry::in_domain` is what a palette filters by.
+### Effects
 
-| Domain | ABI | Compiled by | Into |
-|---|---|---|---|
-| `surface` | `SurfaceContext` in, `Surface` out | `codegen::generate` | one module per `MaterialStage` |
-| `screen` | `ScreenContext` in, one colour out | `codegen::generate_screen` | one fullscreen pass |
-| `document` | the pass vocabulary (`crate::pipeline`) | `wxsl-frame`'s document compiler | a `RenderGraph` |
+An **effect** is a declared unit
+([ADR 0034](adr/0034-effects-are-first-class-units.md)). It has:
 
-The screen ABI (`package::wxsl::screen`) is a tenth the size of the surface
-one: `uv`, `time`, `pixel`, `texel`, and the one image the pass binds.
-`uv` and `time` are spelled as `SurfaceContext` spells them, so `input.uv`
-is one node serving both domains — the same trick `VertexContext` plays,
-and the reason this is a second half of a vocabulary rather than a second
-vocabulary.
+- inputs and outputs, in binding order;
+- a screen or compute entry point;
+- a shader (a `.wxsl` file, generated, or a screen graph);
+- **parameters** declared as `{name, default}`. Their uniform layout is
+  computed, and the host tunes them through `Renderer::set_pass_param`
+  without recompiling
+  ([ADR 0042](adr/0042-effect-parameters-are-uniforms-the-descriptor-declares-them.md)).
 
-An effect can therefore *be* a graph: `EffectShader::Graph` beside
-`Lighting` and `Source`, generated once when the effect is built. The
-shipped graph effects live in the `wxsl` facade — the renderer does not
-depend on the node library, and a graph-authored effect needs both — and
-`wxsl::effects::registry()` replaces `tonemap` under its own id, so every
-stock pipeline presents through a generated module without a document
-changing. `fxaa` is the first effect that arrived as a graph rather than
-being translated into one.
+A pass names an effect by id. A compute effect, or a screen effect with
+unusual wiring, gets a derived `pass.compute.<id>` or `pass.screen.<id>`
+node whose sockets are its declaration
+([ADR 0041](adr/0041-compute-and-buffers-join-the-document-vocabulary.md)).
+Applications register more effects with `Renderer::add_effect`. A
+multi-pass pyramid such as bloom or depth of field is a single document
+node that expands with scoped names
+([ADR 0065](adr/0065-a-pyramid-is-one-document-node-with-scoped-names.md)).
 
-`wxsl.sky` is an editable equirectangular preview over the pure
-`lighting.sky_single_scattering` node: optical integration of exponential
-Rayleigh/Mie density, solar attenuation and planet shadow, in kilometres.
-It writes linear radiance before tonemap and consumes the graph-effect image
-only for its extent. Camera composition is a separate depth-aware effect. The gallery can
-also feed its linear equirectangular result through the S3-D bake into actual
-material lighting (ADRs 0062–0063), replacing the analytic environment explicitly.
-See [ADR 0060](adr/0060-integrate-single-scattering-as-a-pure-sky-node.md).
+### Scheduling
 
-## How a shadow gets there
+`RenderGraph::schedule` is pure and tested without a device. It:
 
-One 2048² depth atlas and a shared table of 112 shadow tiles live in
-the **frame group** beside up to sixteen lights. The first two tiles are
-1024², four are 512², ten are 256² and ninety-six are 64². Each light owns
-an indivisible run: one origin box or up to four directional cascades, six
-point-light cube faces, one perspective tile for a spotlight, or 96 faces
-for a rectangular emitter's sixteen samples.
-A whole run that cannot fit receives no shadows (ADRs 0066, 0071–0073).
+- orders passes by what they read and write, with declaration order as the
+  tie-break;
+- validates everything it can check: attachment counts, formats, cycles,
+  resources nothing writes;
+- assigns physical textures.
 
-Lights without shadows can scale past sixteen. A point or spot light
-with a finite range and no shadow is *local*: `wxsl-frame` bins it on the
-host into a 16 × 9 × 24 light grid over the camera's frustum, and the
-frame group carries the light rows and the per-cluster index runs beside
-the uniform. Each fragment loops over the sixteen uniform lights and then
-over its own cluster's run (ADR 0076).
+Resource properties:
 
-A pass renders from a **view**: `PassDesc::view` selects the camera or a shadow
-tile, with a dynamic camera-binding offset. Both stock pipelines declare one
-pass per tile; unused slots draw nothing. The first clears the atlas and later
-passes load it with their own viewport/scissor. Matrices and rectangles belong
-to tiles; sampling and recording consume the same computed views.
+- **Persistence:** `Transient` textures are reused once their last reader
+  has run. `Persistent { history: n }` keeps a ring, so a pass can read
+  earlier frames without creating a cycle.
+- **Shape:** textures may be 2D, arrays, cubes or 3D, with mips
+  ([ADR 0061](adr/0061-texture-mips-and-attachment-subresources-are-frame-data.md)).
+- **Buffers** are resources too, and never alias
+  ([ADR 0036](adr/0036-buffers-are-graph-resources.md)).
 
-Camera-fitted cascades use view-depth splits, eight-corner bounds, snapped
-bounding spheres and 10% overlap/blending. Receiver-plane PCF avoids acne
-without increasing the normal offset as resolution falls. Point-light face
-selection uses the offset receiver position, avoiding gaps at cube edges.
-Atlas taps remain confined to the selected tile.
+A pass has a **policy**: per frame, once, on resize or on demand. A
+non-default policy may only write stable storage
+([ADR 0035](adr/0035-execution-policies.md)).
 
-`Light::rectangle(centre, half_u, half_v, colour, radiance)` defines a one-sided
-emitter: `cross(half_u, half_v)` is its emitting normal. The shader integrates
-sixteen Gauss quadrature samples with emitter cosine, area weights and inverse
-square falloff, evaluating the material BRDF and visibility for each sample
-on both paths. The gallery's `area-shadow` displays the emitter and its
-penumbrae. Receiver-plane PCF also corrects its perspective face comparisons
-without growing the normal offset. Sixteen samples are an approximation and can produce separate shadow
-lobes; this is neither LTC nor stochastic integration.
+### Patterns built on these
 
-`Light::spot(position, direction, inner, outer, colour, intensity)` defines
-an inverse-square cone, with half-angles in radians and direction away from
-the source. It casts one perspective shadow matching the outer angle.
-`with_cookie(layer)` selects a layer in a host-uploaded, filterable RGBA
-D2Array view supplied to `Renderer::set_light_cookies`: white is open, black
-masked, RGB tints the light and alpha attenuates it. UVs share the shadow's
-orientation but work without shadows too. Texture updates do not recompile.
-Dawn exposes `upload_light_cookies(width, height, layers, rgba)` for the same
-contract. Gallery demos `spot-shadow` and `spot-cookie` show the cone and a
-projected window mask (ADR 0073).
+- **Bakes.** A material subgraph is turned into a compute effect that
+  writes a host-owned table. The material then samples that table
+  ([ADR 0045](adr/0045-a-bake-is-an-effect-over-a-material-subgraph.md)).
+- **Motion.** The velocity stage reads this frame's and the previous
+  frame's transforms. TAA and motion blur are history chains over it
+  ([ADR 0046](adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md)).
+- **Transparency.**
+  - It is tiered: sorted by default, with dual depth peeling up to a
+    material's `max_layers`
+    ([ADRs 0047](adr/0047-dual-depth-peeling-and-the-baseline-native-split-for-blendable-float-targets.md),
+    [0057](adr/0057-transparency-is-tiered-sorted-by-default-peeled-on-request.md)).
+  - Draw order is data, per pass
+    ([ADR 0055](adr/0055-sorting-is-opt-in-per-pass-and-it-sorts-draws-not-passes.md)).
+  - Refraction composes peeled optical layers
+    ([ADRs 0067](adr/0067-trace-refraction-through-peeled-surface-layers.md)–[0070](adr/0070-render-local-probe-glass-as-opaque-surfaces.md)).
 
-N7's remaining scale work is compute-built/clustered light lists. The current
-sixteen-light uniform budget is fixed; atlas, cascades, cube shadows and
-rectangular sampled emission and textured spotlights are implemented. See `plan3.md` for status.
+### Switching pipeline
 
-The gallery's live cameras orbit with left drag, pan with right/middle drag,
-zoom with the wheel and reset with R. Each demo retains its own view; moving
-cameras supply previous-frame camera data to temporal passes. Screenshots
-retain their authored fixed cameras.
+- `Renderer::set_pipeline` switches immediately and compiles during the
+  next frame.
+- `Renderer::request_pipeline` compiles the missing variants on a worker
+  thread, keeps presenting the current pipeline, and then swaps.
+  `swap_progress` reports how far it has got.
 
-The lookup is PCF over a comparison sampler, biased by **normal offset**
-rather than depth bias — the sample point moves along the surface normal
-instead of the comparison moving, which is where the error actually is
-and the only version that behaves on a displaced vertex or a perforated
-surface.
-  [ADR 0024](adr/0024-a-material-declares-the-geometry-it-requires.md).
+## A frame
 
-Each declaring node carries a **setting** — a string the node instance
-holds that names the thing it declares. A setting is not a label: renaming
-a `param.value` renames the uniform.
+The application gives the renderer three things:
 
-**The layout is computed, not mirrored.** This is the one host-shared
-buffer in the repo with no `#[repr(C)]` struct beside it, because its
-fields are whatever the graph declared.
-`wxsl_core::resources::BufferLayout` computes the offsets under WGSL's
-uniform rules — a `vec3f` aligns to 16 and occupies 12, a `mat3x3f` is
-three columns each padded to 16 — and it is the *only* thing that knows
-them: the shader's struct is generated from it, and the host writes
-through it. It has two customers: the parameter buffer, and the row of
-declared per-instance attributes, which differs only in that the storage
-address space does not round a struct's alignment up to 16.
-`crates/wxsl/tests/material_resources.rs` and `material_geometry.rs` run
-one probe graph over both, on a GPU, at every type — which is what
-replaces the mirror test everything else here gets.
+- **an `Environment`:** the camera, lights, exposure and time. Positions
+  are measured from an `f64` floating origin
+  ([ADR 0074](adr/0074-rebase-each-frame-onto-an-f64-floating-origin.md));
+- **a `DrawList`:** each item is a mesh, a material, a transform, tags and
+  bindings. A geometry pass draws a tag expression (`opaque && !outlined`);
+- **a target view.**
 
-**Where a declared attribute lands.** A per-vertex one is a vertex buffer
-of its own at slot 1 and up, matched to the mesh's stream *by name*; four
-of them is the budget, because WebGPU guarantees eight slots and the base
-vertex takes one. A per-instance one is a row of a second storage array in
-the frame group, beside the transform array rather than inside it: the
-transform array is ABI and the hand-written vertex stage reads it at that
-stride, so widening it would move every field out from under code that
-cannot know it moved. Both arrays are indexed by the same
-`@builtin(instance_index)` — which WGSL offers in the vertex stage only,
-so one `@interpolate(flat) u32` varying carries it down and the fragment
-stage re-indexes. One location, however many attributes.
+The renderer never holds a scene. Converting a scene document into a draw
+list is the facade's job (`wxsl::scene::SceneResources`). Batching and
+culling belong on that side too.
 
-## Macro variables
+**Bind groups** are allocated by update frequency
+([ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md)):
 
-Not everything a node needs can be a socket value: a loop bound has to be a
-compile-time constant, and a lighting-model switch should remove code rather
-than pick between two results. Those are *macro variables*
-(`wxsl_core::macros`), declared by node definitions and pinned per graph
-in the node format:
-
-| Kind | Becomes | Example |
+| # | Group | Holds |
 |---|---|---|
-| `Flag(bool)` | a WXSL conditional-translation feature (`@if(name)`) | `wxsl_fbm_ridged`, `wxsl_debug_normals` |
-| `Int` / `Float` | a `const` the declaring module carries | `WXSL_FBM_OCTAVES` |
+| 0 | frame | camera, lights, shadow atlas, light grid, instance rows |
+| 1 | material | the graph's declared parameters and textures |
+| 2 | user | the application's block, if the material declares one |
+| 3 | pass | what the pass reads, then its effect parameters |
 
-A macro is declared, with a default, by the WXSL module that uses it —
-`@macro const OCTAVES: i32 = 5;` — and is an ordinary module-scope `const`
-after binding, which is why it can be a loop bound or an array size.
+`abi::BIND_GROUPS` is the single declaration of these groups. The fixed
+host layouts (scene uniform, lights, vertices) are generated as Rust, C and
+WXSL from `wxsl_core::host`
+([ADR 0050](adr/0050-host-shared-layouts-are-generated.md)).
 
-Precedence, weakest first: the declaring file's default, each node's declared
-default, what the graph pins, then what the application overrides. The whole
-set is part of the variant cache key, because the bindings also reach
-*imported* modules, whose own defaults are nowhere in the root source.
+## Backends and profiles
 
-## The renderer takes its shaders from the application
+- **wgpu** (`wxsl-render`) allocates pools, records passes and caches
+  variants. The neutral ↔ wgpu type mapping is exhaustive (`types`).
+- **Dawn** (`dawn/`) implements only the device half in C++
+  ([ADR 0051](adr/0051-dawn-implements-only-the-device-half.md)). It
+  consumes plans, WGSL and layouts exported by `wxsl-ffi` (JSON in, data
+  out, [ADR 0049](adr/0049-share-the-core-through-a-data-only-c-abi.md)), or
+  loads that ABI at runtime to compile
+  ([ADR 0052](adr/0052-runtime-compilation-stays-behind-the-data-abi.md)).
+  The C++ never reimplements scheduling, compilation or layouts. Parity
+  scripts compare its images with wgpu's.
+- **The profile is decided by the device, not by a feature**
+  ([ADR 0075](adr/0075-webgl2-and-gl-are-a-fallback-profile.md)). Without
+  compute or storage buffers (WebGL2, GLES):
+  - instance rows are read from data textures;
+  - compute effects that have a fragment form run as screen passes;
+  - native-only effects are refused by name.
 
-`wxsl-render` compiles WXSL but ships none — it must not depend on
-`wxsl-stdlib` (ADR 0002), so the application hands it a `ShaderLibrary`.
-With both facade features on that is `wxsl::stdlib_library()`. This is
-also the seam for substituting an ABI module or adding hand-written WXSL. See
-[ADR 0009](adr/0009-the-application-supplies-the-shader-library.md).
+The release gate compiles and validates every shipped shader through the C
+ABI under every profile
+([ADR 0077](adr/0077-gate-a-release-on-every-shipped-shader-through-the-c-abi.md)).
 
-## The editor draws itself with the renderer
+## The editor
 
-There is no GUI toolkit in this workspace. The editor's chrome is a WXSL
-module (`package::wxsl::ui`) compiled by `wxsl-lang` and submitted through
-`variants::compile` like any material, and its preview is the real
-`Renderer` on the real pipelines — so every frame of editing exercises the
-stack the editor exists to author for. [ADR
-0013](adr/0013-the-editor-draws-itself-with-wxsl-render.md) records why, and
-what it cost (`wxsl-editor` now depends on `wxsl-render`, amending ADR
-0004).
+The editor draws itself with the renderer: its chrome is a WXSL shader, its
+text is MSDF generated in-tree, and its preview is the real `Renderer` on
+the real pipelines ([ADRs 0013](adr/0013-the-editor-draws-itself-with-wxsl-render.md),
+[0014](adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md)).
 
-Two things follow that are worth knowing before touching either half:
+It is windowing-agnostic: it takes `UiEvent`s and records into an encoder.
+`examples/editor.rs` is the winit glue.
 
-* **Everything on screen is one instance.** A rounded box, a capsule, an
-  image and a glyph are the same primitive with a different `kind`; the
-  quad's corners come from the vertex index, so there is no vertex or index
-  buffer in the UI path at all. The layout is host-shared three ways —
-  `abi::UI_ATTRIBUTES`, `wxsl_render::ui::draw::UiInstance`, and
-  `shaders/wxsl/ui.wxsl` — generated from the ABI table by `wxsl-core::host`
-  (ADR 0050), not edited separately.
-* **Text is MSDF, generated in-tree, twice.** `ui::msdf` is the reference
-  implementation on the CPU and `shaders/wxsl/msdf.wxsl` is the same
-  algorithm as a compute pass; `MsdfBackend` picks one at runtime and a test
-  asserts they agree. The renderer embeds no font: the application supplies
-  the bytes, exactly as it supplies the shader library. [ADR
-  0014](adr/0014-msdf-text-with-an-own-generator-and-app-supplied-fonts.md).
+It has two canvas modes over one renderer:
 
-## Why WXSL and not raw WGSL
+- **the material graph;**
+- **the pipeline document,** compiled live on every edit
+  ([ADR 0043](adr/0043-the-pipeline-canvas-is-a-mode-and-compiles-on-every-edit.md)).
 
-WGSL alone has no imports and no conditional compilation, both of which
-this project needs structurally: composing node functions, and branching
-shader behaviour on a feature flag. It also has no generics, which
-the node system needs so that one authored function can serve `f32`,
-`vec2f`, `vec3f` and `vec4f`.
+It also offers pass stepping, resource inspection and shader hot reload.
 
-WXSL is a superset of WGSL adding four things — templates, imports,
-conditional translation and macro constants — compiled by `wxsl-lang` and
-lowered back to WGSL, because WGSL is what `wgpu` consumes.
+## WXSL and the compiler
 
-This started as a dependency on [WESL](https://wesl-lang.dev), which
-provides imports and conditional translation. That was
-[ADR 0003](adr/0003-wesl-as-the-shading-language.md), now superseded: WESL's
-generics do not work (tested, with the evidence recorded in that ADR), and
-templates were the feature the node system could not do without.
-[ADR 0011](adr/0011-own-the-shading-language.md) records the replacement and
-the four cheaper alternatives it rejected first.
+WGSL has no imports, no conditional compilation and no generics; the node
+library needs all three. WXSL adds templates, imports, `@if` and
+`@macro const`
+([ADR 0011](adr/0011-own-the-shading-language.md), superseding the WESL
+dependency of [ADR 0003](adr/0003-wesl-as-the-shading-language.md)).
 
-## The compiler
+`wxsl-lang` runs these passes, in this order:
 
-`wxsl-lang` is a source-to-WGSL compiler, in pipeline order:
-
-| Stage | Job |
+| Pass | Job |
 |---|---|
-| `lexer` | tokens, plus WGSL's template disambiguation (`a < b` vs `vec3<f32>`) |
-| `grammar` | LALRPOP, over the token stream rather than raw text |
-| `cond` | evaluate `@if`, bind `@macro const` values — per module, before renaming |
-| `resolve` | inline imports, mangle by origin, rewrite references respecting shadowing |
-| `mono` | instantiate templates, one copy per set of type arguments |
-| — | dead-code elimination from the root's declarations |
-| `emit` | WGSL, refusing anything still WXSL-only |
+| `lexer` | tokens, plus template disambiguation |
+| `grammar` | LALRPOP, over the token stream |
+| `cond` | evaluates `@if` and binds macros, per module, before renaming |
+| `resolve` | inlines imports and mangles names by origin |
+| `mono` | instantiates templates on the flat module ([ADR 0012](adr/0012-monomorphize-templates-on-the-flat-module.md)) |
+| dead-code elimination | keeps only what the root reaches |
+| `emit` | WGSL; refuses anything that is still WXSL |
 
-The pass order is an invariant, not a preference:
+The order is an invariant, and `resolve` enforces it. `node` sits off this
+pipeline: it parses one file and returns the `NodeDefinition` that file
+describes.
 
-* `cond` must run before renaming, because an `@if` names macros in its own
-  module's vocabulary and a dropped branch should never have its references
-  resolved.
-* `mono` must run after flattening, because a template and its call sites
-  can be in different files, so no per-module pass sees all of them.
-* dead-code elimination must run after `mono`, so an instantiation whose
-  only caller was itself dropped goes with it.
+`wxsl-lang` does not validate its WGSL output. The device, naga in tests,
+or the release gate does.
 
-`resolve` takes the bindings and sequences all of this itself rather than
-trusting callers to get it right.
+## The node library
 
-Templates carry one builtin, `components(T)` — the number of scalar
-components in a type, folded to an integer literal, so it works as an array
-size or a loop bound. Type arguments are written explicitly (which is what
-the node graph emits, since a graph knows every socket's type) or inferred
-from the arguments by a deliberately shallow rule that errors rather than
-guesses. [ADR 0012](adr/0012-monomorphize-templates-on-the-flat-module.md)
-records why, and what a full type checker would have cost.
+`wxsl-stdlib/shaders/<category>/` holds one `.wxsl` file per node, and **the
+file is the node** ([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)):
 
-The backend's refusal is deliberate. If an unresolved import, an
-uninstantiated template or a surviving `@if` reaches it, the error names the
-construct and the pass that should have removed it — instead of `wgpu`
-rejecting syntax it has never heard of.
+- the signature gives the sockets;
+- the type-parameter bounds give the generic types;
+- the comments give the label, the doc and the defaults.
 
-One module sits off that pipeline: `node`, which parses a single file and
-answers with the `NodeDefinition` it describes rather than with WGSL
-([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
-It is the only place in the compiler that reads comments, because the node
-metadata a signature cannot carry — a label, a socket default — is stated in
-them rather than in attributes the compiler would have to thread through
-every pass and then ignore.
+Arithmetic operators are inline expressions, one generic node per
+operation ([ADR 0018](adr/0018-one-generic-node-per-operation.md)).
+`shaders/wxsl/` holds the shader ABI
+([ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md)) rather
+than nodes.
 
-## The base node library
-
-`wxsl-stdlib` mirrors the category layout common to granular shader
-libraries under `crates/wxsl-stdlib/shaders/` (`math/`, `color/`,
-`space/`, `lighting/`, `generative/`, `sdf/`, `sample/`, `animation/`,
-`filter/`, `distort/`), one `.wxsl` file per function — original code and
-audited permissive ports (ADR 0053). A `wxsl/` directory alongside them holds the
-shader ABI (ADR 0008), which is plumbing rather than granular functions.
-
-Two kinds of node come out of it. Arithmetic is an inline WXSL expression
-(`math.add` is `{a} + {b}`), because wrapping an addition in a function call
-buys nothing. It is *one* node per operation, not one per operation and
-type: the definition declares the types it works over as a type parameter
-and its sockets carry it, resolved per graph node from whatever is connected,
-and the operators whose two operands WGSL lets differ (`f32 * vec3f`,
-`mat3x3f * vec3f`) declare two parameters and derive the result from both
-([ADR 0018](adr/0018-one-generic-node-per-operation.md)). Everything with a body — PBR
-shading, noise, tonemapping, colour spaces — is a real WXSL function, and
-**the file is the node**: its signature gives the sockets, its type
-parameter's bound list gives the allowed set, its `@macro const`s give the
-macro declarations, and its comments give the label, the documentation and
-the socket defaults
-([ADR 0020](adr/0020-a-node-definition-is-derived-from-its-wxsl-source.md)).
-`wxsl-stdlib/build.rs` runs `wxsl_lang::node_from_source` over every file
-under a category directory and writes the results out as the table
-`registry.rs` includes, so a function and its node cannot disagree — there
-is nowhere for them to disagree — and hand-written WXSL can call the same
-function a graph does. An earlier plan to rewrite
-[LYGIA](https://lygia.xyz) into WXSL was scrapped once its non-permissive
-license ([ADR 0006](adr/0006-lygia-port-licensing-and-isolation.md)) turned
-out to be a real adoption cost even fully isolated behind an opt-in
-feature; ADR 0007 replaced it with this from-scratch library, which is why
-`stdlib` defaults on. ADR 0053 now permits attributed MIT/Apache/BSD ports;
-required notices ship with the crate and are exposed to binary applications.
-See [ADR 0053](adr/0053-permissive-shader-ports-retain-their-provenance.md) and
-`crates/wxsl-stdlib/shaders/README.md`'s authoring rule before adding a
-function.
-
-## Current status
-
-Implemented and tested end to end:
-
-| Area | State |
-|---|---|
-| `wxsl-core`: node/socket model, typed acyclic graph, validation, WXSL codegen, macro variables, node format (serde) | done |
-| `wxsl-frame`: neutral plans, document compilation, scheduling, effects and capability checks | done |
-| `wxsl-ffi`: generated C header, plan/WGSL/layout exports, load-time checks and C/C++ parity harness | done |
-| `dawn/`: headless renderer, generated layouts, optional runtime compiler, scene/category parity and resource probes | done; GPU CI job requires a provisioned labelled runner |
-| `wxsl-stdlib`: shader ABI, 100 node definitions over arithmetic, vectors, conversions, logic, colour, space, noise, SDFs, animation, PBR lighting | done |
-| `wxsl-render`: WXSL→WGSL compilation, variant cache, forward and deferred pipelines, the render graph with per-light shadow passes, lighting-model sets, execution policies, buffer resources, compute and screen effects, channel plans, cube mesh, scene uniforms, offscreen rendering | done |
-| `wxsl-render`: the `ui` layer — texture atlas, MSDF text (CPU and compute pass), instanced draw list, input, the UI pass | done |
-| `wxsl-editor`: node canvas (pan/zoom, link, unlink, move, delete), searchable palette, live preview, WXSL/WGSL/problem panels, macro and parameter editing, per-node name and colour, light/dark themes | done |
-| `wxsl`: facade, `stdlib_library()`, the `pbr_cube` demo, the `gallery` demo, the `editor` demo | done |
-
-The demo is the thing to run first:
-
-```sh
-cargo run -p wxsl --example pbr_cube              # windowed; F/D switch path
-cargo run -p wxsl --example pbr_cube -- --headless  # both pipelines to PNG
-cargo run -p wxsl --example pbr_cube -- --dump-wgsl # what the graph became
-cargo run -p wxsl --example pbr_cube -- --headless --models lambert,phong,pbr,clearcoat
-                                     # three models and an extra G-buffer target,
-                                     # through one deferred lighting pass
-cargo run -p wxsl --example gallery               # every pipeline in one window
-cargo run -p wxsl --example gallery -- --screenshot # one PNG each + contact sheet
-cargo run -p wxsl --example gallery -- --list     # the demos, including the
-                                     # policy (BRDF LUT), buffer-ramp and
-                                     # subsurface-channel proofs
-```
-
-And the editor, which is the same graph with somewhere to edit it:
-
-```sh
-cargo run -p wxsl --features editor --example editor
-cargo run -p wxsl --features editor --example editor -- --screenshot out.png
-cargo run -p wxsl --features editor --example editor -- --pipeline   # the pipeline canvas, ADR 0043
-```
-
-The `--pipeline` canvas is the second one: the deferred preset as a
-document, edited live — an edit validates, compiles through the public
-compiler against the renderer's own config, and lands with `set_graph`,
-so the preview runs the edited pass list the same frame. The palette is
-the document vocabulary plus one row per screen effect (a `pass.screen`
-with the effect already named); the bottom panel lists the compiled
-passes; the inspector shows a selected node's settings, its effect's
-parameters as sliders (ADR 0042's face — a move is a buffer write, not a
-recompile), and the G-buffer channel plan against the attachment budget.
-
-Test coverage worth knowing about, since it is what keeps the two halves of
-the shader ABI honest:
-
-- `crates/wxsl/tests/graph_to_wgsl.rs` compiles *every node in the
-  library* to WGSL for every material stage, plus the demo graph, macro
-  switching, and the node format's round trip. No GPU needed.
-- `crates/wxsl/tests/render_cube.rs` renders the cube through both pipelines
-  on a real device and asserts the images match. Skips when no adapter is
-  available.
-- `crates/wxsl/tests/editor_frame.rs` drives the editor for several frames
-  on a real device: that it draws an interface at all, that editing
-  recompiles, that a path switch produces different WGSL, that a frame of
-  every input event leaves it drawing — and that both MSDF backends produce
-  the same interface, which is what keeps the CPU generator and the compute
-  shader honest. Also the pipeline canvas: the deferred preset opened, a
-  bloom drop landing in the running pass list, a parameter move compiling
-  nothing, and the stock pass list restored on the way back. Also skips
-  with no adapter.
+The code is original or ported from audited permissive sources
+([ADR 0053](adr/0053-permissive-shader-ports-retain-their-provenance.md)).
+The authoring rules are in `crates/wxsl-stdlib/shaders/README.md`.
 
 ## See also
 
-- `docs/adr/` — the decision log this map summarizes.
-- `docs/glossary.md` — terminology used above without re-explanation.
-- `AGENTS.md` (repo root) — process and conventions for making changes here.
+- [`glossary.md`](glossary.md): the terms used here.
+- [`adr/README.md`](adr/README.md): the decision log.
+- [`../AGENTS.md`](../AGENTS.md): commands, tests, conventions.

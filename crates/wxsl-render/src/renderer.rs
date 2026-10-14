@@ -94,7 +94,7 @@ pub struct Renderer {
     /// Every knob the stock pass list varies by, in one place: size,
     /// format, clear colour, lighting set. Mutated by `set_lighting`,
     /// `set_pipeline` and `resize`, read by `rebuild`
-    /// ([plan2 P2](../../../plan2.md)).
+    /// ([plan2 P2](../../../docs/history/plan2.md)).
     config: PipelineConfig,
     /// The execution policies' run bookkeeping (plan2 P10), per pass by
     /// declaration index: how many times each pass has actually run since

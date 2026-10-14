@@ -18,7 +18,7 @@ and this is it.
 ## Context
 
 The material preview has run the real
-[`Renderer`](../../../crates/wxsl-render/src/renderer.rs) since ADR
+[`Renderer`](../../crates/wxsl-render/src/renderer.rs) since ADR
 [0013](0013-the-editor-draws-itself-with-wxsl-render.md) — the same
 variant cache, the same pipelines a shipped application uses. A pipeline
 document, meanwhile, compiles to a pass list through a pure, device-free

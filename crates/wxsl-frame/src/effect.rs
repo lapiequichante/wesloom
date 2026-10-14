@@ -6,7 +6,7 @@
 //! only by editing `wxsl-render`. An effect is now *data*, like everything
 //! else a pipeline is made of: what it reads, the shader it runs, the
 //! entry points to build a pipeline from
-//! ([plan2 P4](../../../plan2.md)). The pipeline compiler validates a
+//! ([plan2 P4](../../../docs/history/plan2.md)). The pipeline compiler validates a
 //! `pass.screen` node against the registry's declarations; the renderer
 //! compiles and runs the shader they name. An application adds an effect
 //! with `wxsl_render::Renderer::add_effect` and a document names it by `effect` id —

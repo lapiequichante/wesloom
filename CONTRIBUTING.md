@@ -1,57 +1,34 @@
 # Contributing
 
-## Start here
-
-[`AGENTS.md`](AGENTS.md) is the actual contributor guide — build/lint/test
-commands, crate-boundary rules, and when a change needs a new
-[ADR](docs/adr/README.md). It's written for AI coding agents, but it's the
-same guide for humans; there's no separate process.
+[`AGENTS.md`](AGENTS.md) is the contributor guide, for humans and coding
+agents alike. It covers the commands, which tests to run, the
+crate-boundary rules, and when a change needs an
+[ADR](docs/adr/README.md).
 
 ## Licensing of contributions
 
-By contributing to any crate in this workspace, you agree your contribution
-is licensed under this project's dual MIT/Apache-2.0 license.
+By contributing, you agree that your contribution is licensed under the
+project's dual MIT/Apache-2.0 license.
 
-If you're adding a function to `wxsl-stdlib`, it must be your own
-original implementation — inspiration from how other libraries or engines
-solve a problem is fine, transcribing their code is not, regardless of
-their license. See
-[ADR 0007](docs/adr/0007-original-shader-stdlib-instead-of-a-lygia-port.md)
-and `crates/wxsl-stdlib/shaders/README.md` for why and for the exact
-rule.
+A `wxsl-stdlib` function is either original code or a port from an audited
+MIT, Apache-2.0 or BSD source. A port keeps its provenance and notices
+([ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)).
+The exact rule is in `crates/wxsl-stdlib/shaders/README.md`.
 
 ## Before opening a PR
 
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --no-default-features -- -D warnings
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-```
-
-If your change touches crate boundaries or the feature-flag matrix, also
-run `cargo check -p wxsl --no-default-features` and
-`cargo check -p wxsl --features editor` — see
-[ADR 0002](docs/adr/0002-cargo-workspace-crate-boundaries.md) for why both
-matter. (`--workspace --no-default-features` does not prove the headless
-claim: it still builds `wxsl-render`, whose `wgpu` dependency is not
-optional.)
-
-If your change touches the shader ABI, the pipelines, or the node library,
-also run the demo — it is the fastest way to see a regression:
+Run the checks in `AGENTS.md`'s "Commands" section, and the tests its table
+routes your change to. A change to the shader ABI, the pipelines or the
+node library should also render:
 
 ```sh
 cargo run -p wxsl --example pbr_cube -- --headless
 ```
 
-It renders one frame per pipeline and reports how far apart they are;
-they should be identical to within 8-bit rounding.
+The two pipelines' images should agree to within 8-bit rounding.
 
-## Commit / PR expectations
+## Pull requests
 
-- Keep PRs scoped to one crate/concern where possible; cross-crate
-  refactors are fine when the change genuinely spans the boundary (e.g. a
-  new node trait method), but avoid bundling unrelated work.
-- If a PR makes an architectural decision (new public trait boundary, new
-  dependency, new feature flag), include the ADR that records it — see
-  `AGENTS.md`'s "Writing an ADR" section.
+- Keep each PR to one concern. Cross-crate changes are fine when the change
+  really spans the boundary.
+- A PR that makes an architectural decision includes its ADR.
