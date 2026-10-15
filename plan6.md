@@ -165,15 +165,54 @@ This is moving and cutting, never rewriting.
 
 This work is driven by C2, never by style.
 
-* Split files where the inventory shows two modules in one:
-  * `pipeline_doc.rs` (5.1k lines): node registry vs. compiler;
-  * `graph.rs` (4k): model vs. serialization;
-  * `codegen.rs` (3.7k);
-  * the editor's `app.rs` (3k), which M0 will split anyway.
-* Remove dead code and orphan examples, and reconcile the `wxsl_render`
-  re-exports of `wxsl_frame` so each type has one canonical path.
-* **Open question (from the old `todo.md`):** why the blurred bloom
-  shows bands.
+**Landed (2026-10-15):** four splits, one commit each, with no behaviour
+change. The code moved verbatim, and the API snapshots list the same items.
+Public types stay defined in the parent module, since a type defined in a
+private child prints under that child's path in other crates' snapshots.
+
+* `wxsl-frame::pipeline_doc` → `mod.rs` (the error, `compile` and the
+  compiler's core), `resources`, `passes`, `peel` and `tests`. The guess
+  "registry vs. compiler" did not hold: the registry is ten lines.
+* `wxsl-core::graph` → `mod.rs` (the model and editing), `generics`,
+  `validate`, `wire` (the file format) and `tests`. Serialization was only
+  the 120-line `wire` module.
+* `wxsl-core::codegen` → `mod.rs` (the generators), `emit` (the expression
+  emitter), `write` (the module writer) and `tests`.
+* `wxsl-editor::app` → `mod.rs` (the `Editor`), `host`, `panels`,
+  `inspector` and `code` (the bottom tabs).
+* **The bloom bands are answered.** The one-pass `bloom` effect samples a
+  13-tap disc at a four-texel stride, so a highlight stamps a ring of dots,
+  and a low threshold turns the rings into bands. The gallery's documents
+  use the separable Gaussian (`bloom_x`, `bloom_y`) and the pyramid instead.
+  The shaders' headers say so, and the 2026-10-15 screenshots show smooth
+  halos.
+* **Orphans:** no dead-code allowances outside shared test helpers. The one
+  example nothing links, `wxsl-frame`'s `effect_interfaces`, stays: it is
+  the device-free effect API's demo beside `plan_frame`.
+
+**Still open, for a decision before C4 freezes the stable tier:**
+
+* **Two types per name.** `wxsl_render` adapts `wxsl_frame` rather than
+  only re-exporting it (ADR 0048):
+  * its `TargetConfig` holds a `wgpu` format, beside `wxsl_frame`'s;
+  * its `RenderGraph` is a newtype that records, beside `wxsl_frame`'s;
+  * its `pipeline_doc::compile` shadows the one its glob re-exports.
+  The root exports the adapters, which is consistent, but
+  `PipelineConfig::target` is `wxsl_frame`'s `TargetConfig`, so a caller
+  converts between them. A third name collides: `wxsl_render::graph::
+  GraphError` (the scheduler's) and `wxsl_core::error::GraphError` (the
+  graph model's). Making one path canonical changes the stable surface.
+* **Public functions nothing in the workspace calls**, mostly accessors
+  and symmetric setters:
+  * `wxsl-core`: `Graph::set_macros`, `set_attributes`, `remove_attribute`,
+    `clear_user_block`; `feature_for_macro`, `is_terminal`,
+    `screen_context_fields`;
+  * `wxsl-frame`: `with_buffer_usage`, `with_normal_bias`, `is_deferred`;
+  * `wxsl-render`: `request_graph`, `set_generator`,
+    `pass_parameter_layout`, `instance_capacity`, `user_block_size`, a few
+    device-capability queries, and the UI's `polyline` and
+    `circle_border`.
+  Removing them is an API change, so the C4 freeze is where to decide.
 
 ### G1 — Scene document v2 *(prerequisite for G2 and E1)*
 
