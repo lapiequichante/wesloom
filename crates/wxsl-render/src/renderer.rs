@@ -34,6 +34,7 @@
 //! pipelines is free, and the third costs nothing at all.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 use wxsl_core::abi::{self, MaterialStage};
@@ -107,6 +108,9 @@ pub struct Renderer {
     drawn: Vec<u32>,
     /// How many triangles each pass drew last frame, beside `drawn`.
     triangles: Vec<u64>,
+    /// How many draw calls each pass issued last frame: `drawn`, with
+    /// each instanced run counted once (ADR 0086).
+    calls: Vec<u32>,
     /// Where the next frame is probed, as a fraction of the target
     /// (plan6 E2).
     probe_at: Option<[f32; 2]>,
@@ -193,6 +197,7 @@ impl Renderer {
             runs: vec![0; pass_count],
             drawn: vec![0; pass_count],
             triangles: vec![0; pass_count],
+            calls: vec![0; pass_count],
             probe_at: None,
             probed: None,
             line_mode: device
@@ -436,6 +441,14 @@ impl Renderer {
     pub fn pass_triangle_count(&self, label: &str) -> Option<u64> {
         let index = self.graph.passes().iter().position(|p| p.label == label)?;
         self.triangles.get(index).copied()
+    }
+
+    /// How many draw calls the pass labelled `label` issued last frame:
+    /// [`Self::pass_draw_count`]'s draws, with each instanced run of
+    /// identical draws counted once (ADR 0086).
+    pub fn pass_call_count(&self, label: &str) -> Option<u32> {
+        let index = self.graph.passes().iter().position(|p| p.label == label)?;
+        self.calls.get(index).copied()
     }
 
     /// Measure every pass's GPU time with timestamp queries, or stop.
@@ -1288,6 +1301,7 @@ impl Renderer {
         // what the compile below selects.
         self.drawn = vec![0; self.graph.passes().len()];
         self.triangles = vec![0; self.graph.passes().len()];
+        self.calls = vec![0; self.graph.passes().len()];
         let plan = self.compile_frame(device, request.environment, request.draws)?;
 
         // One row per draw, in every shape the frame's materials asked
@@ -1532,6 +1546,7 @@ impl Renderer {
         draws: &DrawList<'_>,
     ) -> Result<FramePlan, RenderError> {
         let mut plan = FramePlan::default();
+        let views = environment.views();
         for (index, pass) in self.graph.passes().iter().enumerate() {
             if let PassKind::Screen { effect } | PassKind::Compute { effect } = &pass.kind {
                 if let Some(known) = self.effects.get_on(self.config.profile, effect) {
@@ -1576,6 +1591,19 @@ impl Renderer {
                             pass.layers.admits(material.max_layers())
                         });
                     }
+                    // A draw whose box is outside this pass's view, the
+                    // camera's or its shadow tile's (ADR 0086).
+                    if let DrawSource::Scene(_) = source {
+                        let view_proj =
+                            glam::Mat4::from_cols_array_2d(&views[pass.view.slot()].view_proj);
+                        selected.retain(|index| {
+                            draws.items()[*index as usize]
+                                .bounds
+                                .is_none_or(|(min, max)| {
+                                    !wxsl_frame::environment::outside_view(view_proj, min, max)
+                                })
+                        });
+                    }
                     // The pass's draw order (plan5 D3/D4): each draw sorts
                     // by (its material's render order, camera depth). The
                     // instance rows are untouched — every recorded draw
@@ -1613,9 +1641,22 @@ impl Renderer {
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         });
                     }
-                    let mut variants = Vec::with_capacity(selected.len());
+                    let mut variants: Vec<Run> = Vec::with_capacity(selected.len());
                     for instance in selected {
                         let item = &draws.items()[instance as usize];
+                        // The next instance of the previous run, drawn
+                        // with everything the run's first draw was: the
+                        // same instanced call, already checked (ADR 0086).
+                        if let (DrawSource::Scene(_), Some((run, _))) =
+                            (source, variants.last_mut())
+                        {
+                            if run.end == instance
+                                && same_draw(&draws.items()[run.start as usize], item)
+                            {
+                                run.end += 1;
+                                continue;
+                            }
+                        }
                         // The other half of the shadow story, and the one
                         // that is a *selection*: a material that casts no
                         // shadow is simply not drawn into one. Filtered
@@ -1683,13 +1724,17 @@ impl Renderer {
                         let variant =
                             self.variants
                                 .material(device, &self.library, item.material, *stage)?;
-                        variants.push((instance, variant));
+                        variants.push((instance..instance + 1, variant));
                     }
-                    self.drawn[index] = variants.len() as u32;
+                    self.drawn[index] = variants.iter().map(|(run, _)| run.len() as u32).sum();
+                    self.calls[index] = variants.len() as u32;
                     self.triangles[index] = variants
                         .iter()
-                        .map(|(instance, _)| {
-                            u64::from(draws.items()[*instance as usize].mesh.index_count() / 3)
+                        .map(|(run, _)| {
+                            run.len() as u64
+                                * u64::from(
+                                    draws.items()[run.start as usize].mesh.index_count() / 3,
+                                )
                         })
                         .sum();
                     plan.geometry.insert(index, variants);
@@ -1732,17 +1777,37 @@ impl Renderer {
     }
 }
 
+/// Instance rows drawn by one call, and the variant they are drawn with.
+type Run = (Range<u32>, Arc<ShaderVariant>);
+
 /// The shader variants one frame's passes need, resolved before recording.
 #[derive(Default)]
 struct FramePlan {
-    /// Per geometry pass: the draws it issues, with the variant each is
-    /// drawn with, in instance order.
-    geometry: HashMap<usize, Vec<(u32, Arc<ShaderVariant>)>>,
+    /// Per geometry pass: the draws it issues, as runs of instance rows
+    /// drawn by one call, with the variant each run is drawn with.
+    geometry: HashMap<usize, Vec<Run>>,
     /// Per screen pass: its shader.
     screen: HashMap<usize, Arc<ShaderVariant>>,
     /// Per compute pass: its effect and shader — the effect carries the
     /// entry point and workgroup count the dispatch needs.
     compute: HashMap<usize, (Effect, Arc<ShaderVariant>)>,
+}
+
+/// Whether `next` can be drawn as one more instance of `first`'s call: the
+/// same mesh, material and bind groups. What differs per instance is in
+/// the instance rows.
+fn same_draw(first: &DrawItem<'_>, next: &DrawItem<'_>) -> bool {
+    fn same<T>(a: Option<&T>, b: Option<&T>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => std::ptr::eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+    std::ptr::eq(first.mesh, next.mesh)
+        && std::ptr::eq(first.material, next.material)
+        && same(first.bindings, next.bindings)
+        && same(first.user, next.user)
 }
 
 /// Issue one pass's work into the encoder the graph opened.
@@ -1784,8 +1849,8 @@ fn record_pass(
             // materials declare the same per-instance attributes — the
             // usual frame, and every frame with none — is never.
             let mut bound_shape: Option<&str> = None;
-            for (instance, variant) in entries {
-                let item = &draws.items()[*instance as usize];
+            for (run, variant) in entries {
+                let item = &draws.items()[run.start as usize];
                 let shape = item.material.instance_signature();
                 if bound_shape != Some(shape) {
                     render.set_bind_group(
@@ -1837,7 +1902,7 @@ fn record_pass(
                     .bind_attributes(render, item.material.vertex_attributes());
                 match source {
                     DrawSource::Scene(_) => {
-                        item.mesh.draw_instances(render, *instance..*instance + 1);
+                        item.mesh.draw_instances(render, run.clone());
                     }
                     DrawSource::Indirect {
                         buffer: _,

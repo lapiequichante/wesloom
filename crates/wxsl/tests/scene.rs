@@ -452,3 +452,125 @@ fn a_binding_the_material_does_not_declare_is_refused_by_name() {
         "{message}"
     );
 }
+
+/// A grid of cubes and spheres, interleaved in document order, with one
+/// cube behind the camera (ADR 0086).
+fn grid_scene() -> Scene {
+    let mut scene = Scene::new("grid");
+    let cube = scene.add_mesh(MeshEntry::new("cube", MeshSource::Cube { size: 0.5 }));
+    let sphere = scene.add_mesh(MeshEntry::new("sphere", MeshSource::Sphere { radius: 0.3 }));
+    let mut graph = Graph::new("plain");
+    graph.add_node(wxsl::core::abi::SURFACE_OUTPUT_ID);
+    let plain = scene.add_material(MaterialEntry::new("plain", graph));
+    for index in 0..24 {
+        let (x, y) = ((index % 6) as f32 - 2.5, (index / 6) as f32 - 1.5);
+        let mesh = if index % 2 == 0 { cube } else { sphere };
+        scene.add_instance(Instance::new(mesh, plain).with_transform(translation(x, y, 0.0)));
+    }
+    scene.add_instance(Instance::new(cube, plain).with_transform(translation(0.0, 0.0, 50.0)));
+    scene
+}
+
+#[test]
+fn a_scene_draws_identical_pairs_as_one_call_and_culls_what_no_view_sees() {
+    let Some(gpu) = gpu() else { return };
+    let registry = wxsl::stdlib::registry();
+    let scene = grid_scene();
+    let mut resources = wxsl::scene::SceneResources::load(&gpu.device, &scene, &registry, None)
+        .expect("the scene loads");
+    let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
+    let mut renderer = Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(SIZE, SIZE, target.format()),
+    )
+    .expect("the stdlib library satisfies the ABI");
+    resources
+        .create_bindings(&gpu.device, &gpu.queue, &mut renderer)
+        .expect("nothing to bind");
+    resources
+        .upload(&gpu.device, &gpu.queue)
+        .expect("nothing declared");
+    let environment = Environment {
+        camera: Camera {
+            eye: glam::Vec3::new(0.0, 0.0, 8.0),
+            aspect: 1.0,
+            ..Camera::default()
+        },
+        lights: vec![wxsl::render::Light::directional(
+            glam::Vec3::new(0.3, 0.8, 1.0),
+            glam::Vec3::ONE,
+            3.0,
+        )],
+        ..Environment::default()
+    };
+    let render = |renderer: &mut Renderer, draws: &wxsl::render::DrawList<'_>| {
+        renderer
+            .render(
+                &gpu.device,
+                &gpu.queue,
+                &RenderRequest {
+                    view: target.view(),
+                    environment: &environment,
+                    draws,
+                },
+            )
+            .expect("renders");
+        gpu.wait();
+        let passes: Vec<String> = renderer
+            .render_graph()
+            .passes()
+            .iter()
+            .map(|pass| pass.label.clone())
+            .collect();
+        let counts: Vec<(u32, u32)> = passes
+            .iter()
+            .map(|label| {
+                (
+                    renderer.pass_draw_count(label).unwrap_or(0),
+                    renderer.pass_call_count(label).unwrap_or(0),
+                )
+            })
+            .filter(|(draws, _)| *draws > 0)
+            .collect();
+        (counts, target.read_rgba8(&gpu.device, &gpu.queue))
+    };
+
+    // The scene's own list: by mesh within the one material, each box
+    // tested against the camera. The cube behind it is not drawn.
+    let (counts, batched) = render(&mut renderer, &resources.draw_list());
+    assert!(!counts.is_empty(), "nothing was drawn");
+    for (draws, calls) in &counts {
+        assert_eq!((*draws, *calls), (24, 2), "{counts:?}");
+    }
+    assert_eq!(resources.draw_instance(0), Some(0));
+    assert_eq!(resources.draw_instance(13), Some(1), "spheres after cubes");
+
+    // The same draws by hand, in document order and without boxes: one
+    // call each, the hidden cube too, and the same picture.
+    let draws: wxsl::render::DrawList<'_> = scene
+        .instances
+        .iter()
+        .map(|instance| {
+            wxsl::render::DrawItem::new(
+                &resources.meshes()[instance.mesh],
+                &resources.materials()[instance.material],
+            )
+            .with_transform(glam::Mat4::from_cols_array(&instance.transform))
+        })
+        .collect();
+    let (counts, unbatched) = render(&mut renderer, &draws);
+    for (draws, calls) in &counts {
+        assert_eq!((*draws, *calls), (25, 25), "{counts:?}");
+    }
+    let differs = batched
+        .iter()
+        .zip(&unbatched)
+        .filter(|(a, b)| a.abs_diff(**b) > 1)
+        .count();
+    assert_eq!(differs, 0, "batching changed the picture");
+    assert!(
+        batched.chunks(4).any(|px| px[0] > 12),
+        "the grid is missing"
+    );
+}

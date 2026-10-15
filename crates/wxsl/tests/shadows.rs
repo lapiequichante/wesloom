@@ -1054,3 +1054,69 @@ fn a_displacing_material_casts_a_displaced_shadow() {
         "and no longer shadows where the mesh was"
     );
 }
+
+#[test]
+fn a_caster_outside_the_cameras_view_is_culled_from_it_and_still_casts() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let plain_graph = plain(&scene.registry, "ground");
+    let material = scene.material(&plain_graph, &MaterialConfig::default());
+    // Above the top of the camera's 45° view, straight under the light.
+    let height = 3.5;
+    let caster = Mat4::from_translation(Vec3::Y * height);
+    let (min, max) = wxsl::render::environment::transform_bounds(
+        caster,
+        Vec3::new(-0.5, 0.0, -0.5),
+        Vec3::new(0.5, 0.0, 0.5),
+    );
+    assert!(wxsl::render::environment::outside_view(
+        camera().view_proj(),
+        min,
+        max
+    ));
+
+    let mut frame = |bounds: bool| {
+        let mut item = DrawItem::new(&scene.caster, &material).with_transform(caster);
+        if bounds {
+            item = item.with_bounds(min, max);
+        }
+        let draws: DrawList<'_> = [DrawItem::new(&scene.ground, &material), item]
+            .into_iter()
+            .collect();
+        scene
+            .renderer
+            .render(
+                &scene.gpu.device,
+                &scene.gpu.queue,
+                &RenderRequest {
+                    view: scene.target.view(),
+                    environment: &lit(true),
+                    draws: &draws,
+                },
+            )
+            .expect("the frame renders");
+        scene.gpu.wait();
+        let (mut camera_draws, mut shadow_draws) = (0, 0);
+        for pass in scene.renderer.render_graph().passes() {
+            let drawn = scene.renderer.pass_draw_count(&pass.label).unwrap_or(0);
+            match pass.view {
+                wxsl::render::pass::PassView::Camera => camera_draws = camera_draws.max(drawn),
+                _ => shadow_draws = shadow_draws.max(drawn),
+            }
+        }
+        let image = scene.target.read_rgba8(&scene.gpu.device, &scene.gpu.queue);
+        (camera_draws, shadow_draws, image)
+    };
+    let (camera_all, _, reference) = frame(false);
+    let (camera_culled, shadow_culled, culled) = frame(true);
+    assert_eq!(camera_all, 2);
+    assert_eq!(camera_culled, 1, "the camera's passes drew the caster");
+    assert_eq!(shadow_culled, 2, "the shadow pass culled the caster");
+
+    let (under, open) = (Vec3::ZERO, Vec3::new(2.5, 0.0, 0.0));
+    assert!(
+        brightness(&reference, under) + SHADOW_DROP < brightness(&reference, open),
+        "the reference frame has no shadow to compare"
+    );
+    assert_eq!(brightness(&culled, under), brightness(&reference, under));
+}

@@ -1101,6 +1101,45 @@ pub fn view_depth(origin: Vec3, eye: Vec3, forward: Vec3) -> f32 {
     (origin - eye).dot(forward)
 }
 
+/// Whether the world-space box `min..max` lies wholly outside the view
+/// `view_proj` renders: every corner beyond one side plane, or beyond the
+/// far plane (ADR 0086).
+///
+/// Conservative: a box this misses is drawn and clipped. The near plane is
+/// not tested, so a shadow caster between its light and the shadow view's
+/// near plane still renders. The planes are tested in homogeneous clip
+/// space, which holds for corners behind a perspective eye too.
+pub fn outside_view(view_proj: Mat4, min: Vec3, max: Vec3) -> bool {
+    let corners = box_corners(min, max).map(|corner| view_proj * corner.extend(1.0));
+    let all = |outside: fn(glam::Vec4) -> bool| corners.iter().all(|&clip| outside(clip));
+    all(|c| c.x > c.w)
+        || all(|c| c.x < -c.w)
+        || all(|c| c.y > c.w)
+        || all(|c| c.y < -c.w)
+        || all(|c| c.z > c.w)
+}
+
+/// The axis-aligned box around `min..max` once `transform` moves it.
+pub fn transform_bounds(transform: Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
+    box_corners(min, max).iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(low, high), &corner| {
+            let moved = transform.transform_point3(corner);
+            (low.min(moved), high.max(moved))
+        },
+    )
+}
+
+fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
+    std::array::from_fn(|i| {
+        Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,5 +1371,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_box_outside_a_view_is_culled_and_one_behind_its_near_plane_is_not() {
+        let view = glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.1, 50.0)
+            * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let unit = |at: Vec3| (at - Vec3::splat(0.5), at + Vec3::splat(0.5));
+        let culled = |at: Vec3| {
+            let (min, max) = unit(at);
+            outside_view(view, min, max)
+        };
+        assert!(!culled(Vec3::new(0.0, 0.0, -5.0)), "in front");
+        assert!(!culled(Vec3::new(0.0, 0.0, 0.0)), "straddling the eye");
+        assert!(culled(Vec3::new(0.0, 0.0, 5.0)), "behind the eye");
+        assert!(culled(Vec3::new(20.0, 0.0, -5.0)), "right of the frustum");
+        assert!(culled(Vec3::new(0.0, -20.0, -5.0)), "below it");
+        assert!(culled(Vec3::new(0.0, 0.0, -80.0)), "beyond the far plane");
+
+        // An orthographic shadow view: a caster between the light and the
+        // near plane still casts.
+        let light = glam::camera::rh::proj::directx::orthographic(-5.0, 5.0, -5.0, 5.0, 1.0, 20.0)
+            * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let (min, max) = unit(Vec3::new(0.0, 0.0, 3.0));
+        assert!(!outside_view(light, min, max));
+    }
+
+    #[test]
+    fn transformed_bounds_contain_every_moved_corner() {
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::splat(2.0),
+            glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+            Vec3::new(10.0, 0.0, 0.0),
+        );
+        let (min, max) = transform_bounds(transform, Vec3::splat(-1.0), Vec3::splat(1.0));
+        let half = 2.0 * std::f32::consts::SQRT_2;
+        assert!(
+            (min - Vec3::new(10.0 - half, -2.0, -half))
+                .abs()
+                .max_element()
+                < 1e-5
+        );
+        assert!(
+            (max - Vec3::new(10.0 + half, 2.0, half))
+                .abs()
+                .max_element()
+                < 1e-5
+        );
     }
 }

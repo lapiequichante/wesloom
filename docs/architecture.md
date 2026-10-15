@@ -353,15 +353,20 @@ The application gives the renderer three things:
 - **an `Environment`:** the camera, lights, exposure and time. Positions
   are measured from an `f64` floating origin
   ([ADR 0074](adr/0074-rebase-each-frame-onto-an-f64-floating-origin.md));
-- **a `DrawList`:** each item is a mesh, a material, a transform, tags and
-  bindings. A geometry pass draws a tag expression (`opaque && !outlined`);
+- **a `DrawList`:** each item is a mesh, a material, a transform, tags,
+  bindings and optionally a world box. A geometry pass draws a tag
+  expression (`opaque && !outlined`);
 - **a target view.**
 
 The renderer never holds a scene. Converting a scene document into a draw
 list is `wxsl_render::scene::SceneResources`'s job, a loader beside the
 renderer that the facade re-exports as `wxsl::scene`
-([ADR 0082](adr/0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md)). Batching and
-culling belong on that side too.
+([ADR 0082](adr/0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md)).
+Large scenes split the work
+([ADR 0086](adr/0086-large-scenes-instanced-runs-per-view-culling-shared-materials.md)):
+the scene orders its draws by material and mesh and gives each a box; the
+renderer draws adjacent identical draws as one instanced call, and skips a
+draw whose box is outside a pass's view (the camera's or a shadow tile's).
 
 **Bind groups** are allocated by update frequency
 ([ADR 0010](adr/0010-four-bind-groups-allocated-by-update-frequency.md)):

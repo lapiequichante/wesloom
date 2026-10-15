@@ -52,6 +52,15 @@ pub struct SceneResources {
     /// application fills them in.
     attributes: Vec<InstanceAttributes>,
     instances: Vec<ResolvedInstance>,
+    /// The instances in draw order: by material, then mesh, so identical
+    /// pairs are adjacent and the renderer draws each run with one call
+    /// (ADR 0086).
+    order: Vec<usize>,
+    /// Each mesh's local box, `None` for a mesh with no vertices.
+    mesh_bounds: Vec<Option<(glam::Vec3, glam::Vec3)>>,
+    /// Per material, whether its vertex stage may move vertices, which
+    /// leaves its draws without a box, so they are never culled.
+    displaces: Vec<bool>,
     /// What the document binds, per material, applied by
     /// [`SceneResources::create_bindings`].
     material_bindings: Vec<Bindings>,
@@ -92,6 +101,8 @@ struct ResolvedInstance {
     material: usize,
     transform: glam::Mat4,
     tags: Tags,
+    /// The mesh's box in world space.
+    bounds: Option<(glam::Vec3, glam::Vec3)>,
 }
 
 impl SceneResources {
@@ -260,6 +271,7 @@ impl SceneResources {
                 ),
             }));
         }
+        let mesh_bounds: Vec<_> = meshes.iter().map(local_bounds).collect();
         let meshes: Vec<Mesh> = scene
             .meshes
             .iter()
@@ -267,8 +279,17 @@ impl SceneResources {
             .map(|(entry, data)| Mesh::upload(device, &entry.name, data))
             .collect();
 
-        let mut materials = Vec::with_capacity(scene.materials.len());
-        for entry in &scene.materials {
+        let mut materials: Vec<Material> = Vec::with_capacity(scene.materials.len());
+        for (index, entry) in scene.materials.iter().enumerate() {
+            // A material generated already for an identical entry is
+            // cloned, not generated again (ADR 0086).
+            let same = scene.materials[..index]
+                .iter()
+                .position(|earlier| earlier.graph == entry.graph && earlier.config == entry.config);
+            if let Some(same) = same {
+                materials.push(materials[same].clone());
+                continue;
+            }
             materials.push(
                 // The document's own configuration, with the one field a
                 // document cannot author filled in from the pipeline's plan
@@ -286,14 +307,21 @@ impl SceneResources {
             );
         }
 
-        let instances = resolve_instances(scene);
+        let instances = resolve_instances(scene, &mesh_bounds);
 
         Ok(SceneResources {
             meshes,
             materials,
             bindings: Vec::new(),
             attributes: vec![InstanceAttributes::new(); instances.len()],
+            order: draw_order(&instances),
             instances,
+            mesh_bounds,
+            displaces: scene
+                .materials
+                .iter()
+                .map(|entry| displaces(&entry.graph))
+                .collect(),
             material_bindings: scene
                 .materials
                 .iter()
@@ -312,18 +340,26 @@ impl SceneResources {
         self.images = images;
     }
 
-    /// The draws this scene contributes, in instance order.
+    /// The draws this scene contributes, ordered by material and mesh so
+    /// the renderer draws identical pairs with one instanced call, and
+    /// each with its world box so a pass can cull it (ADR 0086).
+    /// [`SceneResources::draw_instance`] maps a draw back to its instance.
     pub fn draw_list(&self) -> DrawList<'_> {
-        self.instances
+        self.order
             .iter()
-            .enumerate()
-            .map(|(index, instance)| {
+            .map(|&index| {
+                let instance = &self.instances[index];
                 let mut item = DrawItem::new(
                     &self.meshes[instance.mesh],
                     &self.materials[instance.material],
                 )
                 .with_transform(instance.transform)
                 .with_tags(&instance.tags);
+                if let Some((min, max)) = instance.bounds {
+                    if !self.displaces[instance.material] {
+                        item = item.with_bounds(min, max);
+                    }
+                }
                 if let Some(bindings) = self.bindings.get(instance.material) {
                     item = item.with_bindings(bindings);
                 }
@@ -333,6 +369,12 @@ impl SceneResources {
                 item
             })
             .collect()
+    }
+
+    /// The document instance [`SceneResources::draw_list`]'s draw `draw`
+    /// draws.
+    pub fn draw_instance(&self, draw: usize) -> Option<usize> {
+        self.order.get(draw).copied()
     }
 
     /// The per-instance attributes instance `index` supplies, to fill in.
@@ -468,6 +510,7 @@ impl SceneResources {
                 }
             }
         }
+        self.displaces[index] = displaces(&entry.graph);
         Ok(())
     }
 
@@ -489,7 +532,8 @@ impl SceneResources {
                     .to_string(),
             }));
         }
-        self.instances = resolve_instances(scene);
+        self.instances = resolve_instances(scene, &self.mesh_bounds);
+        self.order = draw_order(&self.instances);
         Ok(())
     }
 
@@ -569,17 +613,51 @@ impl SceneResources {
     }
 }
 
-fn resolve_instances(scene: &Scene) -> Vec<ResolvedInstance> {
+fn resolve_instances(
+    scene: &Scene,
+    mesh_bounds: &[Option<(glam::Vec3, glam::Vec3)>],
+) -> Vec<ResolvedInstance> {
     scene
         .instances
         .iter()
-        .map(|instance| ResolvedInstance {
-            mesh: instance.mesh,
-            material: instance.material,
-            transform: glam::Mat4::from_cols_array(&scene.instance_world(instance)),
-            tags: scene.instance_tags(instance).clone(),
+        .map(|instance| {
+            let transform = glam::Mat4::from_cols_array(&scene.instance_world(instance));
+            ResolvedInstance {
+                mesh: instance.mesh,
+                material: instance.material,
+                transform,
+                tags: scene.instance_tags(instance).clone(),
+                bounds: mesh_bounds[instance.mesh].map(|(min, max)| {
+                    wxsl_frame::environment::transform_bounds(transform, min, max)
+                }),
+            }
         })
         .collect()
+}
+
+/// The instances by material, then mesh, then document order.
+fn draw_order(instances: &[ResolvedInstance]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..instances.len()).collect();
+    order.sort_by_key(|&index| (instances[index].material, instances[index].mesh));
+    order
+}
+
+/// A mesh's local box.
+fn local_bounds(data: &MeshData) -> Option<(glam::Vec3, glam::Vec3)> {
+    let mut positions = data
+        .vertices
+        .iter()
+        .map(|vertex| glam::Vec3::from(vertex.position));
+    let first = positions.next()?;
+    Some(positions.fold((first, first), |(min, max), p| (min.min(p), max.max(p))))
+}
+
+/// Whether `graph` has a vertex stage, which may move vertices outside the
+/// mesh's box.
+fn displaces(graph: &wxsl_core::graph::Graph) -> bool {
+    graph
+        .nodes()
+        .any(|(_, node)| node.def == wxsl_core::abi::VERTEX_OUTPUT_ID)
 }
 
 /// The geometry one mesh source describes, on the CPU.

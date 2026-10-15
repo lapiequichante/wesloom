@@ -3068,6 +3068,7 @@ fn frame_summary(preview: &Preview, warnings: &[String]) -> FrameSummary {
             FramePass {
                 gpu_ms: renderer.pass_time(&label),
                 draws: renderer.pass_draw_count(&label).unwrap_or(0),
+                calls: renderer.pass_call_count(&label).unwrap_or(0),
                 triangles: renderer.pass_triangle_count(&label).unwrap_or(0),
                 label,
             }
@@ -3077,6 +3078,7 @@ fn frame_summary(preview: &Preview, warnings: &[String]) -> FrameSummary {
     let (local_lights, dropped_lights) = renderer.frame_bindings().light_grid_counts();
     FrameSummary {
         draws: passes.iter().map(|pass| pass.draws).sum(),
+        calls: passes.iter().map(|pass| pass.calls).sum(),
         triangles: passes.iter().map(|pass| pass.triangles).sum(),
         passes,
         gpu_ms: renderer.frame_time(),
@@ -3310,9 +3312,10 @@ fn frame_panel(
             ui.small_label(
                 cursor,
                 &format!(
-                    "{} draws · {} triangles · {} pipelines · {} variants ({} hits, {} misses) · \
+                    "{} draws in {} calls · {} triangles · {} pipelines · {} variants ({} hits, {} misses) · \
                      {} local lights, {} dropped",
                     frame.draws,
+                    frame.calls,
                     frame.triangles,
                     frame.pipelines,
                     frame.variants,
@@ -3436,8 +3439,8 @@ fn live_frame(ui: &mut Ui<'_>, list: Rect, frame: &FrameSummary, probe: Option<&
                 .map_or_else(|| "    –   ".to_string(), |ms| format!("{ms:6.3} ms"));
             (
                 format!(
-                    "{time}  {:>5} draws  {:>9} tris  {}",
-                    pass.draws, pass.triangles, pass.label
+                    "{time}  {:>5} draws  {:>5} calls  {:>9} tris  {}",
+                    pass.draws, pass.calls, pass.triangles, pass.label
                 ),
                 theme.palette.text,
             )

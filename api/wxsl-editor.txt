@@ -426,6 +426,7 @@ impl core::marker::UnsafeUnpin for wxsl_editor::EditorConfig
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::EditorConfig
 impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::EditorConfig
 #[non_exhaustive] pub struct wxsl_editor::FramePass
+pub wxsl_editor::FramePass::calls: u32
 pub wxsl_editor::FramePass::draws: u32
 pub wxsl_editor::FramePass::gpu_ms: core::option::Option<f32>
 pub wxsl_editor::FramePass::label: alloc::string::String
@@ -449,6 +450,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::FramePass
 #[non_exhaustive] pub struct wxsl_editor::FrameSummary
 pub wxsl_editor::FrameSummary::cache_hits: u64
 pub wxsl_editor::FrameSummary::cache_misses: u64
+pub wxsl_editor::FrameSummary::calls: u32
 pub wxsl_editor::FrameSummary::draws: u32
 pub wxsl_editor::FrameSummary::dropped_lights: usize
 pub wxsl_editor::FrameSummary::gpu_ms: core::option::Option<f32>
@@ -748,6 +750,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ProbeSummary
 impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ProbeSummary
 #[non_exhaustive] pub struct wxsl_editor::ProbedResource
 pub wxsl_editor::ProbedResource::format: alloc::string::String
+pub wxsl_editor::ProbedResource::layer: u32
 pub wxsl_editor::ProbedResource::resource: alloc::string::String
 pub wxsl_editor::ProbedResource::texel: [u32; 2]
 pub wxsl_editor::ProbedResource::value: core::option::Option<alloc::vec::Vec<f64>>

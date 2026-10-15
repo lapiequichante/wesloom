@@ -699,6 +699,8 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::ShadowVie
 pub const wxsl_frame::environment::CUBE_FACE_DIRECTIONS: [glam::f32::vec3::Vec3; 6]
 pub const wxsl_frame::environment::MAX_LIGHTS: usize
 pub const wxsl_frame::environment::MAX_SHADOW_CASCADES: u32
+pub fn wxsl_frame::environment::outside_view(glam::f32::neon::mat4::Mat4, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> bool
+pub fn wxsl_frame::environment::transform_bounds(glam::f32::neon::mat4::Mat4, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> (glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)
 pub fn wxsl_frame::environment::view_depth(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> f32
 pub mod wxsl_frame::graph
 pub enum wxsl_frame::graph::Allocation

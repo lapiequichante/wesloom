@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use wxsl_core::node::Value;
 use wxsl_core::scene::{TagExpr, Tags};
 
@@ -123,6 +123,9 @@ pub struct DrawItem<'a> {
     /// the application's to remember, and getting it out of step is
     /// silent.
     pub previous: Option<Mat4>,
+    /// Its world-space box, `(min, max)`. A pass skips a draw whose box is
+    /// outside its view; `None`, the default, is always drawn (ADR 0086).
+    pub bounds: Option<(Vec3, Vec3)>,
 }
 
 impl<'a> DrawItem<'a> {
@@ -144,6 +147,7 @@ impl<'a> DrawItem<'a> {
             user: None,
             attributes: InstanceAttributes::EMPTY,
             previous: None,
+            bounds: None,
         }
     }
 
@@ -157,6 +161,13 @@ impl<'a> DrawItem<'a> {
     /// renders, unless it truly did not move.
     pub fn with_previous(mut self, previous: Mat4) -> Self {
         self.previous = Some(previous);
+        self
+    }
+
+    /// Give its world-space box, so a pass whose view it is outside skips
+    /// it. Keep it current: a box left behind by a moved object culls it.
+    pub fn with_bounds(mut self, min: Vec3, max: Vec3) -> Self {
+        self.bounds = Some((min, max));
         self
     }
 

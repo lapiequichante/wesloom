@@ -763,6 +763,9 @@ pub struct FrameSummary {
     pub passes: Vec<FramePass>,
     /// Draws, over every pass.
     pub draws: u32,
+    /// Draw calls, over every pass: the draws, with each instanced run
+    /// counted once (ADR 0086).
+    pub calls: u32,
     /// Triangles, over every pass.
     pub triangles: u64,
     /// The whole frame's GPU time, if timestamps exist.
@@ -795,6 +798,8 @@ pub struct FramePass {
     pub gpu_ms: Option<f32>,
     /// Draws it issued.
     pub draws: u32,
+    /// Draw calls those draws took.
+    pub calls: u32,
     /// Triangles those draws covered.
     pub triangles: u64,
 }

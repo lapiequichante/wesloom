@@ -1557,6 +1557,7 @@ impl core::marker::Unpin for wxsl_core::lighting::ModelExtra
 impl core::marker::UnsafeUnpin for wxsl_core::lighting::ModelExtra
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::lighting::ModelExtra
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::lighting::ModelExtra
+pub const wxsl_core::lighting::DEBUG_MATERIAL_MACRO: &str
 pub const wxsl_core::lighting::DEBUG_VIEW_MACRO: &str
 pub const wxsl_core::lighting::DEFAULT_MODELS: &[wxsl_core::lighting::LightingModel]
 pub const wxsl_core::lighting::DEFAULT_MODEL_ID: u32
@@ -1564,9 +1565,10 @@ pub const wxsl_core::lighting::FEATURES: &[wxsl_core::lighting::MaterialFeature]
 pub const wxsl_core::lighting::MODEL_ID_FIELD: &str
 pub const wxsl_core::lighting::MODEL_ID_SCALE: f32
 pub const wxsl_core::lighting::MODEL_ID_TARGET: wxsl_core::abi::GBufferTarget
+pub const wxsl_core::lighting::OVERDRAW_VIEW: &str
 pub const wxsl_core::lighting::PRESHADED_MODEL: &str
 pub const wxsl_core::lighting::SUBSURFACE: wxsl_core::lighting::MaterialFeature
-pub fn wxsl_core::lighting::debug_surface(i32) -> core::option::Option<wxsl_core::lighting::GeneratedLighting>
+pub fn wxsl_core::lighting::debug_surface(i32, i32) -> core::option::Option<wxsl_core::lighting::GeneratedLighting>
 pub fn wxsl_core::lighting::debug_views() -> alloc::vec::Vec<wxsl_core::lighting::DebugView>
 pub fn wxsl_core::lighting::default_set() -> core::result::Result<wxsl_core::lighting::LightingSet, wxsl_core::lighting::LightingError>
 pub fn wxsl_core::lighting::default_single_set() -> wxsl_core::lighting::LightingSet

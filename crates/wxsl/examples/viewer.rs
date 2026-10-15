@@ -10,7 +10,12 @@
 //! cargo run -p wxsl --features gltf --example viewer -- glam-velvet-sofa
 //! cargo run -p wxsl --features gltf --example viewer -- path/to/model.glb
 //! cargo run -p wxsl --features gltf --example viewer -- glam-velvet-sofa --screenshot out.png
+//! cargo run -p wxsl --features gltf --release --example viewer -- --grid 30 --bench 200
 //! ```
+//!
+//! `--grid N` repeats the model N×N times, and `--bench FRAMES` renders
+//! that many frames headless, framed and from inside the grid, and prints
+//! the frame times with the draws and draw calls (plan6 G3, ADR 0086).
 //!
 //! In the window: drag to orbit, scroll to zoom, `1`/`2`/`3` switch demo,
 //! `Space` toggles the turntable, `Esc` quits. `--hdr <file.hdr>` replaces
@@ -47,6 +52,7 @@ const DEMOS: &[(&str, &str)] = &[
 ];
 
 const USAGE: &str = "viewer [demo|file.glb] [--hdr file.hdr] [--screenshot out.png] [--size WxH]
+              [--grid N] [--bench FRAMES]
 demos: damaged-helmet (default), car-concept, glam-velvet-sofa
 window: drag orbits, scroll zooms, 1/2/3 switch demo, Space toggles the turntable, Esc quits";
 
@@ -67,6 +73,8 @@ struct Options {
     hdr: PathBuf,
     screenshot: Option<PathBuf>,
     size: (u32, u32),
+    grid: u32,
+    bench: Option<u32>,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -75,6 +83,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         hdr: resources_dir().join("hdri/lakeside_sunrise_1k.hdr"),
         screenshot: None,
         size: (1280, 720),
+        grid: 1,
+        bench: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -82,6 +92,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         match argument.as_str() {
             "--hdr" => options.hdr = PathBuf::from(value()?),
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
+            "--grid" => options.grid = value()?.parse::<u32>()?.max(1),
+            "--bench" => options.bench = Some(value()?.parse()?),
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -194,9 +206,11 @@ impl Model {
         renderer: &mut Renderer,
         hdr: &EnvironmentImage,
         path: &Path,
+        grid: u32,
     ) -> Result<Self, Box<dyn Error>> {
         let started = Instant::now();
-        let imported = wxsl::asset::import_gltf(path)?;
+        let mut imported = wxsl::asset::import_gltf(path)?;
+        repeat(&mut imported, grid);
         println!(
             "{}: {} nodes, {} meshes, {} materials, {} textures ({:.0?})",
             path.display(),
@@ -233,6 +247,30 @@ impl Model {
             center,
             radius,
         })
+    }
+}
+
+/// Repeat every instance of `imported` on a `grid`×`grid` floor, spaced by
+/// the model's size.
+fn repeat(imported: &mut ImportedScene, grid: u32) {
+    if grid <= 1 {
+        return;
+    }
+    let (_, radius) = bounds(imported);
+    let scene = &mut imported.scene;
+    let originals = std::mem::take(&mut scene.instances);
+    for row in 0..grid {
+        for column in 0..grid {
+            let offset =
+                Mat4::from_translation(Vec3::new(column as f32, 0.0, row as f32) * radius * 2.5);
+            for original in &originals {
+                let mut copy = original.clone();
+                let world = Mat4::from_cols_array(&scene.instance_world(original));
+                copy.transform = (offset * world).to_cols_array();
+                copy.node = None;
+                scene.instances.push(copy);
+            }
+        }
     }
 }
 
@@ -319,7 +357,13 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     let target = OffscreenTarget::new(&gpu.device, width, height);
     let hdr = load_hdr(&gpu, &options.hdr)?;
     let mut renderer = renderer_for(&gpu, TargetConfig::new(width, height, target.format()))?;
-    let model = Model::open(&gpu, &mut renderer, &hdr, &model_path(&options.model))?;
+    let model = Model::open(
+        &gpu,
+        &mut renderer,
+        &hdr,
+        &model_path(&options.model),
+        options.grid,
+    )?;
     let environment = environment(&model, Orbit::default(), width as f32 / height as f32);
     let draws = model.resources.draw_list();
     // The environment maps are baked by the first frame; render twice so
@@ -396,7 +440,13 @@ impl App {
             &gpu,
             TargetConfig::new(size.width.max(1), size.height.max(1), format),
         )?;
-        let model = Model::open(&gpu, &mut renderer, &hdr, &model_path(&self.options.model))?;
+        let model = Model::open(
+            &gpu,
+            &mut renderer,
+            &hdr,
+            &model_path(&self.options.model),
+            self.options.grid,
+        )?;
         let mut state = State {
             window,
             surface,
@@ -421,6 +471,7 @@ impl App {
             &mut state.renderer,
             &state.hdr,
             &model_path(name),
+            self.options.grid,
         ) {
             Ok(model) => {
                 state.model = model;
@@ -568,8 +619,83 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Render `frames` frames headless, framed and then from inside the grid,
+/// and print what they cost.
+fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
+    let gpu = pollster::block_on(GpuContext::headless())?;
+    let (width, height) = options.size;
+    let target = OffscreenTarget::new(&gpu.device, width, height);
+    let hdr = load_hdr(&gpu, &options.hdr)?;
+    let mut renderer = renderer_for(&gpu, TargetConfig::new(width, height, target.format()))?;
+    let model = Model::open(
+        &gpu,
+        &mut renderer,
+        &hdr,
+        &model_path(&options.model),
+        options.grid,
+    )?;
+    let aspect = width as f32 / height as f32;
+    let views = [
+        ("framed", Orbit::default()),
+        (
+            "inside",
+            Orbit {
+                zoom: 0.3,
+                ..Orbit::default()
+            },
+        ),
+    ];
+    for (name, orbit) in views {
+        let environment = environment(&model, orbit, aspect);
+        let (mut cpu, mut wall, mut gpu_ms) = (0.0, 0.0, Vec::new());
+        // Two frames first: the environment bake and the shader compiles.
+        for frame in 0..frames + 2 {
+            let started = Instant::now();
+            let draws = model.resources.draw_list();
+            renderer.render(
+                &gpu.device,
+                &gpu.queue,
+                &RenderRequest {
+                    view: target.view(),
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            let recorded = started.elapsed().as_secs_f64();
+            gpu.wait();
+            if frame >= 2 {
+                cpu += recorded;
+                wall += started.elapsed().as_secs_f64();
+                gpu_ms.extend(renderer.frame_time());
+            }
+        }
+        let (mut draws, mut calls) = (0, 0);
+        for pass in renderer.render_graph().passes() {
+            draws += renderer.pass_draw_count(&pass.label).unwrap_or(0);
+            calls += renderer.pass_call_count(&pass.label).unwrap_or(0);
+        }
+        let per = |total: f64| total * 1000.0 / f64::from(frames.max(1));
+        let gpu_text = if gpu_ms.is_empty() {
+            "no timestamps".to_string()
+        } else {
+            format!("{:.2} ms", gpu_ms.iter().sum::<f32>() / gpu_ms.len() as f32)
+        };
+        println!(
+            "{name}: {} instances, {draws} draws in {calls} calls · cpu {:.2} ms · \
+             cpu+wait {:.2} ms · gpu {gpu_text}",
+            model.resources.instance_count(),
+            per(cpu),
+            per(wall),
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_options()?;
+    if let Some(frames) = options.bench {
+        return bench(&options, frames);
+    }
     if let Some(file) = options.screenshot.clone() {
         return screenshot(&options, &file);
     }

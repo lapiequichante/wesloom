@@ -90,6 +90,7 @@ pub mod wxsl_render::draw
 pub struct wxsl_render::draw::DrawItem<'a>
 pub wxsl_render::draw::DrawItem::attributes: &'a wxsl_render::draw::InstanceAttributes
 pub wxsl_render::draw::DrawItem::bindings: core::option::Option<&'a wxsl_render::bindings::MaterialBindings>
+pub wxsl_render::draw::DrawItem::bounds: core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>
 pub wxsl_render::draw::DrawItem::material: &'a wxsl_render::material::Material
 pub wxsl_render::draw::DrawItem::mesh: &'a wxsl_render::mesh::Mesh
 pub wxsl_render::draw::DrawItem::previous: core::option::Option<glam::f32::neon::mat4::Mat4>
@@ -102,6 +103,7 @@ pub fn wxsl_render::draw::DrawItem<'a>::new(&'a wxsl_render::mesh::Mesh, &'a wxs
 pub fn wxsl_render::draw::DrawItem<'a>::previous_instance(&self) -> wxsl_frame::environment::InstanceTransform
 pub fn wxsl_render::draw::DrawItem<'a>::with_attributes(self, &'a wxsl_render::draw::InstanceAttributes) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_bindings(self, &'a wxsl_render::bindings::MaterialBindings) -> Self
+pub fn wxsl_render::draw::DrawItem<'a>::with_bounds(self, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_previous(self, glam::f32::neon::mat4::Mat4) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_tags(self, &'a wxsl_core::scene::Tags) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_transform(self, glam::f32::neon::mat4::Mat4) -> Self
@@ -792,7 +794,8 @@ impl core::marker::UnsafeUnpin for wxsl_render::probe::TexelValue
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::probe::TexelValue
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::probe::TexelValue
 #[non_exhaustive] pub struct wxsl_render::probe::ProbedTexel
-pub wxsl_render::probe::ProbedTexel::format: wxsl_frame::types::TextureFormat
+pub wxsl_render::probe::ProbedTexel::format: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_render::probe::ProbedTexel::layer: u32
 pub wxsl_render::probe::ProbedTexel::resource: alloc::string::String
 pub wxsl_render::probe::ProbedTexel::size: [u32; 2]
 pub wxsl_render::probe::ProbedTexel::texel: [u32; 2]
@@ -819,6 +822,7 @@ impl core::marker::Unpin for wxsl_render::probe::TexelProbe
 impl core::marker::UnsafeUnpin for wxsl_render::probe::TexelProbe
 impl !core::panic::unwind_safe::RefUnwindSafe for wxsl_render::probe::TexelProbe
 impl !core::panic::unwind_safe::UnwindSafe for wxsl_render::probe::TexelProbe
+pub const wxsl_render::probe::BUFFER_BYTES: u64
 pub fn wxsl_render::probe::decode(wxsl_frame::types::TextureFormat, &[u8]) -> core::option::Option<wxsl_render::probe::TexelValue>
 pub fn wxsl_render::probe::texel_at([f32; 2], [u32; 2]) -> [u32; 2]
 pub fn wxsl_render::probe::texel_bytes(wxsl_frame::types::TextureFormat) -> core::option::Option<u32>
@@ -853,6 +857,7 @@ pub fn wxsl_render::renderer::Renderer::material_bindings(&mut self, &wgpu::api:
 pub fn wxsl_render::renderer::Renderer::material_wgsl(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material) -> core::result::Result<alloc::string::String, wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::material_wgsl_for(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material, wxsl_core::abi::MaterialStage) -> core::result::Result<alloc::string::String, wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::new(&wgpu::api::device::Device, wxsl_render::library::ShaderLibrary, wxsl_render::pipeline::TargetConfig) -> core::result::Result<Self, wxsl_render::error::RenderError>
+pub fn wxsl_render::renderer::Renderer::pass_call_count(&self, &str) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::pass_draw_count(&self, &str) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::pass_param(&self, &str, &str) -> core::option::Option<wxsl_core::node::Value>
 pub fn wxsl_render::renderer::Renderer::pass_parameter_layout(&self, &str) -> core::option::Option<&wxsl_core::resources::BufferLayout>
@@ -881,12 +886,15 @@ pub fn wxsl_render::renderer::Renderer::set_lighting(&mut self, wxsl_core::light
 pub fn wxsl_render::renderer::Renderer::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_pass_timing(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::set_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline)
+pub fn wxsl_render::renderer::Renderer::set_wireframe(&mut self, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::stages(&self) -> alloc::vec::Vec<wxsl_core::abi::MaterialStage>
+pub fn wxsl_render::renderer::Renderer::supports_wireframe(&self) -> bool
 pub fn wxsl_render::renderer::Renderer::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
 pub fn wxsl_render::renderer::Renderer::take_probed(&mut self) -> core::option::Option<alloc::vec::Vec<wxsl_render::probe::ProbedTexel>>
 pub fn wxsl_render::renderer::Renderer::target(&self) -> wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::renderer::Renderer::user_layout(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material) -> core::option::Option<&wgpu::api::bind_group_layout::BindGroupLayout>
 pub fn wxsl_render::renderer::Renderer::variant_count(&self) -> usize
+pub fn wxsl_render::renderer::Renderer::wireframe(&self) -> bool
 impl core::marker::Freeze for wxsl_render::renderer::Renderer
 impl core::marker::Send for wxsl_render::renderer::Renderer
 impl !core::marker::Sync for wxsl_render::renderer::Renderer
@@ -945,6 +953,7 @@ pub struct wxsl_render::scene::SceneResources
 impl wxsl_render::scene::SceneResources
 pub fn wxsl_render::scene::SceneResources::bindings_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::bindings::MaterialBindings>
 pub fn wxsl_render::scene::SceneResources::create_bindings(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wxsl_render::renderer::Renderer) -> core::result::Result<(), wxsl_render::scene::LoadError>
+pub fn wxsl_render::scene::SceneResources::draw_instance(&self, usize) -> core::option::Option<usize>
 pub fn wxsl_render::scene::SceneResources::draw_list(&self) -> wxsl_render::draw::DrawList<'_>
 pub fn wxsl_render::scene::SceneResources::instance_attributes_mut(&mut self, usize) -> core::option::Option<&mut wxsl_render::draw::InstanceAttributes>
 pub fn wxsl_render::scene::SceneResources::instance_count(&self) -> usize
@@ -3319,6 +3328,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_render::gpu::DeviceCaps
 pub struct wxsl_render::DrawItem<'a>
 pub wxsl_render::DrawItem::attributes: &'a wxsl_render::draw::InstanceAttributes
 pub wxsl_render::DrawItem::bindings: core::option::Option<&'a wxsl_render::bindings::MaterialBindings>
+pub wxsl_render::DrawItem::bounds: core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>
 pub wxsl_render::DrawItem::material: &'a wxsl_render::material::Material
 pub wxsl_render::DrawItem::mesh: &'a wxsl_render::mesh::Mesh
 pub wxsl_render::DrawItem::previous: core::option::Option<glam::f32::neon::mat4::Mat4>
@@ -3331,6 +3341,7 @@ pub fn wxsl_render::draw::DrawItem<'a>::new(&'a wxsl_render::mesh::Mesh, &'a wxs
 pub fn wxsl_render::draw::DrawItem<'a>::previous_instance(&self) -> wxsl_frame::environment::InstanceTransform
 pub fn wxsl_render::draw::DrawItem<'a>::with_attributes(self, &'a wxsl_render::draw::InstanceAttributes) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_bindings(self, &'a wxsl_render::bindings::MaterialBindings) -> Self
+pub fn wxsl_render::draw::DrawItem<'a>::with_bounds(self, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_previous(self, glam::f32::neon::mat4::Mat4) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_tags(self, &'a wxsl_core::scene::Tags) -> Self
 pub fn wxsl_render::draw::DrawItem<'a>::with_transform(self, glam::f32::neon::mat4::Mat4) -> Self
@@ -3617,6 +3628,7 @@ pub fn wxsl_render::renderer::Renderer::material_bindings(&mut self, &wgpu::api:
 pub fn wxsl_render::renderer::Renderer::material_wgsl(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material) -> core::result::Result<alloc::string::String, wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::material_wgsl_for(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material, wxsl_core::abi::MaterialStage) -> core::result::Result<alloc::string::String, wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::new(&wgpu::api::device::Device, wxsl_render::library::ShaderLibrary, wxsl_render::pipeline::TargetConfig) -> core::result::Result<Self, wxsl_render::error::RenderError>
+pub fn wxsl_render::renderer::Renderer::pass_call_count(&self, &str) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::pass_draw_count(&self, &str) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::pass_param(&self, &str, &str) -> core::option::Option<wxsl_core::node::Value>
 pub fn wxsl_render::renderer::Renderer::pass_parameter_layout(&self, &str) -> core::option::Option<&wxsl_core::resources::BufferLayout>
@@ -3645,12 +3657,15 @@ pub fn wxsl_render::renderer::Renderer::set_lighting(&mut self, wxsl_core::light
 pub fn wxsl_render::renderer::Renderer::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_pass_timing(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::set_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline)
+pub fn wxsl_render::renderer::Renderer::set_wireframe(&mut self, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::stages(&self) -> alloc::vec::Vec<wxsl_core::abi::MaterialStage>
+pub fn wxsl_render::renderer::Renderer::supports_wireframe(&self) -> bool
 pub fn wxsl_render::renderer::Renderer::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
 pub fn wxsl_render::renderer::Renderer::take_probed(&mut self) -> core::option::Option<alloc::vec::Vec<wxsl_render::probe::ProbedTexel>>
 pub fn wxsl_render::renderer::Renderer::target(&self) -> wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::renderer::Renderer::user_layout(&mut self, &wgpu::api::device::Device, &wxsl_render::material::Material) -> core::option::Option<&wgpu::api::bind_group_layout::BindGroupLayout>
 pub fn wxsl_render::renderer::Renderer::variant_count(&self) -> usize
+pub fn wxsl_render::renderer::Renderer::wireframe(&self) -> bool
 impl core::marker::Freeze for wxsl_render::renderer::Renderer
 impl core::marker::Send for wxsl_render::renderer::Renderer
 impl !core::marker::Sync for wxsl_render::renderer::Renderer

@@ -269,6 +269,43 @@ application side.
 * **Budget:** Sponza or Bistro at 60 fps on a mid-range GPU. Measured, not
   assumed (`timing.rs`).
 
+**Landed (2026-10-15, ADR 0086).**
+- **Instanced runs.** The renderer plans and draws runs: adjacent selected
+  draws with consecutive rows and the same mesh, material, bindings and
+  user group are one `draw_indexed`, checked and looked up once.
+  `SceneResources::draw_list` orders by (material, mesh), and
+  `draw_instance` maps a draw back to its document instance.
+- **Culling per view.** `DrawItem::with_bounds` gives a world box. Each
+  geometry pass skips a box outside its view's side or far planes
+  (`wxsl_frame::environment::outside_view`), the camera's or its shadow
+  tile's, so a caster out of view still casts. `SceneResources` boxes
+  every instance from its mesh, except for a material with a vertex stage,
+  which may displace.
+- **Shared materials:** an entry identical to an earlier one (graph and
+  config) clones its generated material. GPU variants were already shared
+  by content.
+- **Counts:** `Renderer::pass_call_count`, and `calls` in
+  `Query::Frame` and the frame panel, beside the draws.
+- **Measured** with `viewer --grid N --bench FRAMES` (release, 1280×720,
+  Apple M5, forward + IBL; this adapter has no timestamps, so the wall time
+  includes waiting for the GPU):
+
+  | scene | before | after, framed | after, inside the grid |
+  |---|---|---|---|
+  | 900 helmets (1800 draws) | 1800 calls, 21 ms | 2 calls, 16 ms | 1264 draws in 56 calls, 14 ms |
+  | 100 cars (10,900 parts, 24,800 draws) | 24,800 calls, 110 ms (88 ms CPU) | 248 calls, 23 ms (8 ms CPU) | 16,630 draws in 2232 calls, 28 ms (15 ms CPU) |
+- **Tests:** device-free, the clip-space test and box transform
+  (`wxsl-frame`); on a device, a grid drawn in two calls with the hidden
+  cube culled, matching the unbatched picture (`scene`), and a caster
+  culled from the camera's passes that still shadows the ground
+  (`shadows`).
+- Not yet done:
+  - Sponza and Bistro are not in `resources/glb/` (Sponza is CC BY 4.0,
+    Bistro CC BY 4.0 and about 1 GB), so the 60 fps budget is not
+    measured on them yet;
+  - the per-draw work left is planning and the instance upload, both
+    O(draws) per frame; the car grid from inside is CPU-bound at 15 ms.
+
 ### G4 — Skinning and animation *(optional, after the rest)*
 
 A `skinned` vertex stage (joints and weights as streams, a matrix buffer
@@ -652,8 +689,10 @@ Four more come from this plan:
   leaves `wxsl::asset`; what comes out is a scene that can be saved and
   re-read.
 * **The renderer does not become a scene engine.** The hierarchy,
-  batching and culling live in the scene and in `SceneResources`; the
-  renderer still takes a draw list.
+  the draw order and the bounds live in the scene and in
+  `SceneResources`; the renderer still takes a draw list. It merges
+  adjacent identical draws and tests each box against its passes' views,
+  which only it knows (amended by ADR 0086).
 * **MCP has no logic of its own.** A tool that cannot be expressed as a
   command or a query means the vocabulary is missing a command; add the
   command.
