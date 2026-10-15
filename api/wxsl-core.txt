@@ -938,8 +938,6 @@ pub fn wxsl_core::graph::Graph::edges(&self) -> &[wxsl_core::graph::Edge]
 pub fn wxsl_core::graph::Graph::edges_from(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::edges_into(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::effective_macros(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_core::macros::MacroSet, wxsl_core::error::GraphErrors>
-pub fn wxsl_core::graph::Graph::effective_type(&self, wxsl_core::graph::NodeId, &wxsl_core::node::Socket) -> core::option::Option<wxsl_core::node::ValueType>
-pub fn wxsl_core::graph::Graph::generic_type(&self, wxsl_core::graph::NodeId, &str) -> core::option::Option<wxsl_core::node::ValueType>
 pub fn wxsl_core::graph::Graph::in_domain(impl core::convert::Into<alloc::string::String>, wxsl_core::node::GraphDomain) -> Self
 pub fn wxsl_core::graph::Graph::interface(&self, &wxsl_core::node::NodeRegistry) -> wxsl_core::resources::MaterialInterface
 pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegistry, &alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>) -> wxsl_core::resources::MaterialInterface
@@ -959,7 +957,6 @@ pub fn wxsl_core::graph::Graph::remove_node(&mut self, &wxsl_core::node::NodeReg
 pub fn wxsl_core::graph::Graph::screen_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::set_attributes(&mut self, alloc::vec::Vec<wxsl_core::graph::AttributeDecl>)
 pub fn wxsl_core::graph::Graph::set_domain(&mut self, wxsl_core::node::GraphDomain)
-pub fn wxsl_core::graph::Graph::set_generic(&mut self, &wxsl_core::node::NodeRegistry, wxsl_core::graph::NodeId, &str, wxsl_core::node::ValueType) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::Edge>, wxsl_core::error::GraphError>
 pub fn wxsl_core::graph::Graph::set_macro(&mut self, impl core::convert::Into<alloc::string::String>, wxsl_core::macros::MacroValue) -> core::option::Option<wxsl_core::macros::MacroValue>
 pub fn wxsl_core::graph::Graph::set_macros(&mut self, wxsl_core::macros::MacroSet)
 pub fn wxsl_core::graph::Graph::set_name(&mut self, impl core::convert::Into<alloc::string::String>)
@@ -973,10 +970,15 @@ pub fn wxsl_core::graph::Graph::surface_outputs(&self, &wxsl_core::node::NodeReg
 pub fn wxsl_core::graph::Graph::topological_order(&self, core::option::Option<&alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>>) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::NodeId>, wxsl_core::error::GraphError>
 pub fn wxsl_core::graph::Graph::unset_macro(&mut self, &str) -> core::option::Option<wxsl_core::macros::MacroValue>
 pub fn wxsl_core::graph::Graph::user_block(&self) -> core::option::Option<&wxsl_core::graph::UserBlockDecl>
-pub fn wxsl_core::graph::Graph::validate(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<(), wxsl_core::error::GraphErrors>
 pub fn wxsl_core::graph::Graph::varying_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::vertex_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::wire(&mut self, &wxsl_core::node::NodeRegistry, (wxsl_core::graph::NodeId, &str), (wxsl_core::graph::NodeId, &str)) -> core::result::Result<(), wxsl_core::error::GraphError>
+impl wxsl_core::graph::Graph
+pub fn wxsl_core::graph::Graph::effective_type(&self, wxsl_core::graph::NodeId, &wxsl_core::node::Socket) -> core::option::Option<wxsl_core::node::ValueType>
+pub fn wxsl_core::graph::Graph::generic_type(&self, wxsl_core::graph::NodeId, &str) -> core::option::Option<wxsl_core::node::ValueType>
+pub fn wxsl_core::graph::Graph::set_generic(&mut self, &wxsl_core::node::NodeRegistry, wxsl_core::graph::NodeId, &str, wxsl_core::node::ValueType) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::Edge>, wxsl_core::error::GraphError>
+impl wxsl_core::graph::Graph
+pub fn wxsl_core::graph::Graph::validate(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<(), wxsl_core::error::GraphErrors>
 impl core::clone::Clone for wxsl_core::graph::Graph
 pub fn wxsl_core::graph::Graph::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_core::graph::Graph
@@ -3767,8 +3769,6 @@ pub fn wxsl_core::graph::Graph::edges(&self) -> &[wxsl_core::graph::Edge]
 pub fn wxsl_core::graph::Graph::edges_from(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::edges_into(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::effective_macros(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_core::macros::MacroSet, wxsl_core::error::GraphErrors>
-pub fn wxsl_core::graph::Graph::effective_type(&self, wxsl_core::graph::NodeId, &wxsl_core::node::Socket) -> core::option::Option<wxsl_core::node::ValueType>
-pub fn wxsl_core::graph::Graph::generic_type(&self, wxsl_core::graph::NodeId, &str) -> core::option::Option<wxsl_core::node::ValueType>
 pub fn wxsl_core::graph::Graph::in_domain(impl core::convert::Into<alloc::string::String>, wxsl_core::node::GraphDomain) -> Self
 pub fn wxsl_core::graph::Graph::interface(&self, &wxsl_core::node::NodeRegistry) -> wxsl_core::resources::MaterialInterface
 pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegistry, &alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>) -> wxsl_core::resources::MaterialInterface
@@ -3788,7 +3788,6 @@ pub fn wxsl_core::graph::Graph::remove_node(&mut self, &wxsl_core::node::NodeReg
 pub fn wxsl_core::graph::Graph::screen_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::set_attributes(&mut self, alloc::vec::Vec<wxsl_core::graph::AttributeDecl>)
 pub fn wxsl_core::graph::Graph::set_domain(&mut self, wxsl_core::node::GraphDomain)
-pub fn wxsl_core::graph::Graph::set_generic(&mut self, &wxsl_core::node::NodeRegistry, wxsl_core::graph::NodeId, &str, wxsl_core::node::ValueType) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::Edge>, wxsl_core::error::GraphError>
 pub fn wxsl_core::graph::Graph::set_macro(&mut self, impl core::convert::Into<alloc::string::String>, wxsl_core::macros::MacroValue) -> core::option::Option<wxsl_core::macros::MacroValue>
 pub fn wxsl_core::graph::Graph::set_macros(&mut self, wxsl_core::macros::MacroSet)
 pub fn wxsl_core::graph::Graph::set_name(&mut self, impl core::convert::Into<alloc::string::String>)
@@ -3802,10 +3801,15 @@ pub fn wxsl_core::graph::Graph::surface_outputs(&self, &wxsl_core::node::NodeReg
 pub fn wxsl_core::graph::Graph::topological_order(&self, core::option::Option<&alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>>) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::NodeId>, wxsl_core::error::GraphError>
 pub fn wxsl_core::graph::Graph::unset_macro(&mut self, &str) -> core::option::Option<wxsl_core::macros::MacroValue>
 pub fn wxsl_core::graph::Graph::user_block(&self) -> core::option::Option<&wxsl_core::graph::UserBlockDecl>
-pub fn wxsl_core::graph::Graph::validate(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<(), wxsl_core::error::GraphErrors>
 pub fn wxsl_core::graph::Graph::varying_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::vertex_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::wire(&mut self, &wxsl_core::node::NodeRegistry, (wxsl_core::graph::NodeId, &str), (wxsl_core::graph::NodeId, &str)) -> core::result::Result<(), wxsl_core::error::GraphError>
+impl wxsl_core::graph::Graph
+pub fn wxsl_core::graph::Graph::effective_type(&self, wxsl_core::graph::NodeId, &wxsl_core::node::Socket) -> core::option::Option<wxsl_core::node::ValueType>
+pub fn wxsl_core::graph::Graph::generic_type(&self, wxsl_core::graph::NodeId, &str) -> core::option::Option<wxsl_core::node::ValueType>
+pub fn wxsl_core::graph::Graph::set_generic(&mut self, &wxsl_core::node::NodeRegistry, wxsl_core::graph::NodeId, &str, wxsl_core::node::ValueType) -> core::result::Result<alloc::vec::Vec<wxsl_core::graph::Edge>, wxsl_core::error::GraphError>
+impl wxsl_core::graph::Graph
+pub fn wxsl_core::graph::Graph::validate(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<(), wxsl_core::error::GraphErrors>
 impl core::clone::Clone for wxsl_core::graph::Graph
 pub fn wxsl_core::graph::Graph::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_core::graph::Graph
