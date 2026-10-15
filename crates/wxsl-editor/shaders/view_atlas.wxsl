@@ -1,0 +1,23 @@
+//! view_atlas — the editor's shadow-atlas view (plan6 E2, ADR 0066).
+//!
+//! The whole atlas scaled to the view, its depth shown linearly: a
+//! directional light's tiles are orthographic, so the near-range spread of
+//! `inspect_depth` would turn them white. Near the light is bright, far is
+//! dark, and a texel no caster reached (depth 1) is black.
+import package::wxsl::bindings::point_sampler;
+import package::color::linear_to_srgb::linear_to_srgb;
+
+@group(3) @binding(0) var atlas: texture_2d<f32>;
+
+@vertex
+fn view_atlas_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn view_atlas_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let depth = textureSampleLevel(atlas, point_sampler, position.xy / params.view_size, 0.0).x;
+    return vec4f(linear_to_srgb(vec3f(1.0 - depth)), 1.0);
+}

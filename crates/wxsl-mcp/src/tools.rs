@@ -62,6 +62,15 @@ pub(crate) enum Action {
         /// The widest the image may be.
         max_width: u32,
     },
+    /// Apply a view command, if any, draw a frame so that what it asked
+    /// for is measured, then answer the queries: a probe, the frame's
+    /// counters.
+    Draw {
+        /// The command.
+        command: Option<Command>,
+        /// The questions, answered after the frame.
+        queries: Vec<Query>,
+    },
     /// Read a resource by URI.
     Resource(String),
 }
@@ -265,7 +274,10 @@ the ones available, and the pass stepping.",
             "view_set",
             "Change what the editor shows; none of it is an undo step. mode: material, pipeline \
 or scene. pipeline: forward, deferred, or document (the pipeline document). debug_view: a label \
-view_get lists (albedo, normal, depth, ...) or shaded.",
+view_get lists, or shaded: a surface channel (albedo, normal, depth, metallic-roughness, emissive, \
+occlusion; uv, mip level, instance id and material id in forward; feature channels in \
+deferred), or a view of the frame (wireframe, overdraw in forward, light count per cluster, \
+cascades, shadow atlas). A view of the frame stays on across a pipeline change.",
             json!({"type": "object", "properties": {
                 "mode": {"type": "string", "enum": ["material", "pipeline", "scene"]},
                 "pipeline": {"type": "string"},
@@ -293,9 +305,22 @@ viewport renders alone.",
         ),
         tool(
             "frame_stats",
-            "Counters: nodes, edges, compiled shader variants, the last GPU frame time, and the \
-running passes.",
+            "Draw a frame and return what it cost: each pass in schedule order with its GPU time, \
+draws and triangles; pipelines, shader variants and cache hits; the local lights the light grid \
+binned and dropped; the capability check's warnings for the open scene; and the graph's counters.",
             empty.clone(),
+        ),
+        tool(
+            "pixel_probe",
+            "Draw a frame and read back one pixel of the viewport (x, y as fractions 0..1 of its \
+width and height, y down, as in view_screenshot): the value every texture the passes wrote holds \
+there (G-buffer channels, depth, HDR colour, ...; each array layer and cube face), the first \
+64 words of every buffer they wrote, what the target shows, and in the scene mode the instance \
+and material drawn there.",
+            json!({"type": "object", "properties": {
+                "x": {"type": "number", "minimum": 0, "maximum": 1},
+                "y": {"type": "number", "minimum": 0, "maximum": 1},
+            }, "required": ["x", "y"], "additionalProperties": false}),
         ),
         tool(
             "problems_list",
@@ -465,6 +490,13 @@ struct Screenshot {
     viewport: bool,
     #[serde(default)]
     max_width: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Probe {
+    x: f32,
+    y: f32,
 }
 
 #[derive(Deserialize)]
@@ -665,7 +697,17 @@ pub(crate) fn plan(name: &str, arguments: Json) -> Result<Action, PlanError> {
         }
         "frame_stats" => {
             let Nothing {} = parse(arguments)?;
-            run(None, vec![Query::Stats, Query::Passes])
+            Ok(Action::Draw {
+                command: None,
+                queries: vec![Query::Frame, Query::Stats],
+            })
+        }
+        "pixel_probe" => {
+            let Probe { x, y } = parse(arguments)?;
+            Ok(Action::Draw {
+                command: Some(Command::ProbePixel { x, y }),
+                queries: vec![Query::Probe],
+            })
         }
         "problems_list" => {
             let Nothing {} = parse(arguments)?;
@@ -758,6 +800,22 @@ pub(crate) fn run(action: Action, editor: &mut Editor, frame: &Frame<'_>, root: 
             }
             Err(message) => failure(message),
         },
+        Action::Draw { command, queries } => {
+            if let Some(command) = command {
+                if let Err(error) = editor.apply_as_agent(command) {
+                    return failure(error.to_string());
+                }
+            }
+            if let Err(message) = draw(editor, frame) {
+                return failure(message);
+            }
+            let mut result = Map::new();
+            for query in &queries {
+                let (name, answer) = answer(editor, query);
+                result.insert(name, answer);
+            }
+            Ok(text(pretty(&Json::Object(result)), false))
+        }
         Action::Resource(uri) => {
             let (mime, body) = match uri.as_str() {
                 "wxsl://nodes" => (
@@ -932,6 +990,21 @@ fn screenshot(
     frame: &Frame<'_>,
     viewport: bool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    let (target, width, height) = draw(editor, frame)?;
+    Ok(if viewport {
+        let (width, height) = editor.preview().size();
+        (
+            editor.preview().read_rgba8(frame.device, frame.queue),
+            width,
+            height,
+        )
+    } else {
+        (target.read_rgba8(frame.device, frame.queue), width, height)
+    })
+}
+
+/// Draw the editor twice into an offscreen target the window's size.
+fn draw(editor: &mut Editor, frame: &Frame<'_>) -> Result<(OffscreenTarget, u32, u32), String> {
     let (width, height) = (frame.width.max(1), frame.height.max(1));
     let target = OffscreenTarget::new(frame.device, width, height);
     for _ in 0..2 {
@@ -957,16 +1030,7 @@ fn screenshot(
             .map_err(|error| error.to_string())?;
         frame.queue.submit([encoder.finish()]);
     }
-    Ok(if viewport {
-        let (width, height) = editor.preview().size();
-        (
-            editor.preview().read_rgba8(frame.device, frame.queue),
-            width,
-            height,
-        )
-    } else {
-        (target.read_rgba8(frame.device, frame.queue), width, height)
-    })
+    Ok((target, width, height))
 }
 
 #[cfg(test)]
@@ -985,6 +1049,7 @@ mod tests {
             "scene_set_transform" => json!({"instance": 0, "transform": ([0.0f32; 16])}),
             "scene_assign_material" => json!({"instance": 0, "material": 1}),
             "environment_edit" => json!({"light": 0, "color": [1, 1, 1], "intensity": 2}),
+            "pixel_probe" => json!({"x": 0.5, "y": 0.5}),
             _ => Json::Null,
         };
         let names: Vec<String> = definitions()

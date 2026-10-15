@@ -436,9 +436,35 @@ fn hdr_constant_and_directional_convolutions_match_analytic_integrals() {
             .set_graph(fixture::plan(harness.target.format(), directional))
             .unwrap();
         let draws = wxsl::render::DrawList::new();
+        // The pixel probe reads every face of a cube, after the pass that
+        // bakes it (plan6 E2).
+        harness.renderer.probe([0.5, 0.5]);
         let first =
             probe::render_list(&harness.gpu, &mut harness.renderer, &harness.target, &draws)
                 .unwrap();
+        let probed = harness
+            .renderer
+            .take_probed()
+            .expect("the frame was probed");
+        if !directional {
+            let constant = |label: &str| {
+                (0..6).all(|face| {
+                    probed.iter().any(|texel| {
+                        texel.resource == label
+                            && texel.layer == face
+                            && matches!(&texel.value,
+                                Some(wxsl::render::probe::TexelValue::Float(channels))
+                                    if (0..3).all(|c| (channels[c] - (2.0 + c as f32)).abs() < 0.06))
+                    })
+                })
+            };
+            assert!(
+                probed
+                    .iter()
+                    .any(|texel| texel.layer == 5 && constant(&texel.resource)),
+                "a cube reads the constant on all six faces: {probed:?}"
+            );
+        }
         let second =
             probe::render_list(&harness.gpu, &mut harness.renderer, &harness.target, &draws)
                 .unwrap();

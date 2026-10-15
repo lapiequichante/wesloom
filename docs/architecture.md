@@ -443,6 +443,20 @@ writes is validated by the device when saved, and an invalid shader is a
 reported error, never a panic
 ([ADR 0084](adr/0084-wxsl-an-agent-can-write.md)).
 
+Debugging a scene uses the same queries
+([ADR 0085](adr/0085-scene-debugging-views-a-generic-probe-and-the-frame-panel.md)).
+- **Surface views** (albedo, normal, uv, mip level, instance and
+  material ids, ...) replace the shading function in a forward stage, and
+  the lighting pass's output in deferred.
+- **Frame views** (light count per cluster, cascades, shadow atlas) are
+  editor effects appended to the running pass list. Wireframe is the
+  renderer's line rasterization of the camera's passes; overdraw rewrites
+  the forward passes to add a constant without a depth test.
+- **The pixel probe** reads every texture layer and buffer a frame
+  writes, right after the pass that writes it, so it works on any pass
+  list.
+- **The frame panel** lists each pass's time, draws and triangles.
+
 ## WXSL and the compiler
 
 WGSL has no imports, no conditional compilation and no generics; the node

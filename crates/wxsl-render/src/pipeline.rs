@@ -159,6 +159,8 @@ struct PipelineKey {
     /// different settings share this pipeline, which is exactly what
     /// makes a slider free.
     material_group: String,
+    /// Rasterized as lines: a camera pass under the wireframe view.
+    lines: bool,
 }
 
 /// One `wgpu` pipeline per (variant, pass state, target formats).
@@ -169,6 +171,9 @@ pub struct PipelineCache {
     render: HashMap<PipelineKey, wgpu::RenderPipeline>,
     compute: HashMap<(VariantKey, Vec<PassBinding>), wgpu::ComputePipeline>,
     layouts: HashMap<LayoutKey, wgpu::PipelineLayout>,
+    /// Whether geometry pipelines are asked for as lines, which the
+    /// renderer sets per pass.
+    lines: bool,
 }
 
 /// Which four bind group layouts a pipeline layout was built from.
@@ -191,7 +196,14 @@ impl PipelineCache {
             render: HashMap::new(),
             compute: HashMap::new(),
             layouts: HashMap::new(),
+            lines: false,
         }
+    }
+
+    /// Rasterize the geometry pipelines asked for next as lines, or
+    /// filled. The device must have `POLYGON_MODE_LINE` for lines.
+    pub(crate) fn set_lines(&mut self, lines: bool) {
+        self.lines = lines;
     }
 
     /// How many pipelines are cached.
@@ -279,6 +291,7 @@ impl PipelineCache {
             abi::VERTEX_ENTRY,
             fragment_entry,
             true,
+            self.lines,
         )
     }
 
@@ -313,6 +326,7 @@ impl PipelineCache {
             pass_shape,
             vertex_entry,
             Some(fragment_entry),
+            false,
             false,
         )
     }
@@ -368,6 +382,7 @@ impl PipelineCache {
         vertex_entry: &str,
         fragment_entry: Option<&str>,
         vertex_buffers: bool,
+        lines: bool,
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
             variant: variant.key,
@@ -379,6 +394,7 @@ impl PipelineCache {
                 .collect(),
             pass_group: pass_shape.to_vec(),
             material_group: material.signature.to_string(),
+            lines,
         };
         if !self.render.contains_key(&key) {
             // Two statements rather than `entry().or_insert_with()`: the
@@ -431,6 +447,10 @@ impl PipelineCache {
                 }),
                 primitive: wgpu::PrimitiveState {
                     cull_mode: state.cull_mode.map(WgpuType::to_wgpu),
+                    polygon_mode: match lines {
+                        true => wgpu::PolygonMode::Line,
+                        false => wgpu::PolygonMode::Fill,
+                    },
                     ..Default::default()
                 },
                 depth_stencil: types::depth_stencil(state),

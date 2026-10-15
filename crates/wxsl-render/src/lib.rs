@@ -84,6 +84,7 @@ pub mod mesh;
 pub mod pass;
 pub mod pipeline;
 pub mod pipeline_doc;
+pub mod probe;
 pub mod renderer;
 pub mod scene;
 pub mod setup;

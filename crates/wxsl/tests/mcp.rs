@@ -253,6 +253,30 @@ fn an_agent_edits_compiles_looks_and_undoes_over_http() {
         assert_eq!(stepped["view"]["stepping"]["count"], 1);
         tool_json(&call(16, "view_step", json!({}))).unwrap();
 
+        // A frame view, a probe and the frame's counters (plan6 E2).
+        let view = tool_json(&call(40, "view_set", json!({"debug_view": "light count"}))).unwrap();
+        assert_eq!(view["view"]["debug_view"], "light count");
+        let probe = tool_json(&call(41, "pixel_probe", json!({"x": 0.5, "y": 0.5}))).unwrap();
+        let resources = probe["probe"]["resources"].as_array().unwrap();
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource["resource"].as_str().unwrap().contains("depth")),
+            "{probe}"
+        );
+        tool_json(&call(42, "view_set", json!({"debug_view": "shaded"}))).unwrap();
+        let stats = tool_json(&call(43, "frame_stats", json!({}))).unwrap();
+        assert!(
+            stats["frame"]["triangles"].as_u64().unwrap() >= 12,
+            "{stats}"
+        );
+        assert!(
+            stats["frame"]["passes"].as_array().unwrap().len() > 1,
+            "{stats}"
+        );
+        let outside = call(44, "pixel_probe", json!({"x": 2.0, "y": 0.5}));
+        assert_eq!(outside["isError"], true);
+
         // Paths stay under the root.
         let escape = call(
             17,

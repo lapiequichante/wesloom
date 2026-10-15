@@ -409,6 +409,60 @@ Extends pass stepping (N9) from a material to a whole scene.
   * capability check warnings.
 * Each view and the probe are a `Query` (M0), so MCP gets them for free.
 
+**Landed (2026-10-15, ADR 0085).**
+- **Surface views follow the shading.** `DebugView` gains a stage:
+  - the base views (albedo, normal, depth, metallic-roughness, emissive,
+    occlusion) show in forward too, where codegen swaps the shading
+    function for `lighting::debug_surface`;
+  - `uv` and `mip level` are forward-only;
+  - the feature channels stay deferred-only.
+  The scene mode compiles every scene material under the view. The menu
+  offers a view only where a running pass shades it.
+- **Forward id views:** `instance id` (the draw's instance row, carried
+  in the uv varying under that view) and `material id` (a colour per
+  scene material, from `wxsl_debug_material`).
+- **Frame views:** `wireframe`, `overdraw`, `light count` (the ADR 0076
+  heatmap), `cascades` and `shadow atlas`.
+  - The last three are `editor.` effects appended live to the running
+    pass list with the stepping cut, reading the camera's depth or the
+    atlas.
+  - Wireframe is `Renderer::set_wireframe`: the camera's geometry passes
+    as lines, shaded, on a device with `POLYGON_MODE_LINE`.
+  - Overdraw rewrites the forward passes (no depth test or culling,
+    additive), and the materials return a constant.
+  - They work on forward, deferred and documents (overdraw in forward
+    only), and survive a pipeline change, through the swap.
+- **The pixel probe:**
+  - `Renderer::probe` copies one texel of every 2D texture, array layer
+    and cube face right after the pass that writes it, so aliased
+    transients read true. Depth is copied whole. A buffer gives its first
+    64 words. `wxsl_render::probe` decodes the formats without a device.
+  - The editor adds the displayed pixel, and the instance and material
+    from the CPU pick.
+  - `Command::ProbePixel` (Alt+click on the preview or the viewport) and
+    `Query::Probe`.
+- **The frame panel:** `Query::Frame`, shown in the frame tab while live.
+  - Per pass: GPU time, draws and triangles.
+  - Pipelines, variants, cache hits and misses.
+  - The light grid's binned and dropped counts.
+  - The capability check's findings for the open scene.
+- **MCP:**
+  - `view_set` takes every view;
+  - a new `pixel_probe` tool;
+  - `frame_stats` draws a frame, then answers `Query::Frame`.
+- **Tests:**
+  - device-free: forward views validate with naga (`graph_to_wgsl`), the
+    decoding (`wxsl-render`), the views' sources on both presets
+    (`wxsl-editor`);
+  - on a device: every view on both pipelines and a view across a
+    pipeline change, a probe of the G-buffer and depth, a scene with a
+    shadowed sun whose cascades, atlas and probed instance are checked
+    (`editor_frame`), a probe of every face of a baked cube (`ibl`) and of
+    a compute-written buffer (`buffer_resources`), and the MCP session
+    (`mcp`).
+- By design: the probe does not read the imported target, whose value is
+  the displayed pixel the editor adds; nor volumes or mips past the base.
+
 ### M1 — The MCP server
 
 * **A new crate, `wxsl-mcp`** (depends on `wxsl-editor`, behind a
@@ -486,7 +540,7 @@ Extends pass stepping (N9) from a material to a whole scene.
     screenshot, a step, refused paths, resources), and the line transport
     until its input ends.
 - Not yet done:
-  - `pixel.probe` and the E2 debug views, which come with E2's queries;
+  - ~~`pixel.probe` and the E2 debug views~~: landed with E2;
   - ~~a generated node reference~~: landed with M2;
   - server-sent notifications, such as a document changing under the
     agent.

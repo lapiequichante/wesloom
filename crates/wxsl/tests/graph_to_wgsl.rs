@@ -152,6 +152,40 @@ fn every_stage_compiles_from_the_same_graph() {
     assert!(lighting.contains("sample_light"), "{lighting}");
 }
 
+/// The editor's debug views in a forward stage (plan6 E2): under every
+/// view a forward pass can show, the forward module compiles and naga
+/// validates it, derivatives included.
+#[test]
+fn every_forward_debug_view_compiles_and_validates() {
+    use wxsl::core::lighting::{self, DebugStage};
+    let registry = wxsl::stdlib::registry();
+    for view in lighting::debug_views()
+        .into_iter()
+        .filter(|view| view.stage != DebugStage::Deferred)
+    {
+        let mut macros = MacroSet::new();
+        macros.set(lighting::DEBUG_VIEW_MACRO, MacroValue::Int(view.id));
+        let material = Material::from_graph_with_macros(&demo_graph(), &registry, &macros)
+            .expect("codegen succeeds");
+        let wgsl = compile(&material, MaterialStage::FORWARD_LIT)
+            .unwrap_or_else(|error| panic!("`{}` does not compile: {error}", view.label));
+        assert!(
+            !wgsl.contains("sample_light"),
+            "`{}` still lights",
+            view.label
+        );
+        let module = naga::front::wgsl::parse_str(&wgsl).expect("naga parses it");
+        if let Err(error) = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        {
+            panic!("`{}`: {}", view.label, error.emit_to_string(&wgsl));
+        }
+    }
+}
+
 #[test]
 fn macro_variables_change_the_compiled_shader() {
     let registry = wxsl::stdlib::registry();

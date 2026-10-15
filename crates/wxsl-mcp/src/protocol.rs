@@ -25,7 +25,9 @@ material graphs. Read the wxsl://guide resource first: it shows a whole edit, th
 values and types, how to write a function, and how to read the errors. wxsl://nodes lists every \
 node. Start with graph_get and nodes_search, edit with graph_edit (atomic, undoable, node refs \
 with \"ref\"/\"$name\"), check with graph_compile or problems_list, and look with \
-view_screenshot. Every edit you make is marked as yours in the history and can be undone with \
+view_screenshot. To debug a picture, view_set shows one channel or a view of the frame \
+(debug_view), pixel_probe reads every texture and buffer at a point, and frame_stats says \
+what each pass cost. Every edit you make is marked as yours in the history and can be undone with \
 the history tool. Paths are relative to the project root and cannot leave it.";
 
 /// A call waiting for the render thread.

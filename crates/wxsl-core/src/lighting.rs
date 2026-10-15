@@ -1001,6 +1001,7 @@ const SHADE_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/shade_s
 const AMBIENT_DEFAULT_TEMPLATE: &str = include_str!("../templates/lighting/ambient_default.wxsl");
 const AMBIENT_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/ambient_switch.wxsl");
 const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lighting_pass.wxsl");
+const DEBUG_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/debug_surface.wxsl");
 
 /// [`shade_surface`], with the macro declarations omitted and `features`'
 /// channels joined to the models' own extras.
@@ -1455,8 +1456,13 @@ pub fn pack_gbuffer(
 /// the lighting pass already compiles under the materials' macro set.
 pub const DEBUG_VIEW_MACRO: &str = "wxsl_debug_view";
 
-/// One G-buffer isolation view the lighting pass can return instead of
-/// shading (plan3 N9).
+/// The material index the `material id` view colours by (plan6 E2): an
+/// `i32` macro a host sets per material, `0` when absent.
+pub const DEBUG_MATERIAL_MACRO: &str = "wxsl_debug_material";
+
+/// One isolation view a shading pass can return instead of shading
+/// (plan3 N9): the deferred lighting pass from the G-buffer, a forward
+/// pass from the surface it evaluates (plan6 E2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DebugView {
     /// The [`DEBUG_VIEW_MACRO`] value that selects this view. Stable for a
@@ -1468,6 +1474,21 @@ pub struct DebugView {
     /// The requested channel this view isolates, or `None` for a base
     /// view, which every plan carries.
     pub channel: Option<&'static str>,
+    /// Which passes can show it.
+    pub stage: DebugStage,
+}
+
+/// Which shading passes can return a [`DebugView`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugStage {
+    /// Both: the lighting pass reads it from the G-buffer, a forward pass
+    /// from the surface.
+    Both,
+    /// Only a forward pass: what it reads (the mesh's uv, its screen
+    /// derivatives) is not in the G-buffer.
+    Forward,
+    /// Only the deferred lighting pass: a G-buffer channel.
+    Deferred,
 }
 
 impl DebugView {
@@ -1484,26 +1505,60 @@ impl DebugView {
     }
 }
 
-/// The base views: what every G-buffer holds.
-const BASE_DEBUG_VIEWS: &[&str] = &[
-    "albedo",
-    "normal",
-    "depth",
-    "metallic-roughness",
-    "emissive",
-    "occlusion",
+/// The base views: what every surface has, and where it can be shown.
+const BASE_DEBUG_VIEWS: &[(&str, DebugStage)] = &[
+    ("albedo", DebugStage::Both),
+    ("normal", DebugStage::Both),
+    ("depth", DebugStage::Both),
+    ("metallic-roughness", DebugStage::Both),
+    ("emissive", DebugStage::Both),
+    ("occlusion", DebugStage::Both),
+    ("uv", DebugStage::Forward),
+    ("mip level", DebugStage::Forward),
+    // The draw's instance row, which the vertex entry carries in the uv
+    // varying under this view: the fragment stage has no instance index.
+    (INSTANCE_ID_VIEW, DebugStage::Forward),
+    ("material id", DebugStage::Forward),
+    // A constant per fragment; a host makes it a count by blending the
+    // camera's passes additively without a depth test.
+    (OVERDRAW_VIEW, DebugStage::Forward),
 ];
 
-/// Every view the lighting pass knows: the base ones, then one per channel
+/// The view whose vertex entry writes the instance row into the uv
+/// varying.
+const INSTANCE_ID_VIEW: &str = "instance id";
+
+/// The label of the overdraw view, which a host shows by also rewriting
+/// the passes' blend and depth state.
+pub const OVERDRAW_VIEW: &str = "overdraw";
+
+/// Whether the debug view `id` makes the vertex entry carry the instance
+/// row in the uv varying.
+pub(crate) fn debug_view_reads_instance(id: i32) -> bool {
+    debug_views()
+        .into_iter()
+        .any(|view| view.id == id && view.label == INSTANCE_ID_VIEW)
+}
+
+/// A distinct, saturated colour for an index, the same in Rust and in the
+/// `instance id` view's shader.
+fn index_hue(index: u32) -> [f32; 3] {
+    let h = (index.wrapping_mul(2_654_435_761) >> 8) as f32 / 16_777_216.0;
+    [0.0, 2.0 / 3.0, 1.0 / 3.0]
+        .map(|offset: f32| ((((h + offset).fract()) * 6.0 - 3.0).abs() - 1.0).clamp(0.0, 1.0))
+}
+
+/// Every view the shading passes know: the base ones, then one per channel
 /// a shipped feature or model can request — whether or not the current
 /// plan carries it, so the ids do not move as features are toggled.
 pub fn debug_views() -> Vec<DebugView> {
     let mut views: Vec<DebugView> = BASE_DEBUG_VIEWS
         .iter()
-        .map(|&label| DebugView {
+        .map(|&(label, stage)| DebugView {
             id: 0,
             label,
             channel: None,
+            stage,
         })
         .collect();
     let requested = FEATURES.iter().map(|feature| feature.target).chain(
@@ -1517,6 +1572,7 @@ pub fn debug_views() -> Vec<DebugView> {
                 id: 0,
                 label: target.field,
                 channel: Some(target.field),
+                stage: DebugStage::Deferred,
             });
         }
     }
@@ -1524,6 +1580,72 @@ pub fn debug_views() -> Vec<DebugView> {
         view.id = index as i32 + 1;
     }
     views
+}
+
+/// The shading function a forward stage gets under the debug view `id`
+/// (plan6 E2): `shade_surface`'s signature, returning the view instead of
+/// lighting. `None` for 0 and for a view only the lighting pass can show.
+/// Same encoding as the lighting pass's arm, so the two pipelines agree.
+/// `material` is the [`DEBUG_MATERIAL_MACRO`] value.
+pub fn debug_surface(id: i32, material: i32) -> Option<GeneratedLighting> {
+    let view = debug_views()
+        .into_iter()
+        .find(|view| view.id == id && view.stage != DebugStage::Deferred)?;
+    let [r, g, b] = index_hue(material as u32);
+    let material = format!("vec3f({r:?}, {g:?}, {b:?})");
+    let (prelude, shown) = match view.label {
+        "albedo" => ("", "surface.base_color"),
+        "normal" => ("", "srgb_to_linear(normalize(surface.normal) * 0.5 + vec3f(0.5))"),
+        "depth" => (
+            "",
+            "srgb_to_linear(vec3f(exp(-0.15 * distance(eye_position(), ctx.world_position))))",
+        ),
+        "metallic-roughness" => (
+            "",
+            "srgb_to_linear(vec3f(surface.metallic, surface.roughness, 0.0))",
+        ),
+        "emissive" => ("", "surface.emissive"),
+        "occlusion" => ("", "srgb_to_linear(vec3f(surface.occlusion))"),
+        "uv" => ("", "srgb_to_linear(vec3f(fract(ctx.uv), 0.0))"),
+        // The level a 1024-texel texture would be sampled at: blue where
+        // it is magnified, yellow at level 5, red at 10.
+        "mip level" => (
+            "    let texels = ctx.uv * 1024.0;\n    \
+             let footprint = max(dot(dpdx(texels), dpdx(texels)), dot(dpdy(texels), dpdy(texels)));\n    \
+             let level = clamp(0.5 * log2(max(footprint, 1e-8)), 0.0, 10.0);\n",
+            "srgb_to_linear(vec3f(saturate(level / 5.0), saturate(1.0 - abs(level - 5.0) / 5.0), \
+             saturate(1.0 - level / 5.0)))",
+        ),
+        // `index_hue`, at run time: the row is not a constant.
+        INSTANCE_ID_VIEW => (
+            "    let row = u32(round(ctx.uv.x));\n    \
+             let h = f32((row * 2654435761u) >> 8u) / 16777216.0;\n",
+            "saturate(abs(fract(vec3f(h) + vec3f(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) \
+             - vec3f(1.0))",
+        ),
+        "material id" => ("", material.as_str()),
+        OVERDRAW_VIEW => ("", "vec3f(0.1, 0.05, 0.02)"),
+        label => unreachable!("base view `{label}` has no forward expression"),
+    };
+    Some(GeneratedLighting {
+        source: crate::template::fill(
+            DEBUG_SURFACE_TEMPLATE,
+            &[
+                ("LABEL", view.label),
+                ("SHADE_FN", abi::SHADE_SURFACE_FN),
+                ("SURFACE", abi::SURFACE_STRUCT),
+                ("CONTEXT", abi::CONTEXT_STRUCT),
+                ("PRELUDE", prelude),
+                ("SHOWN", shown),
+            ],
+        ),
+        imports: vec![
+            (abi::SURFACE_MODULE, abi::SURFACE_STRUCT),
+            (abi::SURFACE_MODULE, abi::CONTEXT_STRUCT),
+            ("package::wxsl::bindings", "eye_position"),
+            ("package::color::srgb_to_linear", "srgb_to_linear"),
+        ],
+    })
 }
 
 /// The lighting pass's debug arm: one branch per view `plan` carries, each
@@ -1534,7 +1656,7 @@ pub fn debug_views() -> Vec<DebugView> {
 fn debug_view_arm(plan: &GBufferPlan) -> String {
     let mut arm = format!("if ({DEBUG_VIEW_MACRO} != 0) {{\n        var shown = vec3f(0.0);\n");
     for view in debug_views() {
-        if !view.available(plan) {
+        if !view.available(plan) || view.stage == DebugStage::Forward {
             continue;
         }
         let expr = match (view.label, view.channel) {

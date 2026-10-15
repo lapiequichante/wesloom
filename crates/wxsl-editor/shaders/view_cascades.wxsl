@@ -1,0 +1,68 @@
+//! view_cascades — the editor's shadow-cascade view (plan6 E2, ADR 0071).
+//!
+//! Which shadow tile of the first shadowed directional light covers each
+//! pixel's surface: its cascades in red, green, blue, yellow, then magenta
+//! and cyan, chosen by the same rule the shadow lookup uses. Grey where no
+//! tile covers the surface (outside the light's shadow box), or no
+//! directional light casts a shadow; black where nothing was drawn.
+import package::wxsl::bindings::{camera, point_sampler, scene, LIGHT_KIND_DIRECTIONAL, WXSL_MAX_LIGHTS};
+import package::color::linear_to_srgb::linear_to_srgb;
+
+@group(3) @binding(0) var depth: texture_2d<f32>;
+
+@vertex
+fn view_cascades_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+fn cascade_color(index: u32) -> vec3f {
+    switch index % 6u {
+        case 0u: { return vec3f(0.9, 0.15, 0.1); }
+        case 1u: { return vec3f(0.15, 0.8, 0.2); }
+        case 2u: { return vec3f(0.15, 0.3, 0.95); }
+        case 3u: { return vec3f(0.95, 0.85, 0.1); }
+        case 4u: { return vec3f(0.85, 0.2, 0.85); }
+        default: { return vec3f(0.1, 0.85, 0.85); }
+    }
+}
+
+@fragment
+fn view_cascades_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let uv = position.xy / params.view_size;
+    let z = textureSampleLevel(depth, point_sampler, uv, 0.0).x;
+    if z >= 1.0 {
+        return vec4f(0.0, 0.0, 0.0, 1.0);
+    }
+    let world = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
+    let point = world.xyz / world.w;
+    let shade = 0.35 + 0.65 * exp(-0.05 * distance(camera.position, point));
+
+    var shown = vec3f(0.4);
+    let count = min(scene.light_count, WXSL_MAX_LIGHTS);
+    for (var index = 0u; index < count; index = index + 1u) {
+        let light = scene.lights[index];
+        if light.kind != LIGHT_KIND_DIRECTIONAL || light.tile_count == 0u {
+            continue;
+        }
+        // Camera view depth, the metric the slices were fitted in.
+        let reach = (camera.view_proj * vec4f(point, 1.0)).w;
+        var cascade = light.tile_count - 1u;
+        for (var t = 0u; t + 1u < light.tile_count; t = t + 1u) {
+            if reach < scene.shadow_tiles[light.tile_first + t].split {
+                cascade = t;
+                break;
+            }
+        }
+        // Covered only inside the tile's own view: past it, the lookup
+        // reads nothing and the surface is lit.
+        let clip = scene.shadow_tiles[light.tile_first + cascade].view_proj * vec4f(point, 1.0);
+        let ndc = clip.xyz / clip.w;
+        if all(abs(ndc.xy) <= vec2f(1.0)) && ndc.z > 0.0 && ndc.z < 1.0 {
+            shown = cascade_color(cascade);
+        }
+        break;
+    }
+    return vec4f(linear_to_srgb(shown * shade), 1.0);
+}

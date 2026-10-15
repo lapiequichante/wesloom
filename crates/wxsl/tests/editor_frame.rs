@@ -1159,11 +1159,12 @@ fn the_subsurface_debug_view_isolates_the_channel() {
     assert!(editor.preview().status().is_ok());
 
     // The view menu sits right of the pipeline one (x ≈ 494..686); its
-    // rows are 22 px from y ≈ 35: shaded, the six base views, then
+    // rows are 22 px from y ≈ 35: shaded, the ten base views the menu
+    // lists (the four forward ones greyed under deferred), then
     // subsurface, the first feature channel.
     let view_menu = Vec2::new(590.0, 19.0);
     click(&mut editor, view_menu, 1.0);
-    click(&mut editor, Vec2::new(590.0, 200.0), 1.1);
+    click(&mut editor, Vec2::new(590.0, 288.0), 1.1);
     settle(&mut editor, 1.2);
     let shown = wxsl::core::lighting::debug_views()
         .into_iter()
@@ -1171,7 +1172,7 @@ fn the_subsurface_debug_view_isolates_the_channel() {
     assert_eq!(
         shown.and_then(|view| view.channel),
         Some("subsurface"),
-        "the eighth row is the subsurface view"
+        "the twelfth row is the subsurface view"
     );
     assert!(
         editor.preview().status().is_ok(),
@@ -1935,4 +1936,407 @@ fn a_gltf_file_imports_into_the_scene_mode_and_a_second_one_joins_it() {
     editor.apply(Command::Undo).unwrap();
     frame(&gpu, &mut editor, &target, 0.6);
     assert_eq!(scene(&editor), first);
+}
+
+/// Settle the preview after a pipeline or view change: a stock pipeline
+/// swaps in once its shaders are compiled.
+fn settle(gpu: &GpuContext, editor: &mut Editor, target: &OffscreenTarget, time: f64) {
+    for step in 0..30 {
+        frame(gpu, editor, target, time + 0.01 * step as f64);
+        if editor.preview().swap_progress().is_none() && step >= 3 {
+            break;
+        }
+    }
+}
+
+/// The preview's pixels, as RGB, and how many differ from the corner's.
+fn preview_rgb(gpu: &GpuContext, editor: &Editor) -> (Vec<[u8; 3]>, usize) {
+    let pixels: Vec<[u8; 3]> = editor
+        .preview()
+        .read_rgba8(&gpu.device, &gpu.queue)
+        .chunks_exact(4)
+        .map(|texel| [texel[0], texel[1], texel[2]])
+        .collect();
+    let corner = pixels[0];
+    let covered = pixels.iter().filter(|texel| **texel != corner).count();
+    (pixels, covered)
+}
+
+/// The scene debug views (plan6 E2). A surface view shows in forward as
+/// it does in deferred, the forward-only ones are offered only there, and
+/// the frame views run over both pipelines' pass lists, live.
+#[test]
+fn the_debug_views_show_on_both_pipelines() {
+    use wxsl::editor::{Answer, Query};
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    let views = |editor: &Editor| match editor.query(&Query::View) {
+        Answer::View {
+            debug_view,
+            debug_views,
+            ..
+        } => (debug_view, debug_views),
+        other => panic!("{other:?}"),
+    };
+    let show = |editor: &mut Editor, view: &str| {
+        editor
+            .apply(Command::SetDebugView { view: view.into() })
+            .unwrap_or_else(|error| panic!("`{view}`: {error}"));
+    };
+    // A still cube, so a view's pixels compare with the shaded ones.
+    let space = |pressed| UiEvent::Key {
+        key: Key::Char(' '),
+        pressed,
+        repeat: false,
+    };
+    editor.handle_event(UiEvent::PointerMoved(Vec2::new(700.0, 400.0)));
+    editor.handle_event(space(true));
+    frame(&gpu, &mut editor, &target, 0.0);
+    editor.handle_event(space(false));
+    frame(&gpu, &mut editor, &target, 0.0);
+    assert!(!editor.preview().spinning);
+    for (index, pipeline) in ["forward", "deferred"].into_iter().enumerate() {
+        let time = index as f64 * 10.0;
+        editor
+            .apply(Command::SetPipeline {
+                pipeline: pipeline.into(),
+            })
+            .unwrap();
+        settle(&gpu, &mut editor, &target, time);
+        let (_, offered) = views(&editor);
+        for view in [
+            "albedo",
+            "normal",
+            "light count",
+            "cascades",
+            "shadow atlas",
+        ] {
+            assert!(offered.iter().any(|v| v == view), "{pipeline}: {offered:?}");
+        }
+        for view in ["uv", "instance id", "material id", "overdraw"] {
+            assert_eq!(
+                offered.iter().any(|v| v == view),
+                pipeline == "forward",
+                "{view} is a forward view: {offered:?}"
+            );
+        }
+        assert!(offered.iter().any(|v| v == "wireframe"), "{offered:?}");
+
+        // Shaded, then the surface normal: the colours change, and a
+        // normal view has no warm key light in it.
+        let (shaded, covered) = preview_rgb(&gpu, &editor);
+        assert!(covered > 5_000, "{pipeline}: the cube is drawn ({covered})");
+        show(&mut editor, "normal");
+        settle(&gpu, &mut editor, &target, time + 1.0);
+        assert_eq!(views(&editor).0, "normal");
+        let (normal, _) = preview_rgb(&gpu, &editor);
+        let changed = shaded.iter().zip(&normal).filter(|(a, b)| a != b).count();
+        assert!(
+            changed > 5_000,
+            "{pipeline}: the normal view differs ({changed})"
+        );
+
+        if pipeline == "forward" {
+            // The uv view: red and green ramps, never blue.
+            show(&mut editor, "uv");
+            settle(&gpu, &mut editor, &target, time + 2.0);
+            let (uv, _) = preview_rgb(&gpu, &editor);
+            let ramp = uv
+                .iter()
+                .filter(|texel| texel[0] > 40 && texel[1] > 40 && texel[2] < 8)
+                .count();
+            assert!(ramp > 2_000, "the uv view shows the ramps ({ramp})");
+
+            // One instance and one material: each id view is one flat,
+            // saturated colour over the cube.
+            for (step, view) in ["instance id", "material id"].into_iter().enumerate() {
+                show(&mut editor, view);
+                settle(&gpu, &mut editor, &target, time + 2.1 + step as f64 * 0.1);
+                let (ids, covered) = preview_rgb(&gpu, &editor);
+                let first = *ids.iter().find(|texel| **texel != ids[0]).unwrap();
+                let same = ids.iter().filter(|texel| **texel == first).count();
+                assert!(
+                    same * 10 > covered * 9 && covered > 5_000,
+                    "{view}: one colour ({same} of {covered})"
+                );
+                let (max, min) = (first.iter().max().unwrap(), first.iter().min().unwrap());
+                assert!(max - min > 100, "{view}: saturated ({first:?})");
+            }
+
+            // Overdraw: a constant per fragment, added up with no depth
+            // test or culling, so the cube's back faces count too: warm,
+            // and brighter than one layer alone.
+            show(&mut editor, "overdraw");
+            settle(&gpu, &mut editor, &target, time + 2.3);
+            assert_eq!(views(&editor).0, "overdraw");
+            let (counted, covered) = preview_rgb(&gpu, &editor);
+            let warm = counted
+                .iter()
+                .filter(|texel| texel[0] > texel[1] && texel[1] > texel[2])
+                .count();
+            assert!(
+                warm * 10 > covered * 9 && covered > 5_000,
+                "warm ({warm} of {covered})"
+            );
+            let one_layer = (0.1f32.powf(1.0 / 2.2) * 255.0) as u8;
+            let brightest = counted.iter().map(|texel| texel[0]).max().unwrap();
+            assert!(
+                brightest > one_layer + 20,
+                "two layers or more ({brightest})"
+            );
+        }
+
+        // Wireframe: the same shading, drawn as lines, so far less of the
+        // preview is covered.
+        show(&mut editor, "wireframe");
+        settle(&gpu, &mut editor, &target, time + 2.5);
+        assert_eq!(views(&editor).0, "wireframe");
+        let (_, lines) = preview_rgb(&gpu, &editor);
+        assert!(
+            lines > 50 && lines * 4 < covered,
+            "{pipeline}: lines only ({lines} of {covered})"
+        );
+
+        // The light count: the preview's lights are unranged, so none is
+        // local and every covered pixel is the "none" blue, shaded.
+        show(&mut editor, "light count");
+        settle(&gpu, &mut editor, &target, time + 3.0);
+        assert_eq!(views(&editor).0, "light count");
+        let (counted, _) = preview_rgb(&gpu, &editor);
+        assert_eq!(counted[0], [0, 0, 0], "the background is black");
+        let blue = counted
+            .iter()
+            .filter(|texel| texel[2] > 40 && texel[0] < 40 && texel[1] < 40)
+            .count();
+        assert!(
+            blue > 5_000,
+            "{pipeline}: the cube reads no local light ({blue})"
+        );
+
+        // The preview's lights cast no shadow: the cascades view is the
+        // grey of "no tile covers it", and the atlas holds nothing.
+        show(&mut editor, "cascades");
+        settle(&gpu, &mut editor, &target, time + 4.0);
+        let (cascades, covered) = preview_rgb(&gpu, &editor);
+        let coloured = cascades
+            .iter()
+            .filter(|texel| {
+                let (max, min) = (texel.iter().max().unwrap(), texel.iter().min().unwrap());
+                max - min > 30
+            })
+            .count();
+        assert!(
+            covered > 5_000 && coloured == 0,
+            "{pipeline}: grey ({coloured})"
+        );
+        show(&mut editor, "shadow atlas");
+        settle(&gpu, &mut editor, &target, time + 5.0);
+        assert_eq!(views(&editor).0, "shadow atlas");
+
+        // At the reference's time, since the preview's lights move with
+        // it, and on average: the views leave nothing behind, but a pixel
+        // may round differently.
+        show(&mut editor, "shaded");
+        settle(&gpu, &mut editor, &target, time);
+        let (back, _) = preview_rgb(&gpu, &editor);
+        let mean = |pixels: &[[u8; 3]]| {
+            let covered: Vec<_> = pixels.iter().filter(|texel| **texel != pixels[0]).collect();
+            core::array::from_fn::<f32, 3, _>(|channel| {
+                covered
+                    .iter()
+                    .map(|texel| f32::from(texel[channel]))
+                    .sum::<f32>()
+                    / covered.len().max(1) as f32
+            })
+        };
+        let (was, now) = (mean(&shaded), mean(&back));
+        assert!(
+            (0..3).all(|channel| (was[channel] - now[channel]).abs() < 12.0),
+            "{pipeline}: shading comes back ({now:?} against {was:?})"
+        );
+    }
+
+    // A frame view outlives a pipeline change, through the swap.
+    show(&mut editor, "wireframe");
+    settle(&gpu, &mut editor, &target, 30.0);
+    editor
+        .apply(Command::SetPipeline {
+            pipeline: "forward".into(),
+        })
+        .unwrap();
+    settle(&gpu, &mut editor, &target, 31.0);
+    assert_eq!(views(&editor).0, "wireframe");
+    let (_, lines) = preview_rgb(&gpu, &editor);
+    assert!(lines > 50 && lines < 5_000, "still lines ({lines})");
+}
+
+/// The pixel probe (plan6 E2): one point read in every texture the frame's
+/// passes wrote, generically; the G-buffer's albedo is the material's, and
+/// a corner reads cleared depth.
+#[test]
+fn a_probe_reads_every_texture_the_frame_wrote() {
+    use wxsl::editor::{Answer, ProbeSummary, Query};
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    editor
+        .apply(Command::SetPipeline {
+            pipeline: "deferred".into(),
+        })
+        .unwrap();
+    settle(&gpu, &mut editor, &target, 0.0);
+    let probe = |editor: &mut Editor, x: f32, y: f32, time: f64| -> ProbeSummary {
+        editor.apply(Command::ProbePixel { x, y }).unwrap();
+        frame(&gpu, editor, &target, time);
+        match editor.query(&Query::Probe) {
+            Answer::Probe { probe } => probe.expect("the frame was probed"),
+            other => panic!("{other:?}"),
+        }
+    };
+    let value = |probe: &ProbeSummary, label: &str| {
+        probe
+            .resources
+            .iter()
+            .find(|resource| resource.resource.contains(label))
+            .unwrap_or_else(|| {
+                let labels: Vec<_> = probe.resources.iter().map(|r| &r.resource).collect();
+                panic!("no `{label}` among {labels:?}")
+            })
+            .value
+            .clone()
+            .expect("decoded")
+    };
+
+    let centre = probe(&mut editor, 0.5, 0.5, 1.0);
+    assert_eq!(centre.pixel, [256, 256]);
+    let depth = value(&centre, "depth")[0];
+    assert!(depth > 0.0 && depth < 1.0, "the cube's depth: {depth}");
+    // The demo's base colour is an fbm mix of two colours, in 0..1, and
+    // the G-buffer stores it with metallic in alpha.
+    let albedo = value(&centre, "base_color");
+    assert_eq!(albedo.len(), 4);
+    assert!(
+        albedo[..3].iter().all(|c| (0.0..=1.0).contains(c)),
+        "{albedo:?}"
+    );
+    assert!(albedo[..3].iter().any(|c| *c > 0.01), "{albedo:?}");
+    assert!(
+        centre.shown[..3].iter().any(|c| *c > 10),
+        "{:?}",
+        centre.shown
+    );
+    assert_eq!(centre.instance, None, "no scene, no instance");
+
+    let corner = probe(&mut editor, 0.0, 0.0, 2.0);
+    assert_eq!(corner.pixel, [0, 0]);
+    assert_eq!(value(&corner, "depth")[0], 1.0, "nothing was drawn there");
+
+    // Outside the viewport is refused by name.
+    assert!(editor
+        .apply(Command::ProbePixel { x: 1.5, y: 0.5 })
+        .is_err());
+
+    // And the frame's counters: the cube's twelve triangles in the
+    // G-buffer pass, timings or not.
+    let Answer::Frame { frame: summary } = editor.query(&Query::Frame) else {
+        panic!("a frame answer")
+    };
+    assert!(summary.draws >= 1 && summary.triangles >= 12, "{summary:?}");
+    assert!(summary.pipelines > 0 && summary.variants > 0, "{summary:?}");
+    assert!(summary.passes.iter().any(|pass| pass.triangles >= 12));
+    assert_eq!(summary.dropped_lights, 0);
+}
+
+/// The scene's side of the debug views and the probe (plan6 E2): under a
+/// shadowed sun the cascades view colours what its shadow box covers, the
+/// atlas shows the caster, and a probe names the instance it lands on.
+#[test]
+fn a_scene_shows_its_cascades_and_a_probe_names_the_instance() {
+    use wxsl::editor::{Answer, CanvasMode, Query};
+
+    let Some(gpu) = gpu() else { return };
+    let Some((mut editor, target)) = editor(&gpu, MsdfBackend::Cpu) else {
+        return;
+    };
+    // The sheen cube, lit by a shadowed sun from above and the side.
+    let mut scene: serde_json::Value =
+        serde_json::from_str(include_str!("../assets/sheen.scene.json")).unwrap();
+    let tilt = glam::Mat4::from_rotation_x(-0.9) * glam::Mat4::from_rotation_y(0.4);
+    scene["nodes"] = serde_json::json!([{"name": "sun", "transform": tilt.to_cols_array()}]);
+    scene["environment"] = serde_json::json!({"lights": [{
+        "name": "sun", "node": 0, "kind": "directional", "intensity": 3.0, "casts_shadow": true
+    }]});
+    let path = std::env::temp_dir().join(format!("wxsl_e2_{}.scene.json", std::process::id()));
+    std::fs::write(&path, scene.to_string()).unwrap();
+    frame(&gpu, &mut editor, &target, 0.0);
+    editor
+        .apply(Command::OpenScene {
+            path: path.display().to_string(),
+        })
+        .expect("the scene opens");
+    editor.set_canvas_mode(CanvasMode::Scene);
+    for step in 0..3 {
+        frame(&gpu, &mut editor, &target, 0.1 * step as f64);
+    }
+    let _ = std::fs::remove_file(&path);
+    assert!(!editor.message().contains("cannot"), "{}", editor.message());
+
+    editor
+        .apply(Command::SetDebugView {
+            view: "cascades".into(),
+        })
+        .unwrap();
+    settle(&gpu, &mut editor, &target, 1.0);
+    let (cascades, _) = preview_rgb(&gpu, &editor);
+    let red = cascades
+        .iter()
+        .filter(|texel| texel[0] > 60 && texel[1] < texel[0] / 2 && texel[2] < texel[0] / 2)
+        .count();
+    assert!(red > 2_000, "the first cascade covers the cube ({red})");
+
+    editor
+        .apply(Command::SetDebugView {
+            view: "shadow atlas".into(),
+        })
+        .unwrap();
+    settle(&gpu, &mut editor, &target, 2.0);
+    let (_, drawn) = preview_rgb(&gpu, &editor);
+    assert!(drawn > 500, "the atlas holds the cube's depth ({drawn})");
+
+    // The probe in the middle of the viewport lands on the cube: its
+    // depth, the instance and its material.
+    editor
+        .apply(Command::SetDebugView {
+            view: "shaded".into(),
+        })
+        .unwrap();
+    settle(&gpu, &mut editor, &target, 3.0);
+    editor
+        .apply(Command::ProbePixel { x: 0.5, y: 0.5 })
+        .unwrap();
+    frame(&gpu, &mut editor, &target, 4.0);
+    let Answer::Probe { probe: Some(probe) } = editor.query(&Query::Probe) else {
+        panic!("probed")
+    };
+    assert_eq!((probe.instance, probe.material), (Some(0), Some(0)));
+    let atlas = probe
+        .resources
+        .iter()
+        .find(|resource| resource.resource.contains("shadow"))
+        .expect("the atlas is among the probed textures");
+    assert!(atlas.value.is_some(), "{atlas:?}");
+
+    let Answer::Frame { frame: summary } = editor.query(&Query::Frame) else {
+        panic!("a frame answer")
+    };
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
+    assert!(
+        summary.triangles >= 24,
+        "the shadow pass draws too: {summary:?}"
+    );
 }

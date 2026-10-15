@@ -712,6 +712,7 @@ fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
                 &|_| true,
                 &|_| None,
                 None,
+                None,
                 |_, _| Ok(()),
             )
             .expect("records");

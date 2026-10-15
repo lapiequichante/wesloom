@@ -32,6 +32,7 @@ use wxsl_render::{
 
 use crate::highlight::{self, Run};
 use crate::stepping;
+use crate::views::{self, FrameView};
 
 /// The label the stock presets give their tonemap pass, whose `curve` a
 /// debug view switches off.
@@ -53,6 +54,16 @@ struct Stepping {
     /// The scene time the frame is frozen at, so each step shows the same
     /// frame.
     time: f32,
+}
+
+/// A frame view over the running pass list (plan6 E2): every pass runs,
+/// live, and one editor effect draws what the view reads into the target.
+struct ViewCut {
+    /// The pass list as it ran before, which leaving the view puts back.
+    full: wxsl_render::RenderGraph,
+    /// The stock pipeline to go back to, or `None` for `full` itself.
+    restore: Option<StockPipeline>,
+    view: FrameView,
 }
 
 /// What the frame tab shows of a pass list being stepped through.
@@ -161,6 +172,11 @@ pub struct Preview {
     compare: Option<Compare>,
     /// The pass list being stepped through, when stepping.
     stepping: Option<Stepping>,
+    /// The frame view showing, if one is.
+    view_cut: Option<ViewCut>,
+    /// A frame view to put back once a pipeline change lands, which a
+    /// swap in flight delays.
+    pending_view: Option<FrameView>,
     /// The scene time of the last frame, which stepping freezes.
     time: f32,
     /// The B side's target and texture, registered once with the UI so
@@ -215,6 +231,8 @@ impl Preview {
         Ok(Preview {
             compare: None,
             stepping: None,
+            view_cut: None,
+            pending_view: None,
             time: 0.0,
             compare_target,
             compare_texture,
@@ -353,10 +371,11 @@ impl Preview {
     /// Whether the renderer runs an installed document rather than a stock
     /// pass list.
     pub fn runs_document(&self) -> bool {
-        match self.stepping.as_ref() {
-            // A cut is installed as a graph; what it was cut from decides.
-            Some(stepping) => stepping.restore.is_none(),
-            None => self.renderer.pipeline().is_none(),
+        // A cut is installed as a graph; what it was cut from decides.
+        match (self.stepping.as_ref(), self.view_cut.as_ref()) {
+            (Some(stepping), _) => stepping.restore.is_none(),
+            (None, Some(cut)) => cut.restore.is_none(),
+            (None, None) => self.renderer.pipeline().is_none(),
         }
     }
 
@@ -388,6 +407,7 @@ impl Preview {
     /// being data.
     pub fn install_document(&mut self, graph: wxsl_render::RenderGraph) -> Result<(), RenderError> {
         self.stepping = None;
+        self.keep_view();
         self.renderer.set_graph(graph)
     }
 
@@ -423,6 +443,9 @@ impl Preview {
     pub fn set_features(&mut self, names: &[&str]) -> Result<(), RenderError> {
         // A new plan is a new pass list: stepping the old one ends.
         self.stop_stepping();
+        let view = self.frame_view();
+        self.stop_view();
+        self.pending_view = view;
         self.renderer.set_features(names)?;
         // The B side resolves the same material, so it carries the same
         // plan.
@@ -484,21 +507,46 @@ impl Preview {
         self.debug_view
     }
 
-    /// Every debug view, and whether the running plan carries what it
-    /// reads — what the toolbar's view menu lists.
+    /// Every surface debug view, and whether the running pass list can
+    /// show it: a pass that shades it (the lighting pass from the
+    /// G-buffer, a forward pass from the surface), and a plan carrying
+    /// what it reads — what the toolbar's view menu lists.
     pub fn debug_views(&self) -> Vec<(lighting::DebugView, bool)> {
         let plan = self
             .renderer
             .lighting()
             .plan(&self.renderer.pipeline_config().features)
             .ok();
+        let graph = self.uncut_graph();
+        let lights = graph.passes().iter().any(|pass| {
+            matches!(&pass.kind, wxsl_render::pass::PassKind::Screen { effect }
+                if effect == "wxsl.deferred_lighting")
+        });
+        let forward = graph.passes().iter().any(|pass| {
+            matches!(&pass.kind, wxsl_render::pass::PassKind::Geometry { stage, .. }
+                if stage.output() == wxsl_core::abi::StageOutput::Color)
+        });
         lighting::debug_views()
             .into_iter()
             .map(|view| {
-                let available = plan.as_ref().is_some_and(|plan| view.available(plan));
+                let shaded = match view.stage {
+                    lighting::DebugStage::Both => lights || forward,
+                    lighting::DebugStage::Forward => forward,
+                    lighting::DebugStage::Deferred => lights,
+                };
+                let available = shaded && plan.as_ref().is_some_and(|plan| view.available(plan));
                 (view, available)
             })
             .collect()
+    }
+
+    /// The running pass list without a stepping or view cut.
+    fn uncut_graph(&self) -> &wxsl_render::RenderGraph {
+        match (self.view_cut.as_ref(), self.stepping.as_ref()) {
+            (Some(cut), _) => &cut.full,
+            (None, Some(stepping)) => &stepping.full,
+            (None, None) => self.renderer.render_graph(),
+        }
     }
 
     /// Show a G-buffer debug view, or shade again with 0.
@@ -556,11 +604,9 @@ impl Preview {
         if self.stepping.is_some() {
             return Ok(());
         }
-        for effect in [stepping::INSPECT, stepping::INSPECT_DEPTH] {
-            if self.renderer.effects().get(effect.id).is_none() {
-                self.renderer.add_effect(effect);
-            }
-        }
+        // Stepping steps the pass list itself, not a view of it.
+        self.stop_view();
+        self.add_editor_effects();
         let full = self.renderer.render_graph().clone();
         let order = full.schedule()?.order().to_vec();
         self.stepping = Some(Stepping {
@@ -597,6 +643,115 @@ impl Preview {
                 let _ = self.renderer.set_graph(stepping.full);
             }
         }
+    }
+
+    /// Register the inspect and view effects, once.
+    fn add_editor_effects(&mut self) {
+        for effect in views::EFFECTS {
+            if self.renderer.effects().get(effect.id).is_none() {
+                self.renderer.add_effect(effect.clone());
+            }
+        }
+    }
+
+    /// Show a frame view over the running pass list, or with `None` the
+    /// frame again. Stepping ends; the view is live.
+    pub(crate) fn set_frame_view(&mut self, view: Option<FrameView>) -> Result<(), String> {
+        self.stop_stepping();
+        self.stop_view();
+        let Some(view) = view else {
+            return Ok(());
+        };
+        self.add_editor_effects();
+        let full = self.renderer.render_graph().clone();
+        if !view.available(&full, self.renderer.supports_wireframe()) {
+            return Err(format!(
+                "the running pass list cannot show `{}`",
+                view.label()
+            ));
+        }
+        let cut = view.install(&full)?;
+        let restore = self.renderer.pipeline();
+        self.renderer
+            .set_graph(cut)
+            .map_err(|error| error.to_string())?;
+        self.renderer.set_wireframe(view == FrameView::Wireframe);
+        self.view_cut = Some(ViewCut {
+            full,
+            restore,
+            view,
+        });
+        self.sync_view_size().map_err(|error| error.to_string())
+    }
+
+    /// The frame view showing, if one is.
+    pub(crate) fn frame_view(&self) -> Option<FrameView> {
+        // One waiting for a swap to land counts: it is what will show.
+        self.view_cut
+            .as_ref()
+            .map(|cut| cut.view)
+            .or(self.pending_view)
+    }
+
+    /// Whether `view` has something to read in the running pass list.
+    pub(crate) fn frame_view_available(&self, view: FrameView) -> bool {
+        view.available(self.uncut_graph(), self.renderer.supports_wireframe())
+    }
+
+    /// Back to the pass list the view was cut from.
+    fn stop_view(&mut self) {
+        self.pending_view = None;
+        self.renderer.set_wireframe(false);
+        let Some(cut) = self.view_cut.take() else {
+            return;
+        };
+        match cut.restore {
+            Some(stock) => self.renderer.set_pipeline(stock),
+            None => {
+                let _ = self.renderer.set_graph(cut.full);
+            }
+        }
+    }
+
+    /// Drop the view's cut because the pass list is being replaced, and
+    /// show the view again over the new one.
+    fn keep_view(&mut self) {
+        let view = self.frame_view();
+        self.view_cut = None;
+        self.renderer.set_wireframe(false);
+        self.pending_view = view;
+    }
+
+    /// Put a kept frame view back once no swap is in flight, if the new
+    /// pass list can show it; otherwise it is dropped.
+    fn land_view(&mut self) {
+        if self.swapping || self.stepping.is_some() {
+            return;
+        }
+        if let Some(view) = self.pending_view.take() {
+            if self.frame_view_available(view) {
+                let _ = self.set_frame_view(Some(view));
+            }
+        }
+    }
+
+    /// Keep the view pass mapping the target's size, which the scene
+    /// viewport changes.
+    fn sync_view_size(&mut self) -> Result<(), RenderError> {
+        if self.view_cut.is_none() {
+            return Ok(());
+        }
+        let (width, height) = self.size();
+        let size = Value::Vec2([width as f32, height as f32]);
+        let pass = wxsl_render::RenderGraph::STEP_INSPECT_PASS;
+        if self
+            .renderer
+            .pass_param(pass, "view_size")
+            .is_some_and(|current| current != size)
+        {
+            self.renderer.set_pass_param(pass, "view_size", size)?;
+        }
+        Ok(())
     }
 
     /// The pass list being stepped through, for the frame tab.
@@ -754,6 +909,7 @@ impl Preview {
     /// next frame.
     pub fn restore_stock(&mut self) {
         self.stepping = None;
+        self.keep_view();
         self.renderer.set_pipeline(self.stock);
         self.swapping = false;
     }
@@ -790,6 +946,9 @@ impl Preview {
     /// where a frozen frame on a button press is most obvious.
     pub fn set_pipeline(&mut self, device: &wgpu::Device, pipeline: StockPipeline) {
         self.stop_stepping();
+        let view = self.frame_view();
+        self.stop_view();
+        self.pending_view = view;
         // The material canvas's choice, whether or not the swap has to
         // wait: it is what leaving the pipeline canvas restores.
         self.stock = pipeline;
@@ -1021,6 +1180,7 @@ impl Preview {
             self.swapping = false;
             self.refresh_wgsl(device);
         }
+        self.land_view();
         // Kept in step every frame rather than at the toggle: a pipeline
         // swap or a document install can bring a fresh tonemap pass.
         let curve = Value::F32(if self.debug_view == 0 { 1.0 } else { 0.0 });
@@ -1034,6 +1194,7 @@ impl Preview {
                 renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
             }
         }
+        self.sync_view_size()?;
         // Stepping shows one frame, pass by pass: nothing moves.
         let (dt, time) = match self.stepping.as_ref() {
             Some(stepping) => (0.0, stepping.time),
@@ -1109,6 +1270,7 @@ impl Preview {
             self.swapping = false;
             self.refresh_wgsl(device);
         }
+        self.land_view();
         let curve = Value::F32(if self.debug_view == 0 { 1.0 } else { 0.0 });
         if self
             .renderer
@@ -1117,6 +1279,7 @@ impl Preview {
         {
             self.renderer.set_pass_param(TONEMAP_PASS, "curve", curve)?;
         }
+        self.sync_view_size()?;
         self.time = environment.time;
         self.renderer.render(
             device,

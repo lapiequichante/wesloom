@@ -133,8 +133,26 @@ fn a_compute_written_buffer_reaches_a_screen_pass_through_the_pass_group() {
     );
     renderer.set_graph(graph).expect("schedules");
 
+    renderer.probe([0.5, 0.5]);
     let image = render_list_in(&gpu, &mut renderer, &target, &DrawList::new(), &unlit())
         .expect("the frame renders");
+    // The pixel probe reads a buffer's head as words (plan6 E2): the
+    // ramp's first floats, rising from the low end.
+    let probed = renderer.take_probed().expect("the frame was probed");
+    let ramp = probed
+        .iter()
+        .find(|texel| texel.resource == "ramp")
+        .expect("the buffer is probed");
+    assert_eq!((ramp.format, ramp.size), (None, [256 * 4, 1]));
+    let Some(wxsl::render::probe::TexelValue::Uint(words)) = &ramp.value else {
+        panic!("{ramp:?}")
+    };
+    let floats: Vec<f32> = words.iter().map(|word| f32::from_bits(*word)).collect();
+    assert_eq!(floats.len(), 64);
+    assert!(
+        floats.windows(2).all(|pair| pair[0] <= pair[1]) && floats[63] > floats[0],
+        "{floats:?}"
+    );
 
     let pixel = |x: u32, y: u32| {
         let index = ((y * size + x) * 4) as usize;
@@ -227,8 +245,26 @@ fn the_buffer_ramp_compiles_from_a_document_and_reaches_the_screen() {
     .expect("the ramp document compiles");
     renderer.set_graph(graph).expect("schedules");
 
+    renderer.probe([0.5, 0.5]);
     let image = render_list_in(&gpu, &mut renderer, &target, &DrawList::new(), &unlit())
         .expect("the frame renders");
+    // The pixel probe reads a buffer's head as words (plan6 E2): the
+    // ramp's first floats, rising from the low end.
+    let probed = renderer.take_probed().expect("the frame was probed");
+    let ramp = probed
+        .iter()
+        .find(|texel| texel.resource == "ramp")
+        .expect("the buffer is probed");
+    assert_eq!((ramp.format, ramp.size), (None, [256 * 4, 1]));
+    let Some(wxsl::render::probe::TexelValue::Uint(words)) = &ramp.value else {
+        panic!("{ramp:?}")
+    };
+    let floats: Vec<f32> = words.iter().map(|word| f32::from_bits(*word)).collect();
+    assert_eq!(floats.len(), 64);
+    assert!(
+        floats.windows(2).all(|pair| pair[0] <= pair[1]) && floats[63] > floats[0],
+        "{floats:?}"
+    );
 
     let pixel = |x: u32, y: u32| {
         let index = ((y * size + x) * 4) as usize;

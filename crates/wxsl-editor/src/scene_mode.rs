@@ -41,6 +41,9 @@ pub(crate) struct SceneMode {
     pub params: Vec<(usize, String, Value)>,
     /// Why the scene is not drawing, if it is not.
     pub error: Option<String>,
+    /// What the capability check said at the last load (ADR 0044): every
+    /// way the scene does not fit the running pipeline.
+    pub warnings: Vec<String>,
     /// Frame the camera on the scene once it loads.
     pub frame_next: bool,
     /// The renderer's lighting set before a scene replaced it, put back
@@ -67,6 +70,7 @@ impl SceneMode {
         let params = std::mem::take(&mut self.params);
         if self.doc.is_none() {
             self.resources = None;
+            self.warnings.clear();
             self.meshes.clear();
             self.bounds.clear();
             self.error = None;
@@ -141,9 +145,14 @@ impl SceneMode {
         }
         let features = preview.renderer().pipeline_config().features.clone();
         let lighting = preview.renderer().lighting().clone();
+        self.warnings =
+            wxsl_render::setup::check_scene(&doc.document, registry, &lighting, &features)
+                .iter()
+                .map(ToString::to_string)
+                .collect();
         let mut resources = SceneResources::load_resolved(
             device,
-            &doc.document,
+            &viewed(&doc.document, preview.debug_view()),
             registry,
             doc.base.as_deref(),
             &lighting,
@@ -191,13 +200,14 @@ impl SceneMode {
         }
         let features = preview.renderer().pipeline_config().features.clone();
         let lighting = preview.renderer().lighting().clone();
+        let view = preview.debug_view();
         for &material in &pending.materials {
             resources
                 .set_material(
                     device,
                     preview.renderer_mut(),
                     material,
-                    &doc.document.materials[material],
+                    &viewed_material(&doc.document.materials[material], material, view),
                     registry,
                     &lighting,
                     &features,
@@ -209,6 +219,15 @@ impl SceneMode {
             fill_attributes(resources, doc);
         }
         Ok(())
+    }
+
+    /// Recompile every material, for a surface debug view that changed.
+    pub fn retint_materials(&mut self) {
+        if let Some(doc) = self.doc.as_ref() {
+            self.pending
+                .materials
+                .extend(0..doc.document.materials.len());
+        }
     }
 
     /// The draws, if the scene is loaded.
@@ -291,6 +310,50 @@ impl SceneMode {
             &doc.document.instance_world(instance),
         )))
     }
+}
+
+/// `scene` as it draws under the surface debug view `view` (plan6 E2):
+/// each material carries the view's macro, as the preview's does.
+fn viewed(
+    scene: &wxsl_core::scene::Scene,
+    view: i32,
+) -> std::borrow::Cow<'_, wxsl_core::scene::Scene> {
+    if view == 0 {
+        return std::borrow::Cow::Borrowed(scene);
+    }
+    let mut scene = scene.clone();
+    for (index, entry) in scene.materials.iter_mut().enumerate() {
+        *entry = viewed_material(entry, index, view).into_owned();
+    }
+    std::borrow::Cow::Owned(scene)
+}
+
+/// The material at `index` under the surface debug view `view`. The
+/// `material id` view also carries the index, and only it: another view
+/// would compile a variant per material for nothing.
+fn viewed_material(
+    entry: &wxsl_core::scene::MaterialEntry,
+    index: usize,
+    view: i32,
+) -> std::borrow::Cow<'_, wxsl_core::scene::MaterialEntry> {
+    if view == 0 {
+        return std::borrow::Cow::Borrowed(entry);
+    }
+    let mut entry = entry.clone();
+    entry.config.macros.set(
+        wxsl_core::lighting::DEBUG_VIEW_MACRO,
+        wxsl_core::macros::MacroValue::Int(view),
+    );
+    let by_material = wxsl_core::lighting::debug_views()
+        .into_iter()
+        .any(|known| known.id == view && known.label == "material id");
+    if by_material {
+        entry.config.macros.set(
+            wxsl_core::lighting::DEBUG_MATERIAL_MACRO,
+            wxsl_core::macros::MacroValue::Int(index as i32),
+        );
+    }
+    std::borrow::Cow::Owned(entry)
 }
 
 /// The lighting set a scene draws under: every model a material names,
@@ -383,7 +446,7 @@ fn fill_attributes(resources: &mut SceneResources, doc: &SceneDoc) {
 }
 
 /// The viewport: the scene as the preview's renderer drew it. Dragging
-/// orbits, scrolling zooms, a click selects.
+/// orbits, scrolling zooms, a click selects, an Alt+click probes.
 pub(crate) fn viewport(
     ui: &mut Ui<'_>,
     rect: Rect,
@@ -504,8 +567,14 @@ pub(crate) fn viewport(
     let pointer = ui.input.pointer_or_zero();
     let still = (pointer - ui.input.press_position(MouseButton::Left)).length() < 4.0;
     if response.drag_released && still {
-        requests.commands.push(Command::SelectInstance {
-            instance: mode.pick(rect, pointer),
+        // Alt+click probes the pixel (plan6 E2) rather than selecting.
+        requests.commands.push(if ui.input.modifiers().alt {
+            let at = (pointer - rect.min) / rect.size();
+            Command::ProbePixel { x: at.x, y: at.y }
+        } else {
+            Command::SelectInstance {
+                instance: mode.pick(rect, pointer),
+            }
         });
     }
     if !ui.state.is_editing() {

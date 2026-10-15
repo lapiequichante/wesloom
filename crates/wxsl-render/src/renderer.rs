@@ -105,6 +105,17 @@ pub struct Renderer {
     /// and draw nothing, which is what a layer filter admitting no draw
     /// looks like (plan5 D5). Reset at the start of every frame.
     drawn: Vec<u32>,
+    /// How many triangles each pass drew last frame, beside `drawn`.
+    triangles: Vec<u64>,
+    /// Where the next frame is probed, as a fraction of the target
+    /// (plan6 E2).
+    probe_at: Option<[f32; 2]>,
+    /// What the last probed frame read, until it is taken.
+    probed: Option<Vec<crate::probe::ProbedTexel>>,
+    /// Whether the device can rasterize lines, and whether the camera's
+    /// geometry passes do (the wireframe view, plan6 E2).
+    line_mode: bool,
+    wireframe: bool,
     /// The pool generation and target size at which each pass last ran.
     /// A pass of policy `once` is due when its generation is not the
     /// pool's — a reallocation destroyed every slot's contents, so the
@@ -181,6 +192,13 @@ impl Renderer {
             effects: EffectRegistry::shipped(),
             runs: vec![0; pass_count],
             drawn: vec![0; pass_count],
+            triangles: vec![0; pass_count],
+            probe_at: None,
+            probed: None,
+            line_mode: device
+                .features()
+                .contains(wgpu::Features::POLYGON_MODE_LINE),
+            wireframe: false,
             last_run: vec![(u64::MAX, (0, 0)); pass_count],
             demanded: HashSet::new(),
             pass_params: HashMap::new(),
@@ -411,6 +429,13 @@ impl Renderer {
     pub fn pass_draw_count(&self, label: &str) -> Option<u32> {
         let index = self.graph.passes().iter().position(|p| p.label == label)?;
         self.drawn.get(index).copied()
+    }
+
+    /// How many triangles the pass labelled `label` drew last frame,
+    /// over every draw it issued.
+    pub fn pass_triangle_count(&self, label: &str) -> Option<u64> {
+        let index = self.graph.passes().iter().position(|p| p.label == label)?;
+        self.triangles.get(index).copied()
     }
 
     /// Measure every pass's GPU time with timestamp queries, or stop.
@@ -1262,6 +1287,7 @@ impl Renderer {
         // Last frame's draw counts are last frame's; this frame's are
         // what the compile below selects.
         self.drawn = vec![0; self.graph.passes().len()];
+        self.triangles = vec![0; self.graph.passes().len()];
         let plan = self.compile_frame(device, request.environment, request.draws)?;
 
         // One row per draw, in every shape the frame's materials asked
@@ -1387,6 +1413,7 @@ impl Renderer {
         } = self;
         let pass_params = &self.pass_params;
         let profile = self.config.profile;
+        let wireframe = self.wireframe;
 
         // A pass drawing *into* the shadow maps must not also have them
         // bound, so which of the two frame groups it gets is decided from
@@ -1398,6 +1425,10 @@ impl Renderer {
         });
         let timestamps = timer.as_ref().and_then(PassTimer::queries);
         let timed = timestamps.is_some();
+        let mut probe = self
+            .probe_at
+            .take()
+            .map(|at| crate::probe::TexelProbe::new(device, at, graph.resources()));
         graph.record(
             device,
             &mut encoder,
@@ -1414,6 +1445,7 @@ impl Renderer {
                 })
             },
             timestamps.map(|queries| (queries, timer.as_ref().map_or(0, PassTimer::capacity))),
+            probe.as_mut(),
             |pass, encoder| {
                 let shadows = if environment_maps
                     .is_some_and(|maps| pass.desc.written().any(|id| maps.contains(&id)))
@@ -1438,6 +1470,7 @@ impl Renderer {
                     request.draws,
                     pass,
                     shadows,
+                    wireframe,
                     encoder,
                 )
             },
@@ -1446,7 +1479,43 @@ impl Renderer {
         if let (true, Some(timer)) = (timed, timer.as_mut()) {
             timer.written(&run);
         }
+        if let Some(probe) = probe {
+            self.probed = Some(probe.read(device));
+        }
         Ok(())
+    }
+
+    /// Probe the next frame at `at`, a fraction of the target (0..1, y
+    /// down): every 2D texture a pass writes is read there right after
+    /// the pass (plan6 E2). The frame waits for the GPU once.
+    pub fn probe(&mut self, at: [f32; 2]) {
+        self.probe_at = Some(at);
+    }
+
+    /// Whether the device can draw the wireframe view.
+    pub fn supports_wireframe(&self) -> bool {
+        self.line_mode
+    }
+
+    /// Rasterize every geometry pass that renders from the camera as
+    /// lines, shading them as usual, or go back to filled triangles.
+    /// Returns whether wireframe is on: a device without
+    /// `POLYGON_MODE_LINE` stays filled.
+    pub fn set_wireframe(&mut self, on: bool) -> bool {
+        self.wireframe = on && self.line_mode;
+        self.wireframe
+    }
+
+    /// Whether the camera's geometry passes are drawn as lines.
+    pub fn wireframe(&self) -> bool {
+        self.wireframe
+    }
+
+    /// What the probed frame read, once it has rendered, in resource
+    /// order: the textures that frame's passes wrote. The imported target
+    /// is not among them.
+    pub fn take_probed(&mut self) -> Option<Vec<crate::probe::ProbedTexel>> {
+        self.probed.take()
     }
 
     /// Compile every shader variant this frame's pass list will ask for.
@@ -1617,6 +1686,12 @@ impl Renderer {
                         variants.push((instance, variant));
                     }
                     self.drawn[index] = variants.len() as u32;
+                    self.triangles[index] = variants
+                        .iter()
+                        .map(|(instance, _)| {
+                            u64::from(draws.items()[*instance as usize].mesh.index_count() / 3)
+                        })
+                        .sum();
                     plan.geometry.insert(index, variants);
                 }
                 PassKind::Screen { effect } | PassKind::Compute { effect } => {
@@ -1683,6 +1758,7 @@ fn record_pass(
     draws: &DrawList<'_>,
     pass: &RecordedPass<'_>,
     shadows: ShadowMaps,
+    wireframe: bool,
     encoder: PassEncoder<'_, '_>,
 ) -> Result<(), RenderError> {
     let index = pass.index;
@@ -1691,6 +1767,9 @@ fn record_pass(
             let Some(entries) = plan.geometry.get(&index) else {
                 return Ok(());
             };
+            // Every camera pass alike, so a prepass's depth matches the
+            // lines the forward pass draws; shadows stay filled.
+            pipelines.set_lines(wireframe && pass.desc.view == PassView::Camera);
             // Which point of view this pass renders from, as the dynamic
             // offset of the frame group's camera binding. Zero for
             // everything but a shadow pass, so the mechanism is invisible

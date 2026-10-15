@@ -30,11 +30,14 @@ use crate::Profile;
 ///   bakes and lookups of M9.
 /// * `FLOAT32_BLENDABLE` — MAX-blending an `rg32float` peel pair. Optional:
 ///   the baseline peel does not need it (ADR 0047).
+/// * `POLYGON_MODE_LINE` — the wireframe debug view (plan6 E2). Optional:
+///   the web has no line rasterization.
 pub const WANTED_FEATURES: wgpu::Features = wgpu::Features::DEPTH32FLOAT_STENCIL8
     .union(wgpu::Features::INDIRECT_FIRST_INSTANCE)
     .union(wgpu::Features::TIMESTAMP_QUERY)
     .union(wgpu::Features::FLOAT32_FILTERABLE)
-    .union(wgpu::Features::FLOAT32_BLENDABLE);
+    .union(wgpu::Features::FLOAT32_BLENDABLE)
+    .union(wgpu::Features::POLYGON_MODE_LINE);
 
 /// What the device we got can actually do.
 ///

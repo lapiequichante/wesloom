@@ -120,6 +120,8 @@ pub struct FrameBindings {
     local_light_capacity: usize,
     light_grid: RowStore,
     light_grid_capacity: usize,
+    /// Last frame's local lights binned, and those the grid dropped.
+    light_grid_counts: (usize, usize),
     /// The shadow maps currently bound, and where they came from — the
     /// pool's generation and slot — so that rebinding the same texture is
     /// free. `None` while the placeholder is bound.
@@ -460,6 +462,7 @@ impl FrameBindings {
             local_light_capacity: 1,
             light_grid,
             light_grid_capacity: 1,
+            light_grid_counts: (0, 0),
             shadow_source: None,
             shadow_view,
             shadow_placeholder,
@@ -487,6 +490,12 @@ impl FrameBindings {
         // all, and a one-row placeholder to fill the binding with.
         bindings.ensure(device, BASE_SHAPE, 0, 1);
         bindings
+    }
+
+    /// The local lights last frame binned into the light grid, and how
+    /// many it dropped (`LightGrid::dropped`, ADR 0076).
+    pub fn light_grid_counts(&self) -> (usize, usize) {
+        self.light_grid_counts
     }
 
     /// How many instances fit without reallocating.
@@ -739,6 +748,9 @@ impl FrameBindings {
     fn write_light_grid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, grid: &LightGrid) {
         let lights = grid.lights.len();
         let rows = grid.words.len() / 4;
+        // A frame with no local light uploads one zero row and four words.
+        let binned = if rows > 1 { lights } else { 0 };
+        self.light_grid_counts = (binned, grid.dropped);
         let mut grown = false;
         if lights > self.local_light_capacity {
             self.local_light_capacity = lights.next_power_of_two();

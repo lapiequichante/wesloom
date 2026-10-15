@@ -39,7 +39,8 @@ use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
 use crate::command::{
-    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query, StepSummary,
+    Answer, Command, CommandError, Document, FramePass, FrameSummary, NodeSummary, Outcome,
+    PassSummary, ProbeSummary, ProbedResource, Query, StepSummary,
 };
 use crate::function::{self, FunctionSource, Functions};
 use crate::history::{History, Host};
@@ -51,6 +52,7 @@ use crate::scene::{SceneChanges, SceneDoc};
 use crate::scene_mode::{self, SceneMode};
 use crate::theme::Theme;
 use crate::ui::{Align, Id, LineMark, Ui, UiState};
+use crate::views::{DebugChoice, FrameView};
 use crate::widgets;
 
 /// What the editor needs to start.
@@ -201,6 +203,12 @@ pub struct Editor {
     /// A `set_pipeline` waiting for the device: a stock pipeline, or
     /// `None` for the pipeline canvas's document.
     pending_pipeline: Option<Option<StockPipeline>>,
+    /// A probe for the next frame to take (plan6 E2), and the one it is
+    /// taking, as fractions of the viewport.
+    probe_request: Option<[f32; 2]>,
+    probing: Option<[f32; 2]>,
+    /// What the last probed frame read.
+    probe: Option<ProbeSummary>,
 }
 
 impl Editor {
@@ -268,6 +276,9 @@ impl Editor {
             scene: SceneMode::default(),
             agent: None,
             pending_pipeline: None,
+            probe_request: None,
+            probing: None,
+            probe: None,
         })
     }
 
@@ -540,12 +551,15 @@ impl Editor {
                 selected: self.scene.selected,
                 material: self.scene.slot,
             },
+            Query::Probe => Answer::Probe {
+                probe: self.probe.clone(),
+            },
+            Query::Frame => Answer::Frame {
+                frame: self.frame_summary(),
+            },
             Query::View => {
-                let views = self.preview.debug_views();
-                let debug_view = views
-                    .iter()
-                    .find(|(view, _)| view.id == self.preview.debug_view())
-                    .map_or("shaded", |(view, _)| view.label);
+                let views = DebugChoice::all(&self.preview);
+                let debug_view = DebugChoice::current(&self.preview).label();
                 Answer::View {
                     mode: self.mode,
                     pipeline: if self.preview.runs_document() {
@@ -557,7 +571,7 @@ impl Editor {
                     debug_views: views
                         .iter()
                         .filter(|(_, available)| *available)
-                        .map(|(view, _)| view.label.to_string())
+                        .map(|(view, _)| view.label().to_string())
                         .collect(),
                     stepping: self.preview.stepping().map(|view| StepSummary {
                         passes: view.passes,
@@ -803,6 +817,10 @@ impl Editor {
             self.poll_shaders(device);
         }
         self.sync(device, queue);
+        if let Some(at) = self.probe_request.take() {
+            self.preview.renderer_mut().probe(at);
+            self.probing = Some(at);
+        }
         let viewport = self.last_canvas_rect;
         match self.scene.resources() {
             Some(resources) if self.mode == CanvasMode::Scene && !viewport.is_empty() => {
@@ -824,6 +842,7 @@ impl Editor {
                 self.preview.render(device, queue, dt, time as f32)?;
             }
         }
+        self.collect_probe(device, queue);
 
         self.ui.draw.clear();
         let screen = Rect::from_min_size(Vec2::ZERO, self.input.size());
@@ -834,6 +853,80 @@ impl Editor {
             .render(device, queue, encoder, target, &self.ui.draw);
         self.input.end_frame();
         result
+    }
+
+    /// Keep what a probed frame read, once it has rendered: the textures,
+    /// the target's pixel, and in a scene the instance a ray through the
+    /// point hits.
+    fn collect_probe(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(at) = self.probing else {
+            return;
+        };
+        let Some(texels) = self.preview.renderer_mut().take_probed() else {
+            return;
+        };
+        self.probing = None;
+        let (width, height) = self.preview.size();
+        let pixel = wxsl_render::probe::texel_at(at, [width, height]);
+        let rgba = self.preview.read_rgba8(device, queue);
+        let start = ((pixel[1] * width + pixel[0]) * 4) as usize;
+        let mut shown = [0; 4];
+        if let Some(bytes) = rgba.get(start..start + 4) {
+            shown.copy_from_slice(bytes);
+        }
+        let viewport = self.last_canvas_rect;
+        let instance = (self.mode == CanvasMode::Scene && !viewport.is_empty())
+            .then(|| {
+                self.scene.pick(
+                    viewport,
+                    viewport.min + Vec2::new(at[0], at[1]) * viewport.size(),
+                )
+            })
+            .flatten();
+        let material = instance.and_then(|index| {
+            let doc = self.scene.doc.as_ref()?;
+            Some(doc.document.instances.get(index)?.material)
+        });
+        let resources = texels
+            .into_iter()
+            .map(|texel| ProbedResource {
+                resource: texel.resource,
+                format: match texel.format {
+                    Some(format) => serde_json::to_value(format)
+                        .ok()
+                        .and_then(|name| name.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                    None => "buffer".to_string(),
+                },
+                texel: texel.texel,
+                layer: texel.layer,
+                value: texel.value.map(|value| match value {
+                    wxsl_render::probe::TexelValue::Float(channels) => {
+                        channels.into_iter().map(f64::from).collect()
+                    }
+                    wxsl_render::probe::TexelValue::Uint(channels) => {
+                        channels.into_iter().map(f64::from).collect()
+                    }
+                    wxsl_render::probe::TexelValue::Sint(channels) => {
+                        channels.into_iter().map(f64::from).collect()
+                    }
+                }),
+            })
+            .collect();
+        self.message = format!("probe at ({}, {})", pixel[0], pixel[1]);
+        self.probe = Some(ProbeSummary {
+            at,
+            pixel,
+            shown,
+            resources,
+            instance,
+            material,
+        });
+    }
+
+    /// The last frame, pass by pass, and the frame's counters.
+    fn frame_summary(&self) -> FrameSummary {
+        frame_summary(&self.preview, &self.scene.warnings)
     }
 
     /// Bring the preview up to date with the documents without drawing:
@@ -1091,11 +1184,17 @@ impl Editor {
                 &mut requests,
             );
         } else {
+            let frame = (self.tab == CodeTab::Frame)
+                .then(|| frame_summary(&self.preview, &self.scene.warnings));
             self.tab = code_panel(
                 &mut ui,
                 code,
                 self.tab,
                 &self.preview,
+                FrameTab {
+                    frame: frame.as_ref(),
+                    probe: self.probe.as_ref(),
+                },
                 &mut self.functions,
                 &mut requests,
             );
@@ -1429,7 +1528,7 @@ impl Editor {
             self.preview.split = split.clamp(0.0, 1.0);
         }
         if let Some(view) = requests.debug_view {
-            self.show_debug_view(view);
+            let _ = self.show_debug_view(view);
         }
         if let Some(mesh) = requests.mesh {
             self.preview.set_mesh(device, mesh);
@@ -1506,9 +1605,18 @@ impl Editor {
             return;
         };
         self.material_uses_document = false;
-        // Forward has no lighting pass to return a channel from.
-        if pipeline == StockPipeline::Forward && self.preview.debug_view() != 0 {
-            self.show_debug_view(0);
+        // A surface view the new pipeline has no pass to show shades
+        // again: forward has no lighting pass, deferred no forward one.
+        let stage = lighting::debug_views()
+            .into_iter()
+            .find(|view| view.id == self.preview.debug_view())
+            .map(|view| view.stage);
+        let unshown = match pipeline {
+            StockPipeline::Forward => lighting::DebugStage::Deferred,
+            _ => lighting::DebugStage::Forward,
+        };
+        if stage == Some(unshown) {
+            let _ = self.show_debug_view(DebugChoice::Shaded);
         }
         self.preview.set_pipeline(device, pipeline);
         self.message = match self.preview.swap_progress() {
@@ -1517,16 +1625,40 @@ impl Editor {
         };
     }
 
-    /// Show a debug view by id, or shade again with 0.
-    fn show_debug_view(&mut self, view: i32) {
-        // A material macro the lighting pass inherits: the material is
-        // regenerated, and the lighting pass with it.
-        self.preview.set_debug_view(view);
-        self.dirty = true;
-        self.message = match lighting::debug_views().iter().find(|v| v.id == view) {
-            Some(found) => format!("view: {}", found.label),
-            None => "view: shaded".to_string(),
+    /// Show a debug view, or shade again.
+    fn show_debug_view(&mut self, view: DebugChoice) -> Result<(), String> {
+        // A surface view is a material macro the lighting pass inherits:
+        // the material is regenerated, and the lighting pass with it, and
+        // so is every scene material.
+        // Overdraw is a surface view, a constant, that its frame view
+        // counts.
+        let surface = match view {
+            DebugChoice::Surface(id) => id,
+            DebugChoice::Frame(FrameView::Overdraw) => lighting::debug_views()
+                .into_iter()
+                .find(|view| view.label == lighting::OVERDRAW_VIEW)
+                .map_or(0, |view| view.id),
+            _ => 0,
         };
+        if surface != self.preview.debug_view() {
+            self.preview.set_debug_view(surface);
+            self.dirty = true;
+            self.scene.retint_materials();
+        }
+        let frame = match view {
+            DebugChoice::Frame(view) => Some(view),
+            _ => None,
+        };
+        let result = if frame != self.preview.frame_view() {
+            self.preview.set_frame_view(frame)
+        } else {
+            Ok(())
+        };
+        self.message = match &result {
+            Ok(()) => format!("view: {}", view.label()),
+            Err(error) => error.clone(),
+        };
+        result
     }
 
     /// Start, move or stop pass stepping, saying where it landed.
@@ -1731,17 +1863,18 @@ impl Host for Editor {
                 });
             }
             Command::SetDebugView { view } => {
-                let id = if view == "shaded" {
-                    0
-                } else {
-                    self.preview
-                        .debug_views()
-                        .into_iter()
-                        .find(|(found, available)| *available && found.label == view)
-                        .map(|(found, _)| found.id)
-                        .ok_or_else(|| CommandError::NoSuchDebugView(view.clone()))?
-                };
-                self.show_debug_view(id);
+                let choice = DebugChoice::all(&self.preview)
+                    .into_iter()
+                    .find(|(found, available)| *available && found.label() == view)
+                    .map(|(found, _)| found)
+                    .ok_or_else(|| CommandError::NoSuchDebugView(view.clone()))?;
+                self.show_debug_view(choice).map_err(CommandError::Render)?;
+            }
+            Command::ProbePixel { x, y } => {
+                if !(0.0..=1.0).contains(x) || !(0.0..=1.0).contains(y) {
+                    return Err(CommandError::OutsideViewport { x: *x, y: *y });
+                }
+                self.probe_request = Some([*x, *y]);
             }
             Command::StepFrame { passes, show } => {
                 let Some(count) = *passes else {
@@ -1793,8 +1926,8 @@ pub(crate) struct Requests {
     pub(crate) pipeline: Option<StockPipeline>,
     /// Preview the material through the pipeline canvas's document.
     pub(crate) use_document: bool,
-    /// Show this G-buffer debug view (0 shades again).
-    pub(crate) debug_view: Option<i32>,
+    /// Show this debug view.
+    pub(crate) debug_view: Option<DebugChoice>,
     /// Put the A/B split up with this B-side pipeline, or take it down.
     pub(crate) compare: Option<Option<StockPipeline>>,
     /// Move the A/B split's edge to this fraction of the preview's width.
@@ -2024,37 +2157,30 @@ fn toolbar_panel(
             }
         }
 
-        // The G-buffer debug views: the lighting pass returns one channel
-        // instead of shading, so they need a pipeline that has one — a
-        // view the plan does not carry is listed, greyed.
-        let deferred = uses_document || preview.pipeline() == StockPipeline::Deferred;
-        let views = preview.debug_views();
-        let mut labels = vec!["view: shaded".to_string()];
-        labels.extend(
-            views
-                .iter()
-                .map(|(view, _)| format!("view: {}", view.label)),
-        );
-        let mut options: Vec<(&str, bool)> = vec![(labels[0].as_str(), true)];
-        options.extend(
-            views
-                .iter()
-                .zip(&labels[1..])
-                .map(|((_, available), label)| (label.as_str(), deferred && *available)),
-        );
+        // The debug views: what a shading pass returns instead of shading,
+        // and the frame views over the pass list. One the running pass
+        // list cannot show is listed, greyed.
+        let views = DebugChoice::all(preview);
+        let labels: Vec<String> = views
+            .iter()
+            .map(|(view, _)| format!("view: {}", view.label()))
+            .collect();
+        let options: Vec<(&str, bool)> = views
+            .iter()
+            .zip(&labels)
+            .map(|((_, available), label)| (label.as_str(), *available))
+            .collect();
+        let current = DebugChoice::current(preview);
         let mut selected = views
             .iter()
-            .position(|(view, _)| view.id == preview.debug_view())
-            .map_or(0, |index| index + 1);
+            .position(|(view, _)| *view == current)
+            .unwrap_or(0);
         let rect = dropdown_rect(ui, &mut cursor, &labels);
         if ui
             .dropdown(Id::new("toolbar.view"), rect, &options, &mut selected)
             .changed
         {
-            requests.debug_view = Some(match selected {
-                0 => 0,
-                index => views[index - 1].0.id,
-            });
+            requests.debug_view = Some(views[selected].0);
         }
     }
     let labels: Vec<String> = MeshKind::ALL
@@ -2424,6 +2550,13 @@ fn inspector_panel(
     let response = ui.interact(Id::new("preview.image"), image);
     if response.dragging && response.drag_delta.x != 0.0 {
         requests.spin_drag = Some(response.drag_delta.x);
+    }
+    // Alt+click probes the pixel (plan6 E2): the A side, under a split.
+    if response.clicked && ui.input.modifiers().alt {
+        let at = (ui.input.pointer_or_zero() - image.min) / image.size();
+        requests
+            .commands
+            .push(Command::ProbePixel { x: at.x, y: at.y });
     }
     if response.double_clicked {
         requests.toggle_spin = true;
@@ -2920,11 +3053,58 @@ fn inspector_panel(
 }
 
 /// The code panels: what the graph became, and what stopped it.
+/// The last frame of `preview`, pass by pass, and the frame's counters.
+fn frame_summary(preview: &Preview, warnings: &[String]) -> FrameSummary {
+    let renderer = preview.renderer();
+    let graph = renderer.render_graph();
+    let order = graph
+        .schedule()
+        .map(|schedule| schedule.order().to_vec())
+        .unwrap_or_default();
+    let passes: Vec<FramePass> = order
+        .into_iter()
+        .map(|index| {
+            let label = graph.passes()[index].label.clone();
+            FramePass {
+                gpu_ms: renderer.pass_time(&label),
+                draws: renderer.pass_draw_count(&label).unwrap_or(0),
+                triangles: renderer.pass_triangle_count(&label).unwrap_or(0),
+                label,
+            }
+        })
+        .collect();
+    let cache = renderer.cache_stats();
+    let (local_lights, dropped_lights) = renderer.frame_bindings().light_grid_counts();
+    FrameSummary {
+        draws: passes.iter().map(|pass| pass.draws).sum(),
+        triangles: passes.iter().map(|pass| pass.triangles).sum(),
+        passes,
+        gpu_ms: renderer.frame_time(),
+        pipelines: renderer.pipeline_count(),
+        variants: renderer.variant_count(),
+        cache_hits: cache.hits,
+        cache_misses: cache.misses,
+        local_lights,
+        dropped_lights,
+        warnings: warnings.to_vec(),
+    }
+}
+
+/// What the frame tab shows while the frame runs live.
+#[derive(Clone, Copy)]
+struct FrameTab<'a> {
+    /// The last frame, when the tab is showing.
+    frame: Option<&'a FrameSummary>,
+    /// The last probe.
+    probe: Option<&'a ProbeSummary>,
+}
+
 fn code_panel(
     ui: &mut Ui<'_>,
     rect: Rect,
     tab: CodeTab,
     preview: &Preview,
+    live: FrameTab<'_>,
     functions: &mut Functions,
     requests: &mut Requests,
 ) -> CodeTab {
@@ -3000,7 +3180,7 @@ fn code_panel(
             preview.wgsl_highlight(),
         ),
         CodeTab::Features => features_panel(ui, body, preview, requests),
-        CodeTab::Frame => frame_panel(ui, body, preview, requests),
+        CodeTab::Frame => frame_panel(ui, body, preview, live, requests),
         CodeTab::Function => function_panel(ui, body, functions, requests),
         CodeTab::Problems => {
             let errors: Vec<&str> = preview
@@ -3100,7 +3280,13 @@ fn function_panel(ui: &mut Ui<'_>, body: Rect, functions: &mut Functions, reques
 /// pass, showing what that pass wrote — or any texture the running passes
 /// wrote — through the editor's inspect effects. The cut is a pass list
 /// like any other, so what is shown is exactly what those passes did.
-fn frame_panel(ui: &mut Ui<'_>, body: Rect, preview: &Preview, requests: &mut Requests) {
+fn frame_panel(
+    ui: &mut Ui<'_>,
+    body: Rect,
+    preview: &Preview,
+    live: FrameTab<'_>,
+    requests: &mut Requests,
+) {
     let theme = *ui.theme();
     let metrics = theme.metrics;
     let gap = metrics.row_gap;
@@ -3120,12 +3306,26 @@ fn frame_panel(ui: &mut Ui<'_>, body: Rect, preview: &Preview, requests: &mut Re
         if button(ui, "frame.step", "step", false) {
             requests.step = Some(StepRequest::Start);
         }
-        ui.label(
-            list,
-            "pause the preview and run its frame one pass at a time",
-            theme.palette.text_dim,
-            Align::Center,
-        );
+        if let Some(frame) = live.frame {
+            ui.small_label(
+                cursor,
+                &format!(
+                    "{} draws · {} triangles · {} pipelines · {} variants ({} hits, {} misses) · \
+                     {} local lights, {} dropped",
+                    frame.draws,
+                    frame.triangles,
+                    frame.pipelines,
+                    frame.variants,
+                    frame.cache_hits,
+                    frame.cache_misses,
+                    frame.local_lights,
+                    frame.dropped_lights,
+                ),
+                theme.palette.text_dim,
+                Align::Left,
+            );
+            live_frame(ui, list, frame, live.probe);
+        }
         return;
     };
     if button(ui, "frame.step", "live", true) {
@@ -3215,6 +3415,100 @@ fn frame_panel(ui: &mut Ui<'_>, body: Rect, preview: &Preview, requests: &mut Re
         if response.clicked && !current {
             requests.step = Some(StepRequest::To(index + 1, pinned));
         }
+    }
+    area.end(ui);
+}
+
+/// The frame tab while the frame runs live (plan6 E2): each pass's GPU
+/// time, draws and triangles, the capability check's warnings, and what
+/// the last probe (Alt+click on the viewport) read.
+fn live_frame(ui: &mut Ui<'_>, list: Rect, frame: &FrameSummary, probe: Option<&ProbeSummary>) {
+    let theme = *ui.theme();
+    let metrics = theme.metrics;
+    let row = metrics.row_height;
+    let gap = metrics.row_gap;
+    let mut lines: Vec<(String, Color)> = frame
+        .passes
+        .iter()
+        .map(|pass| {
+            let time = pass
+                .gpu_ms
+                .map_or_else(|| "    –   ".to_string(), |ms| format!("{ms:6.3} ms"));
+            (
+                format!(
+                    "{time}  {:>5} draws  {:>9} tris  {}",
+                    pass.draws, pass.triangles, pass.label
+                ),
+                theme.palette.text,
+            )
+        })
+        .collect();
+    lines.extend(
+        frame
+            .warnings
+            .iter()
+            .map(|warning| (warning.clone(), theme.palette.warning)),
+    );
+    match probe {
+        Some(probe) => {
+            let [r, g, b, _] = probe.shown;
+            let mut head = format!(
+                "probe ({}, {}) shows #{r:02x}{g:02x}{b:02x}",
+                probe.pixel[0], probe.pixel[1]
+            );
+            if let (Some(instance), Some(material)) = (probe.instance, probe.material) {
+                head.push_str(&format!(" · instance {instance}, material {material}"));
+            }
+            lines.push((head, theme.palette.accent));
+            for resource in &probe.resources {
+                // A buffer's head is 64 words: the line shows the first.
+                let value = match &resource.value {
+                    Some(channels) => {
+                        let mut shown: Vec<String> = channels
+                            .iter()
+                            .take(8)
+                            .map(|channel| format!("{channel:.4}"))
+                            .collect();
+                        if channels.len() > 8 {
+                            shown.push("…".to_string());
+                        }
+                        shown.join(", ")
+                    }
+                    None => "not decoded".to_string(),
+                };
+                let layer = match resource.layer {
+                    0 => String::new(),
+                    layer => format!(" layer {layer}"),
+                };
+                lines.push((
+                    format!(
+                        "  {}{layer} ({}) [{value}]",
+                        resource.resource, resource.format
+                    ),
+                    theme.palette.text,
+                ));
+            }
+        }
+        None => lines.push((
+            "Alt+click the viewport to probe a pixel".to_string(),
+            theme.palette.text_dim,
+        )),
+    }
+    let width = list.width() - metrics.scrollbar_width;
+    let content = lines.len() as f32 * (row + gap);
+    let area = ui.scroll_area(Id::new("frame.live"), list, Vec2::new(width, content));
+    let origin = area.origin();
+    for (index, (text, color)) in lines.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            Vec2::new(list.min.x, origin.y + index as f32 * (row + gap)),
+            Vec2::new(width, row),
+        );
+        ui.truncated_label(
+            rect.shrink(metrics.padding * 0.5),
+            text,
+            *color,
+            Align::Left,
+        );
     }
     area.end(ui);
 }

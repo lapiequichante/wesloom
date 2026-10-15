@@ -76,7 +76,9 @@
 //! | `preview` | the offscreen material preview, and the compiled WXSL and WGSL |
 //! | `scene` | the open scene, its commands, picking and the orbit camera, without a device |
 //! | `scene_mode` | the scene on the GPU, and the viewport, outliner and inspector ([`CanvasMode::Scene`]) |
+//! | `stepping` | pass stepping's inspect effects |
 //! | `ui` | the immediate-mode layer: identity, interaction, widgets |
+//! | `views` | the debug views that read the frame: light count, cascades, shadow atlas |
 //! | `widgets` | editors for the values a socket can carry, and the colour picker |
 //! | `theme` | colours and metrics |
 //!
@@ -152,13 +154,15 @@ mod scene_mode;
 mod stepping;
 mod theme;
 mod ui;
+mod views;
 mod widgets;
 
 pub use app::{Editor, EditorConfig};
 pub use canvas::View;
 pub use command::{
-    Answer, Command, CommandError, Document, HistoryStep, NodeSummary, Outcome, PassSummary, Query,
-    SocketSummary, StepSummary, TranscriptError,
+    Answer, Command, CommandError, Document, FramePass, FrameSummary, HistoryStep, NodeSummary,
+    Outcome, PassSummary, ProbeSummary, ProbedResource, Query, SocketSummary, StepSummary,
+    TranscriptError,
 };
 pub use pipeline::CanvasMode;
 pub use preview::{Preview, PreviewStatus, StepView};

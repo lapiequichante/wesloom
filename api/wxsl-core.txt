@@ -1261,6 +1261,26 @@ impl core::marker::Unpin for wxsl_core::lighting::ChannelSource
 impl core::marker::UnsafeUnpin for wxsl_core::lighting::ChannelSource
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::lighting::ChannelSource
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::lighting::ChannelSource
+pub enum wxsl_core::lighting::DebugStage
+pub wxsl_core::lighting::DebugStage::Both
+pub wxsl_core::lighting::DebugStage::Deferred
+pub wxsl_core::lighting::DebugStage::Forward
+impl core::clone::Clone for wxsl_core::lighting::DebugStage
+pub fn wxsl_core::lighting::DebugStage::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_core::lighting::DebugStage
+impl core::cmp::PartialEq for wxsl_core::lighting::DebugStage
+pub fn wxsl_core::lighting::DebugStage::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_core::lighting::DebugStage
+pub fn wxsl_core::lighting::DebugStage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_core::lighting::DebugStage
+impl core::marker::StructuralPartialEq for wxsl_core::lighting::DebugStage
+impl core::marker::Freeze for wxsl_core::lighting::DebugStage
+impl core::marker::Send for wxsl_core::lighting::DebugStage
+impl core::marker::Sync for wxsl_core::lighting::DebugStage
+impl core::marker::Unpin for wxsl_core::lighting::DebugStage
+impl core::marker::UnsafeUnpin for wxsl_core::lighting::DebugStage
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::lighting::DebugStage
+impl core::panic::unwind_safe::UnwindSafe for wxsl_core::lighting::DebugStage
 pub enum wxsl_core::lighting::Dispatch
 pub wxsl_core::lighting::Dispatch::Direct(wxsl_core::lighting::LightingModel)
 pub wxsl_core::lighting::Dispatch::Switch(wxsl_core::lighting::LightingSet)
@@ -1344,6 +1364,7 @@ pub struct wxsl_core::lighting::DebugView
 pub wxsl_core::lighting::DebugView::channel: core::option::Option<&'static str>
 pub wxsl_core::lighting::DebugView::id: i32
 pub wxsl_core::lighting::DebugView::label: &'static str
+pub wxsl_core::lighting::DebugView::stage: wxsl_core::lighting::DebugStage
 impl wxsl_core::lighting::DebugView
 pub fn wxsl_core::lighting::DebugView::available(&self, &wxsl_core::lighting::GBufferPlan) -> bool
 impl core::clone::Clone for wxsl_core::lighting::DebugView
@@ -1545,6 +1566,7 @@ pub const wxsl_core::lighting::MODEL_ID_SCALE: f32
 pub const wxsl_core::lighting::MODEL_ID_TARGET: wxsl_core::abi::GBufferTarget
 pub const wxsl_core::lighting::PRESHADED_MODEL: &str
 pub const wxsl_core::lighting::SUBSURFACE: wxsl_core::lighting::MaterialFeature
+pub fn wxsl_core::lighting::debug_surface(i32) -> core::option::Option<wxsl_core::lighting::GeneratedLighting>
 pub fn wxsl_core::lighting::debug_views() -> alloc::vec::Vec<wxsl_core::lighting::DebugView>
 pub fn wxsl_core::lighting::default_set() -> core::result::Result<wxsl_core::lighting::LightingSet, wxsl_core::lighting::LightingError>
 pub fn wxsl_core::lighting::default_single_set() -> wxsl_core::lighting::LightingSet

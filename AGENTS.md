@@ -120,6 +120,7 @@ Each test file's header says what it covers.
 | `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
 | editor commands, undo, transcripts, scene picking (no device) | `cargo test -p wxsl-editor` |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
+| a debug view, the pixel probe, the frame panel (ADR 0085) | `cargo test -p wxsl --test graph_to_wgsl` (forward views validate), `cargo test -p wxsl-render probe`, then `editor_frame`; the probe's layers and buffers are in `ibl` and `buffer_resources` |
 | MCP protocol, tools, HTTP, path confinement (no device) | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
 | a node's sockets, label or doc (the reference, ADR 0084) | `cargo run -p wxsl-mcp --example node_reference`, then `cargo test -p wxsl-mcp` |
 | the authoring guide, or a diagnostic it quotes | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
@@ -217,6 +218,12 @@ The ADR named on each line holds the reasoning.
   agent reads is generated or checked: the node reference
   (`docs/reference/nodes.md`) and the authoring guide
   (`crates/wxsl-mcp/authoring.md`) (ADR 0084).
+- **Debug views** (ADR 0085). A surface view is a `BASE_DEBUG_VIEWS` row
+  with its expression in both `lighting::debug_surface` (forward) and the
+  lighting pass's arm. A view of the frame is a `wxsl_editor::views`
+  variant (an editor effect, or a pass list it installs), never a
+  document node. The probe is generic over the pass list: no view or pass
+  gets its own readback.
 - **One editor, several canvas modes.** The pipeline canvas and the scene
   mode are modes of the same editor over one renderer (ADRs 0043, 0082),
   not second editors.

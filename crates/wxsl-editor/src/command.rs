@@ -294,6 +294,15 @@ pub enum Command {
         #[serde(default)]
         show: Option<String>,
     },
+    /// Probe the next frame at a point of the preview or the scene
+    /// viewport (plan6 E2): every texture the passes write is read there,
+    /// with the instance drawn there in a scene. [`Query::Probe`] answers.
+    ProbePixel {
+        /// Across, as a fraction of the viewport's width (0..1).
+        x: f32,
+        /// Down, as a fraction of its height (0..1).
+        y: f32,
+    },
     /// Apply commands in order, as one undo step. If one fails, nothing
     /// changes.
     Batch {
@@ -414,6 +423,7 @@ impl Command {
                 | Command::SetPipeline { .. }
                 | Command::SetDebugView { .. }
                 | Command::StepFrame { .. }
+                | Command::ProbePixel { .. }
         )
     }
 
@@ -484,6 +494,13 @@ pub enum CommandError {
     NoSuchDebugView(String),
     /// The pass list being stepped writes no resource of this label.
     NoSuchResource(String),
+    /// A probe outside the viewport.
+    OutsideViewport {
+        /// Across, as given.
+        x: f32,
+        /// Down, as given.
+        y: f32,
+    },
     /// A command inside a batch failed.
     InBatch {
         /// Its index in the batch.
@@ -525,6 +542,12 @@ impl fmt::Display for CommandError {
             }
             CommandError::NoSuchResource(name) => {
                 write!(f, "the stepped passes write no resource `{name}`")
+            }
+            CommandError::OutsideViewport { x, y } => {
+                write!(
+                    f,
+                    "({x}, {y}) is outside the viewport; x and y are fractions in 0..1"
+                )
             }
             CommandError::InBatch { index, error } => {
                 write!(f, "batch command {index}: {error}")
@@ -594,6 +617,11 @@ pub enum Query {
     /// The session state the view commands set: the canvas, the
     /// preview's pipeline, its debug view and the pass stepping.
     View,
+    /// What the last [`Command::ProbePixel`] read.
+    Probe,
+    /// The last frame, pass by pass: GPU time, draws, triangles, and the
+    /// frame's counters.
+    Frame,
 }
 
 /// The answer to a [`Query`].
@@ -674,6 +702,101 @@ pub enum Answer {
         /// The pass list being stepped through, if it is.
         stepping: Option<StepSummary>,
     },
+    /// The last probe, if a frame has been probed.
+    Probe {
+        /// What it read.
+        probe: Option<ProbeSummary>,
+    },
+    /// The last frame.
+    Frame {
+        /// What it cost.
+        frame: FrameSummary,
+    },
+}
+
+/// What a [`Command::ProbePixel`] read, as a [`Query::Probe`] answer
+/// shows it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ProbeSummary {
+    /// Where, as fractions of the viewport.
+    pub at: [f32; 2],
+    /// The pixel of the frame's target.
+    pub pixel: [u32; 2],
+    /// What the target shows there, RGBA8 as displayed.
+    pub shown: [u8; 4],
+    /// Every texture the probed frame's passes wrote, in declaration
+    /// order, read where the point falls in it.
+    pub resources: Vec<ProbedResource>,
+    /// The scene instance drawn there, by index, from a ray through the
+    /// point; `None` outside the scene mode or over the background.
+    pub instance: Option<usize>,
+    /// That instance's material, by index.
+    pub material: Option<usize>,
+}
+
+/// One resource under the probe: a texel of one texture layer, or the head
+/// of a buffer.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ProbedResource {
+    /// Its label.
+    pub resource: String,
+    /// Its format, as a pipeline document spells it (`rgba16float`), or
+    /// `buffer`.
+    pub format: String,
+    /// The texel read; `[0, 0]` for a buffer.
+    pub texel: [u32; 2],
+    /// The array layer or cube face read.
+    pub layer: u32,
+    /// Its channels as stored: normalized formats as 0..1, a depth as its
+    /// 0..1 value, integers as integers, a buffer's first 256 bytes as
+    /// `u32` words. `None` for a format the probe does not decode.
+    pub value: Option<Vec<f64>>,
+}
+
+/// The last frame, as a [`Query::Frame`] answer shows it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct FrameSummary {
+    /// Every pass in schedule order.
+    pub passes: Vec<FramePass>,
+    /// Draws, over every pass.
+    pub draws: u32,
+    /// Triangles, over every pass.
+    pub triangles: u64,
+    /// The whole frame's GPU time, if timestamps exist.
+    pub gpu_ms: Option<f32>,
+    /// Render pipelines built so far.
+    pub pipelines: usize,
+    /// Shader variants compiled so far.
+    pub variants: usize,
+    /// Variant cache lookups that found a compiled shader.
+    pub cache_hits: u64,
+    /// Lookups that compiled one.
+    pub cache_misses: u64,
+    /// Local lights binned into the light grid (ADR 0076).
+    pub local_lights: usize,
+    /// Local lights the grid dropped: over its budget, or over a full
+    /// cell's.
+    pub dropped_lights: usize,
+    /// What the capability check says about the open scene under the
+    /// running pipeline (ADR 0044); empty when it fits.
+    pub warnings: Vec<String>,
+}
+
+/// One pass of a [`FrameSummary`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct FramePass {
+    /// Its label.
+    pub label: String,
+    /// Its GPU time, if timestamps exist.
+    pub gpu_ms: Option<f32>,
+    /// Draws it issued.
+    pub draws: u32,
+    /// Triangles those draws covered.
+    pub triangles: u64,
 }
 
 /// One undo step, as a [`Query::History`] answer lists it.

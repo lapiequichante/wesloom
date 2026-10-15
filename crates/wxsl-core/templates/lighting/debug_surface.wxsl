@@ -1,0 +1,6 @@
+// The `${LABEL}` debug view in place of shading (plan6 E2): what the
+// surface or its context holds here, lifted so that a plain sRGB encode
+// shows the stored numbers.
+fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}) -> vec4f {
+${PRELUDE}    return vec4f(${SHOWN}, 1.0);
+}

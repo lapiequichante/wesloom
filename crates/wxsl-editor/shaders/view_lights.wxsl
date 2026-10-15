@@ -1,0 +1,45 @@
+//! view_lights — the editor's light-count view (plan6 E2, ADR 0076).
+//!
+//! How many local lights the light grid lists for the cluster each pixel's
+//! surface falls in: dark blue for none, then from blue through green to
+//! red at thirty-two and more. The ramp is shaded by distance so the scene's shapes
+//! stay readable; what nothing covered is black.
+import package::wxsl::bindings::{camera, point_sampler, local_light_span, world_origin};
+import package::color::linear_to_srgb::linear_to_srgb;
+
+@group(3) @binding(0) var depth: texture_2d<f32>;
+
+@vertex
+fn view_lights_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+// Blue at 0, green at 0.5, red at 1.
+fn heat(t: f32) -> vec3f {
+    return vec3f(
+        smoothstep(0.35, 0.75, t),
+        1.0 - abs(t * 2.0 - 1.0),
+        1.0 - smoothstep(0.1, 0.45, t),
+    );
+}
+
+@fragment
+fn view_lights_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let uv = position.xy / params.view_size;
+    let z = textureSampleLevel(depth, point_sampler, uv, 0.0).x;
+    if z >= 1.0 {
+        return vec4f(0.0, 0.0, 0.0, 1.0);
+    }
+    // Framebuffer coordinates are y-down, clip space is y-up.
+    let world = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
+    let point = world.xyz / world.w;
+    let count = local_light_span(point - world_origin()).y;
+    var shown = vec3f(0.02, 0.02, 0.12);
+    if count > 0u {
+        shown = heat(saturate(f32(count) / 32.0));
+    }
+    let shade = 0.35 + 0.65 * exp(-0.05 * distance(camera.position, point));
+    return vec4f(linear_to_srgb(shown * shade), 1.0);
+}

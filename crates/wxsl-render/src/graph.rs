@@ -213,7 +213,9 @@ impl ResourcePool {
                         sample_count: 1,
                         dimension: texture_dimension(dimension),
                         format: format.to_wgpu(),
-                        usage: usage.to_wgpu(),
+                        // Copyable, so the pixel probe can read any of
+                        // them back (plan6 E2).
+                        usage: usage.to_wgpu() | wgpu::TextureUsages::COPY_SRC,
                         view_formats: &[],
                     });
                     let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -226,7 +228,9 @@ impl ResourcePool {
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some(&format!("wxsl {}", desc.label)),
                         size,
-                        usage: usage.to_wgpu() | wgpu::BufferUsages::STORAGE,
+                        usage: usage.to_wgpu()
+                            | wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::COPY_SRC,
                         mapped_at_creation: false,
                     });
                     Slot::Buffer { buffer }
@@ -347,6 +351,8 @@ impl RenderGraph {
     /// `body` issues the actual work: the graph has opened the pass,
     /// resolved its attachments and bound nothing, because which bind
     /// groups a draw needs is the caller's business, not the scheduler's.
+    /// `probe`, when given, copies one texel of every texture a pass
+    /// writes as soon as the pass ends (plan6 E2).
     #[allow(clippy::too_many_arguments)]
     pub fn record<'s, F>(
         &self,
@@ -361,6 +367,7 @@ impl RenderGraph {
         // `params`, not on the pass description's.
         params: &(dyn Fn(&PassDesc) -> Option<(&'s wgpu::Buffer, u32)> + 's),
         timestamps: Option<(&wgpu::QuerySet, usize)>,
+        mut probe: Option<&mut crate::probe::TexelProbe>,
         mut body: F,
     ) -> Result<(), RenderError>
     where
@@ -531,6 +538,9 @@ impl RenderGraph {
                     }
                     body(&recorded, PassEncoder::Render(&mut render))?;
                 }
+            }
+            if let Some(probe) = probe.as_deref_mut() {
+                probe.after_pass(device, pass, encoder, pool, schedule, frame);
             }
         }
         pool.frame = pool.frame.wrapping_add(1);

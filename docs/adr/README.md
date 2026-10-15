@@ -116,6 +116,7 @@ The ten decisions the rest of the log builds on:
 | [0082](0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md) | The editor's scene mode, with `SceneResources` in the renderer crate | Accepted |
 | [0083](0083-an-mcp-server-over-the-editors-commands.md) | An MCP server over the editor's commands, hand-written on `std` | Accepted |
 | [0084](0084-wxsl-an-agent-can-write.md) | A generated node reference, a checked authoring guide, and shaders refused instead of panicking | Accepted |
+| [0085](0085-scene-debugging-views-a-generic-probe-and-the-frame-panel.md) | Scene debugging: debug views on both paths, frame views as editor passes, a generic probe | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

@@ -1256,17 +1256,35 @@ impl Emitter<'_> {
             }
             match self.options.stage.output() {
                 abi::StageOutput::Color | abi::StageOutput::PeelResolve => {
+                    // Under a debug view the shading function returns the
+                    // view instead of lighting (plan6 E2), so every stage
+                    // that shades shows it.
+                    let macros = &self.options.material.macros;
+                    let debug = match macros.get(crate::lighting::DEBUG_VIEW_MACRO) {
+                        Some(crate::macros::MacroValue::Int(id)) => {
+                            let material = match macros.get(crate::lighting::DEBUG_MATERIAL_MACRO) {
+                                Some(crate::macros::MacroValue::Int(index)) => index,
+                                _ => 0,
+                            };
+                            crate::lighting::debug_surface(id, material)
+                        }
+                        _ => None,
+                    };
                     // The dispatch and the whole shading function come from
                     // the material's lighting model, generated here rather
                     // than imported from a fixed module: the call inside
                     // the light loop names the model.
-                    let generated = crate::lighting::shade_surface_with(
-                        &crate::lighting::Dispatch::Direct(*self.options.material.lighting.model()),
-                        self.options.material.lighting.features(),
-                        // This module declares the macros in effect itself;
-                        // a second declaration would not compile.
-                        false,
-                    );
+                    let generated = debug.unwrap_or_else(|| {
+                        crate::lighting::shade_surface_with(
+                            &crate::lighting::Dispatch::Direct(
+                                *self.options.material.lighting.model(),
+                            ),
+                            self.options.material.lighting.features(),
+                            // This module declares the macros in effect itself;
+                            // a second declaration would not compile.
+                            false,
+                        )
+                    });
                     for (module, item) in &generated.imports {
                         self.request_import(module, item);
                     }
@@ -2296,6 +2314,17 @@ fn write_entry_points(
     // answers for the frame that has passed without the graph knowing
     // there is a previous frame at all.
     let velocity = options.stage.output() == abi::StageOutput::Velocity;
+    // The `instance id` debug view's fragment stage reads the instance row
+    // from the uv varying, which only a shading stage under that view
+    // repurposes (plan6 E2).
+    let instance_uv = matches!(
+        options.stage.output(),
+        abi::StageOutput::Color | abi::StageOutput::PeelResolve
+    ) && matches!(
+        options.material.macros.get(crate::lighting::DEBUG_VIEW_MACRO),
+        Some(crate::macros::MacroValue::Int(id)) if crate::lighting::debug_view_reads_instance(id)
+    );
+    let instance_line = "    out.uv = vec2f(f32(input.instance), 0.0);\n";
     let attrs_arg = match parts.vertex.is_some() && !geometry.is_empty() {
         true => format!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
         false => String::new(),
@@ -2320,13 +2349,16 @@ fn write_entry_points(
             true => (abi::VELOCITY_OUT_STRUCT, velocity_transform.clone()),
             false => (abi::VERTEX_OUT_STRUCT, transform("")),
         };
+        let body = match instance_uv {
+            true => format!("    var out = {call};\n{instance_line}    return out;\n"),
+            false => format!("    return {call};\n"),
+        };
         let _ = write!(
             out,
             "
 @vertex
 fn {vertex}(input: {vertex_in}) -> {vertex_out} {{
-{context}    return {call};
-}}
+{context}{body}}}
 ",
             vertex = options.vertex_entry,
             vertex_in = abi::VERTEX_IN_STRUCT,
@@ -2416,6 +2448,9 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
                 var = abi::VERTEX_CONTEXT_VAR,
                 args = format_args!(", {}", abi::MATERIAL_ATTRIBUTES_VAR),
             );
+        }
+        if instance_uv {
+            out.push_str(instance_line);
         }
         out.push_str("    return out;\n}\n");
     }
@@ -3086,6 +3121,55 @@ mod tests {
         for pair in [(&forward, &gbuffer), (&forward, &depth), (&gbuffer, &depth)] {
             assert_ne!(pair.0, pair.1);
         }
+    }
+
+    #[test]
+    fn a_debug_view_replaces_the_forward_shading_and_leaves_the_gbuffer_alone() {
+        let registry = registry();
+        let mut graph = Graph::new("views");
+        graph.add_node(abi::SURFACE_OUTPUT_ID);
+        let module = |stage: abi::MaterialStage, view: i32| {
+            let mut options = CodegenOptions {
+                stage,
+                ..CodegenOptions::default()
+            };
+            options.material.macros.set(
+                crate::lighting::DEBUG_VIEW_MACRO,
+                crate::macros::MacroValue::Int(view),
+            );
+            generate(&graph, &registry, &options)
+                .expect("compiles")
+                .source
+        };
+        let views = crate::lighting::debug_views();
+        let id = |label: &str| views.iter().find(|view| view.label == label).unwrap().id;
+
+        let uv = module(abi::MaterialStage::FORWARD_LIT, id("uv"));
+        assert!(uv.contains("The `uv` debug view in place of shading"));
+        assert!(uv.contains("fract(ctx.uv)"));
+        assert!(!uv.contains("light_count"), "no light loop: {uv}");
+        // 0 shades, and a G-buffer channel has no forward expression.
+        let shaded = module(abi::MaterialStage::FORWARD_LIT, 0);
+        assert!(shaded.contains("light_count") && !shaded.contains("debug view"));
+        let channel = views
+            .iter()
+            .find(|view| view.stage == crate::lighting::DebugStage::Deferred)
+            .expect("a shipped feature channel");
+        assert!(crate::lighting::debug_surface(channel.id, 0).is_none());
+        // The G-buffer is the lighting pass's to read the view from.
+        let gbuffer = module(abi::MaterialStage::GBUFFER, id("albedo"));
+        assert!(!gbuffer.contains("debug view"));
+        // The instance row rides in the uv varying, under that view only.
+        let carried = "out.uv = vec2f(f32(input.instance), 0.0);";
+        assert!(module(abi::MaterialStage::FORWARD_LIT, id("instance id")).contains(carried));
+        assert!(!uv.contains(carried));
+        // The material id is a constant colour per material.
+        let material = |index: i32| {
+            crate::lighting::debug_surface(id("material id"), index)
+                .unwrap()
+                .source
+        };
+        assert_ne!(material(1), material(2));
     }
 
     #[test]
