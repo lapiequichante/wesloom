@@ -80,7 +80,7 @@ The registry went from 139 definitions to 100, and no id names a type any
 more except where the type genuinely is the node (see the consequences).
 
 **`{$T}` in an expression template** expands to the resolved WGSL spelling of
-generic parameter `T` (`crates/wxsl-core/src/codegen.rs`), which is what lets
+generic parameter `T` (`crates/wxsl-core/src/codegen/`), which is what lets
 `convert.splat` and the range operators' `select` guard be one template. The
 node builder checks at construction that every `{$name}` names a declared
 parameter, the same way it already checked `Socket::generic`.
