@@ -16,6 +16,8 @@
 //! cargo run --example editor -- --screenshot out.png   # one frame, no window
 //! cargo run --example editor -- --pipeline             # open the pipeline canvas
 //! cargo run --example editor --features gltf -- --scene resources/glb/DamagedHelmet/DamagedHelmet.glb
+//! cargo run --example editor --features mcp -- --mcp 7420               # an agent can attach
+//! cargo run --example editor --features mcp -- --mcp-stdio --headless   # an agent, no window
 //! ```
 //!
 //! # Fonts
@@ -56,6 +58,14 @@
 //! viewport to orbit, scroll to zoom, click an instance to select it and
 //! open its material in the material canvas. `Ctrl+S` in the scene mode
 //! writes the scene as JSON.
+//!
+//! # Agents
+//!
+//! With the `mcp` feature, `--mcp <PORT>` serves the editor's commands to
+//! an MCP client over local HTTP while the window stays usable (ADR 0083),
+//! and prints the line that registers it with a client. `--mcp-stdio
+//! --headless` serves them over stdio with no window, for CI. Paths an
+//! agent names stay under `--mcp-root`, the current directory by default.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -97,6 +107,11 @@ OPTIONS:
     --atlas <PIXELS>      Glyph atlas side length (default: 2048)
     --list-fonts          Print the fonts that would be used, and exit
     --screenshot <FILE>   Render one frame headless to a PNG and exit
+    --mcp <PORT>          Serve MCP over HTTP on 127.0.0.1 (0: any free port;
+                          mcp feature)
+    --mcp-stdio           Serve MCP over stdin/stdout (mcp feature)
+    --mcp-root <DIR>      The directory agents' paths stay under (default: .)
+    --headless            No window: only serve MCP, until stdin closes
     -h, --help            Print this help
 
 KEYS:
@@ -148,6 +163,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(path) = options.screenshot.clone() {
         return screenshot(&options, graph, fonts, &path);
     }
+    let mcp = mcp::start(&options)?;
+    if options.headless {
+        return mcp::headless(&options, graph, fonts, mcp);
+    }
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -155,6 +174,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         options,
         graph: Some(graph),
         fonts: Some(fonts),
+        mcp,
         state: None,
         started: Instant::now(),
         modifiers: Modifiers::NONE,
@@ -292,6 +312,10 @@ struct Options {
     atlas: u32,
     list_fonts: bool,
     screenshot: Option<PathBuf>,
+    mcp_port: Option<u16>,
+    mcp_stdio: bool,
+    mcp_root: PathBuf,
+    headless: bool,
     help: bool,
 }
 
@@ -311,6 +335,10 @@ impl Default for Options {
             atlas: 2048,
             list_fonts: false,
             screenshot: None,
+            mcp_port: None,
+            mcp_stdio: false,
+            mcp_root: PathBuf::from("."),
+            headless: false,
             help: false,
         }
     }
@@ -355,9 +383,22 @@ impl Options {
                 }
                 "--list-fonts" => options.list_fonts = true,
                 "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
+                "--mcp" => {
+                    let text = value()?;
+                    options.mcp_port = Some(text.trim().parse().map_err(|_| "bad port")?);
+                }
+                "--mcp-stdio" => options.mcp_stdio = true,
+                "--mcp-root" => options.mcp_root = PathBuf::from(value()?),
+                "--headless" => options.headless = true,
                 "-h" | "--help" => options.help = true,
                 other => return Err(format!("unknown option `{other}`")),
             }
+        }
+        if options.mcp_port.is_some() && options.mcp_stdio {
+            return Err("--mcp and --mcp-stdio are one transport or the other".into());
+        }
+        if options.headless && options.mcp_port.is_none() && !options.mcp_stdio {
+            return Err("--headless serves MCP: pass --mcp <PORT> or --mcp-stdio".into());
         }
         Ok(options)
     }
@@ -544,6 +585,8 @@ struct App {
     graph: Option<Graph>,
     /// Taken when the window is created.
     fonts: Option<Fonts>,
+    /// The MCP server, served after every frame.
+    mcp: mcp::Mcp,
     state: Option<State>,
     started: Instant,
     modifiers: Modifiers,
@@ -706,6 +749,13 @@ impl App {
         }
         state.gpu.queue.submit([encoder.finish()]);
         state.gpu.queue.present(frame);
+        mcp::serve(
+            &mut self.mcp,
+            &mut state.editor,
+            &state.gpu,
+            (size.width, size.height),
+            self.started.elapsed().as_secs_f64(),
+        );
     }
 
     /// Save the active document back to where it came from.
@@ -861,7 +911,10 @@ impl ApplicationHandler for App {
         }
         match self.create_state(event_loop) {
             Ok(state) => {
-                println!("{USAGE}");
+                // Standard output is the protocol's under --mcp-stdio.
+                if !self.options.mcp_stdio {
+                    println!("{USAGE}");
+                }
                 self.state = Some(state);
             }
             Err(error) => {
@@ -1099,4 +1152,139 @@ fn translate_key(event: &winit::event::KeyEvent) -> Option<Key> {
         return Some(Key::Char(character));
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// MCP (ADR 0083)
+// ---------------------------------------------------------------------------
+
+/// The MCP server, when the `mcp` feature is on: one function per thing the
+/// application does with it, and empty stand-ins without it.
+mod mcp {
+    use super::*;
+
+    #[cfg(feature = "mcp")]
+    pub type Mcp = Option<wxsl::mcp::Server>;
+    #[cfg(not(feature = "mcp"))]
+    pub type Mcp = ();
+
+    /// Start the transport the options ask for.
+    #[cfg(feature = "mcp")]
+    pub fn start(options: &Options) -> Result<Mcp, Box<dyn Error>> {
+        use wxsl::mcp::{Root, Server};
+        let root = Root::new(&options.mcp_root)
+            .map_err(|error| format!("--mcp-root {}: {error}", options.mcp_root.display()))?;
+        if options.mcp_stdio {
+            eprintln!(
+                "mcp: serving over stdio, paths under {}",
+                root.path().display()
+            );
+            return Ok(Some(Server::stdio(root)?));
+        }
+        let Some(port) = options.mcp_port else {
+            return Ok(None);
+        };
+        let token = std::env::var("WXSL_MCP_TOKEN").ok();
+        let server = Server::http(root, port, token)?;
+        let (url, token) = (
+            server.url().unwrap_or_default(),
+            server.token().unwrap_or_default(),
+        );
+        eprintln!("mcp: {url}, paths under {}", server.root().path().display());
+        eprintln!(
+            "mcp: claude mcp add --transport http wxsl {url} --header \"Authorization: Bearer {token}\""
+        );
+        Ok(Some(server))
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    pub fn start(options: &Options) -> Result<Mcp, Box<dyn Error>> {
+        if options.mcp_port.is_some() || options.mcp_stdio {
+            return Err(
+                "MCP needs the `mcp` feature: cargo run --example editor --features mcp".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Answer the calls that arrived during the frame just drawn.
+    #[cfg(feature = "mcp")]
+    pub fn serve(
+        mcp: &mut Mcp,
+        editor: &mut Editor,
+        gpu: &GpuContext,
+        size: (u32, u32),
+        time: f64,
+    ) {
+        if let Some(server) = mcp.as_mut() {
+            server.serve(
+                editor,
+                &wxsl::mcp::Frame {
+                    device: &gpu.device,
+                    queue: &gpu.queue,
+                    width: size.0,
+                    height: size.1,
+                    time,
+                },
+            );
+        }
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    pub fn serve(_: &mut Mcp, _: &mut Editor, _: &GpuContext, _: (u32, u32), _: f64) {}
+
+    /// No window: an editor on a headless device, answering calls until
+    /// the stdio client goes away (HTTP serves until killed).
+    #[cfg(feature = "mcp")]
+    pub fn headless(
+        options: &Options,
+        graph: Graph,
+        fonts: Fonts,
+        mcp: Mcp,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut server = mcp.ok_or("--headless needs a transport")?;
+        let gpu = pollster::block_on(GpuContext::headless())?;
+        let (width, height) = options.size;
+        let mut config = EditorConfig::new(
+            wxsl::stdlib_library(),
+            wxsl::stdlib::registry(),
+            graph,
+            fonts.ui,
+            fonts.mono,
+        );
+        config.msdf_backend = options.msdf;
+        config.atlas_size = options.atlas;
+        let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
+        editor.handle_event(UiEvent::Resized {
+            size: Vec2::new(width as f32, height as f32),
+            scale: 1.0,
+        });
+        if options.pipeline {
+            editor.set_canvas_mode(CanvasMode::Pipeline);
+        }
+        if let Some(scene) = options.scene.as_deref() {
+            open_file(&mut editor, scene);
+        }
+        let started = Instant::now();
+        while !server.is_closed() {
+            if server.wait(std::time::Duration::from_millis(200)) {
+                server.serve(
+                    &mut editor,
+                    &wxsl::mcp::Frame {
+                        device: &gpu.device,
+                        queue: &gpu.queue,
+                        width,
+                        height,
+                        time: started.elapsed().as_secs_f64(),
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    pub fn headless(_: &Options, _: Graph, _: Fonts, _: Mcp) -> Result<(), Box<dyn Error>> {
+        Err("--headless needs the `mcp` feature".into())
+    }
 }

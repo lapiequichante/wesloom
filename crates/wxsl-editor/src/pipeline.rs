@@ -51,7 +51,8 @@ use glam::Vec2;
 ///
 /// The editor holds both documents at once; this only says which one the
 /// panels and the shortcuts are pointed at.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CanvasMode {
     /// The material graph, and the preview rendered with a stock
     /// pipeline.

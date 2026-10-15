@@ -1,0 +1,22 @@
+[package]
+name = "wxsl-mcp"
+description = "An MCP server over the wxsl editor's commands: agents write shaders, inspect scenes and debug frames in a running editor."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+# Every tool is an editor command or query (ADR 0083).
+wxsl-editor = { workspace = true }
+# The screenshot tool draws the editor into an offscreen target.
+wxsl-render = { workspace = true }
+wgpu = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# PNG encoding for screenshots; already in the tree through `image`.
+png = "0.18"

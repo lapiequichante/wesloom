@@ -649,6 +649,12 @@ impl Graph {
         id
     }
 
+    /// The id the next added node gets. Ids are never reused, so a batch
+    /// of edits can name the nodes it is about to add.
+    pub fn next_id(&self) -> NodeId {
+        NodeId(self.next_id)
+    }
+
     /// Insert a node of definition `def` with no parameters.
     pub fn add_node(&mut self, def: impl Into<String>) -> NodeId {
         self.add(Node::new(def))

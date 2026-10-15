@@ -1,0 +1,53 @@
+pub mod wxsl_mcp
+pub struct wxsl_mcp::Frame<'a>
+pub wxsl_mcp::Frame::device: &'a wgpu::api::device::Device
+pub wxsl_mcp::Frame::height: u32
+pub wxsl_mcp::Frame::queue: &'a wgpu::api::queue::Queue
+pub wxsl_mcp::Frame::time: f64
+pub wxsl_mcp::Frame::width: u32
+impl<'a> core::marker::Freeze for wxsl_mcp::Frame<'a>
+impl<'a> core::marker::Send for wxsl_mcp::Frame<'a>
+impl<'a> core::marker::Sync for wxsl_mcp::Frame<'a>
+impl<'a> core::marker::Unpin for wxsl_mcp::Frame<'a>
+impl<'a> core::marker::UnsafeUnpin for wxsl_mcp::Frame<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for wxsl_mcp::Frame<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for wxsl_mcp::Frame<'a>
+pub struct wxsl_mcp::Root(_)
+impl wxsl_mcp::Root
+pub fn wxsl_mcp::Root::new(impl core::convert::AsRef<std::path::Path>) -> core::io::error::Result<Self>
+pub fn wxsl_mcp::Root::path(&self) -> &std::path::Path
+pub fn wxsl_mcp::Root::resolve(&self, &str) -> core::result::Result<std::path::PathBuf, alloc::string::String>
+impl core::clone::Clone for wxsl_mcp::Root
+pub fn wxsl_mcp::Root::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_mcp::Root
+impl core::cmp::PartialEq for wxsl_mcp::Root
+pub fn wxsl_mcp::Root::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_mcp::Root
+pub fn wxsl_mcp::Root::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_mcp::Root
+impl core::marker::Freeze for wxsl_mcp::Root
+impl core::marker::Send for wxsl_mcp::Root
+impl core::marker::Sync for wxsl_mcp::Root
+impl core::marker::Unpin for wxsl_mcp::Root
+impl core::marker::UnsafeUnpin for wxsl_mcp::Root
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_mcp::Root
+impl core::panic::unwind_safe::UnwindSafe for wxsl_mcp::Root
+pub struct wxsl_mcp::Server
+impl wxsl_mcp::Server
+pub fn wxsl_mcp::Server::address(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
+pub fn wxsl_mcp::Server::http(wxsl_mcp::Root, u16, core::option::Option<alloc::string::String>) -> core::io::error::Result<Self>
+pub fn wxsl_mcp::Server::is_closed(&self) -> bool
+pub fn wxsl_mcp::Server::lines(wxsl_mcp::Root, impl alloc::io::buf_read::BufRead + core::marker::Send + 'static, impl core::io::write::Write + core::marker::Send + 'static) -> core::io::error::Result<Self>
+pub fn wxsl_mcp::Server::root(&self) -> &wxsl_mcp::Root
+pub fn wxsl_mcp::Server::serve(&mut self, &mut wxsl_editor::app::Editor, &wxsl_mcp::Frame<'_>) -> usize
+pub fn wxsl_mcp::Server::stdio(wxsl_mcp::Root) -> core::io::error::Result<Self>
+pub fn wxsl_mcp::Server::token(&self) -> core::option::Option<&str>
+pub fn wxsl_mcp::Server::url(&self) -> core::option::Option<alloc::string::String>
+pub fn wxsl_mcp::Server::wait(&mut self, core::time::Duration) -> bool
+impl core::marker::Freeze for wxsl_mcp::Server
+impl core::marker::Send for wxsl_mcp::Server
+impl !core::marker::Sync for wxsl_mcp::Server
+impl core::marker::Unpin for wxsl_mcp::Server
+impl core::marker::UnsafeUnpin for wxsl_mcp::Server
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_mcp::Server
+impl core::panic::unwind_safe::UnwindSafe for wxsl_mcp::Server

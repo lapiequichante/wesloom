@@ -1,6 +1,7 @@
 pub mod wxsl
 pub use wxsl::core
 pub use wxsl::editor
+pub use wxsl::mcp
 pub use wxsl::render
 pub use wxsl::stdlib
 pub mod wxsl::asset

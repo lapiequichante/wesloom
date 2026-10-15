@@ -114,6 +114,7 @@ The ten decisions the rest of the log builds on:
 | [0080](0080-gltf-import-produces-a-scene-document-with-generated-graphs.md) | glTF import produces a scene document with generated graphs, in a device-free crate | Accepted |
 | [0081](0081-commands-are-the-editors-single-mutation-path.md) | Commands are the editor's single mutation path, undone by snapshot | Accepted |
 | [0082](0082-the-editors-scene-mode-and-scene-resources-in-the-renderer-crate.md) | The editor's scene mode, with `SceneResources` in the renderer crate | Accepted |
+| [0083](0083-an-mcp-server-over-the-editors-commands.md) | An MCP server over the editor's commands, hand-written on `std` | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

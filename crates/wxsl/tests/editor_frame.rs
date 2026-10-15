@@ -310,7 +310,7 @@ fn a_node_drag_is_one_undo_step_and_command_z_undoes_it() {
     frame(&gpu, &mut editor, &target, 0.0);
     let before = editor.graph().clone();
     let depth = |editor: &Editor| match editor.query(&Query::History) {
-        Answer::History { undo, redo } => (undo, redo),
+        Answer::History { undo, redo, .. } => (undo, redo),
         other => panic!("{other:?}"),
     };
     assert_eq!(depth(&editor), (0, 0));

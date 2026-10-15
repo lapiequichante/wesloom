@@ -946,6 +946,7 @@ pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegist
 pub fn wxsl_core::graph::Graph::macros(&self) -> &wxsl_core::macros::MacroSet
 pub fn wxsl_core::graph::Graph::name(&self) -> &str
 pub fn wxsl_core::graph::Graph::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::graph::Graph::next_id(&self) -> wxsl_core::graph::NodeId
 pub fn wxsl_core::graph::Graph::node(&self, wxsl_core::graph::NodeId) -> core::option::Option<&wxsl_core::graph::Node>
 pub fn wxsl_core::graph::Graph::node_count(&self) -> usize
 pub fn wxsl_core::graph::Graph::node_mut(&mut self, wxsl_core::graph::NodeId) -> core::option::Option<&mut wxsl_core::graph::Node>
@@ -3750,6 +3751,7 @@ pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegist
 pub fn wxsl_core::graph::Graph::macros(&self) -> &wxsl_core::macros::MacroSet
 pub fn wxsl_core::graph::Graph::name(&self) -> &str
 pub fn wxsl_core::graph::Graph::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn wxsl_core::graph::Graph::next_id(&self) -> wxsl_core::graph::NodeId
 pub fn wxsl_core::graph::Graph::node(&self, wxsl_core::graph::NodeId) -> core::option::Option<&wxsl_core::graph::Node>
 pub fn wxsl_core::graph::Graph::node_count(&self) -> usize
 pub fn wxsl_core::graph::Graph::node_mut(&mut self, wxsl_core::graph::NodeId) -> core::option::Option<&mut wxsl_core::graph::Node>

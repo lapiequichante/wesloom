@@ -12,7 +12,7 @@
 
 use wxsl_core::{Graph, NodeRegistry, Value};
 
-use crate::command::{edit_graph, Command, CommandError, Document, Outcome};
+use crate::command::{edit_graph, Command, CommandError, Document, HistoryStep, Outcome};
 use crate::scene::{self, SceneChanges, SceneDoc};
 
 /// How many steps the history keeps.
@@ -47,6 +47,8 @@ pub(crate) trait Host {
     fn open_slot(&mut self, slot: Option<usize>);
     /// Select an instance: session state, not an undo step.
     fn select_instance(&mut self, instance: Option<usize>) -> Result<(), CommandError>;
+    /// Apply a view command ([`Command::is_view`]): session state too.
+    fn view(&mut self, command: &Command) -> Result<(), CommandError>;
 }
 
 /// The state a step replaced.
@@ -60,6 +62,10 @@ struct Snapshot {
     scene: Option<Option<SceneDoc>>,
     /// `(pass, name, value)`, in the order they were first set.
     pass_params: Vec<(String, String, Value)>,
+    /// The command that made the step, by tag.
+    command: String,
+    /// Whether an agent applied it.
+    agent: bool,
 }
 
 impl Snapshot {
@@ -92,6 +98,8 @@ impl Snapshot {
                     Some((pass.clone(), name.clone(), value))
                 })
                 .collect(),
+            command: self.command.clone(),
+            agent: self.agent,
         }
     }
 
@@ -150,6 +158,17 @@ impl History {
         self.redo.len()
     }
 
+    /// The steps that can be undone, oldest first.
+    pub(crate) fn steps(&self) -> Vec<HistoryStep> {
+        self.undo
+            .iter()
+            .map(|snapshot| HistoryStep {
+                command: snapshot.command.clone(),
+                agent: snapshot.agent,
+            })
+            .collect()
+    }
+
     /// The current gesture is over: the next command is a new step.
     pub(crate) fn seal(&mut self) {
         self.open = None;
@@ -157,18 +176,34 @@ impl History {
 
     /// Run `command`. A `gesture` merges into the previous step when it
     /// repeats its target (see [`Command::merge_key`]).
+    #[cfg(test)]
     pub(crate) fn execute(
         &mut self,
         host: &mut impl Host,
         command: &Command,
         gesture: bool,
     ) -> Result<Outcome, CommandError> {
+        self.execute_as(host, command, gesture, false)
+    }
+
+    /// [`History::execute`], marking the step as an `agent`'s.
+    pub(crate) fn execute_as(
+        &mut self,
+        host: &mut impl Host,
+        command: &Command,
+        gesture: bool,
+        agent: bool,
+    ) -> Result<Outcome, CommandError> {
         match command {
             Command::Undo => return self.step(host, true).map(|()| Outcome::default()),
             Command::Redo => return self.step(host, false).map(|()| Outcome::default()),
             _ => {}
         }
-        let mut before = Snapshot::default();
+        let mut before = Snapshot {
+            command: command.name(),
+            agent,
+            ..Snapshot::default()
+        };
         if scene::mentions_scene(command) {
             before.scene = Some(host.scene().cloned());
         }
@@ -273,6 +308,7 @@ fn run(
         }
         Command::Undo | Command::Redo => return Err(CommandError::HistoryInBatch),
         Command::SelectInstance { instance } => host.select_instance(*instance)?,
+        _ if command.is_view() => host.view(command)?,
         Command::SaveScene { path } => host
             .scene()
             .ok_or(CommandError::NoScene)?
@@ -430,6 +466,9 @@ mod tests {
             }
             Ok(())
         }
+        fn view(&mut self, _command: &Command) -> Result<(), CommandError> {
+            Ok(())
+        }
     }
 
     fn host() -> TestHost {
@@ -487,6 +526,59 @@ mod tests {
             node: Node::new(def),
         };
         history.execute(host, &command, false).unwrap().added[0]
+    }
+
+    /// An agent's step is marked as one (ADR 0083), and a view command is
+    /// no step at all, alone or in a batch.
+    #[test]
+    fn agent_steps_are_marked_and_view_commands_leave_no_step() {
+        let mut host = host();
+        let mut history = History::default();
+        let a = add(&mut history, &mut host, "test.add");
+        let set = Command::SetParam {
+            document: Document::Material,
+            node: a,
+            socket: "b".into(),
+            value: Value::F32(2.0),
+        };
+        history.execute_as(&mut host, &set, false, true).unwrap();
+        let view = Command::SetDebugView {
+            view: "albedo".into(),
+        };
+        history.execute_as(&mut host, &view, false, true).unwrap();
+        history
+            .execute_as(
+                &mut host,
+                &Command::Batch {
+                    commands: vec![
+                        view.clone(),
+                        Command::StepFrame {
+                            passes: None,
+                            show: None,
+                        },
+                    ],
+                },
+                false,
+                true,
+            )
+            .unwrap();
+        let steps = history.steps();
+        assert_eq!(
+            steps,
+            [
+                HistoryStep {
+                    command: "add_node".into(),
+                    agent: false
+                },
+                HistoryStep {
+                    command: "set_param".into(),
+                    agent: true
+                },
+            ]
+        );
+        history.execute(&mut host, &Command::Undo, false).unwrap();
+        history.execute(&mut host, &Command::Redo, false).unwrap();
+        assert_eq!(history.steps(), steps, "a redo keeps the step's mark");
     }
 
     /// Every command, applied, undone and redone, leaves exactly the state

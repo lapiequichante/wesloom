@@ -14,6 +14,7 @@ use wxsl_core::{
 };
 
 use crate::canvas;
+use crate::pipeline::CanvasMode;
 
 /// Which of the editor's documents a graph command edits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -262,6 +263,37 @@ pub enum Command {
         /// The instances.
         instances: Vec<usize>,
     },
+    /// Point the panels at another canvas. Session state, like the
+    /// commands below it: not an undo step.
+    SetCanvasMode {
+        /// The canvas.
+        mode: CanvasMode,
+    },
+    /// Preview through a stock pipeline by name (`forward`, `deferred`),
+    /// or through the pipeline canvas's document with `document`. Lands at
+    /// the next [`Editor::sync`](crate::Editor::sync), which has the
+    /// device.
+    SetPipeline {
+        /// The pipeline.
+        pipeline: String,
+    },
+    /// Show one of the lighting pass's debug views by label, or `shaded`
+    /// to shade again ([`Query::View`] lists them).
+    SetDebugView {
+        /// The view's label.
+        view: String,
+    },
+    /// Step through the running pass list (plan3 N9): run its first
+    /// `passes` and show the resource labelled `show`, or what the last of
+    /// them wrote. With no `passes`, run live again.
+    StepFrame {
+        /// How many passes run.
+        #[serde(default)]
+        passes: Option<usize>,
+        /// The resource to show, by label.
+        #[serde(default)]
+        show: Option<String>,
+    },
     /// Apply commands in order, as one undo step. If one fails, nothing
     /// changes.
     Batch {
@@ -372,6 +404,26 @@ impl Command {
                 | Command::SetPassParam { .. }
         )
     }
+
+    /// Whether the command changes session state the history does not
+    /// keep: the canvas, the preview's pipeline, its debug view, stepping.
+    pub(crate) fn is_view(&self) -> bool {
+        matches!(
+            self,
+            Command::SetCanvasMode { .. }
+                | Command::SetPipeline { .. }
+                | Command::SetDebugView { .. }
+                | Command::StepFrame { .. }
+        )
+    }
+
+    /// The command's tag, as a transcript spells it.
+    pub(crate) fn name(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.get("command")?.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
 }
 
 /// What a command did beyond the change it names.
@@ -426,6 +478,12 @@ pub enum CommandError {
     NoSuchLight(usize),
     /// A scene file could not be read, imported or written.
     Scene(String),
+    /// No stock pipeline has this name.
+    NoSuchPipeline(String),
+    /// No debug view has this label.
+    NoSuchDebugView(String),
+    /// The pass list being stepped writes no resource of this label.
+    NoSuchResource(String),
     /// A command inside a batch failed.
     InBatch {
         /// Its index in the batch.
@@ -458,6 +516,16 @@ impl fmt::Display for CommandError {
             CommandError::NoSuchMaterial(index) => write!(f, "no scene material {index}"),
             CommandError::NoSuchLight(index) => write!(f, "no light {index}"),
             CommandError::Scene(message) => f.write_str(message),
+            CommandError::NoSuchPipeline(name) => write!(
+                f,
+                "no pipeline `{name}`; one of forward, deferred or document"
+            ),
+            CommandError::NoSuchDebugView(name) => {
+                write!(f, "no debug view `{name}`; the view query lists them")
+            }
+            CommandError::NoSuchResource(name) => {
+                write!(f, "the stepped passes write no resource `{name}`")
+            }
             CommandError::InBatch { index, error } => {
                 write!(f, "batch command {index}: {error}")
             }
@@ -523,6 +591,9 @@ pub enum Query {
     History,
     /// The open scene document, and the selected instance.
     Scene,
+    /// The session state the view commands set: the canvas, the
+    /// preview's pipeline, its debug view and the pass stepping.
+    View,
 }
 
 /// The answer to a [`Query`].
@@ -578,6 +649,8 @@ pub enum Answer {
         undo: usize,
         /// Steps that can be redone.
         redo: usize,
+        /// The steps that can be undone, oldest first.
+        steps: Vec<HistoryStep>,
     },
     /// The open scene.
     Scene {
@@ -588,6 +661,45 @@ pub enum Answer {
         /// The material open in the material canvas, by index.
         material: Option<usize>,
     },
+    /// The session state.
+    View {
+        /// The canvas the panels point at.
+        mode: CanvasMode,
+        /// The preview's pipeline: a stock name, or `document`.
+        pipeline: String,
+        /// The debug view showing, `shaded` when none.
+        debug_view: String,
+        /// The debug views the running plan can show, by label.
+        debug_views: Vec<String>,
+        /// The pass list being stepped through, if it is.
+        stepping: Option<StepSummary>,
+    },
+}
+
+/// One undo step, as a [`Query::History`] answer lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct HistoryStep {
+    /// The command that made it, by tag; a merged gesture names its
+    /// first command.
+    pub command: String,
+    /// Whether an agent applied it ([`Editor::apply_as_agent`](crate::Editor::apply_as_agent)).
+    pub agent: bool,
+}
+
+/// The pass stepping, as a [`Query::View`] answer shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct StepSummary {
+    /// Every pass label, in schedule order.
+    pub passes: Vec<String>,
+    /// How many of them run.
+    pub count: usize,
+    /// The resources the running passes write that can be shown, by
+    /// label.
+    pub resources: Vec<String>,
+    /// The resource showing, by label: `None` for the frame's target.
+    pub shown: Option<String>,
 }
 
 /// A node definition, as a [`Query::Nodes`] answer lists it.

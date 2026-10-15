@@ -8,6 +8,7 @@ pub wxsl_editor::Answer::Graph
 pub wxsl_editor::Answer::Graph::graph: core::option::Option<wxsl_core::graph::Graph>
 pub wxsl_editor::Answer::History
 pub wxsl_editor::Answer::History::redo: usize
+pub wxsl_editor::Answer::History::steps: alloc::vec::Vec<wxsl_editor::HistoryStep>
 pub wxsl_editor::Answer::History::undo: usize
 pub wxsl_editor::Answer::Nodes
 pub wxsl_editor::Answer::Nodes::nodes: alloc::vec::Vec<wxsl_editor::NodeSummary>
@@ -25,6 +26,12 @@ pub wxsl_editor::Answer::Stats::edges: usize
 pub wxsl_editor::Answer::Stats::frame_ms: core::option::Option<f32>
 pub wxsl_editor::Answer::Stats::nodes: usize
 pub wxsl_editor::Answer::Stats::variants: usize
+pub wxsl_editor::Answer::View
+pub wxsl_editor::Answer::View::debug_view: alloc::string::String
+pub wxsl_editor::Answer::View::debug_views: alloc::vec::Vec<alloc::string::String>
+pub wxsl_editor::Answer::View::mode: wxsl_editor::CanvasMode
+pub wxsl_editor::Answer::View::pipeline: alloc::string::String
+pub wxsl_editor::Answer::View::stepping: core::option::Option<wxsl_editor::StepSummary>
 impl core::clone::Clone for wxsl_editor::Answer
 pub fn wxsl_editor::Answer::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_editor::Answer
@@ -60,6 +67,10 @@ impl core::fmt::Debug for wxsl_editor::CanvasMode
 pub fn wxsl_editor::CanvasMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for wxsl_editor::CanvasMode
 impl core::marker::StructuralPartialEq for wxsl_editor::CanvasMode
+impl serde_core::ser::Serialize for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_editor::CanvasMode
+pub fn wxsl_editor::CanvasMode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 impl core::marker::Freeze for wxsl_editor::CanvasMode
 impl core::marker::Send for wxsl_editor::CanvasMode
 impl core::marker::Sync for wxsl_editor::CanvasMode
@@ -98,10 +109,14 @@ pub wxsl_editor::Command::SaveScene
 pub wxsl_editor::Command::SaveScene::path: alloc::string::String
 pub wxsl_editor::Command::SelectInstance
 pub wxsl_editor::Command::SelectInstance::instance: core::option::Option<usize>
+pub wxsl_editor::Command::SetCanvasMode
+pub wxsl_editor::Command::SetCanvasMode::mode: wxsl_editor::CanvasMode
 pub wxsl_editor::Command::SetColor
 pub wxsl_editor::Command::SetColor::color: core::option::Option<[f32; 3]>
 pub wxsl_editor::Command::SetColor::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetColor::node: wxsl_core::graph::NodeId
+pub wxsl_editor::Command::SetDebugView
+pub wxsl_editor::Command::SetDebugView::view: alloc::string::String
 pub wxsl_editor::Command::SetGeneric
 pub wxsl_editor::Command::SetGeneric::document: wxsl_editor::Document
 pub wxsl_editor::Command::SetGeneric::node: wxsl_core::graph::NodeId
@@ -146,6 +161,8 @@ pub wxsl_editor::Command::SetPassParam
 pub wxsl_editor::Command::SetPassParam::name: alloc::string::String
 pub wxsl_editor::Command::SetPassParam::pass: alloc::string::String
 pub wxsl_editor::Command::SetPassParam::value: wxsl_core::node::Value
+pub wxsl_editor::Command::SetPipeline
+pub wxsl_editor::Command::SetPipeline::pipeline: alloc::string::String
 pub wxsl_editor::Command::SetRenderOrder
 pub wxsl_editor::Command::SetRenderOrder::material: usize
 pub wxsl_editor::Command::SetRenderOrder::order: i32
@@ -157,6 +174,9 @@ pub wxsl_editor::Command::SetSetting::value: alloc::string::String
 pub wxsl_editor::Command::SetTransform
 pub wxsl_editor::Command::SetTransform::instance: usize
 pub wxsl_editor::Command::SetTransform::transform: [f32; 16]
+pub wxsl_editor::Command::StepFrame
+pub wxsl_editor::Command::StepFrame::passes: core::option::Option<usize>
+pub wxsl_editor::Command::StepFrame::show: core::option::Option<alloc::string::String>
 pub wxsl_editor::Command::TidyLayout
 pub wxsl_editor::Command::TidyLayout::document: wxsl_editor::Document
 pub wxsl_editor::Command::Undo
@@ -188,10 +208,13 @@ pub wxsl_editor::CommandError::InBatch
 pub wxsl_editor::CommandError::InBatch::error: alloc::boxed::Box<wxsl_editor::CommandError>
 pub wxsl_editor::CommandError::InBatch::index: usize
 pub wxsl_editor::CommandError::NoScene
+pub wxsl_editor::CommandError::NoSuchDebugView(alloc::string::String)
 pub wxsl_editor::CommandError::NoSuchInstance(usize)
 pub wxsl_editor::CommandError::NoSuchLight(usize)
 pub wxsl_editor::CommandError::NoSuchMaterial(usize)
 pub wxsl_editor::CommandError::NoSuchNode(wxsl_core::graph::NodeId)
+pub wxsl_editor::CommandError::NoSuchPipeline(alloc::string::String)
+pub wxsl_editor::CommandError::NoSuchResource(alloc::string::String)
 pub wxsl_editor::CommandError::NotConnected(wxsl_core::graph::SocketRef)
 pub wxsl_editor::CommandError::NothingToRedo
 pub wxsl_editor::CommandError::NothingToUndo
@@ -285,6 +308,7 @@ pub wxsl_editor::Query::Passes
 pub wxsl_editor::Query::Scene
 pub wxsl_editor::Query::Source
 pub wxsl_editor::Query::Stats
+pub wxsl_editor::Query::View
 impl core::clone::Clone for wxsl_editor::Query
 pub fn wxsl_editor::Query::clone(&self) -> Self
 impl core::cmp::Eq for wxsl_editor::Query
@@ -329,10 +353,13 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::ThemeMode
 impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::ThemeMode
 pub struct wxsl_editor::Editor
 impl wxsl_editor::Editor
+pub fn wxsl_editor::Editor::agent(&self) -> core::option::Option<&str>
 pub fn wxsl_editor::Editor::apply(&mut self, wxsl_editor::Command) -> core::result::Result<wxsl_editor::Outcome, wxsl_editor::CommandError>
+pub fn wxsl_editor::Editor::apply_as_agent(&mut self, wxsl_editor::Command) -> core::result::Result<wxsl_editor::Outcome, wxsl_editor::CommandError>
 pub fn wxsl_editor::Editor::canvas_mode(&self) -> wxsl_editor::CanvasMode
 pub fn wxsl_editor::Editor::canvas_rect(&self) -> wxsl_render::ui::draw::Rect
 pub fn wxsl_editor::Editor::canvas_view(&self) -> &wxsl_editor::View
+pub fn wxsl_editor::Editor::define_function(&mut self, &wgpu::api::device::Device, &str) -> core::result::Result<alloc::string::String, alloc::vec::Vec<wxsl_editor::LineMark>>
 pub fn wxsl_editor::Editor::fit_next_frame(&mut self)
 pub fn wxsl_editor::Editor::frame(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_render::ui::renderer::UiTarget<'_>, f64) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_editor::Editor::function_problems(&self) -> &[wxsl_editor::LineMark]
@@ -354,9 +381,11 @@ pub fn wxsl_editor::Editor::registry(&self) -> &wxsl_core::node::NodeRegistry
 pub fn wxsl_editor::Editor::save_function(&mut self, &wgpu::api::device::Device) -> bool
 pub fn wxsl_editor::Editor::select(&mut self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_core::graph::NodeId>)
 pub fn wxsl_editor::Editor::selection(&self) -> &[wxsl_core::graph::NodeId]
+pub fn wxsl_editor::Editor::set_agent(&mut self, core::option::Option<alloc::string::String>)
 pub fn wxsl_editor::Editor::set_canvas_mode(&mut self, wxsl_editor::CanvasMode)
 pub fn wxsl_editor::Editor::set_message(&mut self, impl core::convert::Into<alloc::string::String>)
 pub fn wxsl_editor::Editor::set_msdf_backend(&mut self, &wgpu::api::device::Device, wxsl_render::ui::msdf_gpu::MsdfBackend) -> core::result::Result<(), wxsl_render::error::RenderError>
+pub fn wxsl_editor::Editor::sync(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue)
 pub fn wxsl_editor::Editor::theme(&self) -> wxsl_editor::Theme
 pub fn wxsl_editor::Editor::watch_shaders(&mut self, impl core::convert::AsRef<std::path::Path>) -> usize
 impl core::marker::Freeze for wxsl_editor::Editor
@@ -384,6 +413,26 @@ impl core::marker::Unpin for wxsl_editor::EditorConfig
 impl core::marker::UnsafeUnpin for wxsl_editor::EditorConfig
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::EditorConfig
 impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::EditorConfig
+#[non_exhaustive] pub struct wxsl_editor::HistoryStep
+pub wxsl_editor::HistoryStep::agent: bool
+pub wxsl_editor::HistoryStep::command: alloc::string::String
+impl core::clone::Clone for wxsl_editor::HistoryStep
+pub fn wxsl_editor::HistoryStep::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::HistoryStep
+impl core::cmp::PartialEq for wxsl_editor::HistoryStep
+pub fn wxsl_editor::HistoryStep::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::HistoryStep
+pub fn wxsl_editor::HistoryStep::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_editor::HistoryStep
+impl serde_core::ser::Serialize for wxsl_editor::HistoryStep
+pub fn wxsl_editor::HistoryStep::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_editor::HistoryStep
+impl core::marker::Send for wxsl_editor::HistoryStep
+impl core::marker::Sync for wxsl_editor::HistoryStep
+impl core::marker::Unpin for wxsl_editor::HistoryStep
+impl core::marker::UnsafeUnpin for wxsl_editor::HistoryStep
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::HistoryStep
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::HistoryStep
 pub struct wxsl_editor::LineMark
 pub wxsl_editor::LineMark::column: usize
 pub wxsl_editor::LineMark::line: usize
@@ -594,6 +643,7 @@ pub fn wxsl_editor::Preview::set_material_param(&mut self, &str, wxsl_core::node
 pub fn wxsl_editor::Preview::set_mesh(&mut self, &wgpu::api::device::Device, wxsl_render::mesh::MeshKind)
 pub fn wxsl_editor::Preview::set_pass_param(&mut self, &str, &str, wxsl_core::node::Value) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_editor::Preview::set_pipeline(&mut self, &wgpu::api::device::Device, wxsl_frame::pipeline::StockPipeline)
+pub fn wxsl_editor::Preview::size(&self) -> (u32, u32)
 pub fn wxsl_editor::Preview::start_stepping(&mut self) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_editor::Preview::status(&self) -> &wxsl_editor::PreviewStatus
 pub fn wxsl_editor::Preview::step_to(&mut self, usize, core::option::Option<wxsl_frame::pass::ResourceId>) -> core::result::Result<(), wxsl_render::error::RenderError>
@@ -633,6 +683,28 @@ impl core::marker::Unpin for wxsl_editor::SocketSummary
 impl core::marker::UnsafeUnpin for wxsl_editor::SocketSummary
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::SocketSummary
 impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::SocketSummary
+#[non_exhaustive] pub struct wxsl_editor::StepSummary
+pub wxsl_editor::StepSummary::count: usize
+pub wxsl_editor::StepSummary::passes: alloc::vec::Vec<alloc::string::String>
+pub wxsl_editor::StepSummary::resources: alloc::vec::Vec<alloc::string::String>
+pub wxsl_editor::StepSummary::shown: core::option::Option<alloc::string::String>
+impl core::clone::Clone for wxsl_editor::StepSummary
+pub fn wxsl_editor::StepSummary::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_editor::StepSummary
+impl core::cmp::PartialEq for wxsl_editor::StepSummary
+pub fn wxsl_editor::StepSummary::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_editor::StepSummary
+pub fn wxsl_editor::StepSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_editor::StepSummary
+impl serde_core::ser::Serialize for wxsl_editor::StepSummary
+pub fn wxsl_editor::StepSummary::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_editor::StepSummary
+impl core::marker::Send for wxsl_editor::StepSummary
+impl core::marker::Sync for wxsl_editor::StepSummary
+impl core::marker::Unpin for wxsl_editor::StepSummary
+impl core::marker::UnsafeUnpin for wxsl_editor::StepSummary
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_editor::StepSummary
+impl core::panic::unwind_safe::UnwindSafe for wxsl_editor::StepSummary
 pub struct wxsl_editor::StepView
 pub wxsl_editor::StepView::count: usize
 pub wxsl_editor::StepView::passes: alloc::vec::Vec<alloc::string::String>

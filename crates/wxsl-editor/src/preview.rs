@@ -1130,8 +1130,9 @@ impl Preview {
     }
 
     /// The target's size in pixels: [`Preview::SIZE`] square, unless the
-    /// scene viewport asked for another.
-    pub(crate) fn size(&self) -> (u32, u32) {
+    /// scene viewport asked for another. [`Preview::read_rgba8`] reads
+    /// this many pixels.
+    pub fn size(&self) -> (u32, u32) {
         let target = self.renderer.target();
         (target.width, target.height)
     }

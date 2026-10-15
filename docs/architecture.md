@@ -27,6 +27,7 @@ graph LR
     gltf["wxsl-gltf<br/>glTF import"]
     render["wxsl-render<br/>wgpu renderer + UI layer"]
     editor["wxsl-editor<br/>visual editor"]
+    mcp["wxsl-mcp<br/>MCP server"]
     facade["wxsl<br/>facade"]
 
     lang --> core
@@ -38,8 +39,9 @@ graph LR
     render --> core & frame & lang
     render -. "gltf feature" .-> gltf
     editor --> core & render & lang
+    mcp --> core & editor & render
     facade --> core
-    facade -. features .-> render & editor & stdlib
+    facade -. features .-> render & editor & stdlib & mcp
 ```
 
 Arrows point from dependent to dependency.
@@ -75,6 +77,7 @@ without a GPU, and shared with Dawn
 | `images` | off | PNG and JPEG decoding for scene textures (implies `render`) |
 | `gltf` | off | glTF/GLB import: `file` meshes, and with `stdlib` whole scenes through `wxsl::asset` (implies `images`) |
 | `webgl` | off | wgpu's WebGL2 backend on `wasm32` |
+| `mcp` | off | `wxsl-mcp`, an MCP server over the editor's commands (implies `editor`) |
 
 With `default-features = false`, `wxsl` is the graph model alone: no wgpu,
 no GUI. The renderer ships no shaders of its own; the application supplies
@@ -425,6 +428,14 @@ Every change to a document is a serializable `Command`, applied by
 `Editor::apply`; the UI's gestures emit them too. Undo restores a snapshot
 taken before each command, and `Query` is the read-only side
 ([ADR 0081](adr/0081-commands-are-the-editors-single-mutation-path.md)).
+
+`wxsl-mcp` serves those commands and queries to agents over the Model
+Context Protocol, on local HTTP beside the window or on stdio with no
+window. Its transport threads plan each call and hand it to the render
+thread, which the host drains once per frame with `Server::serve`. An
+agent's steps are marked in the history, and its paths stay under a
+project root
+([ADR 0083](adr/0083-an-mcp-server-over-the-editors-commands.md)).
 
 ## WXSL and the compiler
 

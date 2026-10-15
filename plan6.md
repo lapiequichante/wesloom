@@ -438,6 +438,60 @@ Extends pass stepping (N9) from a material to a whole scene.
 * **ADR:** transport, threading, the tool ↔ command mapping, and the
   security model.
 
+**Landed (2026-10-15, ADR 0083):**
+
+- `wxsl-mcp`, behind the facade's `mcp` feature. The transport is
+  hand-written on `std`, with no tokio and no HTTP crate:
+  - local HTTP: `POST /mcp`, JSON replies, a bearer token, and local
+    origins only;
+  - stdio: one message per line.
+
+  Both share one dispatcher. A call is planned on the transport's thread
+  and run on the render thread by `Server::serve`, once per frame, or
+  after `Server::wait` with no window.
+- 24 tools. Their names use underscores, because clients refuse dots:
+  - shaders: `nodes_search`, `graph_get`, `graph_edit`, `graph_compile`,
+    `function_save`, `macros_set`;
+  - pipeline: `pipeline_get`, `pipeline_edit`, `pass_param`;
+  - scene: `scene_list`, `scene_open`, `scene_import_gltf`, `scene_save`,
+    `scene_select`, `scene_set_transform`, `scene_assign_material`,
+    `environment_edit`;
+  - inspection: `view_get`, `view_set`, `view_step`, `view_screenshot` (a
+    PNG), `frame_stats`, `problems_list`;
+  - `history`, which lists, undoes or redoes steps.
+
+  The resources are a node reference (`wxsl://nodes`), the shader ABI and
+  the ADR index.
+- `graph_edit` applies raw commands as one batch. An `add_node` can carry
+  a `"ref"`, and later commands write `"$name"` for its id, so a batch can
+  name a node it adds (M0's gap). This needs `Graph::next_id`.
+- In the editor:
+  - `apply_as_agent` marks an agent's step, and `Query::History` lists
+    the steps;
+  - `set_agent` puts the agent's name in the status bar;
+  - `sync` is the compile half of `frame`;
+  - `define_function` saves a function given as source (M0's other gap);
+  - the session commands `set_canvas_mode`, `set_pipeline`,
+    `set_debug_view` and `step_frame`, with `Query::View`, are not undo
+    steps.
+- Every path, including those inside raw commands, resolves under a
+  `Root` or is refused.
+- The `editor` example has `--mcp <PORT>` (it prints the `claude mcp add`
+  line), `--mcp-stdio --headless` and `--mcp-root`.
+- Tests:
+  - without a device: the protocol, every tool's plan, refs, HTTP parsing,
+    the token and origin checks, and confinement;
+  - in `--test mcp`: an agent's session over HTTP (edit with refs,
+    compile, a refused batch, undo, a function saved, a debug view, a
+    screenshot, a step, refused paths, resources), and the line transport
+    until its input ends.
+- Not yet done:
+  - `pixel.probe` and the E2 debug views, which come with E2's queries;
+  - a generated node reference: `wxsl://nodes` is built at run time until
+    M2;
+  - server-sent notifications, such as a document changing under the
+    agent.
+
 ### M2 — Making WXSL writable by an LLM
 
 * **A reference generated from the registry**

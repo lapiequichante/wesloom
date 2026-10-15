@@ -12,6 +12,7 @@
 //! | `editor` | no | [`wxsl_editor`] (implies `render`) | you're building a UI that lets users edit graphs visually |
 //! | `images` | no | PNG and JPEG decoding (implies `render`) | a scene's textures come from image files |
 //! | `gltf` | no | the glTF importer (implies `images`) | you load `.gltf`/`.glb` files: geometry, or with `stdlib` whole scenes (`wxsl::asset`) |
+//! | `mcp` | no | [`wxsl_mcp`] (implies `editor`) | agents drive the editor through the Model Context Protocol |
 //!
 //! [`wxsl_core`] (the graph model) is always available; it has no wgpu
 //! or GUI dependency regardless of which features are enabled. See
@@ -98,6 +99,9 @@ pub use wxsl_render as render;
 
 #[cfg(feature = "editor")]
 pub use wxsl_editor as editor;
+
+#[cfg(feature = "mcp")]
+pub use wxsl_mcp as mcp;
 
 #[cfg(feature = "stdlib")]
 pub use wxsl_stdlib as stdlib;

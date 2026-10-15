@@ -35,6 +35,7 @@ truth.
 | `wxsl-gltf`: glTF import, scene documents out | `core`, `frame` (the registry is an argument) | no (ADR 0080) |
 | `wxsl-render`: wgpu renderer and UI layer | `core`, `frame`, `lang` (+ `gltf` behind its feature) | yes |
 | `wxsl-editor`: node editor, draws itself | `core`, `render`, `lang` | yes (ADR 0013) |
+| `wxsl-mcp`: MCP server over editor commands | `core`, `editor`, `render` | yes (ADR 0083) |
 | `wxsl`: facade, behind features | all of the above | via `render`/`editor` |
 
 Boundaries that must hold (ADR 0002):
@@ -119,6 +120,7 @@ Each test file's header says what it covers.
 | `wxsl_core::resources` (uniform or instance layout) | `material_resources` and `material_geometry` (they share `tests/probe`) |
 | editor commands, undo, transcripts, scene picking (no device) | `cargo test -p wxsl-editor` |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
+| MCP protocol, tools, HTTP, path confinement (no device) | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
 | a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, `gallery -- --screenshot`, or `viewer -- <demo> --screenshot out.png` |
@@ -207,6 +209,9 @@ The ADR named on each line holds the reasoning.
   `Editor::apply(Command)`; a new gesture is a new `Command` variant
   emitted into the frame's requests, never a direct mutation. Undo is
   by snapshot, so a command needs no hand-written inverse.
+- **Agents** (ADR 0083). An MCP tool is a plan in `wxsl_mcp::tools` over
+  commands and queries; a capability it lacks is a new `Command` or
+  `Query` first. Every path a tool takes goes through `Root`.
 - **One editor, several canvas modes.** The pipeline canvas and the scene
   mode are modes of the same editor over one renderer (ADRs 0043, 0082),
   not second editors.
@@ -221,6 +226,8 @@ The ADR named on each line holds the reasoning.
   - `viewer` opens a glTF file under an HDR (`--features gltf`);
   - `scene_check` runs the capability check;
   - `cinema` runs the post chain.
+  - `editor --features mcp -- --mcp <PORT>` (or `--mcp-stdio --headless`)
+    lets an agent drive the editor.
 - `resources/glb/`: Khronos sample models and their licenses.
 - `crates/wxsl/assets/`:
   - `pbr_cube.wxsl.json` is the commented node format;

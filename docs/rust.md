@@ -31,6 +31,7 @@ In the order a program meets them:
 | `SceneResources` | `wxsl::scene` | A scene loaded onto the GPU (the loader lives in `wxsl_render::scene`, ADR 0082). `create_bindings()` uploads its textures and applies its bindings; `draw_list()` turns it into a `DrawList`; `wxsl::scene::environment` turns its environment block into an `Environment`. |
 | `import_gltf`, `ImportedScene` | `wxsl::asset` | A `.gltf`/`.glb` file as a scene document with generated `gltf_pbr` materials, its geometry and images, and named warnings (`gltf` feature). `SceneResources::load_imported` uploads it. The device-free crate under it is `wxsl-gltf`. |
 | `Editor` | `wxsl::editor` | The visual editor, behind the `editor` feature. |
+| `Server`, `Frame`, `Root` | `wxsl::mcp` | An MCP server over the editor's commands, for agents (`mcp` feature). Call `Server::serve` after each frame. |
 
 The examples in `crates/wxsl/examples/` are complete programs:
 
@@ -40,7 +41,8 @@ The examples in `crates/wxsl/examples/` are complete programs:
   `damaged-helmet`, `car-concept` and `glam-velvet-sofa` are the samples in
   `resources/glb/`);
 - `gallery`: pipeline documents and effects;
-- `editor`: embedding the editor in a winit loop.
+- `editor`: embedding the editor in a winit loop, and with `--features mcp`
+  serving it to an agent (`--mcp <PORT>`, or `--mcp-stdio --headless`).
 
 ## Stability
 

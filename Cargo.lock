@@ -2928,6 +2928,7 @@ dependencies = [
  "wxsl-core",
  "wxsl-editor",
  "wxsl-gltf",
+ "wxsl-mcp",
  "wxsl-render",
  "wxsl-stdlib",
 ]
@@ -3007,6 +3008,19 @@ dependencies = [
  "lalrpop",
  "lalrpop-util",
  "wxsl-core",
+]
+
+[[package]]
+name = "wxsl-mcp"
+version = "0.0.0"
+dependencies = [
+ "png",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "wxsl-core",
+ "wxsl-editor",
+ "wxsl-render",
 ]
 
 [[package]]

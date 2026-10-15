@@ -39,7 +39,7 @@ use wxsl_render::{MeshKind, RenderError, ShaderLibrary, StockPipeline};
 
 use crate::canvas::{self, Canvas};
 use crate::command::{
-    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query,
+    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query, StepSummary,
 };
 use crate::function::{self, FunctionSource, Functions};
 use crate::history::{History, Host};
@@ -196,6 +196,11 @@ pub struct Editor {
     history: History,
     /// The open scene and the scene mode's state (ADR 0082).
     scene: SceneMode,
+    /// The agent attached through MCP, by name (ADR 0083).
+    agent: Option<String>,
+    /// A `set_pipeline` waiting for the device: a stock pipeline, or
+    /// `None` for the pipeline canvas's document.
+    pending_pipeline: Option<Option<StockPipeline>>,
 }
 
 impl Editor {
@@ -261,6 +266,8 @@ impl Editor {
             functions: Functions::default(),
             history: History::default(),
             scene: SceneMode::default(),
+            agent: None,
+            pending_pipeline: None,
         })
     }
 
@@ -378,6 +385,38 @@ impl Editor {
         true
     }
 
+    /// Save `source` as a function, the way the code panel's save does:
+    /// into the buffer already holding a function of the same name, or a
+    /// new one, so the code panel shows what an agent wrote. Returns the
+    /// node id, or the diagnostics by line. Not an undo step: the node
+    /// stays registered for the session.
+    pub fn define_function(
+        &mut self,
+        device: &wgpu::Device,
+        source: &str,
+    ) -> Result<String, Vec<LineMark>> {
+        let name = function::function_name(source);
+        let existing = self.functions.buffers.iter().position(|buffer| {
+            name.is_some() && function::function_name(buffer.buffer.text()) == name
+        });
+        let source = FunctionSource::new(source);
+        match existing {
+            Some(index) => {
+                self.functions.buffers[index] = source;
+                self.functions.current = index;
+            }
+            None => {
+                self.functions.buffers.push(source);
+                self.functions.current = self.functions.buffers.len() - 1;
+            }
+        }
+        if self.save_function(device) {
+            Ok(self.functions.current().node.clone().unwrap_or_default())
+        } else {
+            Err(self.functions.current().marks.clone())
+        }
+    }
+
     /// The graph being edited.
     pub fn graph(&self) -> &Graph {
         &self.graph
@@ -388,6 +427,23 @@ impl Editor {
     /// step; [`Command::Undo`] and [`Command::Redo`] walk them.
     pub fn apply(&mut self, command: Command) -> Result<Outcome, CommandError> {
         self.execute(&command, false)
+    }
+
+    /// [`Editor::apply`], for the agent [`Editor::set_agent`] names: the
+    /// step is marked as the agent's in the history (ADR 0083).
+    pub fn apply_as_agent(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        self.execute_as(&command, false, true)
+    }
+
+    /// Name the agent attached to the editor, or with `None` none. While
+    /// one is, the status bar says so.
+    pub fn set_agent(&mut self, agent: Option<String>) {
+        self.agent = agent;
+    }
+
+    /// The agent attached to the editor.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
     }
 
     /// Answer a read-only question about the editor's state.
@@ -474,20 +530,63 @@ impl Editor {
             Query::History => Answer::History {
                 undo: self.history.undo_depth(),
                 redo: self.history.redo_depth(),
+                steps: self.history.steps(),
             },
             Query::Scene => Answer::Scene {
                 scene: self.scene.doc.as_ref().map(|doc| doc.document.clone()),
                 selected: self.scene.selected,
                 material: self.scene.slot,
             },
+            Query::View => {
+                let views = self.preview.debug_views();
+                let debug_view = views
+                    .iter()
+                    .find(|(view, _)| view.id == self.preview.debug_view())
+                    .map_or("shaded", |(view, _)| view.label);
+                Answer::View {
+                    mode: self.mode,
+                    pipeline: if self.preview.runs_document() {
+                        "document".to_string()
+                    } else {
+                        self.preview.pipeline().name().to_string()
+                    },
+                    debug_view: debug_view.to_string(),
+                    debug_views: views
+                        .iter()
+                        .filter(|(_, available)| *available)
+                        .map(|(view, _)| view.label.to_string())
+                        .collect(),
+                    stepping: self.preview.stepping().map(|view| StepSummary {
+                        passes: view.passes,
+                        count: view.count,
+                        resources: view
+                            .resources
+                            .into_iter()
+                            .filter(|(_, _, drawable)| *drawable)
+                            .map(|(_, label, _)| label)
+                            .collect(),
+                        shown: view.shown,
+                    }),
+                }
+            }
         }
     }
 
     /// Run a command through the history: `gesture` when the UI emitted
     /// it, so a drag merges into one step.
     fn execute(&mut self, command: &Command, gesture: bool) -> Result<Outcome, CommandError> {
+        self.execute_as(command, gesture, false)
+    }
+
+    /// [`Editor::execute`], marking the step as an `agent`'s.
+    fn execute_as(
+        &mut self,
+        command: &Command,
+        gesture: bool,
+        agent: bool,
+    ) -> Result<Outcome, CommandError> {
         let mut history = std::mem::take(&mut self.history);
-        let result = history.execute(self, command, gesture);
+        let result = history.execute_as(self, command, gesture, agent);
         self.history = history;
         if result.is_ok()
             && matches!(
@@ -696,6 +795,54 @@ impl Editor {
         // would drop every click since the last frame.
         self.input.set_time(time);
 
+        if time >= self.next_poll {
+            self.next_poll = time + 0.5;
+            self.poll_shaders(device);
+        }
+        self.sync(device, queue);
+        let viewport = self.last_canvas_rect;
+        match self.scene.resources() {
+            Some(resources) if self.mode == CanvasMode::Scene && !viewport.is_empty() => {
+                self.preview.set_size(
+                    device,
+                    &mut self.renderer,
+                    viewport.width().round() as u32,
+                    viewport.height().round() as u32,
+                );
+                let environment = self
+                    .scene
+                    .environment(viewport.width() / viewport.height(), time as f32);
+                self.preview
+                    .render_scene(device, queue, &resources.draw_list(), &environment)?;
+            }
+            _ => {
+                self.preview
+                    .set_size(device, &mut self.renderer, Preview::SIZE, Preview::SIZE);
+                self.preview.render(device, queue, dt, time as f32)?;
+            }
+        }
+
+        self.ui.draw.clear();
+        let screen = Rect::from_min_size(Vec2::ZERO, self.input.size());
+        self.build(device, queue, screen);
+
+        let result = self
+            .renderer
+            .render(device, queue, encoder, target, &self.ui.draw);
+        self.input.end_frame();
+        result
+    }
+
+    /// Bring the preview up to date with the documents without drawing:
+    /// recompile an edited material or pipeline document, land a pending
+    /// `set_pipeline`, and load the scene's changes. [`Editor::frame`]
+    /// starts with it; a host that answers queries between frames, such as
+    /// the MCP server, calls it so the diagnostics and the generated code
+    /// describe the latest edit.
+    pub fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if let Some(pipeline) = self.pending_pipeline.take() {
+            self.choose_pipeline(device, pipeline);
+        }
         if self.dirty {
             let macros = self.graph.macros().clone();
             self.preview
@@ -728,11 +875,7 @@ impl Editor {
                 }
             }
         }
-        if time >= self.next_poll {
-            self.next_poll = time + 0.5;
-            self.poll_shaders(device);
-        }
-        // The scene first: a scene naming a lighting model the renderer
+        // The scene last: a scene naming a lighting model the renderer
         // lacks widens its set, and the material is rebuilt against it.
         if self
             .scene
@@ -742,37 +885,6 @@ impl Editor {
             self.preview
                 .rebuild(device, &self.graph, &self.registry, &macros);
         }
-        let viewport = self.last_canvas_rect;
-        match self.scene.resources() {
-            Some(resources) if self.mode == CanvasMode::Scene && !viewport.is_empty() => {
-                self.preview.set_size(
-                    device,
-                    &mut self.renderer,
-                    viewport.width().round() as u32,
-                    viewport.height().round() as u32,
-                );
-                let environment = self
-                    .scene
-                    .environment(viewport.width() / viewport.height(), time as f32);
-                self.preview
-                    .render_scene(device, queue, &resources.draw_list(), &environment)?;
-            }
-            _ => {
-                self.preview
-                    .set_size(device, &mut self.renderer, Preview::SIZE, Preview::SIZE);
-                self.preview.render(device, queue, dt, time as f32)?;
-            }
-        }
-
-        self.ui.draw.clear();
-        let screen = Rect::from_min_size(Vec2::ZERO, self.input.size());
-        self.build(device, queue, screen);
-
-        let result = self
-            .renderer
-            .render(device, queue, encoder, target, &self.ui.draw);
-        self.input.end_frame();
-        result
     }
 
     /// Lay the interface out and interact with it.
@@ -1005,7 +1117,7 @@ impl Editor {
                 &document,
                 &self.preview,
                 self.backend,
-                &self.message,
+                (&self.message, self.agent.as_deref()),
                 self.modified,
             );
         } else {
@@ -1034,7 +1146,7 @@ impl Editor {
                 &document,
                 &self.preview,
                 self.backend,
-                &self.message,
+                (&self.message, self.agent.as_deref()),
                 self.modified,
             );
         }
@@ -1291,40 +1403,13 @@ impl Editor {
             }
         }
         if requests.use_document {
-            self.material_uses_document = true;
-            self.pipeline
-                .get_or_insert_with(|| PipelineCanvas::open_on_preset(StockPipeline::Deferred))
-                .dirty = true;
-            self.message = "pipeline: the pipeline canvas's document".to_string();
+            self.choose_pipeline(device, None);
         }
         if let Some(pipeline) = requests.pipeline {
-            self.material_uses_document = false;
-            // Forward has no lighting pass to return a channel from.
-            if pipeline == StockPipeline::Forward && self.preview.debug_view() != 0 {
-                requests.debug_view = Some(0);
-            }
-            self.preview.set_pipeline(device, pipeline);
-            self.message = match self.preview.swap_progress() {
-                Some(progress) => format!("pipeline: {pipeline} ({progress})"),
-                None => format!("pipeline: {pipeline}"),
-            };
+            self.choose_pipeline(device, Some(pipeline));
         }
         if let Some(step) = requests.step {
-            let result = match step {
-                StepRequest::Start => self.preview.start_stepping(),
-                StepRequest::To(count, show) => self.preview.step_to(count, show),
-                StepRequest::Stop => {
-                    self.preview.stop_stepping();
-                    Ok(())
-                }
-            };
-            self.message = match result {
-                Ok(()) => match self.preview.stepping() {
-                    Some(view) => format!("frame: pass {} of {}", view.count, view.passes.len()),
-                    None => "frame: live".to_string(),
-                },
-                Err(error) => error.to_string(),
-            };
+            let _ = self.step(step);
         }
         if let Some(compare) = requests.compare {
             match self.preview.set_compare(device, compare) {
@@ -1341,14 +1426,7 @@ impl Editor {
             self.preview.split = split.clamp(0.0, 1.0);
         }
         if let Some(view) = requests.debug_view {
-            // A material macro the lighting pass inherits: the material
-            // is regenerated, and the lighting pass with it.
-            self.preview.set_debug_view(view);
-            self.dirty = true;
-            self.message = match lighting::debug_views().iter().find(|v| v.id == view) {
-                Some(found) => format!("view: {}", found.label),
-                None => "view: shaded".to_string(),
-            };
+            self.show_debug_view(view);
         }
         if let Some(mesh) = requests.mesh {
             self.preview.set_mesh(device, mesh);
@@ -1409,6 +1487,63 @@ impl Editor {
         if let Some(error) = error {
             self.message = error;
         }
+    }
+}
+
+impl Editor {
+    /// Preview through a stock pipeline, or with `None` through the
+    /// pipeline canvas's document.
+    fn choose_pipeline(&mut self, device: &wgpu::Device, pipeline: Option<StockPipeline>) {
+        let Some(pipeline) = pipeline else {
+            self.material_uses_document = true;
+            self.pipeline
+                .get_or_insert_with(|| PipelineCanvas::open_on_preset(StockPipeline::Deferred))
+                .dirty = true;
+            self.message = "pipeline: the pipeline canvas's document".to_string();
+            return;
+        };
+        self.material_uses_document = false;
+        // Forward has no lighting pass to return a channel from.
+        if pipeline == StockPipeline::Forward && self.preview.debug_view() != 0 {
+            self.show_debug_view(0);
+        }
+        self.preview.set_pipeline(device, pipeline);
+        self.message = match self.preview.swap_progress() {
+            Some(progress) => format!("pipeline: {pipeline} ({progress})"),
+            None => format!("pipeline: {pipeline}"),
+        };
+    }
+
+    /// Show a debug view by id, or shade again with 0.
+    fn show_debug_view(&mut self, view: i32) {
+        // A material macro the lighting pass inherits: the material is
+        // regenerated, and the lighting pass with it.
+        self.preview.set_debug_view(view);
+        self.dirty = true;
+        self.message = match lighting::debug_views().iter().find(|v| v.id == view) {
+            Some(found) => format!("view: {}", found.label),
+            None => "view: shaded".to_string(),
+        };
+    }
+
+    /// Start, move or stop pass stepping, saying where it landed.
+    fn step(&mut self, step: StepRequest) -> Result<(), RenderError> {
+        let result = match step {
+            StepRequest::Start => self.preview.start_stepping(),
+            StepRequest::To(count, show) => self.preview.step_to(count, show),
+            StepRequest::Stop => {
+                self.preview.stop_stepping();
+                Ok(())
+            }
+        };
+        self.message = match &result {
+            Ok(()) => match self.preview.stepping() {
+                Some(view) => format!("frame: pass {} of {}", view.count, view.passes.len()),
+                None => "frame: live".to_string(),
+            },
+            Err(error) => error.to_string(),
+        };
+        result
     }
 }
 
@@ -1574,6 +1709,59 @@ impl Host for Editor {
         self.scene.selected = instance;
         if material.is_some() {
             self.open_slot(material);
+        }
+        Ok(())
+    }
+
+    fn view(&mut self, command: &Command) -> Result<(), CommandError> {
+        let render = |error: RenderError| CommandError::Render(error.to_string());
+        match command {
+            Command::SetCanvasMode { mode } => self.set_canvas_mode(*mode),
+            Command::SetPipeline { pipeline } => {
+                self.pending_pipeline = Some(if pipeline == "document" {
+                    None
+                } else {
+                    Some(
+                        StockPipeline::parse(pipeline)
+                            .ok_or_else(|| CommandError::NoSuchPipeline(pipeline.clone()))?,
+                    )
+                });
+            }
+            Command::SetDebugView { view } => {
+                let id = if view == "shaded" {
+                    0
+                } else {
+                    self.preview
+                        .debug_views()
+                        .into_iter()
+                        .find(|(found, available)| *available && found.label == view)
+                        .map(|(found, _)| found.id)
+                        .ok_or_else(|| CommandError::NoSuchDebugView(view.clone()))?
+                };
+                self.show_debug_view(id);
+            }
+            Command::StepFrame { passes, show } => {
+                let Some(count) = *passes else {
+                    return self.step(StepRequest::Stop).map_err(render);
+                };
+                self.step(StepRequest::Start).map_err(render)?;
+                self.step(StepRequest::To(count, None)).map_err(render)?;
+                if let Some(label) = show {
+                    let id = self
+                        .preview
+                        .stepping()
+                        .and_then(|view| {
+                            view.resources
+                                .into_iter()
+                                .find(|(_, found, drawable)| *drawable && found == label)
+                        })
+                        .map(|(id, _, _)| id)
+                        .ok_or_else(|| CommandError::NoSuchResource(label.clone()))?;
+                    self.step(StepRequest::To(count, Some(id)))
+                        .map_err(render)?;
+                }
+            }
+            _ => unreachable!("not a view command"),
         }
         Ok(())
     }
@@ -3169,7 +3357,7 @@ fn status_bar(
     document: &StatusBarDocument,
     preview: &Preview,
     backend: MsdfBackend,
-    message: &str,
+    (message, agent): (&str, Option<&str>),
     modified: bool,
 ) {
     let theme = *ui.theme();
@@ -3200,6 +3388,15 @@ fn status_bar(
         message.to_string()
     };
     ui.small_label(inner, &right, color, Align::Right);
+    // An attached agent is always visible (ADR 0083).
+    if let Some(agent) = agent {
+        ui.small_label(
+            inner,
+            &format!("● agent: {agent}"),
+            theme.palette.accent,
+            Align::Center,
+        );
+    }
 }
 
 /// The widget id an input's value editor takes, so the pass that *reserves*

@@ -15,6 +15,7 @@ wxsl-render = { workspace = true, optional = true }
 wxsl-editor = { workspace = true, optional = true }
 wxsl-stdlib = { workspace = true, optional = true }
 wxsl-gltf = { workspace = true, optional = true }
+wxsl-mcp = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -45,6 +46,8 @@ images = ["render", "wxsl-render/images"]
 gltf = ["render", "wxsl-render/gltf", "images", "dep:wxsl-gltf", "wxsl-editor?/gltf"]
 # WebGL2 as the browser fallback behind WebGPU (ADR 0075); wasm32 only.
 webgl = ["render", "wxsl-render/webgl"]
+# An MCP server over the editor's commands, for agents (ADR 0083).
+mcp = ["editor", "dep:wxsl-mcp"]
 
 [[example]]
 name = "viewer"
@@ -91,6 +94,12 @@ name = "editor_frame"
 # Drives the editor for a few frames on a real device; skips when there is no
 # adapter, like render_cube.rs.
 required-features = ["editor", "stdlib"]
+
+[[test]]
+name = "mcp"
+# A headless editor driven through the MCP server; the device half skips
+# without an adapter.
+required-features = ["mcp", "stdlib"]
 
 [[test]]
 name = "gltf_import"

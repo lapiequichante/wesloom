@@ -90,6 +90,12 @@
 //! answers the read-only questions. A transcript is one JSON command per
 //! line ([`Command::parse_transcript`]).
 //!
+//! `wxsl-mcp` serves the same vocabulary to agents
+//! ([ADR 0083](../../../docs/adr/0083-an-mcp-server-over-the-editors-commands.md)):
+//! [`Editor::apply_as_agent`] marks their steps in the history,
+//! [`Editor::sync`] compiles between frames, and the session commands
+//! ([`Command::SetPipeline`], [`Command::StepFrame`], …) are not undo steps.
+//!
 //! # `wxsl-core` still knows nothing about how it looks
 //!
 //! Which ADR 0004 required and this crate keeps: a node *definition* carries
@@ -151,8 +157,8 @@ mod widgets;
 pub use app::{Editor, EditorConfig};
 pub use canvas::View;
 pub use command::{
-    Answer, Command, CommandError, Document, NodeSummary, Outcome, PassSummary, Query,
-    SocketSummary, TranscriptError,
+    Answer, Command, CommandError, Document, HistoryStep, NodeSummary, Outcome, PassSummary, Query,
+    SocketSummary, StepSummary, TranscriptError,
 };
 pub use pipeline::CanvasMode;
 pub use preview::{Preview, PreviewStatus, StepView};
