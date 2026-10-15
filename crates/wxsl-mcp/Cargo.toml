@@ -20,3 +20,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # PNG encoding for screenshots; already in the tree through `image`.
 png = "0.18"
+
+[dev-dependencies]
+# The shipped registry, for the generated node reference.
+wxsl-stdlib = { workspace = true }
+# The authoring guide's sources are derived the way a save derives them.
+wxsl-lang = { workspace = true }

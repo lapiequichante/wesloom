@@ -1,0 +1,38 @@
+# "Make a material for rusty metal, look at it, fix it" (plan6 M2): the
+# acceptance test of the MCP track. One agent session, recorded on
+# 2026-10-15 against the `editor` example's starting graph (pbr_cube), one
+# JSON-RPC message per line; `#` lines are notes. Replayed by
+# `crates/wxsl/tests/mcp.rs`, which checks every answer and the pictures.
+#
+# Start, and look at what is there.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"graph_get","arguments":{}}}
+# Which noises are there? `generative.fbm3` is fractal value noise in 0..1.
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nodes_search","arguments":{"search":"noise"}}}
+# Clear the sample material, keeping its `output.surface` (node 15).
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"graph_edit","arguments":{"commands":[{"command":"remove_nodes","nodes":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,16,17,18,19,20,21,22,23,24,25,26]}]}}}
+# Steel with rust patches: fbm over world position, thresholded by a soft
+# step into a mask; the mask mixes the albedo, the metalness and the
+# roughness.
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"graph_edit","arguments":{"commands":[{"command":"add_node","ref":"p","node":{"def":"input.world_position"}},{"command":"add_node","ref":"s","node":{"def":"math.multiply","generics":{"A":"vec3","B":"f32"},"params":{"b":{"f32":4.0}}}},{"command":"add_node","ref":"n","node":{"def":"generative.fbm3"}},{"command":"add_node","ref":"m","node":{"def":"math.smootherstep","generics":{"T":"f32"},"params":{"edge0":{"f32":0.45},"edge1":{"f32":0.6}}}},{"command":"add_node","ref":"c","node":{"def":"math.mix","generics":{"T":"vec3"},"params":{"a":{"vec3":[0.56,0.57,0.58]},"b":{"vec3":[0.3,0.08,0.02]}}}},{"command":"add_node","ref":"mt","node":{"def":"math.mix","generics":{"T":"f32"},"params":{"a":{"f32":1.0},"b":{"f32":0.0}}}},{"command":"add_node","ref":"r","node":{"def":"math.mix","generics":{"T":"f32"},"params":{"a":{"f32":0.25},"b":{"f32":0.85}}}},{"command":"connect","from":{"node":"$p","socket":"out"},"to":{"node":"$s","socket":"a"}},{"command":"connect","from":{"node":"$s","socket":"out"},"to":{"node":"$n","socket":"p"}},{"command":"connect","from":{"node":"$n","socket":"out"},"to":{"node":"$m","socket":"x"}},{"command":"connect","from":{"node":"$m","socket":"out"},"to":{"node":"$c","socket":"t"}},{"command":"connect","from":{"node":"$m","socket":"out"},"to":{"node":"$mt","socket":"t"}},{"command":"connect","from":{"node":"$m","socket":"out"},"to":{"node":"$r","socket":"t"}},{"command":"connect","from":{"node":"$c","socket":"out"},"to":{"node":15,"socket":"base_color"}},{"command":"connect","from":{"node":"$mt","socket":"out"},"to":{"node":15,"socket":"metallic"}},{"command":"connect","from":{"node":"$r","socket":"out"},"to":{"node":15,"socket":"roughness"}}]}}}
+# Look. The rust is a flat, too-bright orange, and where the mask is half-
+# way there is a pale rim: metallic steel tinted halfway to rust.
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"view_screenshot","arguments":{"viewport":true}}}
+# Fix the rust: an albedo varied by a second, finer noise, as a function.
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"function_save","arguments":{"source":"// Rust albedo\n//\n// The base colour of rust over steel: bare steel where `mask` is 0, rust\n// where it is 1, the rust going from dark pits to orange flakes with\n// `detail`.\n\nfn rust_albedo(\n    mask: f32,   // 0 = bare steel, 1 = rust. @default 0.0\n    detail: f32, // A second noise in 0..1 that varies the rust. @default 0.5\n) -> vec3f {\n    let steel = vec3f(0.56, 0.57, 0.58);\n    let pits = vec3f(0.08, 0.025, 0.008);\n    let flakes = vec3f(0.32, 0.09, 0.025);\n    return mix(steel, mix(pits, flakes, detail), mask);\n}"}}}
+# Use it for the albedo, and switch the metalness on a much sharper mask
+# than the soft one.
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"graph_edit","arguments":{"commands":[{"command":"add_node","ref":"fine","node":{"def":"math.multiply","generics":{"A":"vec3","B":"f32"},"params":{"b":{"f32":23.0}}}},{"command":"add_node","ref":"detail","node":{"def":"generative.fbm3"}},{"command":"add_node","ref":"albedo","node":{"def":"user.rust_albedo"}},{"command":"add_node","ref":"edge","node":{"def":"math.smootherstep","generics":{"T":"f32"},"params":{"edge0":{"f32":0.49},"edge1":{"f32":0.51}}}},{"command":"connect","from":{"node":27,"socket":"out"},"to":{"node":"$fine","socket":"a"}},{"command":"connect","from":{"node":"$fine","socket":"out"},"to":{"node":"$detail","socket":"p"}},{"command":"connect","from":{"node":30,"socket":"out"},"to":{"node":"$albedo","socket":"mask"}},{"command":"connect","from":{"node":"$detail","socket":"out"},"to":{"node":"$albedo","socket":"detail"}},{"command":"connect","from":{"node":"$albedo","socket":"out"},"to":{"node":15,"socket":"base_color"}},{"command":"remove_nodes","nodes":[31]},{"command":"connect","from":{"node":29,"socket":"out"},"to":{"node":"$edge","socket":"x"}},{"command":"connect","from":{"node":"$edge","socket":"out"},"to":{"node":32,"socket":"t"}}]}}}
+# Look. The rust has grain now, but the rim is still there: between the
+# metal mask's edge and the albedo's, steel-grey dielectric reads pale.
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"view_screenshot","arguments":{"viewport":true}}}
+# Fix the rim: the albedo follows the sharp mask too.
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"graph_edit","arguments":{"commands":[{"command":"connect","from":{"node":37,"socket":"out"},"to":{"node":36,"socket":"mask"}},{"command":"set_param","node":37,"socket":"edge0","value":{"f32":0.47}}]}}}
+# Look. Steel and dark, grainy rust, no rim.
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"view_screenshot","arguments":{"viewport":true}}}
+# Check: it compiles clean, no problems, and the history shows the four
+# steps as the agent's.
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"graph_compile","arguments":{}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"problems_list","arguments":{}}}
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"history","arguments":{}}}

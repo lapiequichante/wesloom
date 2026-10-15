@@ -435,7 +435,13 @@ window. Its transport threads plan each call and hand it to the render
 thread, which the host drains once per frame with `Server::serve`. An
 agent's steps are marked in the history, and its paths stay under a
 project root
-([ADR 0083](adr/0083-an-mcp-server-over-the-editors-commands.md)).
+([ADR 0083](adr/0083-an-mcp-server-over-the-editors-commands.md)). An
+agent learns the vocabulary from two resources that cannot drift: a node
+reference generated from the registries (also `docs/reference/nodes.md`)
+and an authoring guide whose snippets are run as tests. A function it
+writes is validated by the device when saved, and an invalid shader is a
+reported error, never a panic
+([ADR 0084](adr/0084-wxsl-an-agent-can-write.md)).
 
 ## WXSL and the compiler
 

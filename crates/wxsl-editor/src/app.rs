@@ -341,7 +341,10 @@ impl Editor {
     /// nothing changes. Returns whether it took.
     pub fn save_function(&mut self, device: &wgpu::Device) -> bool {
         let source = self.functions.current().buffer.text().to_string();
-        let derived = function::derive(&source, self.preview.library());
+        let library = self.preview.library();
+        let derived = function::derive(&source, library).and_then(|(path, definition)| {
+            function::validate(device, &path, &source, library).map(|()| (path, definition))
+        });
         let (path, definition) = match derived {
             Ok(derived) => derived,
             Err(marks) => {

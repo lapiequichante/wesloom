@@ -3026,7 +3026,7 @@ pub fn wxsl_render::variants::ShaderVariants::contains(&self, &wxsl_render::vari
 pub fn wxsl_render::variants::ShaderVariants::effect(&mut self, &wgpu::api::device::Device, &wxsl_render::library::ShaderLibrary, wxsl_frame::effect::Effect, &wxsl_core::macros::MacroSet, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> core::result::Result<alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>, wxsl_render::error::RenderError>
 pub fn wxsl_render::variants::ShaderVariants::effect_key(&wxsl_frame::effect::Effect, &wxsl_core::macros::MacroSet, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> wxsl_render::variants::VariantKey
 pub fn wxsl_render::variants::ShaderVariants::get(&self, &wxsl_render::variants::VariantKey) -> core::option::Option<&alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>>
-pub fn wxsl_render::variants::ShaderVariants::insert(&mut self, &wgpu::api::device::Device, wxsl_render::variants::VariantKey, alloc::string::String, alloc::string::String) -> alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>
+pub fn wxsl_render::variants::ShaderVariants::insert(&mut self, &wgpu::api::device::Device, wxsl_render::variants::VariantKey, alloc::string::String, alloc::string::String) -> core::result::Result<alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>, wxsl_render::error::RenderError>
 pub fn wxsl_render::variants::ShaderVariants::is_empty(&self) -> bool
 pub fn wxsl_render::variants::ShaderVariants::len(&self) -> usize
 pub fn wxsl_render::variants::ShaderVariants::material(&mut self, &wgpu::api::device::Device, &wxsl_render::library::ShaderLibrary, &wxsl_render::material::Material, wxsl_core::abi::MaterialStage) -> core::result::Result<alloc::rcs::arc::Arc<wxsl_render::variants::ShaderVariant>, wxsl_render::error::RenderError>
@@ -3067,6 +3067,7 @@ impl core::marker::UnsafeUnpin for wxsl_render::variants::VariantKey
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_render::variants::VariantKey
 impl core::panic::unwind_safe::UnwindSafe for wxsl_render::variants::VariantKey
 pub fn wxsl_render::variants::compile(&wxsl_render::library::ShaderLibrary, &[(&str, alloc::borrow::Cow<'_, str>)], &str, &wxsl_core::macros::MacroSet) -> core::result::Result<alloc::string::String, wxsl_render::error::RenderError>
+pub fn wxsl_render::variants::shader_module(&wgpu::api::device::Device, &str, &str) -> core::result::Result<wgpu::api::shader_module::ShaderModule, wxsl_render::error::RenderError>
 pub enum wxsl_render::AttributeValues
 pub wxsl_render::AttributeValues::F32(alloc::vec::Vec<f32>)
 pub wxsl_render::AttributeValues::Vec2(alloc::vec::Vec<[f32; 2]>)

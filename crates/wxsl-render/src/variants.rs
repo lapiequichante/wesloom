@@ -156,21 +156,22 @@ impl ShaderVariants {
     /// ([`crate::swap`]).
     ///
     /// Counted as a miss, because it is one: the work happened, just not
-    /// on this thread.
+    /// on this thread. WGSL the device refuses is an error, and nothing is
+    /// cached.
     pub fn insert(
         &mut self,
         device: &wgpu::Device,
         key: VariantKey,
         label: String,
         wgsl: String,
-    ) -> Arc<ShaderVariant> {
+    ) -> Result<Arc<ShaderVariant>, RenderError> {
         if let Some(existing) = self.entries.get(&key) {
-            return Arc::clone(existing);
+            return Ok(Arc::clone(existing));
         }
         self.stats.misses += 1;
-        let variant = Arc::new(build_module(device, key, label, wgsl));
+        let variant = Arc::new(build_module(device, key, label, wgsl)?);
         self.entries.insert(key, Arc::clone(&variant));
-        variant
+        Ok(variant)
     }
 
     /// The variant `effect` runs, for `macros`, the enabled lighting set
@@ -254,7 +255,7 @@ impl ShaderVariants {
         }
         self.stats.misses += 1;
         let (label, wgsl) = build();
-        let variant = Arc::new(build_module(device, key, label, wgsl?));
+        let variant = Arc::new(build_module(device, key, label, wgsl?)?);
         self.entries.insert(key, Arc::clone(&variant));
         Ok(variant)
     }
@@ -426,16 +427,55 @@ fn build_module(
     key: VariantKey,
     label: String,
     wgsl: String,
-) -> ShaderVariant {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&label),
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(wgsl.as_str())),
-    });
-    ShaderVariant {
+) -> Result<ShaderVariant, RenderError> {
+    let module = shader_module(device, &label, &wgsl)?;
+    Ok(ShaderVariant {
         key,
         module,
         wgsl,
         label,
+    })
+}
+
+/// Create a shader module, or say why the device refuses `wgsl`.
+///
+/// The WXSL compiler does not type-check function bodies, so a module it
+/// accepts can still be invalid WGSL: a user function with a wrong return
+/// type, a hot-reloaded file with a typo. The device's validation is
+/// caught in an error scope and becomes [`RenderError::ShaderCompile`],
+/// instead of wgpu's uncaptured-error panic. Native validation answers at
+/// once; where the scope answers later (WebGPU) the module is returned
+/// unchecked.
+pub fn shader_module(
+    device: &wgpu::Device,
+    label: &str,
+    wgsl: &str,
+) -> Result<wgpu::ShaderModule, RenderError> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(wgsl)),
+    });
+    match ready(scope.pop()).flatten() {
+        Some(error) => Err(RenderError::ShaderCompile {
+            module: label.to_string(),
+            diagnostic: error.to_string(),
+        }),
+        None => Ok(module),
+    }
+}
+
+/// A future's output if it is ready on the first poll.
+fn ready<T>(future: impl core::future::Future<Output = T>) -> Option<T> {
+    struct Noop;
+    impl std::task::Wake for Noop {
+        fn wake(self: Arc<Self>) {}
+    }
+    let waker = std::task::Waker::from(Arc::new(Noop));
+    let mut context = std::task::Context::from_waker(&waker);
+    match core::pin::pin!(future).poll(&mut context) {
+        std::task::Poll::Ready(output) => Some(output),
+        std::task::Poll::Pending => None,
     }
 }
 

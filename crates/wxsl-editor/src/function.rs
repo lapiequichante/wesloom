@@ -12,8 +12,8 @@
 //!
 //! [`derive()`] is the device-free half — parse, derive, resolve against the
 //! library — and answers with the node or with the compiler's diagnostics
-//! placed on their own lines. Whether the WGSL validates is the preview's
-//! to say, the moment a graph uses the node.
+//! placed on their own lines. [`validate()`] is the device half: the WGSL
+//! the module compiles to must validate, or the save is refused.
 
 use wxsl_core::node::NodeDefinition;
 use wxsl_lang::ast::Declaration;
@@ -197,6 +197,36 @@ pub fn derive(
     wxsl_lang::compile_to_wxsl(&modules, &path, &wxsl_lang::Bindings::new())
         .map_err(|errors| marks(source, Some(&path), &errors))?;
     Ok((path, definition))
+}
+
+/// The device half of a save: compile the module on its own to WGSL and
+/// have `device` validate it. The WXSL compiler does not type-check a
+/// body, so without this a function returning the wrong type saves
+/// cleanly and only fails once a graph uses it. A templated function has
+/// no WGSL until a node instantiates it, so it is checked then.
+pub fn validate(
+    device: &wgpu::Device,
+    path: &str,
+    source: &str,
+    library: &ShaderLibrary,
+) -> Result<(), Vec<LineMark>> {
+    let mark = |message: String| {
+        vec![LineMark {
+            line: 0,
+            column: 0,
+            message,
+        }]
+    };
+    let wgsl = wxsl_render::variants::compile(
+        library,
+        &[(path, std::borrow::Cow::Borrowed(source))],
+        path,
+        &Default::default(),
+    )
+    .map_err(|error| mark(error.to_string()))?;
+    wxsl_render::variants::shader_module(device, path, &wgsl)
+        .map(drop)
+        .map_err(|error| mark(error.to_string()))
 }
 
 /// Place `errors` on `source`'s lines. A diagnostic that names another

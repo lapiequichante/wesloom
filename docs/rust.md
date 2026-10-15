@@ -43,6 +43,8 @@ The examples in `crates/wxsl/examples/` are complete programs:
 - `gallery`: pipeline documents and effects;
 - `editor`: embedding the editor in a winit loop, and with `--features mcp`
   serving it to an agent (`--mcp <PORT>`, or `--mcp-stdio --headless`).
+  An agent starts from `crates/wxsl-mcp/authoring.md` and
+  `docs/reference/nodes.md`.
 
 ## Stability
 

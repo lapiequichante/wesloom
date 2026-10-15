@@ -805,8 +805,13 @@ impl Renderer {
         for compiled in swap.drain() {
             match compiled.wgsl {
                 Ok(wgsl) => {
-                    self.variants
-                        .insert(device, compiled.key, compiled.label, wgsl);
+                    if let Err(error) =
+                        self.variants
+                            .insert(device, compiled.key, compiled.label, wgsl)
+                    {
+                        self.swap = None;
+                        return Err(error);
+                    }
                 }
                 Err(error) => {
                     // The new pipeline cannot be built. Keep presenting

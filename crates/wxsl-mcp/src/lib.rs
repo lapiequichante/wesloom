@@ -41,6 +41,7 @@
 //! | `tools` | the tools and resources, each a plan over commands and queries |
 //! | `http` | the streamable HTTP transport on `std::net`: token, origin, `/mcp` |
 //! | `stdio` | the stdio transport: one message per line |
+//! | `reference` | the node reference, generated from the registries |
 //! | `sandbox` | the project root every path is confined to |
 //! | `image` | screenshots as scaled-down PNG |
 //!
@@ -58,6 +59,7 @@
 mod http;
 mod image;
 mod protocol;
+mod reference;
 mod sandbox;
 mod stdio;
 mod tools;
@@ -72,6 +74,7 @@ use wxsl_editor::Editor;
 
 use crate::protocol::{Dispatcher, Job, Shared};
 
+pub use reference::node_reference;
 pub use sandbox::Root;
 
 /// How long a transport waits for the render thread to answer a call.

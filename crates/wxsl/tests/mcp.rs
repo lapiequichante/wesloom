@@ -2,6 +2,9 @@
 //! session over HTTP, and the same calls over the line transport stdio
 //! uses.
 //!
+//! Also plan6 M2's acceptance test, the recorded "rusty metal" session in
+//! `transcripts/`, and the snippets of `wxsl-mcp/authoring.md`.
+//!
 //! The protocol, the tool plans, path confinement and HTTP parsing are
 //! tested without a device in `wxsl-mcp` itself. What needs one is the
 //! editor the tools run against, so this **skips** (prints a note and
@@ -318,6 +321,39 @@ impl Write for Captured {
     }
 }
 
+/// Feed `script` (one JSON-RPC message per line) through the line
+/// transport, serving `editor` until the input ends. Returns the answers.
+fn replay(gpu: &GpuContext, editor: &mut Editor, script: String) -> Vec<Json> {
+    let output = Captured::default();
+    let mut server = Server::lines(
+        Root::new(ROOT).unwrap(),
+        BufReader::new(std::io::Cursor::new(script.into_bytes())),
+        output.clone(),
+    )
+    .unwrap();
+    let mut time = 0.0;
+    while !server.is_closed() {
+        if server.wait(Duration::from_millis(20)) {
+            time += 0.016;
+            server.serve(
+                editor,
+                &Frame {
+                    device: &gpu.device,
+                    queue: &gpu.queue,
+                    width: SIZE.0,
+                    height: SIZE.1,
+                    time,
+                },
+            );
+        }
+    }
+    let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+    BufReader::new(text.as_bytes())
+        .lines()
+        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+        .collect()
+}
+
 #[test]
 fn the_line_transport_serves_until_its_input_ends() {
     let Some(gpu) = gpu() else { return };
@@ -336,34 +372,7 @@ fn the_line_transport_serves_until_its_input_ends() {
     .iter()
     .map(|message| format!("{message}\n"))
     .collect::<String>();
-    let output = Captured::default();
-    let mut server = Server::lines(
-        Root::new(ROOT).unwrap(),
-        BufReader::new(std::io::Cursor::new(script.into_bytes())),
-        output.clone(),
-    )
-    .unwrap();
-    let mut time = 0.0;
-    while !server.is_closed() {
-        if server.wait(Duration::from_millis(20)) {
-            time += 0.016;
-            server.serve(
-                &mut editor,
-                &Frame {
-                    device: &gpu.device,
-                    queue: &gpu.queue,
-                    width: SIZE.0,
-                    height: SIZE.1,
-                    time,
-                },
-            );
-        }
-    }
-    let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
-    let answers: Vec<Json> = BufReader::new(text.as_bytes())
-        .lines()
-        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
-        .collect();
+    let answers = replay(&gpu, &mut editor, script);
     assert_eq!(
         answers.len(),
         3,
@@ -373,4 +382,179 @@ fn the_line_transport_serves_until_its_input_ends() {
     let problems = tool_json(&answers[1]["result"]).unwrap();
     assert_eq!(problems["diagnostics"]["material"], json!([]));
     assert_eq!(answers[2]["result"]["content"][0]["type"], "image");
+}
+
+/// A screenshot answer's pixels.
+fn picture(result: &Json) -> image::RgbaImage {
+    let data = result["content"][0]["data"].as_str().expect("an image");
+    let mut bytes = Vec::new();
+    let mut bits = (0u32, 0);
+    for c in data.bytes().filter(|&c| c != b'=') {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            _ => 63,
+        };
+        bits = (bits.0 << 6 | u32::from(value), bits.1 + 6);
+        if bits.1 >= 8 {
+            bits.1 -= 8;
+            bytes.push((bits.0 >> bits.1) as u8);
+        }
+    }
+    image::load_from_memory(&bytes).unwrap().to_rgba8()
+}
+
+/// The share of the lit pixels that look like rust, and like steel.
+fn rust_and_steel(picture: &image::RgbaImage) -> (f32, f32) {
+    let (mut lit, mut rust, mut steel) = (0, 0, 0);
+    for pixel in picture.pixels() {
+        let [r, g, b, _] = pixel.0.map(f32::from);
+        if r + g + b < 60.0 {
+            continue;
+        }
+        lit += 1;
+        if r > 1.4 * g && g > b {
+            rust += 1;
+        } else if (r - b).abs() < 30.0 && (g - b).abs() < 30.0 {
+            steel += 1;
+        }
+    }
+    let lit = lit.max(1) as f32;
+    (rust as f32 / lit, steel as f32 / lit)
+}
+
+/// plan6 M2's acceptance test: an agent's recorded session, "make a
+/// material for rusty metal, look at it, fix it", replayed against the
+/// same starting graph.
+#[test]
+fn the_rusty_metal_session_replays() {
+    let Some(gpu) = gpu() else { return };
+    let Some(mut editor) = editor(&gpu) else {
+        return;
+    };
+    let transcript = include_str!("transcripts/rusty_metal.jsonl");
+    let messages: Vec<&str> = transcript
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .collect();
+    let requests: Vec<Json> = messages
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|message: &Json| message.get("id").is_some())
+        .collect();
+    let answers = replay(&gpu, &mut editor, messages.join("\n") + "\n");
+    assert_eq!(answers.len(), requests.len(), "one answer per request");
+
+    let mut pictures = Vec::new();
+    for (request, answer) in requests.iter().zip(&answers) {
+        let name = request["params"]["name"].as_str().unwrap_or("initialize");
+        assert_eq!(answer["id"], request["id"]);
+        assert!(answer.get("error").is_none(), "{name}: {answer}");
+        let result = &answer["result"];
+        assert_ne!(result["isError"], true, "{name}: {result}");
+        match name {
+            "graph_edit" => {
+                let edit = tool_json(result).unwrap();
+                assert_eq!(edit["diagnostics"]["material"], json!([]), "{edit}");
+            }
+            "function_save" => {
+                assert_eq!(tool_json(result).unwrap()["node"], "user.rust_albedo");
+            }
+            "view_screenshot" => pictures.push(picture(result)),
+            _ => {}
+        }
+    }
+
+    // It looked, three times, and each fix changed the picture.
+    assert_eq!(pictures.len(), 3);
+    assert_ne!(pictures[0], pictures[1]);
+    assert_ne!(pictures[1], pictures[2]);
+    let (rust, steel) = rust_and_steel(&pictures[2]);
+    assert!(
+        rust > 0.1 && steel > 0.1,
+        "rust over steel: {rust:.2} rust, {steel:.2} steel"
+    );
+
+    // What it left: four steps, all the agent's, and the albedo is the
+    // function it wrote.
+    let history = tool_json(&answers.last().unwrap()["result"]).unwrap();
+    let steps = history["history"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 4);
+    assert!(steps.iter().all(|step| step["agent"] == true));
+    let graph = editor.graph();
+    let (output, _) = graph
+        .nodes()
+        .find(|(_, node)| node.def == "output.surface")
+        .unwrap();
+    let albedo = graph
+        .edges()
+        .iter()
+        .find(|edge| edge.to.node == output && edge.to.socket.as_str() == "base_color")
+        .map(|edge| graph.node(edge.from.node).unwrap().def.clone());
+    assert_eq!(albedo.as_deref(), Some("user.rust_albedo"));
+}
+
+/// The fenced snippets of `wxsl-mcp/authoring.md`, in order: a `wxsl`
+/// source to save, a refused one with the `text` its diagnostic contains,
+/// or a `json tool` call.
+fn guide_snippets() -> Vec<(String, String, Option<String>)> {
+    let guide = include_str!("../../wxsl-mcp/authoring.md");
+    let mut snippets: Vec<(String, String, Option<String>)> = Vec::new();
+    let mut lines = guide.lines();
+    while let Some(line) = lines.next() {
+        let Some(info) = line.strip_prefix("```").filter(|info| !info.is_empty()) else {
+            continue;
+        };
+        let body: Vec<&str> = lines.by_ref().take_while(|line| *line != "```").collect();
+        let body = body.join("\n") + "\n";
+        if info == "text" {
+            snippets.last_mut().expect("a text after a snippet").2 = Some(body);
+        } else {
+            snippets.push((info.to_string(), body, None));
+        }
+    }
+    snippets
+}
+
+#[test]
+fn the_authoring_guide_holds() {
+    let Some(gpu) = gpu() else { return };
+    let Some(mut editor) = editor(&gpu) else {
+        return;
+    };
+    let snippets = guide_snippets();
+    let mut script = String::new();
+    for (id, (info, body, _)) in snippets.iter().enumerate() {
+        let params = match info.as_str() {
+            "wxsl" | "wxsl refused" => {
+                json!({"name": "function_save", "arguments": {"source": body}})
+            }
+            "json tool" => serde_json::from_str(body).expect("a guide call parses"),
+            other => panic!("unknown snippet `{other}`"),
+        };
+        let request = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params});
+        script.push_str(&format!("{request}\n"));
+    }
+    let answers = replay(&gpu, &mut editor, script);
+    assert_eq!(answers.len(), snippets.len());
+    for ((info, body, expected), answer) in snippets.iter().zip(&answers) {
+        let result = &answer["result"];
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        if info == "wxsl refused" {
+            let expected = expected
+                .as_deref()
+                .expect("a refused snippet says why")
+                .trim();
+            assert_eq!(result["isError"], true, "saved:\n{body}");
+            assert!(text.contains(expected), "{expected:?} not in:\n{text}");
+        } else {
+            assert_ne!(result["isError"], true, "{body}\n{text}");
+            if let Ok(answer) = serde_json::from_str::<Json>(text) {
+                let material = &answer["diagnostics"]["material"];
+                assert!(material.is_null() || *material == json!([]), "{answer}");
+            }
+        }
+    }
 }

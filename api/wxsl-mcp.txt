@@ -51,3 +51,4 @@ impl core::marker::Unpin for wxsl_mcp::Server
 impl core::marker::UnsafeUnpin for wxsl_mcp::Server
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_mcp::Server
 impl core::panic::unwind_safe::UnwindSafe for wxsl_mcp::Server
+pub fn wxsl_mcp::node_reference<'a>(&'a wxsl_core::node::NodeRegistry, &'a wxsl_core::node::NodeRegistry) -> alloc::string::String

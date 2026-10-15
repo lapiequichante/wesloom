@@ -3020,7 +3020,9 @@ dependencies = [
  "wgpu",
  "wxsl-core",
  "wxsl-editor",
+ "wxsl-lang",
  "wxsl-render",
+ "wxsl-stdlib",
 ]
 
 [[package]]

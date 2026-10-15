@@ -487,8 +487,7 @@ Extends pass stepping (N9) from a material to a whole scene.
     until its input ends.
 - Not yet done:
   - `pixel.probe` and the E2 debug views, which come with E2's queries;
-  - a generated node reference: `wxsl://nodes` is built at run time until
-    M2;
+  - ~~a generated node reference~~: landed with M2;
   - server-sent notifications, such as a document changing under the
     agent.
 
@@ -505,6 +504,50 @@ Extends pass stepping (N9) from a material to a whole scene.
 * **An end-to-end scenario recorded as a transcript (M0):** "make a
   material for rusty metal, look at it, fix it". This is the acceptance
   test of the whole MCP track.
+
+**Landed (2026-10-15, ADR 0084):**
+
+- The reference, `wxsl_mcp::node_reference`, is generated from the shader
+  and pipeline registries: every node's sockets, types, defaults,
+  generics, settings, macros and domains (210 nodes).
+  - `docs/reference/nodes.md` is written by
+    `cargo run -p wxsl-mcp --example node_reference`, and a test fails
+    when it is stale;
+  - `wxsl://nodes` is generated from the running editor's registries, so
+    it includes the session's `user.*` functions.
+- The guide is `crates/wxsl-mcp/authoring.md`, served as `wxsl://guide`
+  and named first in the server's instructions. It covers:
+  - a whole edit, and how values and types are spelled;
+  - the shape of a function, imports, generics and macros;
+  - the common errors, quoted.
+
+  Every snippet is checked twice: device-free in `wxsl-mcp`, and run in
+  order against the example's graph in `--test mcp`.
+- The acceptance session was recorded by driving a headless editor over
+  HTTP: `crates/wxsl/tests/transcripts/rusty_metal.jsonl`, 14 calls with
+  notes. Over its three screenshots it fixed a flat albedo with a
+  `user.rust_albedo` function, then a pale rim with a sharper metal mask.
+  The replay checks:
+  - every answer;
+  - that each fix changed the picture;
+  - that the last picture is rust over steel;
+  - that four agent steps are in the history.
+- What recording the session found, and what was fixed:
+  - **An invalid shader panicked the editor.** Any agent or user function,
+    or any hot-reloaded file, could crash it. Shader modules are now
+    created in a validation error scope
+    (`wxsl_render::variants::shader_module`), and a refusal is a
+    `RenderError::ShaderCompile` in the problems list.
+  - **`function_save` accepted functions that cannot compile.** It now
+    validates the module's WGSL on the device.
+  - **JSON refused `vec3f`.** The reference, WXSL and the diagnostics all
+    spell it that way, so the WGSL spellings are now serde aliases of
+    `ValueType` and `Value`.
+- Not yet done:
+  - a templated user function is validated only once a node instantiates
+    it;
+  - the validator quotes the WGSL, not the WXSL line. They match for a
+    function, but not inside a material.
 
 ### C4 — Stabilization and 0.1.0 *(last)*
 

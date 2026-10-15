@@ -50,6 +50,8 @@ use crate::wxsl::{stable_hash, write_f32, ModulePath, WxslIdent};
 /// ([ADR 0023](../../../docs/adr/0023-a-material-declares-its-resources.md)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+// The WGSL spellings are accepted too: they are what a diagnostic, the
+// node reference and WXSL itself write, so an agent reaches for them.
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ValueType {
     /// WGSL `bool`.
@@ -61,14 +63,19 @@ pub enum ValueType {
     /// WGSL `f32`.
     F32,
     /// WGSL `vec2f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec2f"))]
     Vec2,
     /// WGSL `vec3f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec3f"))]
     Vec3,
     /// WGSL `vec4f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec4f"))]
     Vec4,
     /// WGSL `mat3x3f`.
+    #[cfg_attr(feature = "serde", serde(alias = "mat3x3f"))]
     Mat3,
     /// WGSL `mat4x4f`.
+    #[cfg_attr(feature = "serde", serde(alias = "mat4x4f"))]
     Mat4,
     /// WGSL `texture_2d<f32>`. A resource, see the type's own docs.
     Texture2d,
@@ -478,14 +485,19 @@ pub enum Value {
     /// An `f32`.
     F32(f32),
     /// A `vec2f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec2f"))]
     Vec2([f32; 2]),
     /// A `vec3f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec3f"))]
     Vec3([f32; 3]),
     /// A `vec4f`.
+    #[cfg_attr(feature = "serde", serde(alias = "vec4f"))]
     Vec4([f32; 4]),
     /// A `mat3x3f`, in column-major order.
+    #[cfg_attr(feature = "serde", serde(alias = "mat3x3f"))]
     Mat3([f32; 9]),
     /// A `mat4x4f`, in column-major order.
+    #[cfg_attr(feature = "serde", serde(alias = "mat4x4f"))]
     Mat4([f32; 16]),
 }
 
@@ -2069,6 +2081,19 @@ impl NodeRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn types_and_values_read_their_wgsl_spellings_too() {
+        let ty: ValueType = serde_json::from_str("\"vec3f\"").unwrap();
+        assert_eq!(ty, ValueType::Vec3);
+        let ty: ValueType = serde_json::from_str("\"mat4x4f\"").unwrap();
+        assert_eq!(ty, ValueType::Mat4);
+        let value: Value = serde_json::from_str(r#"{"vec2f":[1,2]}"#).unwrap();
+        assert_eq!(value, Value::Vec2([1.0, 2.0]));
+        // Written as before.
+        assert_eq!(serde_json::to_string(&ValueType::Vec3).unwrap(), "\"vec3\"");
+    }
 
     #[test]
     fn value_literals_are_wgsl_shaped() {

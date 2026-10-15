@@ -21,8 +21,10 @@ pub(crate) const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "202
 const INSTRUCTIONS: &str = "\
 This server drives a running wxsl node editor. A material is a graph of nodes compiled to \
 WXSL and WGSL; the pipeline is a second graph of passes; a scene holds instances drawn with \
-material graphs. Start with graph_get and nodes_search, edit with graph_edit (atomic, undoable, \
-node refs with \"ref\"/\"$name\"), check with graph_compile or problems_list, and look with \
+material graphs. Read the wxsl://guide resource first: it shows a whole edit, the spelling of \
+values and types, how to write a function, and how to read the errors. wxsl://nodes lists every \
+node. Start with graph_get and nodes_search, edit with graph_edit (atomic, undoable, node refs \
+with \"ref\"/\"$name\"), check with graph_compile or problems_list, and look with \
 view_screenshot. Every edit you make is marked as yours in the history and can be undone with \
 the history tool. Paths are relative to the project root and cannot leave it.";
 

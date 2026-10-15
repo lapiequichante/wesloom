@@ -121,6 +121,8 @@ Each test file's header says what it covers.
 | editor commands, undo, transcripts, scene picking (no device) | `cargo test -p wxsl-editor` |
 | editor or UI behavior | `cargo test -p wxsl --features editor --test editor_frame` |
 | MCP protocol, tools, HTTP, path confinement (no device) | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
+| a node's sockets, label or doc (the reference, ADR 0084) | `cargo run -p wxsl-mcp --example node_reference`, then `cargo test -p wxsl-mcp` |
+| the authoring guide, or a diagnostic it quotes | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
 | a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, `gallery -- --screenshot`, or `viewer -- <demo> --screenshot out.png` |
@@ -211,7 +213,10 @@ The ADR named on each line holds the reasoning.
   by snapshot, so a command needs no hand-written inverse.
 - **Agents** (ADR 0083). An MCP tool is a plan in `wxsl_mcp::tools` over
   commands and queries; a capability it lacks is a new `Command` or
-  `Query` first. Every path a tool takes goes through `Root`.
+  `Query` first. Every path a tool takes goes through `Root`. What an
+  agent reads is generated or checked: the node reference
+  (`docs/reference/nodes.md`) and the authoring guide
+  (`crates/wxsl-mcp/authoring.md`) (ADR 0084).
 - **One editor, several canvas modes.** The pipeline canvas and the scene
   mode are modes of the same editor over one renderer (ADRs 0043, 0082),
   not second editors.
@@ -227,11 +232,13 @@ The ADR named on each line holds the reasoning.
   - `scene_check` runs the capability check;
   - `cinema` runs the post chain.
   - `editor --features mcp -- --mcp <PORT>` (or `--mcp-stdio --headless`)
-    lets an agent drive the editor.
+    lets an agent drive the editor. `crates/wxsl/tests/transcripts/`
+    holds recorded agent sessions, replayed by `--test mcp`.
 - `resources/glb/`: Khronos sample models and their licenses.
 - `crates/wxsl/assets/`:
   - `pbr_cube.wxsl.json` is the commented node format;
   - `*.scene.json` are scene documents.
 - `docs/architecture.md` (the overall design), `docs/glossary.md` (terms),
   `docs/adr/` (decisions), `docs/rust.md` and `docs/cpp.md` (using the
-  libraries), `docs/history/` (finished plans).
+  libraries), `docs/reference/nodes.md` (every node, generated),
+  `docs/history/` (finished plans).

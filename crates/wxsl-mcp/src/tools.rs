@@ -318,7 +318,11 @@ oldest first, each marked with whether an agent made it.",
 pub(crate) fn resources(root: &Root) -> Vec<Json> {
     let mut list = vec![
         json!({"uri": "wxsl://nodes", "name": "node reference",
-            "description": "Every node the material can use: id, signature, defaults, doc.",
+            "description": "Every node a graph can place: id, sockets, types, defaults, doc.",
+            "mimeType": "text/markdown"}),
+        json!({"uri": "wxsl://guide", "name": "authoring guide",
+            "description": "How to build a material with graph_edit and write a function: \
+the source's shape, value and type spellings, and how to read the errors.",
             "mimeType": "text/markdown"}),
         json!({"uri": "wxsl://abi", "name": "shader ABI",
             "description": "The WXSL modules a material and a user function are written against.",
@@ -331,6 +335,10 @@ pub(crate) fn resources(root: &Root) -> Vec<Json> {
     }
     list
 }
+
+/// The authoring guide (plan6 M2). Its snippets are checked here and in
+/// the facade's `mcp` test.
+pub(crate) const GUIDE: &str = include_str!("../authoring.md");
 
 /// Where the ADR index is, under the root.
 const ADR_INDEX: &str = "docs/adr/README.md";
@@ -752,7 +760,14 @@ pub(crate) fn run(action: Action, editor: &mut Editor, frame: &Frame<'_>, root: 
         },
         Action::Resource(uri) => {
             let (mime, body) = match uri.as_str() {
-                "wxsl://nodes" => ("text/markdown", node_reference(editor)),
+                "wxsl://nodes" => (
+                    "text/markdown",
+                    crate::node_reference(
+                        editor.registry(),
+                        &wxsl_render::document_registry(editor.preview().effects()),
+                    ),
+                ),
+                "wxsl://guide" => ("text/markdown", GUIDE.to_string()),
                 "wxsl://abi" => {
                     let library = editor.preview().library();
                     let body = ABI_MODULES
@@ -954,47 +969,6 @@ fn screenshot(
     })
 }
 
-/// The node reference resource: one section per node the material can
-/// use. Plan6 M2 replaces it with the generated reference.
-fn node_reference(editor: &Editor) -> String {
-    let wxsl_editor::Answer::Nodes { nodes } = editor.query(&Query::Nodes {
-        document: Document::Material,
-        search: None,
-    }) else {
-        return String::new();
-    };
-    let mut out = String::from("# Nodes\n\n");
-    for node in nodes {
-        out.push_str(&format!(
-            "## `{}` · {} ({})\n\n",
-            node.id, node.label, node.category
-        ));
-        if !node.doc.is_empty() {
-            out.push_str(&format!("{}\n\n", node.doc.trim()));
-        }
-        for (heading, sockets) in [("in", &node.inputs), ("out", &node.outputs)] {
-            for socket in sockets {
-                let ty = match &socket.generic {
-                    Some(generic) => generic.clone(),
-                    None => format!("{:?}", socket.ty).to_lowercase(),
-                };
-                let default = socket
-                    .default
-                    .map(|value| {
-                        format!(" = {}", serde_json::to_string(&value).unwrap_or_default())
-                    })
-                    .unwrap_or_default();
-                out.push_str(&format!("- {heading} `{}`: {ty}{default}\n", socket.name));
-            }
-        }
-        if !node.settings.is_empty() {
-            out.push_str(&format!("- settings: {}\n", node.settings.join(", ")));
-        }
-        out.push('\n');
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,6 +1002,69 @@ mod tests {
             plan("graph.edit", Json::Null),
             Err(PlanError::Unknown("graph.edit".into()))
         );
+    }
+
+    /// The guide's fenced snippets: (info string, body, the `text` fence
+    /// after it).
+    fn guide_snippets() -> Vec<(&'static str, String, Option<String>)> {
+        let mut snippets: Vec<(&str, String, Option<String>)> = Vec::new();
+        let mut lines = GUIDE.lines();
+        while let Some(line) = lines.next() {
+            let Some(info) = line.strip_prefix("```").filter(|info| !info.is_empty()) else {
+                continue;
+            };
+            let body: Vec<&str> = lines.by_ref().take_while(|line| *line != "```").collect();
+            let body = body.join("\n") + "\n";
+            match info {
+                "text" => snippets.last_mut().expect("a text after a snippet").2 = Some(body),
+                _ => snippets.push((info, body, None)),
+            }
+        }
+        snippets
+    }
+
+    #[test]
+    fn the_guide_calls_plan_and_its_sources_derive() {
+        let snippets = guide_snippets();
+        assert!(snippets.len() >= 8, "the guide lost its snippets");
+        for (info, body, expected) in snippets {
+            match info {
+                "json tool" => {
+                    let call: Json = serde_json::from_str(&body).expect("a guide call parses");
+                    let name = call["name"].as_str().unwrap();
+                    plan(name, call["arguments"].clone())
+                        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+                }
+                "wxsl" | "wxsl refused" => {
+                    let name = body
+                        .split("fn ")
+                        .nth(1)
+                        .and_then(|rest| rest.split(['(', '<']).next())
+                        .unwrap_or("function");
+                    let derived =
+                        wxsl_lang::node_from_source(&body, &format!("package::user::{name}"));
+                    match (info, derived) {
+                        ("wxsl", derived) => {
+                            derived.unwrap_or_else(|error| panic!("{body}\n{error:?}"));
+                        }
+                        // Refused before any device: the guide quotes it.
+                        (_, Err(errors)) => {
+                            let expected = expected.expect("a refused snippet says why");
+                            assert!(
+                                errors
+                                    .iter()
+                                    .any(|error| error.message.contains(expected.trim())),
+                                "{expected:?} not in {errors:?}"
+                            );
+                        }
+                        // Refused by the device's validator, which the
+                        // facade's `mcp` test runs.
+                        (_, Ok(_)) => {}
+                    }
+                }
+                other => panic!("unknown snippet `{other}`"),
+            }
+        }
     }
 
     #[test]
