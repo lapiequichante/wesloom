@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!  ┌─────────────────────────────────────────────────────────────┐
-//!  │ toolbar: name · path · mesh · msdf · add · fit · tidy · …   │
+//!  │ toolbar: name · path · mesh · add · fit · tidy · …          │
 //!  ├───────────┬──────────────────────────────┬──────────────────┤
 //!  │ palette   │ node canvas                  │ preview          │
 //!  │ (search,  │ (pan, zoom, link, unlink,    │ selected node    │
@@ -1067,7 +1067,6 @@ impl Editor {
                 toolbar,
                 &mut requests,
                 &self.preview,
-                self.backend,
                 (self.mode, (false, "")),
                 &self
                     .pipeline
@@ -1081,7 +1080,6 @@ impl Editor {
                 toolbar,
                 &mut requests,
                 &self.preview,
-                self.backend,
                 (
                     self.mode,
                     (
@@ -1333,9 +1331,6 @@ impl Editor {
             if ui.input.key_pressed_plain(Key::Char('m')) {
                 requests.mesh = Some(self.preview.mesh_kind().next());
             }
-            if ui.input.key_pressed_plain(Key::Char('g')) {
-                requests.backend = Some(self.backend.toggled());
-            }
             if ui.input.key_pressed_plain(Key::Char('a')) && !scene_mode {
                 let at = canvas_rect.center();
                 requests.add_at = Some(if pipeline_mode {
@@ -1543,11 +1538,6 @@ impl Editor {
             self.preview.set_mesh(device, mesh);
             self.message = format!("preview mesh: {}", mesh.name());
         }
-        if let Some(backend) = requests.backend {
-            if let Err(error) = self.set_msdf_backend(device, backend) {
-                self.message = error.to_string();
-            }
-        }
         if requests.toggle_spin {
             self.preview.spinning = !self.preview.spinning;
         }
@@ -1723,7 +1713,6 @@ pub(crate) struct Requests {
     /// Start, move or stop pass stepping.
     pub(crate) step: Option<StepRequest>,
     pub(crate) mesh: Option<MeshKind>,
-    pub(crate) backend: Option<MsdfBackend>,
     /// Switch which canvas the panels point at.
     pub(crate) mode: Option<CanvasMode>,
     /// Open the palette to add a node at this graph-space point.

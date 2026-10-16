@@ -10,7 +10,6 @@
 //! ```text
 //! cargo run --example editor                          # the shipped demo graph
 //! cargo run --example editor -- --graph my.wxsl.json   # a graph of your own
-//! cargo run --example editor -- --msdf gpu             # generate glyphs on the GPU
 //! cargo run --example editor -- --font C:/Windows/Fonts/segoeui.ttf
 //! cargo run --example editor -- --list-fonts           # what it would pick
 //! cargo run --example editor -- --screenshot out.png   # one frame, no window
@@ -82,7 +81,7 @@ use wxsl::core::graph::Graph;
 use wxsl::editor::{CanvasMode, Command, Editor, EditorConfig};
 use wxsl::render::gpu::GpuContext;
 use wxsl::render::ui::input::{Key, Modifiers, MouseButton, UiEvent};
-use wxsl::render::ui::{MsdfBackend, UiTarget};
+use wxsl::render::ui::UiTarget;
 
 /// The graph opened when `--graph` is not given: the same demo the renderer's
 /// example uses, so the two show the same material.
@@ -102,7 +101,6 @@ OPTIONS:
                           in the scene mode; dropping a file does the same
     --font <FILE>         Proportional font for the interface
     --mono <FILE>         Monospaced font for the code panels
-    --msdf <cpu|gpu>      Which MSDF backend generates glyphs (default: gpu)
     --size <WIDTHxHEIGHT> Window size (default: 1600x900)
     --atlas <PIXELS>      Glyph atlas side length (default: 2048)
     --list-fonts          Print the fonts that would be used, and exit
@@ -118,7 +116,6 @@ KEYS:
     P            material / pipeline canvas
     F / D        forward / deferred render path (material canvas)
     M            cycle the preview mesh
-    G            switch the MSDF backend (cpu <-> gpu)
     A            add a node at the middle of the canvas
     R            frame the whole graph
     Space        pause the preview's spin (tap; held, it pans)
@@ -216,7 +213,6 @@ fn screenshot(
         fonts.ui,
         fonts.mono,
     );
-    config.msdf_backend = options.msdf;
     config.atlas_size = options.atlas;
     let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
     editor.handle_event(UiEvent::Resized {
@@ -279,9 +275,8 @@ fn screenshot(
         image::ExtendedColorType::Rgba8,
     )?;
     println!(
-        "wrote {} ({width}x{height}, msdf {}, {})",
+        "wrote {} ({width}x{height}, {})",
         path.display(),
-        options.msdf.name(),
         if options.pipeline {
             match editor.pipeline_status() {
                 [] => "the document compiles".to_string(),
@@ -307,7 +302,6 @@ struct Options {
     scene: Option<PathBuf>,
     ui_font: Option<PathBuf>,
     mono_font: Option<PathBuf>,
-    msdf: MsdfBackend,
     size: (u32, u32),
     atlas: u32,
     list_fonts: bool,
@@ -327,10 +321,6 @@ impl Default for Options {
             pipeline: false,
             ui_font: None,
             mono_font: None,
-            // Matches `EditorConfig::new`'s own default: the editor always
-            // has a device, and the compute pass is noticeably faster once
-            // a batch of glyphs is more than a handful.
-            msdf: MsdfBackend::Gpu,
             size: (1600, 900),
             atlas: 2048,
             list_fonts: false,
@@ -359,11 +349,6 @@ impl Options {
                 "--scene" => options.scene = Some(PathBuf::from(value()?)),
                 "--font" => options.ui_font = Some(PathBuf::from(value()?)),
                 "--mono" => options.mono_font = Some(PathBuf::from(value()?)),
-                "--msdf" => {
-                    let text = value()?;
-                    options.msdf = MsdfBackend::parse(&text)
-                        .ok_or_else(|| format!("unknown MSDF backend `{text}`"))?;
-                }
                 "--size" => {
                     let text = value()?;
                     let (width, height) = text
@@ -659,7 +644,6 @@ impl App {
             fonts.ui,
             fonts.mono,
         );
-        config.msdf_backend = self.options.msdf;
         config.atlas_size = self.options.atlas;
         config.scale = scale;
 
@@ -1104,8 +1088,22 @@ fn translate_key(event: &winit::event::KeyEvent) -> Option<Key> {
         return Some(key);
     }
 
-    // The physical key, so that `F` and `D` are the same keys whatever the
-    // layout does with shift, and a shortcut is not lost to a dead key.
+    // The layout's letter without modifiers, so a shortcut follows the
+    // key's label: `Cmd+Z` on AZERTY is the key QWERTY calls W.
+    {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        if let WinitKey::Character(text) = event.key_without_modifiers() {
+            let mut chars = text.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                if c.is_ascii_alphabetic() {
+                    return Some(Key::Char(c.to_ascii_lowercase()));
+                }
+            }
+        }
+    }
+
+    // Otherwise the physical key: digits whatever the layout does with
+    // shift, a letter on a non-Latin layout, a dead key.
     if let PhysicalKey::Code(code) = event.physical_key {
         let character = match code {
             KeyCode::KeyA => 'a',
@@ -1252,7 +1250,6 @@ mod mcp {
             fonts.ui,
             fonts.mono,
         );
-        config.msdf_backend = options.msdf;
         config.atlas_size = options.atlas;
         let mut editor = Editor::new(&gpu.device, &gpu.queue, config)?;
         editor.handle_event(UiEvent::Resized {

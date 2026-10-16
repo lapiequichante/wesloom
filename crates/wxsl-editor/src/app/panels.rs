@@ -14,7 +14,6 @@ pub(super) fn toolbar_panel(
     rect: Rect,
     requests: &mut Requests,
     preview: &Preview,
-    backend: MsdfBackend,
     // Which canvas is up, whether the material previews through the
     // pipeline document, and that document's name.
     (mode, document): (CanvasMode, (bool, &str)),
@@ -183,10 +182,6 @@ pub(super) fn toolbar_panel(
         .changed
     {
         requests.mesh = Some(MeshKind::ALL[selected]);
-    }
-    let backend_label = format!("msdf: {}", backend.name());
-    if button(ui, &mut cursor, "toolbar.backend", &backend_label, false) {
-        requests.backend = Some(backend.toggled());
     }
     if button(ui, &mut cursor, "toolbar.add", "add node", false) {
         // Where "the middle of the canvas" is, the toolbar does not know.
