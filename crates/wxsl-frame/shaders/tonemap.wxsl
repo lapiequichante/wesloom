@@ -16,6 +16,8 @@
 //! `curve` (ADR 0042 parameter) switches the curve off: at 0 the pass only
 //! clamps and encodes, so an editor debug view shows the value a G-buffer
 //! channel stores rather than that value bent by the filmic shoulder.
+//! `exposure` scales the radiance into the curve, and does nothing with the
+//! curve off.
 //!
 //! The render targets are plain (non-`Srgb`) formats, so the encode is
 //! this shader's rather than the GPU's: a chain's intermediate images are
@@ -40,6 +42,6 @@ fn tonemap_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // `textureLoad` rather than a sampler: the pass is one-to-one with the
     // target it writes, and the pass group binds textures and no sampler.
     let linear = textureLoad(image, vec2i(position.xy), 0);
-    let curved = select(clamp(linear.rgb, vec3f(0.0), vec3f(1.0)), tonemap_filmic(linear.rgb), params.curve > 0.5);
+    let curved = select(clamp(linear.rgb, vec3f(0.0), vec3f(1.0)), tonemap_filmic(linear.rgb, params.exposure), params.curve > 0.5);
     return vec4f(linear_to_srgb(curved), linear.a);
 }

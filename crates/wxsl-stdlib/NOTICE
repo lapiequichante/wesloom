@@ -23,9 +23,9 @@ Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
 Source file: src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
 Original symbols: ACESFilmicToneMapping, RRTAndODTFit
 Adapted file: shaders/color/tonemap_aces.wxsl
-Changes: GLSL to WXSL, the fit inlined into one function, exposure folded
-out to the caller, matrices written in WGSL column order as upstream
-wrote them in GLSL.
+Changes: GLSL to WXSL, the fit inlined into one function, exposure a
+parameter rather than a uniform, matrices written in WGSL column order as
+upstream wrote them in GLSL.
 
 webgl-noise — MIT
 Source: https://github.com/ashima/webgl-noise

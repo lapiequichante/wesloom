@@ -16,12 +16,13 @@
 // Source: src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
 // Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
 // Symbol: ACESFilmicToneMapping (with RRTAndODTFit inlined)
-// Changes: GLSL to WXSL; exposure folded out (the graph or caller scales
-//          first); matrices in WGSL column order as upstream wrote them;
+// Changes: GLSL to WXSL; exposure a parameter rather than a uniform;
+//          matrices in WGSL column order as upstream wrote them;
 //          the fit inlined into the one function a node may declare.
 // License text: ../../NOTICE.
 fn tonemap_aces(
     color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
 ) -> vec3f {
     // sRGB => XYZ => D65_2_D60 => AP1 => RRT_SAT
     let input_matrix = mat3x3f(
@@ -34,7 +35,7 @@ fn tonemap_aces(
         -0.53108, 1.10813, -0.07276,
         -0.07367, -0.00605, 1.07602);
 
-    var fitted = input_matrix * max(color, vec3f(0.0)) / 0.6;
+    var fitted = input_matrix * max(color * exposure, vec3f(0.0)) / 0.6;
     // The RRT and ODT fit, per channel.
     let a = fitted * (fitted + vec3f(0.0245786)) - vec3f(0.000090537);
     let b = fitted * (vec3f(0.983729) * fitted + vec3f(0.4329510)) + vec3f(0.238081);

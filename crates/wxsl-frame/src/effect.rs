@@ -1124,12 +1124,20 @@ pub const TONEMAP: Effect = Effect {
         history: 0,
     }],
     outputs: &[],
-    parameters: &[EffectParameter {
-        name: "curve",
-        // 1 applies the filmic curve; 0 only clamps and encodes, which is
-        // what a debug view needs to show stored data unbent (plan3 N9).
-        default: Value::F32(1.0),
-    }],
+    parameters: &[
+        EffectParameter {
+            name: "curve",
+            // 1 applies the filmic curve; 0 only clamps and encodes, which is
+            // what a debug view needs to show stored data unbent (plan3 N9).
+            default: Value::F32(1.0),
+        },
+        EffectParameter {
+            name: "exposure",
+            // Scales the radiance into the curve; a debug view (curve 0)
+            // ignores it.
+            default: Value::F32(1.0),
+        },
+    ],
     shader: EffectShader::Source {
         path: TONEMAP_MODULE,
         wxsl: include_str!("../shaders/tonemap.wxsl"),
@@ -2069,9 +2077,10 @@ mod tests {
             !wxsl.contains("const THRESHOLD"),
             "the const this retired stays retired"
         );
-        // The tonemap's one knob is its debug-view switch (plan3 N9).
-        assert_eq!(TONEMAP.parameters.len(), 1);
-        assert_eq!(TONEMAP.parameters[0].name, "curve");
+        // The tonemap's knobs: its debug-view switch (plan3 N9), then the
+        // exposure into the curve.
+        let names: Vec<&str> = TONEMAP.parameters.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["curve", "exposure"]);
         // Every other shipped effect declares no knobs, so nothing about
         // them moves.
         for effect in [DEFERRED_LIGHTING, BRDF_LUT, LUT_VIEW, RAMP_FILL, RAMP_VIEW] {

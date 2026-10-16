@@ -14,8 +14,9 @@ import package::color::luminance::luminance;
 
 fn tonemap_filmic(
     color: vec3f, // @default 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
 ) -> vec3f {
-    let x = max(color, vec3f(0.0, 0.0, 0.0));
+    let x = max(color * exposure, vec3f(0.0, 0.0, 0.0));
     let toe = x * (x + vec3f(0.28, 0.28, 0.28));
     let shoulder = x * (x + vec3f(0.66, 0.66, 0.66)) + vec3f(0.14, 0.14, 0.14);
     let mapped = toe / shoulder;

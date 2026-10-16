@@ -9,9 +9,11 @@ import package::color::luminance::luminance;
 
 fn tonemap_reinhard(
     color: vec3f, // @default 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
 ) -> vec3f {
-    let level = luminance(color);
+    let exposed = color * exposure;
+    let level = luminance(exposed);
     let compressed = level / (1.0 + level);
     // Rescale the original hue to the compressed luminance.
-    return color * (compressed / max(level, 1e-5));
+    return exposed * (compressed / max(level, 1e-5));
 }

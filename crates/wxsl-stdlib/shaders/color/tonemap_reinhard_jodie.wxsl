@@ -11,8 +11,9 @@
 // has nothing to say about it.
 fn tonemap_reinhard_jodie(
     color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
 ) -> vec3f {
-    let c = max(color, vec3f(0.0));
+    let c = max(color * exposure, vec3f(0.0));
     let luminance = dot(c, vec3f(0.2126, 0.7152, 0.0722));
     let per_channel = c / (vec3f(1.0) + c);
     return mix(c / (vec3f(1.0) + luminance), per_channel, per_channel);

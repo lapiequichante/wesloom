@@ -110,6 +110,7 @@ Decode an sRGB colour (what a colour picker gives you) to the linear light every
 Maps unbounded positive radiance into 0..1 through the ACES fit: a pre-tonemap colour space transform into AP1, the RRT+ODT rational fit, and the transform back. Brighter and more saturated in the midtones than the filmic curve; desaturates highlights as they roll off.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 
 #### `color.tonemap_filmic` · Tonemap (filmic)
@@ -117,6 +118,7 @@ Maps unbounded positive radiance into 0..1 through the ACES fit: a pre-tonemap c
 Filmic curve with a gentle toe, a long shoulder and highlight desaturation. Also what the shipped `tonemap` effect applies at the end of a pipeline's chain.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 
 #### `color.tonemap_reinhard` · Tonemap (Reinhard)
@@ -124,6 +126,7 @@ Filmic curve with a gentle toe, a long shoulder and highlight desaturation. Also
 Compress high dynamic range on luminance, preserving hue.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 
 #### `color.tonemap_reinhard_jodie` · Reinhard-Jodie tonemap
@@ -131,6 +134,7 @@ Compress high dynamic range on luminance, preserving hue.
 Maps unbounded positive radiance into 0..1, blending the plain global Reinhard scale with a per-channel one so saturated highlights keep their hue instead of collapsing to white.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 
 <a id="shader-compare"></a>
