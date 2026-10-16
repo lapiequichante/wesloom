@@ -190,18 +190,14 @@ private child prints under that child's path in other crates' snapshots.
   example nothing links, `wxsl-frame`'s `effect_interfaces`, stays: it is
   the device-free effect API's demo beside `plan_frame`.
 
-**Still open, for a decision before C4 freezes the stable tier:**
+* **One name per type (2026-10-16, ADR 0087).** The `wgpu` adapters keep
+  the stable names; `wxsl-frame`'s originals became `TargetDesc`,
+  `FrameGraph` and `ScheduleError` (the scheduler's error, which shared
+  `GraphError` with the graph model's). `wxsl_render::pipeline_doc`
+  re-exports by name, so its `compile` is the only one.
 
-* **Two types per name.** `wxsl_render` adapts `wxsl_frame` rather than
-  only re-exporting it (ADR 0048):
-  * its `TargetConfig` holds a `wgpu` format, beside `wxsl_frame`'s;
-  * its `RenderGraph` is a newtype that records, beside `wxsl_frame`'s;
-  * its `pipeline_doc::compile` shadows the one its glob re-exports.
-  The root exports the adapters, which is consistent, but
-  `PipelineConfig::target` is `wxsl_frame`'s `TargetConfig`, so a caller
-  converts between them. A third name collides: `wxsl_render::graph::
-  GraphError` (the scheduler's) and `wxsl_core::error::GraphError` (the
-  graph model's). Making one path canonical changes the stable surface.
+**Kept as is (decided 2026-10-16):**
+
 * **Public functions nothing in the workspace calls**, mostly accessors
   and symmetric setters:
   * `wxsl-core`: `Graph::set_macros`, `set_attributes`, `remove_attribute`,
@@ -212,7 +208,7 @@ private child prints under that child's path in other crates' snapshots.
     `pass_parameter_layout`, `instance_capacity`, `user_block_size`, a few
     device-capability queries, and the UI's `polyline` and
     `circle_border`.
-  Removing them is an API change, so the C4 freeze is where to decide.
+  They stay public.
 
 ### G1 — Scene document v2 *(prerequisite for G2 and E1)*
 
@@ -685,6 +681,19 @@ Extends pass stepping (N9) from a material to a whole scene.
 * Bump the version to `0.1.0`, start a `CHANGELOG.md`, and run
   `cargo publish --dry-run` on the published crates.
 * Re-audit `NOTICE` and the licenses of every packaged crate (ADR 0053).
+  *Done (2026-10-16):*
+  * the six ported shaders are the six `NOTICE` entries, each with its
+    pinned revision (`tests/provenance.rs`). The shaders that re-express a
+    published technique say so and copy no text;
+  * every dependency is permissive (MIT, Apache-2.0, BSD, Zlib, ISC,
+    Unicode-3.0, or a choice including one);
+  * each crate now packages `LICENSE-MIT` and `LICENSE-APACHE` (symlinks
+    to the root's), which none did; `wxsl-stdlib` also packages `NOTICE`;
+  * the lakeside HDR had no provenance: it is Poly Haven's CC0 "Lakeside
+    Sunrise", recorded in `resources/hdri/README.md`. The fonts and the
+    glTF models already had theirs.
+  * Left for the publish: the gallery example embeds the HDR from outside
+    the `wxsl` crate, so a packaged `wxsl` cannot build that example.
 * From then on the API snapshot (C2) is a gate: a stable change requires a
   CHANGELOG entry.
 
