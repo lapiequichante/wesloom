@@ -567,8 +567,8 @@ mod tests {
 
     #[test]
     fn a_plan_that_does_not_build_is_reported_before_the_scene() {
-        // The full shipped set claims the `lighting` field for its dispatch
-        // id; a feature claiming the same field collides with it. The
+        // The base layout claims the `normal` field; a feature claiming the
+        // same field collides with it. The
         // collision is about the pipeline, so it is one `Plan`
         // incompatibility, and no material is asked anything after it.
         let mut config = PipelineConfig::new(crate::pipeline::TargetDesc::new(
@@ -580,7 +580,7 @@ mod tests {
         config.features = vec![ChannelRequest {
             source: ChannelSource::Feature { name: "subsurface" },
             target: abi::GBufferTarget {
-                field: "lighting",
+                field: "normal",
                 doc: "a collision by construction",
                 precision: abi::GBufferPrecision::NormalizedScalar,
             },
@@ -597,7 +597,7 @@ mod tests {
         let found = setup.check(&scene, &abi_registry());
         assert_eq!(found.len(), 1, "the plan once, and nothing after it");
         assert!(
-            matches!(&found[0], Incompatibility::Plan { reason } if reason.contains("`lighting`")),
+            matches!(&found[0], Incompatibility::Plan { reason } if reason.contains("`normal`")),
             "the collision is named: {:?}",
             found[0]
         );

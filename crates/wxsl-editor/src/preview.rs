@@ -1063,6 +1063,34 @@ impl Preview {
             return;
         }
 
+        // A fragment chain shades forward under deferred, through the
+        // preshaded route (ADR 0089): the preview's set gains the route
+        // rather than refusing the graph.
+        let chained = graph
+            .outputs(registry)
+            .is_some_and(|outputs| outputs.fragment.is_some());
+        if chained && self.renderer.lighting().preshaded().is_none() {
+            let route = lighting::DEFAULT_MODELS
+                .iter()
+                .copied()
+                .filter(|model| model.name == lighting::PRESHADED_MODEL);
+            let widened = lighting::LightingSet::new(
+                self.renderer
+                    .lighting()
+                    .models()
+                    .iter()
+                    .copied()
+                    .chain(route),
+            );
+            if let Err(error) = widened
+                .map_err(|error| error.to_string())
+                .and_then(|set| self.renderer.set_lighting(set).map_err(|e| e.to_string()))
+            {
+                self.status = PreviewStatus::Failed(vec![error]);
+                return;
+            }
+        }
+
         // Resolved against the renderer's own plan — its lighting set and
         // feature channels — because a material's G-buffer module is
         // generated for that layout and the frame checks the handshake by

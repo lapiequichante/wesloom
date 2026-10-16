@@ -323,6 +323,14 @@ pub const UNPACK_GBUFFER_FN: &str = "unpack_gbuffer";
 /// The generated shading function imports it, so both render paths get
 /// the same lookup.
 pub const SHADOW_MODULE: &str = "package::wxsl::shadow";
+/// Module holding the G-buffer's normal encoding, which the generated pack
+/// and lighting pass share (ADR 0088).
+pub const GBUFFER_MODULE: &str = "package::wxsl::gbuffer";
+/// Encode a unit normal into the normal target's two channels
+/// ([`GBUFFER_MODULE`]).
+pub const ENCODE_NORMAL_FN: &str = "gbuffer_encode_normal";
+/// Decode the normal target's two channels ([`GBUFFER_MODULE`]).
+pub const DECODE_NORMAL_FN: &str = "gbuffer_decode_normal";
 /// Attenuation of one light at one point, in `[0, 1]`
 /// ([`SHADOW_MODULE`]).
 pub const SHADOW_FACTOR_FN: &str = "shadow_factor";
@@ -765,11 +773,11 @@ pub struct GBufferTarget {
 /// The *base* G-buffer layout, in `@location` order.
 ///
 /// Packing two quantities per target keeps the deferred path's fixed cost at
-/// three colour attachments plus depth. This is what every deferred pipeline
-/// carries; a lighting-model set [`crate::lighting::LightingSet`]
-/// *requests* more on top of it — the dispatch id channel and one target per
-/// model that needs one — and [`crate::lighting::LightingSet::gbuffer_layout`]
-/// is the whole answer. `wxsl-stdlib`'s [`PACK_GBUFFER_FN`] and the lighting
+/// three colour attachments plus depth, 24 bytes per sample; the normal
+/// target also carries the lighting model's id (ADR 0088). This is what
+/// every deferred pipeline carries; a plan with any channel request adds
+/// the one shared [`crate::lighting::MODEL_DATA_TARGET`], and
+/// [`crate::lighting::LightingSet::gbuffer_layout`] is the whole answer. `wxsl-stdlib`'s [`PACK_GBUFFER_FN`] and the lighting
 /// pass are the two ends of this contract.
 pub const GBUFFER_BASE_TARGETS: &[GBufferTarget] = &[
     GBufferTarget {
@@ -779,7 +787,7 @@ pub const GBUFFER_BASE_TARGETS: &[GBufferTarget] = &[
     },
     GBufferTarget {
         field: "normal",
-        doc: "rgb = world-space shading normal, a = roughness",
+        doc: "xy = octahedral world-space normal, z = roughness, w = lighting model id",
         precision: GBufferPrecision::HighDynamicRange,
     },
     GBufferTarget {
@@ -1846,6 +1854,19 @@ pub const SURFACE_OUTPUT_ID: &str = "output.surface";
 pub const VERTEX_OUTPUT_ID: &str = "output.vertex";
 /// Registry id of the discard output node.
 pub const DISCARD_OUTPUT_ID: &str = "output.discard";
+/// Registry id of the fragment output node (ADR 0089).
+pub const FRAGMENT_OUTPUT_ID: &str = "output.fragment";
+/// The input socket [`FRAGMENT_OUTPUT_ID`] takes its colour on.
+pub const SOCKET_FRAGMENT_COLOR: &str = "color";
+/// The output socket of [`SURFACE_OUTPUT_ID`] that carries the shaded
+/// surface.
+pub const SOCKET_SHADED_COLOR: &str = "color";
+/// Name of the function a graph's fragment chain compiles into: the
+/// colour the colour stages write, from the shaded surface.
+pub const FRAGMENT_FN: &str = "wxsl_fragment";
+/// The parameter of [`FRAGMENT_FN`] holding the shaded surface, which the
+/// surface output's [`SOCKET_SHADED_COLOR`] reads.
+pub const SHADED_VAR: &str = "wxsl_shaded";
 /// Definition id of the node that writes one declared interpolant
 /// ([`varying_output_def`]).
 pub const VARYING_OUTPUT_ID: &str = "output.varying";
@@ -1883,7 +1904,34 @@ pub fn surface_output_def() -> NodeDefinition {
         }
         builder = builder.input(socket);
     }
-    builder.surface_output()
+    builder
+        .output(Socket::new(SOCKET_SHADED_COLOR, ValueType::Vec4).with_doc(
+            "The surface lit by the pipeline: linear radiance and alpha. \
+             Only an `output.fragment` chain can read it.",
+        ))
+        .surface_output()
+}
+
+/// The fragment terminal (ADR 0089): what the colour stages write instead
+/// of the shaded surface, when `color` is connected. Wire the surface
+/// output's `color` through whatever should change it (fog, a grade)
+/// into here.
+pub fn fragment_output_def() -> NodeDefinition {
+    NodeDefinition::builder(FRAGMENT_OUTPUT_ID, "Fragment output")
+        .category("output")
+        .doc(
+            "The colour this material writes, in place of its shaded \
+             surface. Feed it from the surface output's `color`; nodes in \
+             between change the lit colour. Linear: the pipeline's tonemap \
+             still applies.",
+        )
+        .input(
+            Socket::new(SOCKET_FRAGMENT_COLOR, ValueType::Vec4)
+                .with_doc("Linear radiance and alpha.")
+                .with_default(Value::Vec4([0.0, 0.0, 0.0, 1.0]))
+                .optional(),
+        )
+        .fragment_output()
 }
 
 /// One node definition per [`CONTEXT_FIELDS`] entry.

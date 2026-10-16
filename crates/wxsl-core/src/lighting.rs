@@ -58,25 +58,22 @@ use crate::abi::{self, GBufferPrecision, GBufferTarget};
 use crate::identity;
 use crate::wxsl::stable_hash;
 
-/// The field name of the G-buffer target carrying the dispatch id.
-pub const MODEL_ID_FIELD: &str = "lighting";
+/// The field name of the G-buffer target every model's data shares.
+pub const MODEL_DATA_FIELD: &str = "model";
 
-/// The G-buffer target the dispatch id rides in, when a set dispatches.
+/// The one G-buffer target that carries model data (ADR 0088).
 ///
-/// One normalized scalar channel, with the id scaled by
-/// [`MODEL_ID_SCALE`] on each side: a normalized target divides by 255 on
-/// store and multiplies back on load, and `id/255` survives that round
-/// trip exactly. One byte of the attachment budget, because a whole
-/// `vec4` target would cost eight of it for three empty channels — and
-/// the base targets have nearly spent the budget already.
-pub const MODEL_ID_TARGET: GBufferTarget = GBufferTarget {
-    field: MODEL_ID_FIELD,
-    doc: "lighting model id / 255 (see LightingSet)",
-    precision: GBufferPrecision::NormalizedScalar,
+/// A pixel is shaded by one model, so the models share it: each pixel's
+/// material writes its own model's pack (or the feature its model
+/// consumes), and the lighting pass hands the texel to that model's arm.
+/// A plan carries it when anything requests a channel; one HDR `vec4`,
+/// which brings the G-buffer to the 32-byte floor whatever the set. The
+/// dispatch id rides in the normal target's fourth channel.
+pub const MODEL_DATA_TARGET: GBufferTarget = GBufferTarget {
+    field: MODEL_DATA_FIELD,
+    doc: "the pixel's model's data, read by its id (see ModelExtra)",
+    precision: GBufferPrecision::HighDynamicRange,
 };
-
-/// The scale the dispatch id travels at, in [`MODEL_ID_TARGET`].
-pub const MODEL_ID_SCALE: f32 = 255.0;
 
 /// The name of the passthrough model a forward-shaded material's pixels
 /// route by (plan5 D2).
@@ -92,8 +89,9 @@ pub const PRESHADED_MODEL: &str = "wxsl.preshaded";
 /// The G-buffer channels a model may ask for, and how they are filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModelExtra {
-    /// The requested render target, packed after the base targets and any
-    /// earlier model's request.
+    /// What the model stores in the shared [`MODEL_DATA_TARGET`]: the
+    /// field names the meaning (for debug views and diagnostics), the
+    /// precision how many of its channels the model reads.
     pub target: GBufferTarget,
     /// Name of the function in the model's module that fills the target
     /// from the surface: `fn <pack>(surface: Surface) -> vec4f`.
@@ -108,10 +106,10 @@ pub struct ModelExtra {
 /// without any model in between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChannelSource {
-    /// The ABI's base targets and the dispatch id channel — the fixed
+    /// The ABI's base targets and the shared model target — the fixed
     /// part of every plan, which every request is measured against.
     BaseLayout,
-    /// A lighting model's own request — its `extra` target.
+    /// A lighting model's own request — its `extra`.
     Model {
         /// The model's name.
         name: &'static str,
@@ -243,9 +241,9 @@ pub fn feature_requests(names: &[&str]) -> Result<Vec<ChannelRequest>, LightingE
         .collect()
 }
 
-/// The collected G-buffer channel plan: base targets, the dispatch id
-/// channel if the set needs one, and every request — model and feature —
-/// with collisions named (plan2 P12).
+/// The collected G-buffer channel plan: the base targets, the shared model
+/// target if anything requests a channel, and every request — model and
+/// feature — with collisions named (plan2 P12, ADR 0088).
 ///
 /// This is the single answer to "what does the deferred path attach,
 /// bind and read" that [`LightingSet::gbuffer_layout`] has always been,
@@ -266,6 +264,9 @@ impl GBufferPlan {
         id_channel: bool,
         requests: impl IntoIterator<Item = ChannelRequest>,
     ) -> Result<Self, LightingError> {
+        // The requests name meanings that share one target (ADR 0088), so
+        // the layout grows by that target alone; the names must still be
+        // distinct, since a debug view and a diagnostic go by them.
         let mut requests: Vec<ChannelRequest> = requests.into_iter().collect();
         requests.sort_by_key(|request| match request.source {
             ChannelSource::Model { .. } => (0, request.source.name()),
@@ -273,11 +274,9 @@ impl GBufferPlan {
             ChannelSource::BaseLayout => (2, ""),
         });
         let mut layout: Vec<GBufferTarget> = abi::GBUFFER_BASE_TARGETS.to_vec();
-        if id_channel {
-            layout.push(MODEL_ID_TARGET);
-        }
         let mut claimed: Vec<(&'static str, ChannelSource)> = layout
             .iter()
+            .chain([&MODEL_DATA_TARGET])
             .map(|target| (target.field, ChannelSource::BaseLayout))
             .collect();
         for request in &requests {
@@ -292,7 +291,9 @@ impl GBufferPlan {
                 });
             }
             claimed.push((request.target.field, request.source));
-            layout.push(request.target);
+        }
+        if !requests.is_empty() {
+            layout.push(MODEL_DATA_TARGET);
         }
         Ok(GBufferPlan {
             id_channel,
@@ -311,9 +312,15 @@ impl GBufferPlan {
         &self.requests
     }
 
-    /// Whether the dispatch id channel is part of the plan.
+    /// Whether the lighting pass reads the normal target's fourth channel
+    /// as a model id: the set dispatches.
     pub fn id_channel(&self) -> bool {
         self.id_channel
+    }
+
+    /// Whether the plan carries the shared [`MODEL_DATA_TARGET`].
+    pub fn model_data(&self) -> bool {
+        !self.requests.is_empty()
     }
 
     /// The features part of the plan's identity, for cache keys.
@@ -396,6 +403,12 @@ pub enum LightingError {
     },
     /// The set is empty, which no pipeline can draw with.
     Empty,
+    /// A model has its own `extra` and consumes a feature: both would be
+    /// stored in the one model target (ADR 0088).
+    TwoDataSources {
+        /// The model's name.
+        name: String,
+    },
     /// A material names a model the set does not enable.
     UnknownModel {
         /// The name that was asked for.
@@ -458,6 +471,11 @@ impl fmt::Display for LightingError {
                  in a package of its own"
             ),
             LightingError::Empty => write!(f, "a lighting model set cannot be empty"),
+            LightingError::TwoDataSources { name } => write!(
+                f,
+                "lighting model `{name}` has its own G-buffer data and consumes a feature; \
+                 the one model target holds one of them"
+            ),
             LightingError::UnknownModel { name } => {
                 write!(f, "no lighting model named `{name}` is enabled")
             }
@@ -553,6 +571,14 @@ impl LightingSet {
                 return Err(LightingError::DuplicateId { id: model.id });
             }
         }
+        if let Some(model) = models
+            .iter()
+            .find(|model| model.extra.is_some() && model.feature.is_some())
+        {
+            return Err(LightingError::TwoDataSources {
+                name: model.name.to_string(),
+            });
+        }
         let mut names: Vec<&str> = models.iter().map(|model| model.name).collect();
         names.sort_unstable();
         names.dedup();
@@ -575,7 +601,7 @@ impl LightingSet {
         Ok(LightingSet { models })
     }
 
-    /// A set of exactly one model: no dispatch, no id channel.
+    /// A set of exactly one model: no dispatch.
     ///
     /// The shape every deferred pipeline had before models existed, and
     /// still the default — it keeps the G-buffer at the base three targets
@@ -647,8 +673,8 @@ impl LightingSet {
     }
 
     /// The G-buffer layout this set needs, in `@location` order: the base
-    /// targets, then the id channel if the set dispatches, then each
-    /// requesting model's target in id order.
+    /// targets, then the shared model target if any model asks for data
+    /// (ADR 0088).
     ///
     /// This is the single answer to "what does the deferred path attach,
     /// bind and read" — `wxsl-render` declares its resources from it, the
@@ -837,19 +863,10 @@ pub fn default_single_set() -> LightingSet {
     LightingSet::single(model)
 }
 
-/// The historical portable demo set (30 bytes per sample), plus the
-/// subsurface model — it asks for no channel of its own, so the layout is
-/// unchanged until a plan carries the feature.
-///
-/// Iridescent and sheen models are selected explicitly from [`DEFAULT_MODELS`]:
-/// their single-model layouts fill the 32-byte floor (ADRs 0058/0059).
+/// Every shipped model: the models share one data target, so the set
+/// costs 32 bytes per sample however many of them ask for data (ADR 0088).
 pub fn default_set() -> Result<LightingSet, LightingError> {
-    LightingSet::new(
-        DEFAULT_MODELS
-            .iter()
-            .copied()
-            .filter(|model| !matches!(model.name, "wxsl.iridescent" | "wxsl.sheen")),
-    )
+    LightingSet::new(DEFAULT_MODELS.iter().copied())
 }
 
 /// What one material is shaded with: its model, and the set around it.
@@ -928,7 +945,7 @@ impl MaterialLighting {
 
 impl Default for MaterialLighting {
     /// The library's default model in a set of one — the shape every
-    /// pipeline had before models existed, which writes no id channel and
+    /// pipeline had before models existed, which dispatches on no id and
     /// adds no G-buffer target.
     fn default() -> Self {
         MaterialLighting {
@@ -1010,10 +1027,10 @@ const DEBUG_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/debug_s
 /// shading text pasted into one must not declare them again — twice in the
 /// same module is a redefinition. The lighting pass, compiled as a root of
 /// its own, has nobody else to declare them and needs them. The `features`
-/// are the pipeline's second source of channels (plan2 P12): their targets
-/// join the `ModelExtras` struct, and a model whose registry entry names
-/// the feature reads it as `extra` under the feature's own macro —
-/// zeros, and never a named field, when the plan does not carry it.
+/// are the pipeline's second source of channels (plan2 P12): a model whose
+/// registry entry names the feature reads the shared model target as
+/// `extra` under the feature's own macro — zeros when the plan does not
+/// carry it (ADR 0088).
 pub fn shade_surface_with(
     dispatch: &Dispatch,
     features: &[ChannelRequest],
@@ -1154,34 +1171,14 @@ fn shade_surface_from(
             for model in set.models() {
                 imports.push((model.module, model.function));
             }
-            // The models' view of the G-buffer: one field per requested
-            // target — the models' own, then the features' — and nothing
-            // else: no id, no base targets. Empty when nobody asked,
-            // which WGSL permits.
-            let mut fields = String::new();
-            for target in set
-                .extras()
-                .iter()
-                .map(|extra| extra.target)
-                .chain(features.iter().map(|request| request.target))
-            {
-                let _ = writeln!(
-                    fields,
-                    "    {}: {},",
-                    target.field,
-                    target.precision.field_type(),
-                );
-            }
-            // Nobody asked for a channel: no struct and no parameter, for
-            // WGSL refuses an empty struct (and the arms read nothing).
-            let (extras_decl, extras_param, model_extras) = if fields.is_empty() {
-                (String::new(), String::new(), String::new())
+            // The models' view of the G-buffer: the shared model target,
+            // when the plan carries it (ADR 0088), and no parameter when
+            // nobody asked for data.
+            let has_data = !set.extras().is_empty() || !features.is_empty();
+            let (extras_param, model_extras) = if has_data {
+                (", model_data: vec4f".to_string(), "model_data".to_string())
             } else {
-                (
-                    format!("struct ModelExtras {{\n{fields}}}\n\n"),
-                    ", extras: ModelExtras".to_string(),
-                    "ModelExtras".to_string(),
-                )
+                (String::new(), String::new())
             };
             // A narrower target is widened back to the vec4f the model
             // contract hands over.
@@ -1190,11 +1187,7 @@ fn shade_surface_from(
             let custom_ambient = set.models().iter().any(|model| model.ambient.is_some());
             for model in set.models() {
                 let extra = match model.extra {
-                    Some(extra) => match extra.target.precision.channels() {
-                        1 => format!("vec4f(extras.{}, 0.0, 0.0, 0.0)", extra.target.field),
-                        2 => format!("vec4f(extras.{}, 0.0, 0.0)", extra.target.field),
-                        _ => format!("extras.{}", extra.target.field),
-                    },
+                    Some(extra) => stored(extra.target.precision.channels()),
                     None => "vec4f(0.0)".to_string(),
                 };
                 // A feature-consuming model reads the channel under the
@@ -1209,10 +1202,7 @@ fn shade_surface_from(
                         id = model.id,
                         function = model.function,
                         macro = feature.macro_name,
-                        value = widen(
-                            format!("extras.{}", request.target.field),
-                            request.target.precision.channels(),
-                        ),
+                        value = stored(request.target.precision.channels()),
                     );
                     continue;
                 }
@@ -1239,7 +1229,6 @@ fn shade_surface_from(
             out.push_str(&crate::template::fill(
                 DISPATCH_SWITCH_TEMPLATE,
                 &[
-                    ("MODEL_EXTRAS_DECL", &extras_decl),
                     ("EXTRAS_PARAM", &extras_param),
                     ("DISPATCH_FN", abi::LIGHTING_DISPATCH_FN),
                     ("SURFACE", abi::SURFACE_STRUCT),
@@ -1258,7 +1247,7 @@ fn shade_surface_from(
                 if model_extras.is_empty() {
                     "ambient_dispatch(surface, ctx, model_id)".to_string()
                 } else {
-                    "ambient_dispatch(surface, ctx, extras, model_id)".to_string()
+                    "ambient_dispatch(surface, ctx, model_data, model_id)".to_string()
                 }
             } else {
                 "default_ambient(surface, ctx)".to_string()
@@ -1269,12 +1258,12 @@ fn shade_surface_from(
                 if model_extras.is_empty() {
                     ", model_id: u32".to_string()
                 } else {
-                    ", extras: ModelExtras, model_id: u32".to_string()
+                    ", model_data: vec4f, model_id: u32".to_string()
                 },
                 if model_extras.is_empty() {
                     ", model_id".to_string()
                 } else {
-                    ", extras, model_id".to_string()
+                    ", model_data, model_id".to_string()
                 },
                 String::new(),
                 ambient_call,
@@ -1330,13 +1319,11 @@ pub fn gbuffer_struct(layout: &[GBufferTarget]) -> String {
 /// Generate [`abi::PACK_GBUFFER_FN`] for a material shading with `model`
 /// under `set`, with `features`' channels in the layout (plan2 P12).
 ///
-/// The base targets are packed exactly as they always were; the id channel
-/// is written only when the set dispatches; the material fills its own
-/// model's target through the model's pack function; and a feature's
-/// channel is filled through the feature's pack when the material's macro
-/// turns the feature on, zeroed when it does not. Zeroed rather than
-/// skipped: the field exists, and an undefined channel reads back whatever
-/// the clear left.
+/// The base targets are packed as they always were, except the normal,
+/// which is octahedral beside the roughness and the model id (ADR 0088).
+/// The shared model target gets the material's own model's pack, or the
+/// pack of the feature its model consumes when the material's macro turns
+/// it on, or zeros.
 ///
 /// A forward-shaded material (`forward_shaded`, plan5 D2) packs
 /// differently in one place: the radiance its fragment has already
@@ -1375,70 +1362,61 @@ pub fn pack_gbuffer(
         },
         struct_name = abi::GBUFFER_STRUCT,
     );
+    imports.push((abi::GBUFFER_MODULE, abi::ENCODE_NORMAL_FN));
+    let model_id = if set.dispatches() {
+        "f32(model_id)"
+    } else {
+        "0.0"
+    };
     for target in layout {
-        let expr = if abi::GBUFFER_BASE_TARGETS
-            .iter()
-            .any(|base| base.field == target.field)
-        {
-            // The base packing, exactly as `deferred.wxsl` wrote it —
-            // except the emissive target of a forward-shaded material,
-            // which stores the fragment's own radiance (plan5 D2).
-            match (target.field, forward_shaded) {
-                ("base_color", _) => "vec4f(surface.base_color, saturate(surface.metallic))",
-                ("normal", _) => "vec4f(normalize(surface.normal), saturate(surface.roughness))",
-                ("emissive", false) => "vec4f(surface.emissive, saturate(surface.occlusion))",
-                ("emissive", true) => "vec4f(wxsl_preshaded.rgb, 0.0)",
-                other => unreachable!("base target `{other:?}` has no pack expression"),
+        let expr = match (target.field, forward_shaded) {
+            // The base packing, except the emissive target of a
+            // forward-shaded material, which stores the fragment's own
+            // radiance (plan5 D2), and the normal target, which also
+            // carries the model id (ADR 0088).
+            ("base_color", _) => {
+                "vec4f(surface.base_color, saturate(surface.metallic))".to_string()
             }
-            .to_string()
-        } else if target.field == MODEL_ID_FIELD {
-            format!("f32(model_id) / {MODEL_ID_SCALE}")
-        } else if model.extra.map(|extra| extra.target.field) == Some(target.field) {
-            // The pack contract hands a vec4f over; a narrower target
-            // simply takes the leading components of it.
-            let extra = model.extra.expect("matched above");
-            imports.push((model.module, extra.pack));
-            match target.precision.channels() {
-                1 => format!("{}(surface).x", extra.pack),
-                2 => format!("{}(surface).xy", extra.pack),
-                _ => format!("{}(surface)", extra.pack),
+            ("normal", _) => format!(
+                "vec4f({encode}(normalize(surface.normal)), saturate(surface.roughness), {model_id})",
+                encode = abi::ENCODE_NORMAL_FN,
+            ),
+            ("emissive", false) => {
+                "vec4f(surface.emissive, saturate(surface.occlusion))".to_string()
             }
-        } else if let Some(request) = features
-            .iter()
-            .find(|request| request.target.field == target.field)
-        {
-            // A feature's channel: filled through the feature's own pack
-            // when the material's macro turns the feature on, zeros when
-            // it does not. Conditional translation keeps only the taken
-            // arm, and an unused import dies with it (ADR 0012).
-            let feature = FEATURES
-                .iter()
-                .find(|feature| {
-                    feature.name == request.source.name()
-                        && matches!(request.source, ChannelSource::Feature { .. })
-                })
-                .expect("feature channels name shipped features");
-            imports.push((feature.module, feature.pack));
-            let zero = match target.precision.channels() {
-                1 => "0.0",
-                2 => "vec2f(0.0)",
-                _ => "vec4f(0.0)",
-            };
-            let _ = writeln!(
-                source,
-                "    @if({macro})\n    out.{field} = {pack}();\n    @if(!{macro})\n    out.{field} = {zero};",
-                macro = feature.macro_name,
-                field = target.field,
-                pack = feature.pack,
-                zero = zero,
-            );
-            continue;
-        } else {
-            match target.precision.channels() {
-                1 => "0.0".to_string(),
-                2 => "vec2f(0.0)".to_string(),
-                _ => "vec4f(0.0)".to_string(),
+            ("emissive", true) => "vec4f(wxsl_preshaded.rgb, 0.0)".to_string(),
+            (MODEL_DATA_FIELD, _) => {
+                if let Some(extra) = model.extra {
+                    // The pack contract hands a vec4f over; a model reading
+                    // fewer channels ignores the rest.
+                    imports.push((model.module, extra.pack));
+                    format!("{}(surface)", extra.pack)
+                } else if let Some((feature, request)) = stored_feature(model, features) {
+                    // The feature this model consumes, or else the first
+                    // the plan carries (a debug view reads it), under the
+                    // feature's own macro: zeros when the material leaves
+                    // it off.
+                    // Conditional translation keeps only the taken arm, and
+                    // an unused import dies with it (ADR 0012).
+                    imports.push((feature.module, feature.pack));
+                    let _ = writeln!(
+                        source,
+                        "    @if({macro})\n    out.{field} = {value};\n    @if(!{macro})\n    out.{field} = vec4f(0.0);",
+                        macro = feature.macro_name,
+                        field = MODEL_DATA_FIELD,
+                        value = widen(
+                            format!("{}()", feature.pack),
+                            request.target.precision.channels()
+                        ),
+                    );
+                    continue;
+                } else {
+                    // Zeroed rather than skipped: the field exists, and an
+                    // undefined channel reads back whatever the clear left.
+                    "vec4f(0.0)".to_string()
+                }
             }
+            other => unreachable!("G-buffer target `{other:?}` has no pack expression"),
         };
         let _ = writeln!(source, "    out.{field} = {expr};", field = target.field);
     }
@@ -1653,7 +1631,7 @@ pub fn debug_surface(id: i32, material: i32) -> Option<GeneratedLighting> {
 /// data is lifted with `srgb_to_linear` so the encode shows the raw
 /// numbers — so a debug view wants a curve-free encode in place of the
 /// tonemap at the end of the chain (ADR 0039); that pass is not built yet.
-fn debug_view_arm(plan: &GBufferPlan) -> String {
+fn debug_view_arm(set: &LightingSet, plan: &GBufferPlan) -> String {
     let mut arm = format!("if ({DEBUG_VIEW_MACRO} != 0) {{\n        var shown = vec3f(0.0);\n");
     for view in debug_views() {
         if !view.available(plan) || view.stage == DebugStage::Forward {
@@ -1674,17 +1652,44 @@ fn debug_view_arm(plan: &GBufferPlan) -> String {
                 .to_string(),
             ("occlusion", None) => "srgb_to_linear(vec3f(unpacked.surface.occlusion))".to_string(),
             (_, Some(field)) => {
+                // The shared target holds this meaning only where a model
+                // reading it shaded the pixel (ADR 0088); black elsewhere.
                 let channels = plan
                     .requests()
                     .iter()
                     .find(|request| request.target.field == field)
                     .map_or(4, |request| request.target.precision.channels());
+                let data = format!("unpacked.{MODEL_DATA_FIELD}");
                 let value = match channels {
-                    1 => format!("vec3f(unpacked.{field}, 0.0, 0.0)"),
-                    2 => format!("vec3f(unpacked.{field}, 0.0)"),
-                    _ => format!("unpacked.{field}.rgb"),
+                    1 => format!("vec3f({data}.x, 0.0, 0.0)"),
+                    2 => format!("vec3f({data}.xy, 0.0)"),
+                    _ => format!("{data}.rgb"),
                 };
-                format!("srgb_to_linear(saturate({value}))")
+                // A model's data is where that model shaded; a feature's
+                // where the pixel's model stores no data of its own.
+                let feature = FEATURES.iter().any(|feature| feature.target.field == field);
+                let owners: Vec<u32> = set
+                    .models()
+                    .iter()
+                    .filter(|model| match model.extra {
+                        Some(extra) => extra.target.field == field,
+                        None => feature,
+                    })
+                    .map(|model| model.id)
+                    .collect();
+                let shown = format!("srgb_to_linear(saturate({value}))");
+                if owners.is_empty() {
+                    "vec3f(0.0)".to_string()
+                } else if !set.dispatches() {
+                    shown
+                } else {
+                    let test = owners
+                        .iter()
+                        .map(|id| format!("unpacked.model_id == {id}u"))
+                        .collect::<Vec<_>>()
+                        .join(" || ");
+                    format!("select(vec3f(0.0), {shown}, {test})")
+                }
             }
             (label, None) => unreachable!("base view `{label}` has no expression"),
         };
@@ -1712,7 +1717,6 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         .plan(features)
         .expect("the pipeline's plan was validated when the features were set");
     let layout = plan.layout();
-    let requests = plan.requests();
     // One model needs no dispatch at all: the pass shades with it
     // directly, and the module contains only that model — which is the
     // bar a single-model pipeline is held to. Only a real set switches.
@@ -1766,6 +1770,12 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         "import package::color::srgb_to_linear::srgb_to_linear;
 ",
     );
+    let _ = writeln!(
+        out,
+        "import {}::{};",
+        abi::GBUFFER_MODULE,
+        abi::DECODE_NORMAL_FN
+    );
     if let Some(shading) = &shading {
         for (module, item) in &shading.imports {
             let _ = writeln!(out, "import {module}::{item};");
@@ -1798,13 +1808,8 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
 ",
         );
     }
-    for target in requests.iter().map(|request| request.target) {
-        let _ = writeln!(
-            unpacked,
-            "    {}: {},",
-            target.field,
-            target.precision.field_type(),
-        );
+    if plan.model_data() {
+        let _ = writeln!(unpacked, "    {MODEL_DATA_FIELD}: vec4f,");
     }
     unpacked.push_str(
         "}
@@ -1818,30 +1823,18 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
         .collect::<Vec<_>>()
         .join(", ");
 
-    // The id line exists only when the set dispatches. Half-float
-    // integers are exact well past 255, so the round trip through a
-    // normalized target costs nothing (see `MODEL_ID_TARGET`).
+    // The id line exists only when the set dispatches. Half floats hold
+    // small integers exactly, so the id needs no scale (ADR 0088).
     let model_id_line = if set.dispatches() {
-        let mut line = String::new();
-        let _ = writeln!(
-            line,
-            "    out.model_id = u32(round(lighting * {}));",
-            MODEL_ID_SCALE
-        );
-        line
+        "    out.model_id = u32(round(normal.w));\n".to_string()
     } else {
         String::new()
     };
-
-    // One passthrough per requested target.
-    let mut extras_unpack = String::new();
-    for target in requests.iter().map(|request| request.target) {
-        let _ = writeln!(
-            extras_unpack,
-            "    out.{field} = {field};",
-            field = target.field,
-        );
-    }
+    let extras_unpack = if plan.model_data() {
+        format!("    out.{MODEL_DATA_FIELD} = {MODEL_DATA_FIELD};\n")
+    } else {
+        String::new()
+    };
 
     // `textureLoad` always answers with a vec4; the unpack's parameter
     // takes the channels the target actually has.
@@ -1862,33 +1855,24 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
     // passes. Statements before the return, indented for the template.
     let mut extra_preamble = String::new();
     let shade_args = if switch_shape {
-        let extras = requests
-            .iter()
-            .map(|request| format!("unpacked.{}", request.target.field))
-            .collect::<Vec<_>>()
-            .join(", ");
-        // A set whose models asked for no channels passes no extras: the
+        // A set whose models asked for no channels passes no data: the
         // generated dispatch takes the id and nothing else.
-        if extras.is_empty() {
-            "unpacked.surface, ctx, unpacked.model_id".to_string()
+        if plan.model_data() {
+            format!("unpacked.surface, ctx, unpacked.{MODEL_DATA_FIELD}, unpacked.model_id")
         } else {
-            format!("unpacked.surface, ctx, ModelExtras({extras}), unpacked.model_id")
+            "unpacked.surface, ctx, unpacked.model_id".to_string()
         }
     } else if let Some(extra) = set.models()[0].extra {
-        let value = match extra.target.precision.channels() {
-            1 => format!("vec4f(unpacked.{}, 0.0, 0.0, 0.0)", extra.target.field),
-            2 => format!("vec4f(unpacked.{}, 0.0, 0.0)", extra.target.field),
-            _ => format!("unpacked.{}", extra.target.field),
-        };
-        format!("unpacked.surface, ctx, {value}")
+        extra_preamble = format!("let model_data = unpacked.{MODEL_DATA_FIELD};\n    ");
+        format!(
+            "unpacked.surface, ctx, {}",
+            stored(extra.target.precision.channels())
+        )
     } else if let Some((feature, request)) = consumed_feature(&set.models()[0], features) {
         extra_preamble = format!(
-            "var model_extra = vec4f(0.0);\n    @if({macro})\n    model_extra = {value};\n    ",
+            "let model_data = unpacked.{MODEL_DATA_FIELD};\n    var model_extra = vec4f(0.0);\n    @if({macro})\n    model_extra = {value};\n    ",
             macro = feature.macro_name,
-            value = widen(
-                format!("unpacked.{}", request.target.field),
-                request.target.precision.channels(),
-            ),
+            value = stored(request.target.precision.channels()),
         );
         "unpacked.surface, ctx, model_extra".to_string()
     } else {
@@ -1933,7 +1917,7 @@ pub fn lighting_pass_source(set: &LightingSet, features: &[ChannelRequest]) -> S
             ("FRAGMENT_ENTRY", abi::LIGHTING_PASS_FRAGMENT_ENTRY),
             ("FIRST_TARGET", layout[0].field),
             ("UNPACK_CALL", loads.as_str()),
-            ("DEBUG_VIEW", &debug_view_arm(&plan)),
+            ("DEBUG_VIEW", &debug_view_arm(set, &plan)),
             ("DEBUG_VIEW_MACRO", DEBUG_VIEW_MACRO),
             ("FINAL_RETURN", &final_return),
         ],
@@ -1967,6 +1951,37 @@ fn consumed_feature(
     })?;
     let feature = FEATURES.iter().find(|feature| feature.name == name)?;
     Some((feature, request))
+}
+
+/// The shared model target's texel, `model_data`, as a model reading
+/// `channels` of it sees it: the rest zeroed, as a narrower target of its
+/// own used to read back.
+fn stored(channels: usize) -> String {
+    match channels {
+        1 => "vec4f(model_data.x, 0.0, 0.0, 0.0)".to_string(),
+        2 => "vec4f(model_data.xy, 0.0, 0.0)".to_string(),
+        _ => "model_data".to_string(),
+    }
+}
+
+/// The feature a material shading with `model` stores in the shared model
+/// target: the one the model consumes, or else the first the plan carries.
+/// None when the model stores data of its own (ADR 0088).
+fn stored_feature(
+    model: &LightingModel,
+    features: &[ChannelRequest],
+) -> Option<(&'static MaterialFeature, ChannelRequest)> {
+    if model.extra.is_some() {
+        return None;
+    }
+    consumed_feature(model, features).or_else(|| {
+        features.iter().find_map(|request| {
+            let feature = FEATURES
+                .iter()
+                .find(|feature| feature.name == request.source.name())?;
+            Some((feature, *request))
+        })
+    })
 }
 
 /// Widen a channel expression back to the `vec4f` the model contract
@@ -2039,17 +2054,31 @@ mod tests {
     }
 
     #[test]
-    fn the_layout_is_base_plus_id_plus_extras_in_id_order() {
+    fn every_model_shares_one_data_target() {
         let set = default_set().unwrap();
         assert!(set.dispatches());
+        assert!(set.extras().len() >= 3, "clearcoat, iridescent and sheen");
         let layout = set.gbuffer_layout();
         let fields: Vec<&str> = layout.iter().map(|t| t.field).collect();
         assert_eq!(
             fields,
-            vec!["base_color", "normal", "emissive", "lighting", "clearcoat"],
-            "base targets, then the id channel, then the requests"
+            vec!["base_color", "normal", "emissive", MODEL_DATA_FIELD],
+            "base targets, then the one shared model target (ADR 0088)"
         );
-        assert_eq!(layout[3], MODEL_ID_TARGET);
+        assert_eq!(layout[3], MODEL_DATA_TARGET);
+    }
+
+    #[test]
+    fn a_model_with_data_and_a_feature_is_refused() {
+        let mut both = DEFAULT_MODELS[3];
+        assert!(both.extra.is_some());
+        both.feature = Some("subsurface");
+        assert_eq!(
+            LightingSet::new([both]).unwrap_err(),
+            LightingError::TwoDataSources {
+                name: both.name.to_string()
+            }
+        );
     }
 
     #[test]
@@ -2091,22 +2120,22 @@ mod tests {
         // nothing, which is the whole point of generating the dispatch.
         assert!(generated.source.contains("lighting_lambert"));
         assert!(generated.source.contains("default: { return vec3f(0.0); }"));
-        // The arm for the model with an extra reads it, widened back to
-        // the vec4f the contract hands over; the others are handed zero.
+        // The arm for the model with an extra reads the shared texel in
+        // its own precision; the others are handed zero.
         assert!(generated.source.contains(
-            "case 3u: { return lighting_clearcoat(surface, ctx, light, vec4f(extras.clearcoat, 0.0, 0.0)); }"
+            "case 3u: { return lighting_clearcoat(surface, ctx, light, vec4f(model_data.xy, 0.0, 0.0)); }"
         ));
         assert!(generated
             .source
             .contains("case 2u: { return lighting_pbr(surface, ctx, light, vec4f(0.0)); }"));
-        // The switch flavour's shading function takes the extras and the id.
+        // The switch flavour's shading function takes the texel and the id.
         assert!(generated.source.contains(
-            "fn shade_surface(surface: Surface, ctx: SurfaceContext, extras: ModelExtras, model_id: u32)"
+            "fn shade_surface(surface: Surface, ctx: SurfaceContext, model_data: vec4f, model_id: u32)"
         ));
     }
 
     #[test]
-    fn the_pack_fills_the_id_channel_only_when_dispatching() {
+    fn the_pack_writes_the_id_beside_the_normal_only_when_dispatching() {
         let single = LightingSet::single(DEFAULT_MODELS[DEFAULT_MODEL_ID as usize]);
         let plain = pack_gbuffer(
             &DEFAULT_MODELS[DEFAULT_MODEL_ID as usize],
@@ -2118,6 +2147,10 @@ mod tests {
             .source
             .contains("fn pack_gbuffer(surface: Surface) -> GBuffer"));
         assert!(!plain.source.contains("model_id"));
+        assert!(plain.source.contains(
+            "out.normal = vec4f(gbuffer_encode_normal(normalize(surface.normal)), saturate(surface.roughness), 0.0);"
+        ));
+        assert!(!plain.source.contains("out.model"));
 
         let set = default_set().unwrap();
         let dispatched = pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[], false);
@@ -2126,26 +2159,21 @@ mod tests {
             .contains("fn pack_gbuffer(surface: Surface, model_id: u32) -> GBuffer"));
         assert!(dispatched
             .source
-            .contains("out.lighting = f32(model_id) / 255"));
+            .contains("saturate(surface.roughness), f32(model_id));"));
 
-        // The clearcoat model fills its own target through its pack, and a
-        // different model's target stays zeroed.
+        // The clearcoat model fills the shared target through its pack,
+        // and a model with no data zeroes it.
         let coat = DEFAULT_MODELS
             .iter()
             .find(|m| m.name == "wxsl.clearcoat")
             .unwrap();
         let coated = pack_gbuffer(coat, &set, &[], false);
-        // The pair-precision target takes the leading components of the
-        // pack contract's vec4f.
         assert!(coated
             .source
-            .contains("out.clearcoat = pack_clearcoat(surface).xy;"));
-        assert!(coated.source.contains("out.lighting = f32(model_id)"));
+            .contains("out.model = pack_clearcoat(surface);"));
         let plain_under_set =
             pack_gbuffer(&DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], &set, &[], false);
-        assert!(plain_under_set
-            .source
-            .contains("out.clearcoat = vec2f(0.0);"));
+        assert!(plain_under_set.source.contains("out.model = vec4f(0.0);"));
     }
 
     #[test]
@@ -2168,11 +2196,12 @@ mod tests {
             layout.len()
         )));
         // The dispatch and the unpack are both present, and the fragment
-        // entry hands the extras and the id to the shading function.
+        // entry hands the shared texel and the id to the shading function.
         assert!(source.contains("switch model_id"));
-        assert!(source.contains("out.model_id = u32(round(lighting * 255))"));
+        assert!(source.contains("out.model_id = u32(round(normal.w));"));
+        assert!(source.contains("gbuffer_decode_normal(normal.xy)"));
         assert!(source.contains(
-            "return shade_surface(unpacked.surface, ctx, ModelExtras(unpacked.clearcoat), unpacked.model_id)"
+            "return shade_surface(unpacked.surface, ctx, unpacked.model, unpacked.model_id)"
         ));
     }
 
@@ -2198,7 +2227,7 @@ mod tests {
             let extra = model.extra.unwrap();
             let source = lighting_pass_source(&LightingSet::single(model), &[]);
             assert!(source.contains("ctx: SurfaceContext, model_extra: vec4f"));
-            assert!(source.contains(&format!("unpacked.{}", extra.target.field)));
+            assert!(source.contains("let model_data = unpacked.model;"));
             assert!(!source.contains(extra.pack));
             let forward = shade_surface(&Dispatch::Direct(model));
             assert!(forward.source.contains(&format!("{}(surface)", extra.pack)));
@@ -2215,7 +2244,7 @@ mod tests {
         let single = lighting_pass_source(&LightingSet::single(sheen), &[]);
         assert!(single.contains("+ ambient_sheen(surface, ctx, model_extra)"));
         let switch = lighting_pass_source(&LightingSet::new([pbr, sheen]).unwrap(), &[]);
-        assert!(switch.contains("case 7u: { return ambient_sheen(surface, ctx, extras.sheen); }"));
+        assert!(switch.contains("case 7u: { return ambient_sheen(surface, ctx, model_data); }"));
         assert!(switch.contains("case 2u: { return default_ambient(surface, ctx); }"));
         let mut changed = sheen;
         changed.ambient = None;
@@ -2280,15 +2309,8 @@ mod tests {
         let fields: Vec<&str> = plan.layout().iter().map(|t| t.field).collect();
         assert_eq!(
             fields,
-            vec![
-                "base_color",
-                "normal",
-                "emissive",
-                "lighting",
-                "clearcoat",
-                "subsurface"
-            ],
-            "base targets, id channel, model requests, then the feature's"
+            vec!["base_color", "normal", "emissive", MODEL_DATA_FIELD],
+            "every request shares the one model target (ADR 0088)"
         );
         // The request is tagged, which is what an error — or a reader —
         // needs to say where the channel came from.
@@ -2349,25 +2371,21 @@ mod tests {
 
     #[test]
     fn the_pack_fills_a_feature_channel_when_the_material_pins_it() {
-        let model = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
+        let model = shipped_model("wxsl.subsurface");
         let single = LightingSet::single(model);
         let features = feature_requests(&["subsurface"]).unwrap();
 
-        // Under the feature: the channel exists, filled through the
-        // feature's pack when the material's macro turns it on, zeros
-        // when it does not.
+        // Under the feature: the consuming model's material fills the
+        // shared target through the feature's pack when its macro turns
+        // it on, zeros when it does not.
         let packed = pack_gbuffer(&model, &single, &features, false);
-        assert!(
-            packed.source.contains("subsurface: vec2f,"),
-            "{}",
-            packed.source
-        );
+        assert!(packed.source.contains("model: vec4f,"), "{}", packed.source);
         assert!(packed.source.contains("@if(wxsl_subsurface)"));
         assert!(packed
             .source
-            .contains("out.subsurface = pack_subsurface();"));
+            .contains("out.model = vec4f(pack_subsurface(), 0.0, 0.0);"));
         assert!(packed.source.contains("@if(!wxsl_subsurface)"));
-        assert!(packed.source.contains("out.subsurface = vec2f(0.0);"));
+        assert!(packed.source.contains("out.model = vec4f(0.0);"));
         assert!(packed
             .imports
             .iter()
@@ -2377,6 +2395,20 @@ mod tests {
         // and nothing emitted for it.
         let plain = pack_gbuffer(&model, &single, &[], false);
         assert!(!plain.source.contains("subsurface"));
+        assert!(!plain.source.contains("out.model"));
+
+        // A model with no data of its own stores the feature too, for a
+        // debug view to read; one with its own data stores that instead.
+        let pbr = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
+        let other = pack_gbuffer(&pbr, &LightingSet::single(pbr), &features, false);
+        assert!(other
+            .source
+            .contains("out.model = vec4f(pack_subsurface(), 0.0, 0.0);"));
+        let coat = shipped_model("wxsl.clearcoat");
+        let coated = pack_gbuffer(&coat, &LightingSet::single(coat), &features, false);
+        assert!(coated
+            .source
+            .contains("out.model = pack_clearcoat(surface);"));
     }
 
     /// The preshaded route (plan5 D2): findable by name in any set that
@@ -2468,22 +2500,22 @@ mod tests {
         let set = default_set().unwrap();
         let features = feature_requests(&["subsurface"]).unwrap();
         let source = lighting_pass_source(&set, &features);
-        // One binding per layout entry, depth included, so the feature's
-        // channel rides at its own `@group(3)` slot.
+        // One binding per layout entry, depth included: the feature's
+        // channel is the shared model target.
         let layout = set.plan(&features).unwrap();
         let depth_binding = layout.layout().len();
         assert!(source.contains(&format!(
-            "@group(3) @binding({}) var gbuffer_subsurface:",
+            "@group(3) @binding({}) var gbuffer_model:",
             depth_binding - 1
         )));
         assert!(source.contains(&format!(
             "@group(3) @binding({}) var gbuffer_depth:",
             depth_binding
         )));
-        // Unpacked and handed to the shading function's extras, where a
+        // Unpacked and handed to the shading function, where a
         // feature-aware model reads it.
-        assert!(source.contains("subsurface: vec2f,"));
-        assert!(source.contains("ModelExtras(unpacked.clearcoat, unpacked.subsurface)"));
+        assert!(source.contains("    model: vec4f,"));
+        assert!(source.contains("unpacked.surface, ctx, unpacked.model, unpacked.model_id"));
     }
 
     fn shipped_model(name: &str) -> LightingModel {
@@ -2505,7 +2537,7 @@ mod tests {
         assert!(
             source.contains(
                 "case 8u: {\n            var model_extra = vec4f(0.0);\n            \
-                 @if(wxsl_subsurface)\n            model_extra = vec4f(extras.subsurface, 0.0, 0.0);\n            \
+                 @if(wxsl_subsurface)\n            model_extra = vec4f(model_data.xy, 0.0, 0.0);\n            \
                  return lighting_subsurface(surface, ctx, light, model_extra);\n        }"
             ),
             "{source}"
@@ -2521,7 +2553,7 @@ mod tests {
         let set = LightingSet::new([shipped_model("wxsl.pbr"), shipped_model("wxsl.subsurface")])
             .unwrap();
         let source = lighting_pass_source(&set, &[]);
-        assert!(!source.contains("extras.subsurface"), "{source}");
+        assert!(!source.contains("model_data: vec4f"), "{source}");
         assert!(source.contains("return lighting_subsurface(surface, ctx, light, vec4f(0.0));"));
         assert!(!source.contains("@macro const wxsl_subsurface"));
     }
@@ -2536,7 +2568,7 @@ mod tests {
         assert!(
             source.contains(
                 "var model_extra = vec4f(0.0);\n    @if(wxsl_subsurface)\n    \
-                 model_extra = vec4f(unpacked.subsurface, 0.0, 0.0);\n    "
+                 model_extra = vec4f(model_data.xy, 0.0, 0.0);\n    "
             ),
             "{source}"
         );

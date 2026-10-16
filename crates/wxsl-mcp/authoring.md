@@ -18,6 +18,9 @@ inputs are the surface: `base_color`, `metallic`, `roughness`, `normal`,
 keeps its default. Colours are linear, never sRGB; the `tonemap` pass at
 the end of the frame is the only display transform.
 
+To change the lit colour itself (fog, a grade), wire `output.surface`'s
+`color` output through those nodes into an `output.fragment` node.
+
 Look before editing: `graph_get` gives every node with its `id` and `def`,
 and the edges. In the starting graph, the `output.surface` node is `15`.
 `nodes_search` finds a node by words in its id or label, and the

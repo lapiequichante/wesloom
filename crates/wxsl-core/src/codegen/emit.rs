@@ -53,9 +53,24 @@ impl Emitter<'_> {
             (crate::wxsl::WxslIdent, crate::node::ValueType),
         >,
     ) -> Result<Partition, CodegenError> {
+        self.emit_fragment_partition_with(terminal, cuts, None)
+    }
+
+    /// [`Emitter::emit_fragment_partition`], with one more leaf: a socket
+    /// bound to a given expression, whose node the walk stops at.
+    fn emit_fragment_partition_with(
+        &mut self,
+        terminal: NodeId,
+        cuts: &std::collections::BTreeMap<
+            SocketRef,
+            (crate::wxsl::WxslIdent, crate::node::ValueType),
+        >,
+        leaf: Option<(SocketRef, String)>,
+    ) -> Result<Partition, CodegenError> {
         let mut stops: std::collections::BTreeSet<NodeId> =
             cuts.keys().map(|socket| socket.node).collect();
         stops.extend(self.baked.keys().copied());
+        stops.extend(leaf.iter().map(|(socket, _)| socket.node));
         let needed = self.graph.dependencies_stopping_at(terminal, &stops);
         let order = self
             .graph
@@ -84,6 +99,9 @@ impl Emitter<'_> {
                 self.bindings.insert(reference, term.sample_expr());
             }
         }
+        if let Some((socket, expr)) = leaf {
+            self.bindings.insert(socket, expr);
+        }
         for node in &order {
             if *node == terminal || stops.contains(node) {
                 continue;
@@ -95,6 +113,28 @@ impl Emitter<'_> {
             body: core::mem::take(&mut self.body),
             inputs,
         })
+    }
+
+    /// The fragment chain (ADR 0089): the fragment partition rooted at
+    /// `terminal`, stopping at the surface output, whose shaded colour is
+    /// the [`abi::SHADED_VAR`] parameter of the function it compiles into.
+    pub(super) fn emit_fragment_chain(
+        &mut self,
+        terminal: NodeId,
+        surface: NodeId,
+        cuts: &std::collections::BTreeMap<
+            SocketRef,
+            (crate::wxsl::WxslIdent, crate::node::ValueType),
+        >,
+    ) -> Result<Partition, CodegenError> {
+        self.emit_fragment_partition_with(
+            terminal,
+            cuts,
+            Some((
+                SocketRef::new(surface, abi::SOCKET_SHADED_COLOR),
+                abi::SHADED_VAR.to_string(),
+            )),
+        )
     }
 
     /// One cut, as a vertex-stage partition of its own — the same shape a
@@ -603,6 +643,7 @@ impl Emitter<'_> {
             NodeBody::SurfaceOutput
             | NodeBody::VertexOutput
             | NodeBody::DiscardOutput
+            | NodeBody::FragmentOutput
             | NodeBody::VaryingOutput
             | NodeBody::ScreenOutput => {
                 // Emitted by `emit_surface`, which needs to run last.
@@ -793,6 +834,24 @@ impl Emitter<'_> {
                 out,
                 "    return {};",
                 discard.input(abi::SOCKET_DISCARD, "false")
+            );
+            out.push_str("}\n");
+        }
+
+        if let Some(fragment) = &parts.fragment {
+            let _ = write!(
+                out,
+                "\nfn {}({}: {}{attributes}, {}: vec4f) -> vec4f {{\n",
+                abi::FRAGMENT_FN,
+                abi::CONTEXT_VAR,
+                abi::CONTEXT_STRUCT,
+                abi::SHADED_VAR,
+            );
+            out.push_str(&fragment.body);
+            let _ = writeln!(
+                out,
+                "    return {};",
+                fragment.input(abi::SOCKET_FRAGMENT_COLOR, abi::SHADED_VAR)
             );
             out.push_str("}\n");
         }

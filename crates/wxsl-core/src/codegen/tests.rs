@@ -1020,3 +1020,72 @@ fn a_baked_node_the_vertex_stage_reaches_is_refused() {
         .expect_err("textureSample does not run in the vertex stage");
     assert!(error.to_string().contains("vertex"), "{error}");
 }
+
+/// A fragment chain (ADR 0089): the colour stages return what the chain
+/// makes of the shaded surface; the G-buffer stage shades forward through
+/// the preshaded route, or says by name that the set cannot route it.
+#[test]
+fn a_fragment_chain_rewrites_the_shaded_colour() {
+    let mut registry = registry();
+    registry.register(abi::fragment_output_def());
+    registry.register(
+        NodeDefinition::builder("test.halve", "Halve")
+            .input(Socket::new("a", ValueType::Vec4).with_splat_default(0.0))
+            .output(Socket::new("out", ValueType::Vec4))
+            .expr("{a} * 0.5"),
+    );
+    let mut graph = Graph::new("chain");
+    let surface = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    let fragment = graph.add_node(abi::FRAGMENT_OUTPUT_ID);
+
+    // Placed but unwired, it changes nothing.
+    let plain = generate_default(&graph, &registry).source;
+    assert!(!plain.contains(abi::FRAGMENT_FN), "{plain}");
+
+    let halve = graph.add_node("test.halve");
+    graph
+        .wire(&registry, (surface, abi::SOCKET_SHADED_COLOR), (halve, "a"))
+        .expect("the shaded colour is a vec4");
+    graph
+        .wire(
+            &registry,
+            (halve, "out"),
+            (fragment, abi::SOCKET_FRAGMENT_COLOR),
+        )
+        .expect("into the fragment output");
+    let forward = generate_default(&graph, &registry).source;
+    assert!(
+        forward.contains("fn wxsl_fragment(ctx: SurfaceContext, wxsl_shaded: vec4f) -> vec4f {"),
+        "{forward}"
+    );
+    assert!(forward.contains("wxsl_shaded * 0.5"), "{forward}");
+    assert!(
+        forward.contains("return wxsl_fragment(ctx, shade_surface(wxsl_material(ctx), ctx));"),
+        "{forward}"
+    );
+
+    // Under deferred: no route in the default set, a named error.
+    let gbuffer = CodegenOptions {
+        stage: abi::MaterialStage::GBUFFER,
+        ..CodegenOptions::default()
+    };
+    assert_eq!(
+        generate(&graph, &registry, &gbuffer).unwrap_err(),
+        CodegenError::FragmentNeedsPreshaded
+    );
+    // With the route: the stage shades, runs the chain, and packs it.
+    let set = crate::lighting::default_set().unwrap();
+    let routed = CodegenOptions {
+        material: crate::material::MaterialConfig::default()
+            .resolve(&set)
+            .unwrap(),
+        ..gbuffer
+    };
+    let packed = generate(&graph, &registry, &routed).unwrap().source;
+    assert!(
+        packed.contains(
+            "return pack_gbuffer(surface, wxsl_fragment(ctx, shade_surface(surface, ctx)), 5u);"
+        ),
+        "{packed}"
+    );
+}

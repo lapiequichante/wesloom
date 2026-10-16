@@ -293,6 +293,7 @@ impl Graph {
             (abi::SURFACE_OUTPUT_ID, self.surface_outputs(registry)),
             (abi::VERTEX_OUTPUT_ID, self.vertex_outputs(registry)),
             (abi::DISCARD_OUTPUT_ID, self.discard_outputs(registry)),
+            (abi::FRAGMENT_OUTPUT_ID, self.fragment_outputs(registry)),
         ] {
             if found.len() > 1 {
                 errors.push(GraphError::DuplicateOutput {

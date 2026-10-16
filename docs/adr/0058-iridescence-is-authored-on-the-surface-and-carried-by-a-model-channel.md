@@ -52,3 +52,6 @@ cannot validate a graph using the new sockets or model. Sheen inputs,
 subsurface and physical IBL remain separate
 increments. Tests cover the single-model channel, switch code generation,
 zero-film equivalence and per-fragment thickness across both render paths.
+* Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
+  the film data rides in the shared `model` target, so iridescence now
+  fits beside other models and is in `default_set()`.

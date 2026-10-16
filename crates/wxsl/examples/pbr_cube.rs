@@ -77,7 +77,8 @@ OPTIONS:
     --size <WIDTHxHEIGHT>      Render size (default: 1280x720, or 800x600 headless)
     --instances <N>            Draw N copies of the cube in a row (default: 1)
     --models <A,B,...>         Lighting models the deferred path enables, from:
-                               lambert, phong, pbr, clearcoat, cloth, preshaded
+                               lambert, phong, pbr, clearcoat, cloth, preshaded,
+                               iridescent, sheen, subsurface
                                (default: pbr)
     --model <NAME>             Which model shades this material (default: pbr)
     --forward-shaded           Shade the material in the geometry pass under

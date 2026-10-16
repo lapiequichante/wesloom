@@ -16,8 +16,9 @@ ${UNPACKED_STRUCT}fn ${UNPACK_FN}(${UNPACK_PARAMS}) -> UnpackedGBuffer {
     var out: UnpackedGBuffer;
     out.surface.base_color = base_color.rgb;
     out.surface.metallic = base_color.a;
-    out.surface.normal = normalize(normal.xyz);
-    out.surface.roughness = normal.a;
+    // Octahedral, beside the roughness and the model id (ADR 0088).
+    out.surface.normal = gbuffer_decode_normal(normal.xy);
+    out.surface.roughness = normal.z;
     out.surface.emissive = emissive.rgb;
     out.surface.occlusion = emissive.a;
     // `alpha` comes back as 1: the G-buffer is opaque by construction.

@@ -89,7 +89,7 @@ pub fn analyze(
 
     // The terminals, at the stages they belong to. These are the roots
     // consumer stages flow back from.
-    let fragment_roots: Vec<NodeId> = [Some(outputs.surface), outputs.discard]
+    let fragment_roots: Vec<NodeId> = [Some(outputs.surface), outputs.discard, outputs.fragment]
         .into_iter()
         .flatten()
         .collect();

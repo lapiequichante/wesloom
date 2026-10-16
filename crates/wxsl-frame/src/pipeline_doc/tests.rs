@@ -180,8 +180,8 @@ fn a_feature_channel_joins_the_compiled_gbuffer() {
         .collect();
     assert_eq!(
         names,
-        vec!["base_color", "normal", "emissive", "subsurface"],
-        "the base targets, then the feature's channel"
+        vec!["base_color", "normal", "emissive", "model"],
+        "the base targets, then the shared model target the feature rides in"
     );
     // The scheduler's attachment-count check ran against the widened
     // layout — this compiling is the proof it agreed.

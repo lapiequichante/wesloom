@@ -1017,7 +1017,9 @@ pub enum NodeBody {
     /// field set is part of the shader ABI, see [`crate::abi`].
     ContextRead(WxslIdent),
     /// The terminal node: its inputs are the fields of the surface struct the
-    /// material function returns. A graph has exactly one of these.
+    /// material function returns. A graph has exactly one of these. Its
+    /// one output is the surface as the pipeline lit it, which only an
+    /// [`NodeBody::FragmentOutput`]'s chain can read (ADR 0089).
     SurfaceOutput,
     /// Reads a **uniform parameter** of the material's own bind group: a
     /// field of the one buffer `wxsl-core` lays out from every reachable
@@ -1075,6 +1077,9 @@ pub enum NodeBody {
     VertexOutput,
     /// The graph's discard terminal: whether to throw the fragment away.
     DiscardOutput,
+    /// The graph's fragment terminal: the colour the colour stages write in
+    /// place of the shaded surface, when its input is connected (ADR 0089).
+    FragmentOutput,
     /// A terminal writing one declared interpolant, named by the setting
     /// [`SETTING_NAME`].
     ///
@@ -1538,6 +1543,11 @@ impl NodeDefinition {
         matches!(self.body, NodeBody::DiscardOutput)
     }
 
+    /// Whether this is the graph's terminal fragment-colour node.
+    pub fn is_fragment_output(&self) -> bool {
+        matches!(self.body, NodeBody::FragmentOutput)
+    }
+
     /// Whether this writes one declared interpolant.
     pub fn is_varying_output(&self) -> bool {
         matches!(self.body, NodeBody::VaryingOutput)
@@ -1549,6 +1559,7 @@ impl NodeDefinition {
         self.is_surface_output()
             || self.is_vertex_output()
             || self.is_discard_output()
+            || self.is_fragment_output()
             || self.is_varying_output()
     }
 
@@ -1778,6 +1789,12 @@ impl NodeDefinitionBuilder {
         self.build()
     }
 
+    /// Finish with a [`NodeBody::FragmentOutput`] body.
+    pub fn fragment_output(mut self) -> NodeDefinition {
+        self.def.body = NodeBody::FragmentOutput;
+        self.build()
+    }
+
     /// Finish with a [`NodeBody::VaryingOutput`] body.
     ///
     /// # Panics
@@ -1844,6 +1861,7 @@ impl NodeDefinitionBuilder {
             NodeBody::SurfaceOutput
             | NodeBody::VertexOutput
             | NodeBody::DiscardOutput
+            | NodeBody::FragmentOutput
             | NodeBody::VaryingOutput
             | NodeBody::VertexContextRead(_)
             | NodeBody::Param
@@ -1866,6 +1884,7 @@ impl NodeDefinitionBuilder {
             NodeBody::SurfaceOutput
                 | NodeBody::VertexOutput
                 | NodeBody::DiscardOutput
+                | NodeBody::FragmentOutput
                 | NodeBody::VaryingOutput
                 | NodeBody::ScreenOutput
                 | NodeBody::Document

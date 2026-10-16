@@ -52,3 +52,6 @@ The shader ABI adds sockets without changing existing meanings or host
 buffer layouts. Both backends consume the same generated lighting and
 computed targets. Every future custom ambient owes direct/switch corpus
 coverage and render parity; no ambient override changes old models.
+* Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
+  the sheen data rides in the shared `model` target, so sheen now fits
+  beside other models and is in `default_set()`.

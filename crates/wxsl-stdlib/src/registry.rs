@@ -93,6 +93,7 @@ pub fn abi_nodes() -> Vec<NodeDefinition> {
     defs.push(abi::surface_output_def());
     defs.push(abi::vertex_output_def());
     defs.push(abi::discard_output_def());
+    defs.push(abi::fragment_output_def());
     defs.push(abi::varying_output_def());
     defs.extend(abi::screen_context_node_defs());
     defs.push(abi::screen_image_def());

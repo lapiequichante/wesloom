@@ -9,6 +9,26 @@ an entry.
 
 ## [Unreleased]
 
+### Added
+
+- `output.fragment`, and a `color` output on `output.surface`: nodes
+  between the two change a material's lit colour, under either pipeline
+  ([ADR 0089](docs/adr/0089-the-surface-output-hands-its-shaded-colour-to-a-fragment-output.md)).
+- An `exposure` input on the tonemap nodes, and an `exposure` parameter on
+  the `tonemap` effect. Both default to 1.
+- Every shipped lighting model in `default_set()`, now that they fit.
+
+### Changed
+
+- The G-buffer stores the normal octahedrally, with the lighting model's
+  id beside it, and every model's data in one shared `model` target:
+  24 bytes per sample, or 32 with model data, whatever the set
+  ([ADR 0088](docs/adr/0088-one-shared-model-channel-and-the-id-in-the-normal-target.md)).
+  The `lighting` target and the per-model targets are gone.
+- The editor's shortcuts follow the keyboard layout, and its glyphs are
+  always generated on the GPU (the toolbar's `msdf` button, the `G` key
+  and the example's `--msdf` option are gone).
+
 ## [0.1.0] - 2026-10-16
 
 The first release. The workspace's crates share one version.

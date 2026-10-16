@@ -642,6 +642,22 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         ),
     };
     write_peel_declarations(out, stage);
+    // The shaded colour, through the graph's fragment chain when it has
+    // one (ADR 0089).
+    let lit = |shaded: String| match parts.fragment.is_some() {
+        true => format!(
+            "{fragment}({ctx}{args}, {shaded})",
+            fragment = abi::FRAGMENT_FN,
+            ctx = abi::CONTEXT_VAR,
+        ),
+        false => shaded,
+    };
+    let shaded = lit(format!(
+        "{shade}({material}({ctx}{args}), {ctx})",
+        shade = abi::SHADE_SURFACE_FN,
+        material = options.material_fn,
+        ctx = abi::CONTEXT_VAR,
+    ));
     let body = match stage.output() {
         abi::StageOutput::RefractionSurface => format!(
             "-> WxslOpticalLayer {{\n{prologue}    \
@@ -667,19 +683,13 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             };
             format!(
                 "-> @location(0) vec4f {{\n{prologue}{window}{back}    \
-                 let wxsl_peel_lit = {shade}({material}({ctx}{args}), {ctx});\n    \
+                 let wxsl_peel_lit = {shaded};\n    \
                  return vec4f(wxsl_peel_lit.rgb * wxsl_peel_lit.a, wxsl_peel_lit.a);\n}}\n",
-                ctx = abi::CONTEXT_VAR,
-                shade = abi::SHADE_SURFACE_FN,
-                material = options.material_fn,
             )
         }
         abi::StageOutput::Color => format!(
             "-> @location(0) vec4f {{\n{prologue}    \
-             return {shade}({material}({ctx}{args}), {ctx});\n}}\n",
-            ctx = abi::CONTEXT_VAR,
-            shade = abi::SHADE_SURFACE_FN,
-            material = options.material_fn,
+             return {shaded};\n}}\n",
         ),
         abi::StageOutput::PeelDepth => {
             // Optical entry/exit surfaces may be much closer than alpha
@@ -699,7 +709,7 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
              let wxsl_peel_pair_v = textureLoad(wxsl_peel_pair, wxsl_peel_px, 0);\n    \
              let wxsl_peel_front_z = 1.0 - wxsl_peel_pair_v.r;\n    \
              let wxsl_peel_back_z = wxsl_peel_pair_v.g;\n    \
-             let wxsl_peel_lit = {shade}({material}({ctx}{args}), {ctx});\n    \
+             let wxsl_peel_lit = {shaded};\n    \
              let wxsl_peel_premul = vec4f(wxsl_peel_lit.rgb * wxsl_peel_lit.a, wxsl_peel_lit.a);\n    \
              var wxsl_peel_front_color = vec4f(0.0);\n    \
              var wxsl_peel_back_color = vec4f(0.0);\n    \
@@ -709,9 +719,6 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
              wxsl_peel_back_color = wxsl_peel_premul;\n    }}\n    \
              if wxsl_peel_front_color.a == 0.0 && wxsl_peel_back_color.a == 0.0 {{ discard; }}\n    \
              return WxslPeelColors(wxsl_peel_front_color, wxsl_peel_back_color);\n}}\n",
-            ctx = abi::CONTEXT_VAR,
-            shade = abi::SHADE_SURFACE_FN,
-            material = options.material_fn,
         ),
         abi::StageOutput::GBuffer if options.material.forward_shaded => {
             // The owner's "l'albedo est l'output" (plan5 D2): shade here,
@@ -728,12 +735,12 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
             format!(
                 "-> {gbuffer} {{\n{prologue}    \
                  let surface = {material}({ctx}{args});\n    \
-                 return {pack}(surface, {shade}(surface, {ctx}){id});\n}}\n",
+                 return {pack}(surface, {lit}{id});\n}}\n",
                 ctx = abi::CONTEXT_VAR,
                 gbuffer = abi::GBUFFER_STRUCT,
                 material = options.material_fn,
                 pack = abi::PACK_GBUFFER_FN,
-                shade = abi::SHADE_SURFACE_FN,
+                lit = lit(format!("{}(surface, {})", abi::SHADE_SURFACE_FN, abi::CONTEXT_VAR)),
                 id = if options.material.lighting.set().dispatches() {
                     format!(", {}u", route.id)
                 } else {

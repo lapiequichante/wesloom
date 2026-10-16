@@ -621,6 +621,10 @@ pub enum CodegenError {
     NoOutputNode,
     /// The graph has more than one surface-output node.
     MultipleOutputNodes(Vec<NodeId>),
+    /// The graph's fragment chain asks its G-buffer stage to shade forward,
+    /// and the pipeline's lighting set does not enable `wxsl.preshaded`,
+    /// the route that stage's pixels need (ADR 0089).
+    FragmentNeedsPreshaded,
     /// A node definition's expression template referenced a socket the node
     /// does not declare. A bug in the node definition, not in the graph.
     BadTemplate {
@@ -680,6 +684,10 @@ impl fmt::Display for CodegenError {
                 "this is a {found} graph, and a {expected} graph is what compiles here"
             ),
             CodegenError::NoOutputNode => f.write_str("graph has no surface output node"),
+            CodegenError::FragmentNeedsPreshaded => f.write_str(
+                "the fragment output makes this material shade in the G-buffer pass, \
+                 which needs `wxsl.preshaded` in the pipeline's lighting set",
+            ),
             CodegenError::MultipleOutputNodes(nodes) => {
                 write!(
                     f,

@@ -254,17 +254,13 @@ fn iridescence_transports_fragment_thickness_and_has_an_exact_zero_film_fallback
         "the changed IOR was lost in the deferred channel"
     );
 
-    let oversized =
-        LightingSet::new([DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], film_model]).unwrap();
-    let error = scene
+    // Beside another model it fits now: the models share one data
+    // target (ADR 0088).
+    let beside = LightingSet::new([DEFAULT_MODELS[DEFAULT_MODEL_ID as usize], film_model]).unwrap();
+    scene
         .renderer
-        .set_lighting(oversized)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("iridescent") && error.contains("bytes per sample"),
-        "{error}"
-    );
+        .set_lighting(beside)
+        .expect("pbr and iridescent fit in 32 bytes per sample");
     scene
         .renderer
         .set_lighting(wxsl::core::lighting::default_single_set())
@@ -617,6 +613,79 @@ fn a_forward_shaded_material_shades_identically_under_both_pipelines() {
     }
 }
 
+/// A fragment chain (ADR 0089) changes the shaded colour, and the same
+/// way under both pipelines: deferred routes the material as preshaded.
+#[test]
+fn a_fragment_chain_darkens_the_shaded_colour_under_both_pipelines() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let plain = glossy(&scene.registry, "plain", 0.4);
+    let mut chained = plain.clone();
+    let surface = chained.surface_outputs(&scene.registry)[0];
+    let halve = chained.add(Node::new("math.multiply").with_param("b", Value::F32(0.25)));
+    chained
+        .set_generic(
+            &scene.registry,
+            halve,
+            "A",
+            wxsl::core::node::ValueType::Vec4,
+        )
+        .unwrap();
+    chained
+        .set_generic(
+            &scene.registry,
+            halve,
+            "B",
+            wxsl::core::node::ValueType::F32,
+        )
+        .unwrap();
+    let fragment = chained.add(Node::new(abi::FRAGMENT_OUTPUT_ID));
+    chained
+        .wire(
+            &scene.registry,
+            (surface, abi::SOCKET_SHADED_COLOR),
+            (halve, "a"),
+        )
+        .unwrap();
+    chained
+        .wire(
+            &scene.registry,
+            (halve, "out"),
+            (fragment, abi::SOCKET_FRAGMENT_COLOR),
+        )
+        .unwrap();
+    // Shadows off on both, for the forward-shaded route has none.
+    let config = MaterialConfig {
+        receive_shadow: false,
+        ..MaterialConfig::default()
+    };
+    let plain = scene.material(&plain, &config);
+    let chained = scene.material(&chained, &config);
+    assert!(chained
+        .shader(abi::MaterialStage::GBUFFER)
+        .source
+        .contains("wxsl_fragment(ctx, shade_surface(surface, ctx))"));
+
+    let plain_deferred = scene.render(&[&plain, &plain, &plain]);
+    let deferred = scene.render(&[&chained, &chained, &chained]);
+    scene.renderer.set_pipeline(StockPipeline::Forward);
+    let forward = scene.render(&[&chained, &chained, &chained]);
+    for x in SLOTS {
+        let at = Vec3::new(x, 0.0, 0.0);
+        let p = probe::color_at(&plain_deferred, camera(), at);
+        let d = probe::color_at(&deferred, camera(), at);
+        let f = probe::color_at(&forward, camera(), at);
+        assert!(
+            d.iter().sum::<f32>() + 30.0 < p.iter().sum::<f32>(),
+            "the chain did not darken x = {x}: {d:?} vs {p:?}"
+        );
+        assert!(
+            probe::gap(d, f) <= 4.0,
+            "the chain disagrees across the pipelines at x = {x}: {f:?} vs {d:?}"
+        );
+    }
+}
+
 /// The acceptance test: three objects shaded by three different models
 /// through one deferred lighting pass — and the same three through the
 /// forward path, agreeing.
@@ -718,8 +787,8 @@ fn the_dispatch_channel_changes_no_pbr_pixel() {
     }
 }
 
-/// Enabling the clearcoat model adds its target, and its second lobe
-/// changes what a smooth surface shades to.
+/// Enabling the clearcoat model adds the shared model target, and its
+/// second lobe changes what a smooth surface shades to.
 #[test]
 fn the_clearcoat_model_uses_the_extra_target_it_asks_for() {
     let Some(gpu) = gpu() else { return };
@@ -738,7 +807,7 @@ fn the_clearcoat_model_uses_the_extra_target_it_asks_for() {
         .lighting()
         .gbuffer_layout()
         .iter()
-        .any(|target| target.field == "clearcoat"));
+        .any(|target| target.field == wxsl::core::lighting::MODEL_DATA_FIELD));
 
     let graph = glossy(&scene.registry, "lacquered", 0.3);
     let pbr = scene.material(&graph, &named("pbr"));

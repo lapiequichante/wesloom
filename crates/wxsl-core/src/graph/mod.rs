@@ -283,6 +283,9 @@ pub struct GraphOutputs {
     pub vertex: Option<NodeId>,
     /// The discard output, if the graph has one.
     pub discard: Option<NodeId>,
+    /// The fragment output, if the graph has one with its colour
+    /// connected (ADR 0089).
+    pub fragment: Option<NodeId>,
     /// One terminal per declared interpolant the graph writes, by name,
     /// in name order.
     ///
@@ -947,7 +950,7 @@ impl Graph {
     /// may be a superset of what its shader uses anyway.
     pub fn reachable_from(&self, outputs: &GraphOutputs) -> BTreeSet<NodeId> {
         let mut reachable = self.dependencies_of(outputs.surface);
-        let extras = [outputs.vertex, outputs.discard]
+        let extras = [outputs.vertex, outputs.discard, outputs.fragment]
             .into_iter()
             .flatten()
             .chain(outputs.varyings.iter().map(|(_, node)| *node));
@@ -1523,6 +1526,11 @@ impl Graph {
         self.terminals(registry, NodeDefinition::is_discard_output)
     }
 
+    /// Every fragment-output node. At most one is valid.
+    pub fn fragment_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
+        self.terminals(registry, NodeDefinition::is_fragment_output)
+    }
+
     /// Every node writing a declared interpolant, whether or not the name
     /// it points at exists.
     pub fn varying_outputs(&self, registry: &NodeRegistry) -> Vec<NodeId> {
@@ -1572,6 +1580,12 @@ impl Graph {
             surface,
             vertex: one(self.vertex_outputs(registry)),
             discard: one(self.discard_outputs(registry)),
+            // Placed but unwired, it changes nothing: the colour stages
+            // keep writing the shaded surface.
+            fragment: one(self.fragment_outputs(registry)).filter(|node| {
+                self.edge_into(&SocketRef::new(*node, crate::abi::SOCKET_FRAGMENT_COLOR))
+                    .is_some()
+            }),
             varyings,
         })
     }

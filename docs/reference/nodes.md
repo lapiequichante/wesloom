@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (181)
+- [Shader nodes](#shader-nodes) (182)
 - [Pipeline nodes](#pipeline-nodes) (29)
 
 ## Shader nodes
@@ -1273,6 +1273,13 @@ Throws the fragment away when true, writing neither colour nor depth. This is th
 - in `discard: bool = false` (optional): Discard the fragment when true.
 - only in surface graphs
 
+#### `output.fragment` · Fragment output
+
+The colour this material writes, in place of its shaded surface. Feed it from the surface output's `color`; nodes in between change the lit colour. Linear: the pipeline's tonemap still applies.
+
+- in `color: vec4f = vec4f(0.0, 0.0, 0.0, 1.0)` (optional): Linear radiance and alpha.
+- only in surface graphs
+
 #### `output.screen` · Screen output
 
 The colour one fullscreen pass writes. Unconnected inputs keep the value shown in the editor, so a graph driving only `color` is a complete effect.
@@ -1299,6 +1306,7 @@ The material a graph produces. Unconnected inputs keep their default: the geomet
 - in `iridescence_ior: f32 = 1.3f` (optional): Thin-film index of refraction, 1..3.
 - in `sheen_color: vec3f = vec3f(0.0, 0.0, 0.0)` (optional): Linear RGB sheen reflectance, 0..1; black disables the layer.
 - in `sheen_roughness: f32 = 0.5f` (optional): Perceptual roughness of the Charlie sheen layer, 0..1.
+- out `color: vec4f`: The surface lit by the pipeline: linear radiance and alpha. Only an `output.fragment` chain can read it.
 - only in surface graphs
 
 #### `output.varying` · Interpolant output

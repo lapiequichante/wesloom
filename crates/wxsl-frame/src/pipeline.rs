@@ -799,40 +799,34 @@ mod tests {
         // requests is measured against exactly that remainder.
         assert_eq!(cost(LightingSet::default()), 24);
         assert_eq!(cost(LightingSet::single(model("pbr"))), 24);
-        // + the scalar id (1, align 1) = 25; + the clearcoat pair (4,
-        // align 2, so 25 rounds to 26 first) = 30. The round-up is the
-        // part that was once guessed wrong: the naive sum says 29.
-        assert_eq!(cost(wxsl_core::lighting::default_set().unwrap()), 30);
+        // The id rides in the normal target; any data at all adds the one
+        // shared HDR vec4 (8): 32, whatever the set (ADR 0088).
+        assert_eq!(cost(wxsl_core::lighting::default_set().unwrap()), 32);
         assert_eq!(cost(LightingSet::single(model("iridescent"))), 32);
         assert_eq!(cost(LightingSet::single(model("sheen"))), 32);
-        assert!(
-            cost(LightingSet::new([model("pbr"), model("iridescent")]).unwrap())
-                > MAX_GBUFFER_BYTES_PER_SAMPLE
+        assert_eq!(
+            cost(LightingSet::new([model("pbr"), model("iridescent"), model("sheen")]).unwrap()),
+            32
         );
         assert_eq!(
             cost(LightingSet::new([model("lambert"), model("clearcoat")]).unwrap()),
-            30
+            32
         );
-        // A set with the id channel and nothing else: 25.
+        // A set that dispatches and asks for no data: the base 24.
         assert_eq!(
             cost(LightingSet::new([model("pbr"), model("phong")]).unwrap()),
-            25
+            24
         );
-        // Every shipped set fits, with room to spare.
-        assert!(cost(wxsl_core::lighting::default_set().unwrap()) <= MAX_GBUFFER_BYTES_PER_SAMPLE);
         assert_eq!(MAX_GBUFFER_BYTES_PER_SAMPLE, 32, "the spec's floor");
 
-        // A feature channel joins the same budget (plan2 P12): base 24,
-        // the subsurface pair rounds 24 up to its alignment of 2 — still
-        // 24 — and adds 4. 28, with the id channel absent in a
-        // single-model set.
+        // A feature channel shares the same target (plan2 P12).
         let single = LightingSet::single(model("pbr"));
         let features = wxsl_core::lighting::feature_requests(&["subsurface"]).unwrap();
         let plan = single.plan(&features).unwrap();
         assert_eq!(
             gbuffer_layout_bytes_per_sample(plan.layout()),
-            28,
-            "24 base + 4 for the pair-precision subsurface channel"
+            32,
+            "24 base + 8 for the shared model target"
         );
     }
 

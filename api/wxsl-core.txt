@@ -271,16 +271,21 @@ pub const wxsl_core::abi::CONTEXT_FIELDS: &[wxsl_core::abi::ContextField]
 pub const wxsl_core::abi::CONTEXT_STRUCT: &str
 pub const wxsl_core::abi::CONTEXT_VAR: &str
 pub const wxsl_core::abi::CURRENT_CLIP_FIELD: &str
+pub const wxsl_core::abi::DECODE_NORMAL_FN: &str
 pub const wxsl_core::abi::DEFAULT_SURFACE_FN: &str
 pub const wxsl_core::abi::DISCARD_FN: &str
 pub const wxsl_core::abi::DISCARD_OUTPUT_ID: &str
+pub const wxsl_core::abi::ENCODE_NORMAL_FN: &str
 pub const wxsl_core::abi::ENVIRONMENT_LUT_SIZE: u32
 pub const wxsl_core::abi::FEATURE_DEBUG_NORMALS: &str
 pub const wxsl_core::abi::FEATURE_INSTANCE_TEXTURE: &str
 pub const wxsl_core::abi::FEATURE_PREVIOUS_FRAME: &str
 pub const wxsl_core::abi::FEATURE_RECEIVE_SHADOWS: &str
 pub const wxsl_core::abi::FEATURE_RELATIVE_TO_EYE: &str
+pub const wxsl_core::abi::FRAGMENT_FN: &str
+pub const wxsl_core::abi::FRAGMENT_OUTPUT_ID: &str
 pub const wxsl_core::abi::GBUFFER_BASE_TARGETS: &[wxsl_core::abi::GBufferTarget]
+pub const wxsl_core::abi::GBUFFER_MODULE: &str
 pub const wxsl_core::abi::GBUFFER_STRUCT: &str
 pub const wxsl_core::abi::GROUP_FRAME: u32
 pub const wxsl_core::abi::GROUP_MATERIAL: u32
@@ -342,14 +347,17 @@ pub const wxsl_core::abi::SCREEN_MOTION_FN: &str
 pub const wxsl_core::abi::SCREEN_ONLY_FIELDS: &[wxsl_core::abi::ContextField]
 pub const wxsl_core::abi::SCREEN_OUTPUT_ID: &str
 pub const wxsl_core::abi::SCREEN_VERTEX_ENTRY: &str
+pub const wxsl_core::abi::SHADED_VAR: &str
 pub const wxsl_core::abi::SHADE_SURFACE_FN: &str
 pub const wxsl_core::abi::SHADOW_ATLAS_SIZE: u32
 pub const wxsl_core::abi::SHADOW_FACTOR_FN: &str
 pub const wxsl_core::abi::SHADOW_MODULE: &str
 pub const wxsl_core::abi::SOCKET_DISCARD: &str
+pub const wxsl_core::abi::SOCKET_FRAGMENT_COLOR: &str
 pub const wxsl_core::abi::SOCKET_POSITION_OFFSET: &str
 pub const wxsl_core::abi::SOCKET_SCREEN_ALPHA: &str
 pub const wxsl_core::abi::SOCKET_SCREEN_COLOR: &str
+pub const wxsl_core::abi::SOCKET_SHADED_COLOR: &str
 pub const wxsl_core::abi::SOCKET_VARYING: &str
 pub const wxsl_core::abi::SURFACE_CONTEXT_FN: &str
 pub const wxsl_core::abi::SURFACE_FIELDS: &[wxsl_core::abi::SurfaceField]
@@ -390,6 +398,7 @@ pub fn wxsl_core::abi::abi_macros() -> alloc::vec::Vec<wxsl_core::macros::MacroD
 pub fn wxsl_core::abi::context_node_defs() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
 pub fn wxsl_core::abi::context_node_id(&str) -> alloc::string::String
 pub fn wxsl_core::abi::discard_output_def() -> wxsl_core::node::NodeDefinition
+pub fn wxsl_core::abi::fragment_output_def() -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::abi::peel_layers(&wxsl_core::macros::MacroSet) -> u32
 pub fn wxsl_core::abi::peel_native(&wxsl_core::macros::MacroSet) -> bool
 pub fn wxsl_core::abi::screen_context_fields() -> alloc::vec::Vec<&'static wxsl_core::abi::ContextField>
@@ -520,6 +529,7 @@ pub mod wxsl_core::error
 pub wxsl_core::error::CodegenError::BadTemplate
 pub wxsl_core::error::CodegenError::BadTemplate::def: alloc::string::String
 pub wxsl_core::error::CodegenError::BadTemplate::placeholder: alloc::string::String
+pub wxsl_core::error::CodegenError::FragmentNeedsPreshaded
 pub wxsl_core::error::CodegenError::Invalid(wxsl_core::error::GraphErrors)
 pub wxsl_core::error::CodegenError::MultipleOutputNodes(alloc::vec::Vec<wxsl_core::graph::NodeId>)
 pub wxsl_core::error::CodegenError::NoOutputNode
@@ -938,6 +948,7 @@ pub fn wxsl_core::graph::Graph::edges(&self) -> &[wxsl_core::graph::Edge]
 pub fn wxsl_core::graph::Graph::edges_from(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::edges_into(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::effective_macros(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_core::macros::MacroSet, wxsl_core::error::GraphErrors>
+pub fn wxsl_core::graph::Graph::fragment_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::in_domain(impl core::convert::Into<alloc::string::String>, wxsl_core::node::GraphDomain) -> Self
 pub fn wxsl_core::graph::Graph::interface(&self, &wxsl_core::node::NodeRegistry) -> wxsl_core::resources::MaterialInterface
 pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegistry, &alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>) -> wxsl_core::resources::MaterialInterface
@@ -1001,6 +1012,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::graph::Graph
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::graph::Graph
 pub struct wxsl_core::graph::GraphOutputs
 pub wxsl_core::graph::GraphOutputs::discard: core::option::Option<wxsl_core::graph::NodeId>
+pub wxsl_core::graph::GraphOutputs::fragment: core::option::Option<wxsl_core::graph::NodeId>
 pub wxsl_core::graph::GraphOutputs::surface: wxsl_core::graph::NodeId
 pub wxsl_core::graph::GraphOutputs::varyings: alloc::vec::Vec<(wxsl_core::wxsl::WxslIdent, wxsl_core::graph::NodeId)>
 pub wxsl_core::graph::GraphOutputs::vertex: core::option::Option<wxsl_core::graph::NodeId>
@@ -1317,6 +1329,8 @@ pub wxsl_core::lighting::LightingError::FeatureNotCarried::macro_name: &'static 
 pub wxsl_core::lighting::LightingError::ForwardShadedModel
 pub wxsl_core::lighting::LightingError::ForwardShadedWithShadows
 pub wxsl_core::lighting::LightingError::PreshadedNotEnabled
+pub wxsl_core::lighting::LightingError::TwoDataSources
+pub wxsl_core::lighting::LightingError::TwoDataSources::name: alloc::string::String
 pub wxsl_core::lighting::LightingError::UnknownFeature
 pub wxsl_core::lighting::LightingError::UnknownFeature::name: alloc::string::String
 pub wxsl_core::lighting::LightingError::UnknownModel
@@ -1389,6 +1403,7 @@ pub struct wxsl_core::lighting::GBufferPlan
 impl wxsl_core::lighting::GBufferPlan
 pub fn wxsl_core::lighting::GBufferPlan::id_channel(&self) -> bool
 pub fn wxsl_core::lighting::GBufferPlan::layout(&self) -> &[wxsl_core::abi::GBufferTarget]
+pub fn wxsl_core::lighting::GBufferPlan::model_data(&self) -> bool
 pub fn wxsl_core::lighting::GBufferPlan::new(bool, impl core::iter::traits::collect::IntoIterator<Item = wxsl_core::lighting::ChannelRequest>) -> core::result::Result<Self, wxsl_core::lighting::LightingError>
 pub fn wxsl_core::lighting::GBufferPlan::requests(&self) -> &[wxsl_core::lighting::ChannelRequest]
 pub fn wxsl_core::lighting::GBufferPlan::signature(&self) -> alloc::string::String
@@ -1564,9 +1579,8 @@ pub const wxsl_core::lighting::DEBUG_VIEW_MACRO: &str
 pub const wxsl_core::lighting::DEFAULT_MODELS: &[wxsl_core::lighting::LightingModel]
 pub const wxsl_core::lighting::DEFAULT_MODEL_ID: u32
 pub const wxsl_core::lighting::FEATURES: &[wxsl_core::lighting::MaterialFeature]
-pub const wxsl_core::lighting::MODEL_ID_FIELD: &str
-pub const wxsl_core::lighting::MODEL_ID_SCALE: f32
-pub const wxsl_core::lighting::MODEL_ID_TARGET: wxsl_core::abi::GBufferTarget
+pub const wxsl_core::lighting::MODEL_DATA_FIELD: &str
+pub const wxsl_core::lighting::MODEL_DATA_TARGET: wxsl_core::abi::GBufferTarget
 pub const wxsl_core::lighting::OVERDRAW_VIEW: &str
 pub const wxsl_core::lighting::PRESHADED_MODEL: &str
 pub const wxsl_core::lighting::SUBSURFACE: wxsl_core::lighting::MaterialFeature
@@ -1831,6 +1845,7 @@ pub wxsl_core::node::NodeBody::ContextRead(wxsl_core::wxsl::WxslIdent)
 pub wxsl_core::node::NodeBody::DiscardOutput
 pub wxsl_core::node::NodeBody::Document
 pub wxsl_core::node::NodeBody::Expr(alloc::vec::Vec<alloc::string::String>)
+pub wxsl_core::node::NodeBody::FragmentOutput
 pub wxsl_core::node::NodeBody::Param
 pub wxsl_core::node::NodeBody::Resource
 pub wxsl_core::node::NodeBody::ScreenOutput
@@ -2077,6 +2092,7 @@ pub fn wxsl_core::node::NodeDefinition::generic(&self, &str) -> core::option::Op
 pub fn wxsl_core::node::NodeDefinition::input(&self, &str) -> core::option::Option<&wxsl_core::node::Socket>
 pub fn wxsl_core::node::NodeDefinition::is_discard_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_document(&self) -> bool
+pub fn wxsl_core::node::NodeDefinition::is_fragment_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_screen_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_surface_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_terminal(&self) -> bool
@@ -2114,6 +2130,7 @@ pub fn wxsl_core::node::NodeDefinitionBuilder::domains(self, wxsl_core::node::Do
 pub fn wxsl_core::node::NodeDefinitionBuilder::expr(self, impl core::convert::Into<alloc::string::String>) -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::node::NodeDefinitionBuilder::exprs(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<alloc::string::String>>) -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::node::NodeDefinitionBuilder::fragment_only(self) -> Self
+pub fn wxsl_core::node::NodeDefinitionBuilder::fragment_output(self) -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::node::NodeDefinitionBuilder::generic_param(self, wxsl_core::node::GenericParam) -> Self
 pub fn wxsl_core::node::NodeDefinitionBuilder::import(self, &str, &str) -> Self
 pub fn wxsl_core::node::NodeDefinitionBuilder::input(self, wxsl_core::node::Socket) -> Self
@@ -3255,6 +3272,7 @@ pub fn wxsl_core::wxsl::write_f32(&mut alloc::string::String, f32) -> core::opti
 pub wxsl_core::CodegenError::BadTemplate
 pub wxsl_core::CodegenError::BadTemplate::def: alloc::string::String
 pub wxsl_core::CodegenError::BadTemplate::placeholder: alloc::string::String
+pub wxsl_core::CodegenError::FragmentNeedsPreshaded
 pub wxsl_core::CodegenError::Invalid(wxsl_core::error::GraphErrors)
 pub wxsl_core::CodegenError::MultipleOutputNodes(alloc::vec::Vec<wxsl_core::graph::NodeId>)
 pub wxsl_core::CodegenError::NoOutputNode
@@ -3769,6 +3787,7 @@ pub fn wxsl_core::graph::Graph::edges(&self) -> &[wxsl_core::graph::Edge]
 pub fn wxsl_core::graph::Graph::edges_from(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::edges_into(&self, wxsl_core::graph::NodeId) -> impl core::iter::traits::iterator::Iterator<Item = &wxsl_core::graph::Edge>
 pub fn wxsl_core::graph::Graph::effective_macros(&self, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_core::macros::MacroSet, wxsl_core::error::GraphErrors>
+pub fn wxsl_core::graph::Graph::fragment_outputs(&self, &wxsl_core::node::NodeRegistry) -> alloc::vec::Vec<wxsl_core::graph::NodeId>
 pub fn wxsl_core::graph::Graph::in_domain(impl core::convert::Into<alloc::string::String>, wxsl_core::node::GraphDomain) -> Self
 pub fn wxsl_core::graph::Graph::interface(&self, &wxsl_core::node::NodeRegistry) -> wxsl_core::resources::MaterialInterface
 pub fn wxsl_core::graph::Graph::interface_of(&self, &wxsl_core::node::NodeRegistry, &alloc::collections::btree::set::BTreeSet<wxsl_core::graph::NodeId>) -> wxsl_core::resources::MaterialInterface
@@ -4126,6 +4145,7 @@ pub fn wxsl_core::node::NodeDefinition::generic(&self, &str) -> core::option::Op
 pub fn wxsl_core::node::NodeDefinition::input(&self, &str) -> core::option::Option<&wxsl_core::node::Socket>
 pub fn wxsl_core::node::NodeDefinition::is_discard_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_document(&self) -> bool
+pub fn wxsl_core::node::NodeDefinition::is_fragment_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_screen_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_surface_output(&self) -> bool
 pub fn wxsl_core::node::NodeDefinition::is_terminal(&self) -> bool

@@ -140,3 +140,6 @@ a named error before anything is recorded.
   `pipeline::gbuffer_bytes_per_sample`'s cost table with the spec's
   numbers, not guesses — the naive "4 bytes for Rgba8Unorm" is wrong, and
   was, here.
+* Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
+  the id rides in the normal target and every model's data shares one
+  `model` target; there is no `lighting` target and no target per model.

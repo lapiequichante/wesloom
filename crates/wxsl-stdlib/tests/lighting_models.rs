@@ -100,7 +100,7 @@ fn telling_sets() -> Vec<(&'static str, LightingSet)> {
         ("single pbr", LightingSet::single(model("pbr"))),
         ("single sheen", LightingSet::single(model("sheen"))),
         (
-            "pbr + sheen (codegen only; exceeds portable budget)",
+            "pbr + sheen",
             LightingSet::new([model("pbr"), model("sheen")]).unwrap(),
         ),
         (
@@ -108,7 +108,7 @@ fn telling_sets() -> Vec<(&'static str, LightingSet)> {
             LightingSet::single(model("iridescent")),
         ),
         (
-            "pbr + iridescent (codegen only; exceeds portable budget)",
+            "pbr + iridescent",
             LightingSet::new([model("pbr"), model("iridescent")]).unwrap(),
         ),
         ("full set", lighting::default_set().unwrap()),
@@ -287,7 +287,7 @@ fn the_generated_lighting_pass_compiles_for_every_set_and_macro_combination() {
 
 /// The feature-enabled half of the corpus gate (plan2 P12): the lighting
 /// pass generated with a feature's channel in the plan — its binding, its
-/// unpack, its ride in the extras struct — compiles against the shipped
+/// unpack, its ride in the shared model target — compiles against the shipped
 /// library, with the feature's own macro on and off, since the *pack* the
 /// same plan generates is conditional on it. The feature module is part of
 /// the library, so a drift between the generator and the module fails here
@@ -297,19 +297,12 @@ fn the_generated_lighting_pass_compiles_with_a_feature_channel() {
     let features = lighting::feature_requests(&["subsurface"]).expect("subsurface ships");
     let set = lighting::default_set().expect("the default set");
     let source = lighting::lighting_pass_source(&set, &features);
-    assert!(source.contains("gbuffer_subsurface"));
+    assert!(source.contains("gbuffer_model"));
 
     // The pack is the conditional half: generated once per arm of the
     // feature's macro, both must compile against the shipped module.
-    let packed = lighting::pack_gbuffer(
-        lighting::DEFAULT_MODELS
-            .iter()
-            .find(|model| model.name == "wxsl.pbr")
-            .expect("the default model"),
-        &lighting::LightingSet::default(),
-        &features,
-        false,
-    );
+    // The consuming model's material is the one that packs the feature.
+    let packed = lighting::pack_gbuffer(&model("subsurface"), &set, &features, false);
     assert!(packed.source.contains("@if(wxsl_subsurface)"));
 
     let mut modules = library();
@@ -398,6 +391,73 @@ fn the_forward_shaded_material_module_compiles_for_every_stage() {
                 |diagnostics| {
                     panic!(
                         "{set_name} forward-shaded at stage {} does not compile:\n{}",
+                        stage.name(),
+                        diagnostics.render(&|path| modules.get(path).map(str::to_string))
+                    )
+                },
+            );
+        }
+    }
+}
+
+/// A fragment chain (ADR 0089) compiles at every stage, under a forward
+/// set and under a set whose G-buffer stage routes it as preshaded.
+#[test]
+fn a_fragment_chain_compiles_for_every_stage() {
+    let registry = wxsl_stdlib::registry();
+    let mut graph = gate_graph();
+    let surface = graph.surface_outputs(&registry)[0];
+    let scale = graph.add(Node::new("math.multiply"));
+    graph
+        .set_generic(&registry, scale, "A", wxsl_core::node::ValueType::Vec4)
+        .expect("a vec4 operand");
+    graph
+        .set_generic(&registry, scale, "B", wxsl_core::node::ValueType::F32)
+        .expect("a scalar operand");
+    let fragment = graph.add(Node::new(abi::FRAGMENT_OUTPUT_ID));
+    graph
+        .wire(&registry, (surface, abi::SOCKET_SHADED_COLOR), (scale, "a"))
+        .expect("the shaded colour into the chain");
+    graph
+        .wire(
+            &registry,
+            (scale, "out"),
+            (fragment, abi::SOCKET_FRAGMENT_COLOR),
+        )
+        .expect("the chain into the fragment output");
+    for (set_name, set) in [
+        ("single pbr", LightingSet::single(model("pbr"))),
+        ("full set", lighting::default_set().unwrap()),
+    ] {
+        let resolved = wxsl_core::material::MaterialConfig::default()
+            .resolve(&set)
+            .unwrap();
+        for stage in MaterialStage::ALL {
+            let options = CodegenOptions {
+                stage: *stage,
+                material: resolved.clone(),
+                ..CodegenOptions::default()
+            };
+            let generated = match codegen::generate(&graph, &registry, &options) {
+                Ok(generated) => generated,
+                // The one stage a set without the route cannot build.
+                Err(wxsl_core::error::CodegenError::FragmentNeedsPreshaded)
+                    if set.preshaded().is_none() && *stage == abi::MaterialStage::GBUFFER =>
+                {
+                    continue
+                }
+                Err(error) => panic!("{set_name} codegen failed at {}: {error}", stage.name()),
+            };
+            let mut modules = library();
+            modules.insert(codegen::MATERIAL_MODULE, generated.source.clone());
+            let mut bindings = wxsl_lang::Bindings::new();
+            for (name, value) in generated.macros.flags() {
+                bindings.insert(name.to_string(), wxsl_lang::Value::Bool(value));
+            }
+            wxsl_lang::compile(&modules, codegen::MATERIAL_MODULE, &bindings).unwrap_or_else(
+                |diagnostics| {
+                    panic!(
+                        "{set_name}: the chain at stage {} does not compile:\n{}",
                         stage.name(),
                         diagnostics.render(&|path| modules.get(path).map(str::to_string))
                     )

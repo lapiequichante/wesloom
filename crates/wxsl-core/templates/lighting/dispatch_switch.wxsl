@@ -1,9 +1,6 @@
-// What the models read back out of the G-buffer: one field per
-// requested target. The dispatch arm for a model reads its own;
-// the others are ignored. No request, no struct: WGSL refuses an
-// empty one, and with nobody reading the extras there is nothing
-// to pass.
-${MODEL_EXTRAS_DECL}// Dispatch over every enabled model; an id the set did not
+// `model_data`, when present, is the shared model target's texel
+// (ADR 0088): each arm reads it as its own model stored it.
+// Dispatch over every enabled model; an id the set did not
 // enable shades black, which is preferable to shading with the
 // wrong one — ids come from this set's own packing, so reaching
 // the arm means the G-buffer and the set disagree.

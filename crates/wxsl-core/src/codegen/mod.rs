@@ -102,7 +102,8 @@ pub struct CodegenOptions {
     /// a quality setting, a debug view. Keeping them here rather than
     /// writing them into the graph means the graph still holds what it was
     /// authored with. Its `lighting` decides whether the G-buffer stage
-    /// writes a dispatch id and which targets the G-buffer struct carries,
+    /// writes a dispatch id and whether the G-buffer struct carries the
+    /// model target,
     /// and which shading function the generated code calls.
     ///
     /// The other two — the cast-shadow flag and the tags — ride along
@@ -196,6 +197,29 @@ pub fn generate(
         0 => return Err(CodegenError::NoOutputNode),
         1 => graph.outputs(registry).expect("exactly one surface output"),
         _ => return Err(CodegenError::MultipleOutputNodes(found)),
+    };
+
+    // A fragment chain makes the G-buffer stage shade forward (ADR 0089):
+    // the same route a `forward_shaded` material takes (ADR 0056), with the
+    // shadow lookup compiled out of that stage.
+    let chained;
+    let options = if outputs.fragment.is_some()
+        && options.stage.output() == abi::StageOutput::GBuffer
+        && !options.material.forward_shaded
+    {
+        if options.material.lighting.set().preshaded().is_none() {
+            return Err(CodegenError::FragmentNeedsPreshaded);
+        }
+        let mut adjusted = options.clone();
+        adjusted.material.forward_shaded = true;
+        adjusted.material.macros.set(
+            abi::FEATURE_RECEIVE_SHADOWS,
+            crate::macros::MacroValue::Flag(false),
+        );
+        chained = adjusted;
+        &chained
+    } else {
+        options
     };
 
     // Precedence, weakest first: the caller's defaults, each node's declared
@@ -315,12 +339,32 @@ pub fn generate(
         .needs_surface()
         .then(|| emitter.emit_fragment_partition(outputs.surface, &plan.cuts))
         .transpose()?;
+    // The chain from the shaded surface to the fragment output, in the
+    // stages that write the shaded colour (ADR 0089).
+    // A debug view shows the surface, not what the chain made of it.
+    let debug_view = matches!(
+        options.material.macros.get(crate::lighting::DEBUG_VIEW_MACRO),
+        Some(MacroValue::Int(id)) if id != 0
+    );
+    let shades = !debug_view
+        && match stage.output() {
+            abi::StageOutput::Color | abi::StageOutput::PeelResolve => true,
+            abi::StageOutput::GBuffer => options.material.forward_shaded,
+            _ => false,
+        };
+    let fragment = match outputs.fragment {
+        Some(node) if shades => {
+            Some(emitter.emit_fragment_chain(node, outputs.surface, &plan.cuts)?)
+        }
+        _ => None,
+    };
 
     emitter.request_abi_imports(vertex.is_some(), surface.is_some(), !varyings.is_empty());
     let parts = Partitions {
         vertex,
         surface,
         discard,
+        fragment,
         varyings,
     };
     // A stage with nothing to write has a fragment entry only when the
@@ -895,6 +939,9 @@ struct Partitions {
     surface: Option<Partition>,
     /// The discard test, when the graph has a discard output.
     discard: Option<Partition>,
+    /// The chain from the shaded surface to the fragment output, when the
+    /// graph has one and this stage writes a colour (ADR 0089).
+    fragment: Option<Partition>,
 }
 
 struct Emitter<'a> {

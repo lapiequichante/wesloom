@@ -54,8 +54,8 @@ field claimed twice is an error naming both claimants. See
 **Material feature** — a registry entry
 (`wxsl_core::lighting::MaterialFeature`) that owns a G-buffer channel on
 the models' behalf: a macro pin turns it on per material, a pack function
-in the feature's module fills the channel, and any feature-aware model
-reads it from its dispatch's extras. Subsurface ships first. See
+in the feature's module fills the shared model target, and the model that
+consumes the feature reads it there (ADR 0088). Subsurface ships first. See
 [ADR 0037](adr/0037-semantic-channels.md).
 
 **Scene** — the document: meshes, materials and instances, as pure
@@ -97,7 +97,8 @@ colour, which are metadata a reader chooses and codegen never sees
 (ADR 0019).
 
 **Terminal** — a graph's output node. `output.surface` (required),
-`output.vertex` (an object-space position offset), `output.discard`, and
+`output.vertex` (an object-space position offset), `output.discard`,
+`output.fragment` (the colour written in place of the lit surface), and
 one `output.varying` per declared **interpolant**. Each is the root of
 its own **partition**.
 
@@ -155,10 +156,11 @@ See [ADR 0008](adr/0008-surface-graphs-and-a-named-shader-abi.md) and
 
 **Lighting model** — one WXSL function of a fixed signature plus a small
 integer id, shaded through a registry entry in `wxsl_core::lighting`
-(ADR 0028). `lambert`, `phong`, `pbr` and `clearcoat` ship; a material
-names its model by name, and a deferred pipeline enables a **set** of
-them, which decides the G-buffer's extra targets and the dispatch the
-generated lighting pass performs.
+(ADR 0028). `lambert`, `phong`, `pbr`, `clearcoat`, `cloth`, `iridescent`,
+`sheen` and `subsurface` ship; a material names its model by name, and a
+deferred pipeline enables a **set** of them, which decides whether the
+G-buffer carries the shared model target and the dispatch the generated
+lighting pass performs (ADR 0088).
 
 **Surface** — what a material graph produces: base colour, metallic,
 roughness, normal, emissive, occlusion and alpha at one point. A graph

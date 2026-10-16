@@ -105,3 +105,6 @@ which is exactly the question a collision raises.
   decision — materials resolved against a different plan are named
   errors, which is the P8 capability check arriving early for the one
   case that already had the facts computed.
+* Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
+  a feature's channel is stored in the shared `model` target, by the
+  materials whose model consumes it; requests still name their meaning.

@@ -119,6 +119,10 @@ A material graph has several outputs:
 - **`output.vertex`**, optional: an object-space offset added to each
   vertex.
 - **`output.discard`**, optional: an alpha test.
+- **`output.fragment`**, optional: the colour written in place of the lit
+  surface, fed from `output.surface`'s `color` output through any nodes
+  (fog, a grade). Under deferred such a material shades forward
+  ([ADR 0089](adr/0089-the-surface-output-hands-its-shaded-colour-to-a-fragment-output.md)).
 - **`output.varying`**, one per declared interpolant
   ([ADR 0027](adr/0027-a-graph-computes-its-own-interpolants.md)).
 
@@ -206,11 +210,14 @@ The whole set is part of the variant cache key.
 - A material names its model.
 - A pipeline enables a `LightingSet`. The set determines:
   - the G-buffer layout;
-  - the generated dispatch: a direct call when forward, a `switch` on an id
-    channel when deferred;
+  - the generated dispatch: a direct call when forward, a `switch` on the
+    id the normal target carries when deferred;
   - the attachment-budget check.
-- **Material features** such as subsurface add channels on the models'
-  behalf ([ADR 0037](adr/0037-semantic-channels.md)).
+- **Every model's data shares one target**, read by the pixel's id, so the
+  G-buffer is 24 bytes per sample, or 32 with model data, whatever the set
+  ([ADR 0088](adr/0088-one-shared-model-channel-and-the-id-in-the-normal-target.md)).
+- **Material features** such as subsurface fill that target for the models
+  that consume them ([ADR 0037](adr/0037-semantic-channels.md)).
 
 The shading function, the G-buffer pack and the lighting pass are
 generated from the set; never edit the generated text. Forward and deferred

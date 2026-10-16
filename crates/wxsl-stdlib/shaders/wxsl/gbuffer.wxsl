@@ -1,0 +1,26 @@
+// The G-buffer's normal encoding (ADR 0088)
+//
+// The normal target stores the shading normal octahedrally in two
+// channels, so that its other two carry roughness and the lighting-model
+// id. The generated pack calls the encode, the generated lighting pass the
+// decode; both are here so the two ends cannot disagree.
+
+// A unit vector to the octahedron's square, in -1..1 on each axis.
+fn gbuffer_encode_normal(n: vec3f) -> vec2f {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if n.z >= 0.0 {
+        return p;
+    }
+    // The lower half folds over the diagonals.
+    let s = select(vec2f(-1.0), vec2f(1.0), p >= vec2f(0.0));
+    return (vec2f(1.0) - abs(p.yx)) * s;
+}
+
+// The inverse of `gbuffer_encode_normal`, normalized.
+fn gbuffer_decode_normal(e: vec2f) -> vec3f {
+    var n = vec3f(e, 1.0 - abs(e.x) - abs(e.y));
+    let t = saturate(-n.z);
+    let s = select(vec2f(1.0), vec2f(-1.0), n.xy >= vec2f(0.0));
+    n = vec3f(n.xy + t * s, n.z);
+    return normalize(n);
+}
