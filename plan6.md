@@ -698,8 +698,10 @@ Extends pass stepping (N9) from a material to a whole scene.
   * the lakeside HDR had no provenance: it is Poly Haven's CC0 "Lakeside
     Sunrise", recorded in `resources/hdri/README.md`. The fonts and the
     glTF models already had theirs.
-  * Left for the publish: the gallery example embeds the HDR from outside
-    the `wxsl` crate, so a packaged `wxsl` cannot build that example.
+  * Left for the publish: the gallery reads the HDR from outside the
+    `wxsl` crate. Natively it falls back to the procedural sky when the
+    file is missing; only its wasm build embeds the file, so that build
+    needs the repository, not the packaged crate.
 * From then on the API snapshot (C2) is a gate: a stable change requires a
   CHANGELOG entry.
 
