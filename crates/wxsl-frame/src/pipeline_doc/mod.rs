@@ -1,5 +1,5 @@
 //! The pipeline compiler: a [`Graph`] of document nodes in, a
-//! [`RenderGraph`] out — one pure function, no device.
+//! [`FrameGraph`] out — one pure function, no device.
 //!
 //! This is the layer between "a pipeline the user edits as a graph" and "a
 //! pass list the engine schedules"
@@ -10,7 +10,7 @@
 //! G-buffer, that exactly one pass may write the frame's target, that
 //! `pair` means `Rg16Float`. Every failure names the document node,
 //! because the reader is a user looking at a canvas — the scheduler's own
-//! checks stay as the last line, and [`RenderGraph::schedule`] is
+//! checks stay as the last line, and [`FrameGraph::schedule`] is
 //! untouched.
 //!
 //! # What is derived, and from what
@@ -69,7 +69,7 @@ use crate::effect::{
     Downlevel, Effect, EffectInputKind, EffectOutputShape, EffectRegistry, PEEL_BOUNDS,
     PEEL_COMPOSITE, PEEL_DEPTH_BOUNDS, PEEL_OVER, PEEL_UNDER,
 };
-use crate::graph::RenderGraph;
+use crate::graph::FrameGraph;
 use crate::pass::{
     Attachment, DepthAttachment, DrawSource, Extent, LayerFilter, PassDesc, PassKind, PassState,
     PassView, Persistence, Policy, Read, ResourceDesc, ResourceId, SortOrder, ViewportRect,
@@ -596,7 +596,7 @@ pub fn document_registry(effects: &EffectRegistry) -> NodeRegistry {
 /// Compile a pipeline document into a pass list.
 ///
 /// Pure: no device, no allocation beyond the graph itself. Everything the
-/// [`RenderGraph::schedule`] can catch is still caught there — this
+/// [`FrameGraph::schedule`] can catch is still caught there — this
 /// function's own errors are the ones the scheduler *cannot* name, because
 /// they are about nodes the scheduler never saw.
 pub fn compile(
@@ -604,7 +604,7 @@ pub fn compile(
     registry: &NodeRegistry,
     effects: &EffectRegistry,
     config: &PipelineConfig,
-) -> Result<RenderGraph, PipelineError> {
+) -> Result<FrameGraph, PipelineError> {
     if let Err(errors) = document.validate(registry) {
         return Err(PipelineError::InvalidDocument(errors));
     }
@@ -643,7 +643,7 @@ struct Compiler<'a> {
     /// inputs are what its wiring is validated against.
     effects: &'a EffectRegistry,
     config: &'a PipelineConfig,
-    graph: RenderGraph,
+    graph: FrameGraph,
     /// `resource.gbuffer` node → (targets in layout order, depth).
     gbuffers: HashMap<NodeId, (Vec<ResourceId>, ResourceId)>,
     /// `resource.color` node → engine resource.
@@ -677,7 +677,7 @@ impl<'a> Compiler<'a> {
             registry,
             effects,
             config,
-            graph: RenderGraph::new(config.target.format),
+            graph: FrameGraph::new(config.target.format),
             gbuffers: HashMap::new(),
             colors: HashMap::new(),
             depths: HashMap::new(),
@@ -706,7 +706,7 @@ impl<'a> Compiler<'a> {
             .unwrap_or_default()
     }
 
-    fn compile(mut self) -> Result<RenderGraph, PipelineError> {
+    fn compile(mut self) -> Result<FrameGraph, PipelineError> {
         // Resources first: passes refer to them by id, and declaration
         // order (document order, by node id) is the scheduler's tie-break.
         let nodes: Vec<NodeId> = self.document.nodes().map(|(id, _)| id).collect();
@@ -791,7 +791,7 @@ impl Compiler<'_> {
     fn finish(&mut self, presents: Vec<NodeId>) -> Result<(), PipelineError> {
         if let Some(layout) = self.layout.take() {
             self.graph =
-                std::mem::replace(&mut self.graph, RenderGraph::new(self.config.target.format))
+                std::mem::replace(&mut self.graph, FrameGraph::new(self.config.target.format))
                     .with_gbuffer_layout(layout);
         }
 
@@ -818,8 +818,7 @@ impl Compiler<'_> {
                     | Some(doc::PASS_SCREEN)
                     | Some(doc::PASS_PEEL)
                     | Some(doc::PASS_REFRACTION)
-            ) && self.pass_colors.get(&feeder)
-                == Some(&RenderGraph::TARGET);
+            ) && self.pass_colors.get(&feeder) == Some(&FrameGraph::TARGET);
             if !stands_for_target {
                 let wrote = self.pass_colors.get(&feeder).and_then(|resource| {
                     self.graph

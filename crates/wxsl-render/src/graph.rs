@@ -9,22 +9,22 @@ use crate::types::{texture_dimension, view_dimension, WgpuType};
 use std::collections::HashMap;
 use wxsl_core::abi;
 
-pub use wxsl_frame::graph::{Allocation, GraphError, Schedule, SlotDesc, SlotShape};
+pub use wxsl_frame::graph::{Allocation, Schedule, ScheduleError, SlotDesc, SlotShape};
 
 /// A shared frame plan with wgpu recording operations.
 #[derive(Clone, Debug)]
-pub struct RenderGraph(wxsl_frame::graph::RenderGraph);
+pub struct RenderGraph(wxsl_frame::graph::FrameGraph);
 
 impl RenderGraph {
     /// The caller-supplied frame target.
-    pub const TARGET: ResourceId = wxsl_frame::graph::RenderGraph::TARGET;
+    pub const TARGET: ResourceId = wxsl_frame::graph::FrameGraph::TARGET;
 
     /// The label of the pass a stepped cut appends to show a resource.
-    pub const STEP_INSPECT_PASS: &'static str = wxsl_frame::graph::RenderGraph::STEP_INSPECT_PASS;
+    pub const STEP_INSPECT_PASS: &'static str = wxsl_frame::graph::FrameGraph::STEP_INSPECT_PASS;
 
     /// An empty graph using the native target format.
     pub fn new(format: wgpu::TextureFormat) -> Self {
-        Self(wxsl_frame::graph::RenderGraph::new(
+        Self(wxsl_frame::graph::FrameGraph::new(
             wxsl_frame::types::TextureFormat::from_wgpu(format),
         ))
     }
@@ -35,20 +35,20 @@ impl RenderGraph {
     }
 }
 
-impl From<wxsl_frame::graph::RenderGraph> for RenderGraph {
-    fn from(graph: wxsl_frame::graph::RenderGraph) -> Self {
+impl From<wxsl_frame::graph::FrameGraph> for RenderGraph {
+    fn from(graph: wxsl_frame::graph::FrameGraph) -> Self {
         Self(graph)
     }
 }
 
-impl From<RenderGraph> for wxsl_frame::graph::RenderGraph {
+impl From<RenderGraph> for wxsl_frame::graph::FrameGraph {
     fn from(graph: RenderGraph) -> Self {
         graph.0
     }
 }
 
 impl std::ops::Deref for RenderGraph {
-    type Target = wxsl_frame::graph::RenderGraph;
+    type Target = wxsl_frame::graph::FrameGraph;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -403,7 +403,7 @@ impl RenderGraph {
                     let format = match self.resources()[attachment.resource.index()].shape {
                         ResourceShape::Texture { format, .. } => format,
                         ResourceShape::Buffer { .. } => {
-                            return Err(RenderError::Graph(GraphError::AttachmentNotATexture {
+                            return Err(RenderError::Graph(ScheduleError::AttachmentNotATexture {
                                 pass: pass.label.clone(),
                                 resource: self.resources()[attachment.resource.index()]
                                     .label

@@ -62,7 +62,7 @@ impl Compiler<'_> {
                     self.kind(node) == Some(doc::PASS_GEOMETRY)
                         && self.layers(node)? == LayerFilter::Sorted,
                 ));
-                Ok(RenderGraph::TARGET)
+                Ok(FrameGraph::TARGET)
             }
         }
     }
@@ -184,7 +184,7 @@ impl Compiler<'_> {
         let into_wired = self.fed(node, "into").is_some();
         let layers = self.layers(node)?;
         let blend = self.blend(node)?;
-        let mut wrote = RenderGraph::TARGET;
+        let mut wrote = FrameGraph::TARGET;
         let colors: Vec<Attachment> = match stage.output() {
             abi::StageOutput::Color | abi::StageOutput::Velocity => {
                 // A pass whose colour reaches nothing: neither handed on
@@ -426,7 +426,7 @@ impl Compiler<'_> {
             | Some(doc::PASS_SCREEN)
             | Some(doc::PASS_PEEL)
             | Some(doc::PASS_REFRACTION) => match self.pass_colors.get(&source) {
-                Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                Some(&resource) if resource != FrameGraph::TARGET => Ok(resource),
                 _ => Err(PipelineError::Peel {
                     node: node.to_string(),
                     reason: format!(
@@ -707,7 +707,7 @@ impl Compiler<'_> {
         // A pass that skips frames writes stable storage, or the
         // scheduler names the mistake: a chain's colour target is
         // promoted here, so `once`-into-`resource.color` just works.
-        if policy != Policy::PerFrame && target != RenderGraph::TARGET {
+        if policy != Policy::PerFrame && target != FrameGraph::TARGET {
             self.graph.make_stable_storage(target);
         }
         self.graph.pass(
@@ -855,7 +855,7 @@ impl Compiler<'_> {
             | Some(doc::PASS_REFRACTION)
             | Some(doc::PASS_BLOOM)
             | Some(doc::PASS_DOF) => match self.pass_colors.get(&source) {
-                Some(&resource) if resource != RenderGraph::TARGET => Ok(resource),
+                Some(&resource) if resource != FrameGraph::TARGET => Ok(resource),
                 _ => Err(PipelineError::ImageFromPass {
                     node: self.label(reader),
                     fed_by: label(self.document, self.registry, source),

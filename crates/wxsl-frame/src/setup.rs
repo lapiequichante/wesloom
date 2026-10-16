@@ -443,7 +443,7 @@ mod tests {
         let features = feature_requests(features).expect("shipped features");
         let config = PipelineConfig {
             features,
-            ..PipelineConfig::new(crate::pipeline::TargetConfig::new(
+            ..PipelineConfig::new(crate::pipeline::TargetDesc::new(
                 512,
                 512,
                 TextureFormat::Bgra8Unorm,
@@ -549,7 +549,7 @@ mod tests {
         let setup = RenderSetup::new(
             pipeline,
             EffectRegistry::shipped(),
-            PipelineConfig::new(crate::pipeline::TargetConfig::new(
+            PipelineConfig::new(crate::pipeline::TargetDesc::new(
                 512,
                 512,
                 TextureFormat::Bgra8Unorm,
@@ -571,7 +571,7 @@ mod tests {
         // id; a feature claiming the same field collides with it. The
         // collision is about the pipeline, so it is one `Plan`
         // incompatibility, and no material is asked anything after it.
-        let mut config = PipelineConfig::new(crate::pipeline::TargetConfig::new(
+        let mut config = PipelineConfig::new(crate::pipeline::TargetDesc::new(
             512,
             512,
             TextureFormat::Bgra8Unorm,

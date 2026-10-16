@@ -16,7 +16,7 @@ use wxsl_core::resources::BufferLayout;
 use wxsl_core::scene::Scene;
 use wxsl_frame::effect::{Effect, EffectRegistry};
 use wxsl_frame::pass::PassKind;
-use wxsl_frame::pipeline::{PipelineConfig, TargetConfig};
+use wxsl_frame::pipeline::{PipelineConfig, TargetDesc};
 use wxsl_frame::profile::Profile;
 use wxsl_frame::setup::RenderSetup;
 use wxsl_frame::types::TextureFormat;
@@ -178,7 +178,7 @@ fn parse<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 #[derive(Deserialize)]
 #[serde(default)]
 struct Config {
-    target: TargetConfig,
+    target: TargetDesc,
     lighting_models: Vec<String>,
     features: Vec<String>,
     macros: MacroSet,
@@ -190,7 +190,7 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            target: TargetConfig::new(800, 600, TextureFormat::Rgba8Unorm),
+            target: TargetDesc::new(800, 600, TextureFormat::Rgba8Unorm),
             lighting_models: vec!["wxsl.pbr".into()],
             features: Vec::new(),
             macros: MacroSet::new(),

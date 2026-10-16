@@ -237,7 +237,7 @@ pub wxsl_render::error::RenderError::EffectParameter
 pub wxsl_render::error::RenderError::EffectParameter::name: alloc::string::String
 pub wxsl_render::error::RenderError::EffectParameter::pass: alloc::string::String
 pub wxsl_render::error::RenderError::EffectParameter::reason: alloc::string::String
-pub wxsl_render::error::RenderError::Graph(wxsl_frame::graph::GraphError)
+pub wxsl_render::error::RenderError::Graph(wxsl_frame::graph::ScheduleError)
 pub wxsl_render::error::RenderError::Import
 pub wxsl_render::error::RenderError::Import::path: alloc::string::String
 pub wxsl_render::error::RenderError::Import::reason: alloc::string::String
@@ -307,8 +307,8 @@ pub wxsl_render::error::RenderError::VertexStreamLength::supplied: usize
 pub wxsl_render::error::RenderError::VertexStreamLength::vertices: usize
 impl core::convert::From<wxsl_core::error::CodegenError> for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::from(wxsl_core::error::CodegenError) -> Self
-impl core::convert::From<wxsl_frame::graph::GraphError> for wxsl_render::error::RenderError
-pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::GraphError) -> Self
+impl core::convert::From<wxsl_frame::graph::ScheduleError> for wxsl_render::error::RenderError
+pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::ScheduleError) -> Self
 impl core::convert::From<wxsl_render::error::RenderError> for wxsl_render::scene::LoadError
 pub fn wxsl_render::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
 impl core::error::Error for wxsl_render::error::RenderError
@@ -392,8 +392,8 @@ pub const wxsl_render::gpu::WANTED_FEATURES: wgpu_types::features::Features
 pub fn wxsl_render::gpu::device_profile(&wgpu::api::device::Device) -> wxsl_frame::profile::Profile
 pub mod wxsl_render::graph
 pub use wxsl_render::graph::Allocation
-pub use wxsl_render::graph::GraphError
 pub use wxsl_render::graph::Schedule
+pub use wxsl_render::graph::ScheduleError
 pub use wxsl_render::graph::SlotDesc
 pub use wxsl_render::graph::SlotShape
 pub enum wxsl_render::graph::PassBinding
@@ -462,14 +462,14 @@ pub fn wxsl_render::graph::RenderGraph::pass_binding_kinds(&self, &wxsl_frame::p
 pub fn wxsl_render::graph::RenderGraph::record<'s, F>(&self, &wgpu::api::device::Device, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_frame::graph::Schedule, &mut wxsl_render::graph::ResourcePool, &[(wxsl_frame::pass::ResourceId, &wgpu::api::texture_view::TextureView)], &dyn core::ops::function::Fn(usize) -> bool, &(dyn core::ops::function::Fn(&wxsl_frame::pass::PassDesc) -> core::option::Option<(&'s wgpu::api::buffer::Buffer, u32)> + 's), core::option::Option<(&wgpu::api::query_set::QuerySet, usize)>, core::option::Option<&mut wxsl_render::probe::TexelProbe>, F) -> core::result::Result<(), wxsl_render::error::RenderError> where F: core::ops::function::FnMut(&wxsl_render::graph::RecordedPass<'_>, wxsl_render::graph::PassEncoder<'_, '_>) -> core::result::Result<(), wxsl_render::error::RenderError>
 impl core::clone::Clone for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::clone(&self) -> Self
-impl core::convert::From<wxsl_frame::graph::RenderGraph> for wxsl_render::graph::RenderGraph
-pub fn wxsl_render::graph::RenderGraph::from(wxsl_frame::graph::RenderGraph) -> Self
-impl core::convert::From<wxsl_render::graph::RenderGraph> for wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::graph::RenderGraph::from(wxsl_render::graph::RenderGraph) -> Self
+impl core::convert::From<wxsl_frame::graph::FrameGraph> for wxsl_render::graph::RenderGraph
+pub fn wxsl_render::graph::RenderGraph::from(wxsl_frame::graph::FrameGraph) -> Self
+impl core::convert::From<wxsl_render::graph::RenderGraph> for wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::graph::FrameGraph::from(wxsl_render::graph::RenderGraph) -> Self
 impl core::fmt::Debug for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::ops::deref::Deref for wxsl_render::graph::RenderGraph
-pub type wxsl_render::graph::RenderGraph::Target = wxsl_frame::graph::RenderGraph
+pub type wxsl_render::graph::RenderGraph::Target = wxsl_frame::graph::FrameGraph
 pub fn wxsl_render::graph::RenderGraph::deref(&self) -> &Self::Target
 impl core::ops::deref::DerefMut for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::deref_mut(&mut self) -> &mut Self::Target
@@ -752,10 +752,10 @@ impl core::clone::Clone for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::eq(&self, &Self) -> bool
-impl core::convert::From<wxsl_frame::pipeline::TargetConfig> for wxsl_render::pipeline::TargetConfig
-pub fn wxsl_render::pipeline::TargetConfig::from(wxsl_frame::pipeline::TargetConfig) -> Self
-impl core::convert::From<wxsl_render::pipeline::TargetConfig> for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::from(wxsl_render::pipeline::TargetConfig) -> Self
+impl core::convert::From<wxsl_frame::pipeline::TargetDesc> for wxsl_render::pipeline::TargetConfig
+pub fn wxsl_render::pipeline::TargetConfig::from(wxsl_frame::pipeline::TargetDesc) -> Self
+impl core::convert::From<wxsl_render::pipeline::TargetConfig> for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::from(wxsl_render::pipeline::TargetConfig) -> Self
 impl core::fmt::Debug for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for wxsl_render::pipeline::TargetConfig
@@ -772,7 +772,8 @@ pub fn wxsl_render::pipeline::forward_graph(wxsl_render::pipeline::TargetConfig)
 pub fn wxsl_render::pipeline::gbuffer_format(wxsl_core::abi::GBufferPrecision) -> wgpu_types::texture::format::TextureFormat
 pub fn wxsl_render::pipeline::gbuffer_formats(&wxsl_core::lighting::LightingSet) -> alloc::vec::Vec<wgpu_types::texture::format::TextureFormat>
 pub mod wxsl_render::pipeline_doc
-pub use wxsl_render::pipeline_doc::<<wxsl_frame::pipeline_doc::*>>
+pub use wxsl_render::pipeline_doc::PipelineError
+pub use wxsl_render::pipeline_doc::document_registry
 pub fn wxsl_render::pipeline_doc::compile(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> core::result::Result<wxsl_render::graph::RenderGraph, wxsl_frame::pipeline_doc::PipelineError>
 pub mod wxsl_render::probe
 pub enum wxsl_render::probe::TexelValue
@@ -3195,7 +3196,7 @@ pub wxsl_render::RenderError::EffectParameter
 pub wxsl_render::RenderError::EffectParameter::name: alloc::string::String
 pub wxsl_render::RenderError::EffectParameter::pass: alloc::string::String
 pub wxsl_render::RenderError::EffectParameter::reason: alloc::string::String
-pub wxsl_render::RenderError::Graph(wxsl_frame::graph::GraphError)
+pub wxsl_render::RenderError::Graph(wxsl_frame::graph::ScheduleError)
 pub wxsl_render::RenderError::Import
 pub wxsl_render::RenderError::Import::path: alloc::string::String
 pub wxsl_render::RenderError::Import::reason: alloc::string::String
@@ -3265,8 +3266,8 @@ pub wxsl_render::RenderError::VertexStreamLength::supplied: usize
 pub wxsl_render::RenderError::VertexStreamLength::vertices: usize
 impl core::convert::From<wxsl_core::error::CodegenError> for wxsl_render::error::RenderError
 pub fn wxsl_render::error::RenderError::from(wxsl_core::error::CodegenError) -> Self
-impl core::convert::From<wxsl_frame::graph::GraphError> for wxsl_render::error::RenderError
-pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::GraphError) -> Self
+impl core::convert::From<wxsl_frame::graph::ScheduleError> for wxsl_render::error::RenderError
+pub fn wxsl_render::error::RenderError::from(wxsl_frame::graph::ScheduleError) -> Self
 impl core::convert::From<wxsl_render::error::RenderError> for wxsl_render::scene::LoadError
 pub fn wxsl_render::scene::LoadError::from(wxsl_render::error::RenderError) -> Self
 impl core::error::Error for wxsl_render::error::RenderError
@@ -3580,14 +3581,14 @@ pub fn wxsl_render::graph::RenderGraph::pass_binding_kinds(&self, &wxsl_frame::p
 pub fn wxsl_render::graph::RenderGraph::record<'s, F>(&self, &wgpu::api::device::Device, &mut wgpu::api::command_encoder::CommandEncoder, &wxsl_frame::graph::Schedule, &mut wxsl_render::graph::ResourcePool, &[(wxsl_frame::pass::ResourceId, &wgpu::api::texture_view::TextureView)], &dyn core::ops::function::Fn(usize) -> bool, &(dyn core::ops::function::Fn(&wxsl_frame::pass::PassDesc) -> core::option::Option<(&'s wgpu::api::buffer::Buffer, u32)> + 's), core::option::Option<(&wgpu::api::query_set::QuerySet, usize)>, core::option::Option<&mut wxsl_render::probe::TexelProbe>, F) -> core::result::Result<(), wxsl_render::error::RenderError> where F: core::ops::function::FnMut(&wxsl_render::graph::RecordedPass<'_>, wxsl_render::graph::PassEncoder<'_, '_>) -> core::result::Result<(), wxsl_render::error::RenderError>
 impl core::clone::Clone for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::clone(&self) -> Self
-impl core::convert::From<wxsl_frame::graph::RenderGraph> for wxsl_render::graph::RenderGraph
-pub fn wxsl_render::graph::RenderGraph::from(wxsl_frame::graph::RenderGraph) -> Self
-impl core::convert::From<wxsl_render::graph::RenderGraph> for wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::graph::RenderGraph::from(wxsl_render::graph::RenderGraph) -> Self
+impl core::convert::From<wxsl_frame::graph::FrameGraph> for wxsl_render::graph::RenderGraph
+pub fn wxsl_render::graph::RenderGraph::from(wxsl_frame::graph::FrameGraph) -> Self
+impl core::convert::From<wxsl_render::graph::RenderGraph> for wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::graph::FrameGraph::from(wxsl_render::graph::RenderGraph) -> Self
 impl core::fmt::Debug for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::ops::deref::Deref for wxsl_render::graph::RenderGraph
-pub type wxsl_render::graph::RenderGraph::Target = wxsl_frame::graph::RenderGraph
+pub type wxsl_render::graph::RenderGraph::Target = wxsl_frame::graph::FrameGraph
 pub fn wxsl_render::graph::RenderGraph::deref(&self) -> &Self::Target
 impl core::ops::deref::DerefMut for wxsl_render::graph::RenderGraph
 pub fn wxsl_render::graph::RenderGraph::deref_mut(&mut self) -> &mut Self::Target
@@ -3732,10 +3733,10 @@ impl core::clone::Clone for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::eq(&self, &Self) -> bool
-impl core::convert::From<wxsl_frame::pipeline::TargetConfig> for wxsl_render::pipeline::TargetConfig
-pub fn wxsl_render::pipeline::TargetConfig::from(wxsl_frame::pipeline::TargetConfig) -> Self
-impl core::convert::From<wxsl_render::pipeline::TargetConfig> for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::from(wxsl_render::pipeline::TargetConfig) -> Self
+impl core::convert::From<wxsl_frame::pipeline::TargetDesc> for wxsl_render::pipeline::TargetConfig
+pub fn wxsl_render::pipeline::TargetConfig::from(wxsl_frame::pipeline::TargetDesc) -> Self
+impl core::convert::From<wxsl_render::pipeline::TargetConfig> for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::from(wxsl_render::pipeline::TargetConfig) -> Self
 impl core::fmt::Debug for wxsl_render::pipeline::TargetConfig
 pub fn wxsl_render::pipeline::TargetConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for wxsl_render::pipeline::TargetConfig

@@ -165,7 +165,7 @@ The ADR named on each line holds the reasoning.
   - The stock pipelines are documents in
     `crates/wxsl-frame/assets/presets/`; never edit generated pass lists.
   - Adding a pass means adding a `PassDesc`, never a `begin_render_pass`.
-  - Everything checkable is checked in the pure `RenderGraph::schedule`.
+  - Everything checkable is checked in the pure `FrameGraph::schedule`.
   - A document error names the document node.
 - **Effects are data** (ADRs 0034, 0035, 0042).
   - Adding an effect means an `Effect` row plus its shader, never a

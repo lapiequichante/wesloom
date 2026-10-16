@@ -18,9 +18,10 @@ use crate::types::Color;
 use crate::types::{BufferUsages, TextureFormat, TextureUsages};
 use wxsl_core::abi;
 
-/// A pipeline, as a list of passes over a set of resources.
+/// A pipeline, as a list of passes over a set of resources, with no
+/// device. `wxsl-render`'s `RenderGraph` wraps it and records it on `wgpu`.
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct RenderGraph {
+pub struct FrameGraph {
     resources: Vec<ResourceDesc>,
     passes: Vec<PassDesc>,
     shadow_maps: Option<ResourceId>,
@@ -29,23 +30,23 @@ pub struct RenderGraph {
     /// The G-buffer layout this graph's `gbuffer`-stage passes are built
     /// for: what the scheduler checks a material pass's attachment count
     /// against. The base targets unless the graph says otherwise — see
-    /// `RenderGraph::with_gbuffer_layout`, which a pipeline built from a
+    /// `FrameGraph::with_gbuffer_layout`, which a pipeline built from a
     /// lighting-model set calls
     /// (`wxsl_core::lighting::LightingSet::gbuffer_layout`).
     gbuffer_layout: Vec<abi::GBufferTarget>,
 }
 
-impl RenderGraph {
+impl FrameGraph {
     /// The frame's own target, which every graph has and nobody allocates.
     pub const TARGET: ResourceId = ResourceId(0);
 
-    /// The label of the pass [`RenderGraph::stepped`] appends to show a
+    /// The label of the pass [`FrameGraph::stepped`] appends to show a
     /// resource — what its effect parameters are addressed by.
     pub const STEP_INSPECT_PASS: &'static str = "step inspect";
 
     /// An empty graph whose target is in `format`.
     pub fn new(format: TextureFormat) -> Self {
-        RenderGraph {
+        FrameGraph {
             resources: vec![ResourceDesc::imported("target", format)],
             passes: Vec::new(),
             shadow_maps: None,
@@ -141,7 +142,7 @@ impl RenderGraph {
         &self,
         count: usize,
         show: Option<(ResourceId, &str)>,
-    ) -> Result<RenderGraph, GraphError> {
+    ) -> Result<FrameGraph, ScheduleError> {
         let order = self.schedule()?.order().to_vec();
         let kept: std::collections::HashSet<usize> = order.into_iter().take(count).collect();
         let mut cut = self.clone();
@@ -211,7 +212,7 @@ impl RenderGraph {
     /// Pure: no device, no allocation of anything but memory. Everything
     /// that can be wrong with a pass list is wrong here rather than as a
     /// `wgpu` validation error three layers down.
-    pub fn schedule(&self) -> Result<Schedule, GraphError> {
+    pub fn schedule(&self) -> Result<Schedule, ScheduleError> {
         if let Some(maps) = self.shadow_maps {
             let mut expanded = self.clone();
             expanded.shadow_maps = None;
@@ -227,14 +228,14 @@ impl RenderGraph {
         }
         if let Some(maps) = self.environment_maps {
             if !self.environment_scale.is_finite() || self.environment_scale <= 0.0 {
-                return Err(GraphError::InvalidTexture {
+                return Err(ScheduleError::InvalidTexture {
                     resource: "environment scale".into(),
                     reason: "must be finite and positive".into(),
                 });
             }
             for id in maps {
                 let Some(desc) = self.resource_desc(id) else {
-                    return Err(GraphError::InvalidTexture {
+                    return Err(ScheduleError::InvalidTexture {
                         resource: format!("environment {}", id.index()),
                         reason: "unknown resource".into(),
                     });
@@ -250,7 +251,7 @@ impl RenderGraph {
                     )
                     || !matches!(desc.persistence, Persistence::Persistent { history: 0 })
                 {
-                    return Err(GraphError::InvalidTexture {
+                    return Err(ScheduleError::InvalidTexture {
                         resource: desc.label.clone(),
                         reason: "environment maps require pooled stable rgba16float cubes".into(),
                     });
@@ -274,7 +275,7 @@ impl RenderGraph {
     }
 
     /// Everything checkable about a pass list before a device sees it.
-    fn validate(&self) -> Result<(), GraphError> {
+    fn validate(&self) -> Result<(), ScheduleError> {
         for desc in &self.resources {
             if let ResourceShape::Texture {
                 extent,
@@ -284,7 +285,7 @@ impl RenderGraph {
                 ..
             } = desc.shape
             {
-                let invalid = |reason: &str| GraphError::InvalidTexture {
+                let invalid = |reason: &str| ScheduleError::InvalidTexture {
                     resource: desc.label.clone(),
                     reason: reason.into(),
                 };
@@ -322,7 +323,7 @@ impl RenderGraph {
         }
         for pass in &self.passes {
             if pass.viewport.is_some() && pass.color.is_empty() && pass.depth.is_none() {
-                return Err(GraphError::InvalidTextureUse {
+                return Err(ScheduleError::InvalidTextureUse {
                     pass: pass.label.clone(),
                     resource: "raster rectangle".into(),
                     reason: "requires a render attachment".into(),
@@ -334,7 +335,7 @@ impl RenderGraph {
                 .chain(pass.indirect_buffer())
             {
                 if id.index() >= self.resources.len() {
-                    return Err(GraphError::UnknownResource {
+                    return Err(ScheduleError::UnknownResource {
                         pass: pass.label.clone(),
                         resource: id,
                     });
@@ -355,7 +356,7 @@ impl RenderGraph {
                     .get(id.index())
                     .is_some_and(|desc| desc.texture().is_none())
                 {
-                    return Err(GraphError::AttachmentNotATexture {
+                    return Err(ScheduleError::AttachmentNotATexture {
                         pass: pass.label.clone(),
                         resource: self.resources[id.index()].label.clone(),
                     });
@@ -393,7 +394,7 @@ impl RenderGraph {
                         _ => false,
                     };
                     if !valid {
-                        return Err(GraphError::InvalidTextureUse {
+                        return Err(ScheduleError::InvalidTextureUse {
                             pass: pass.label.clone(), resource: desc.label.clone(),
                             reason: "raster rectangle requires a fixed attachment extent and must be nonempty and inside it".into(),
                         });
@@ -417,7 +418,7 @@ impl RenderGraph {
                         None
                     };
                     if let Some(reason) = reason {
-                        return Err(GraphError::InvalidTextureUse {
+                        return Err(ScheduleError::InvalidTextureUse {
                             pass: pass.label.clone(),
                             resource: desc.label.clone(),
                             reason: reason.into(),
@@ -428,7 +429,7 @@ impl RenderGraph {
                     if !desc.imported && matches!(extent, Extent::Fixed { .. }) {
                         let size = extent.resolve_mip(1, 1, mip);
                         if fixed_attachment_extent.is_some_and(|expected| expected != size) {
-                            return Err(GraphError::InvalidTextureUse {
+                            return Err(ScheduleError::InvalidTextureUse {
                                 pass: pass.label.clone(), resource: desc.label.clone(),
                                 reason: "attachment mip extent differs from the pass's other attachments".into(),
                             });
@@ -449,7 +450,7 @@ impl RenderGraph {
                         ..
                     }
                 ) {
-                    return Err(GraphError::InvalidTextureUse {
+                    return Err(ScheduleError::InvalidTextureUse {
                         pass: pass.label.clone(), resource: desc.label.clone(),
                         reason: "storage writes require a single-mip, non-cube view; use render-face attachments instead".into(),
                     });
@@ -461,7 +462,7 @@ impl RenderGraph {
             // entry-point signature error with no mention of the pass.
             if let Some(expected) = expected_color_targets(&pass.kind, self) {
                 if pass.color.len() != expected {
-                    return Err(GraphError::WrongColorTargetCount {
+                    return Err(ScheduleError::WrongColorTargetCount {
                         pass: pass.label.clone(),
                         expected,
                         found: pass.color.len(),
@@ -484,7 +485,7 @@ impl RenderGraph {
                     })
                 });
             if attached.flatten() != pass.state.depth_format {
-                return Err(GraphError::DepthFormatMismatch {
+                return Err(ScheduleError::DepthFormatMismatch {
                     pass: pass.label.clone(),
                     attached: attached.flatten(),
                     state: pass.state.depth_format,
@@ -523,7 +524,7 @@ impl RenderGraph {
                     ResourceShape::Buffer { .. } => None,
                 };
                 if let Some(reason) = reason {
-                    return Err(GraphError::InvalidIndirectBuffer {
+                    return Err(ScheduleError::InvalidIndirectBuffer {
                         pass: pass.label.clone(),
                         resource: desc.label.clone(),
                         reason: reason.to_string(),
@@ -539,14 +540,14 @@ impl RenderGraph {
                 // attachment is the legitimate way to read what is already
                 // there; this is not.
                 if read.history == 0 && pass.written().any(|id| id == read.resource) {
-                    return Err(GraphError::ReadsWhatItWrites {
+                    return Err(ScheduleError::ReadsWhatItWrites {
                         pass: pass.label.clone(),
                         resource: desc.label.clone(),
                     });
                 }
                 let depth = read.history as usize;
                 if depth >= desc.persistence.ring_length() {
-                    return Err(GraphError::NoSuchHistory {
+                    return Err(ScheduleError::NoSuchHistory {
                         pass: pass.label.clone(),
                         resource: desc.label.clone(),
                         history: read.history,
@@ -573,10 +574,10 @@ impl RenderGraph {
                     // rather than by the pool's ring. The target is
                     // imported too, but it is re-presented every frame by
                     // definition and is the frame's, not the host's.
-                    let stable = (desc.imported && id != RenderGraph::TARGET)
+                    let stable = (desc.imported && id != FrameGraph::TARGET)
                         || matches!(desc.persistence, Persistence::Persistent { history: 0 });
                     if !stable {
-                        return Err(GraphError::PolicyNeedsStableStorage {
+                        return Err(ScheduleError::PolicyNeedsStableStorage {
                             pass: pass.label.clone(),
                             resource: desc.label.clone(),
                             policy: pass.policy,
@@ -600,7 +601,7 @@ impl RenderGraph {
             for id in pass.read_this_frame() {
                 let desc = &self.resources[id.index()];
                 if !written[id.index()] && !desc.imported {
-                    return Err(GraphError::NeverWritten {
+                    return Err(ScheduleError::NeverWritten {
                         pass: pass.label.clone(),
                         resource: desc.label.clone(),
                     });
@@ -618,7 +619,7 @@ impl RenderGraph {
     /// were declared in: a pass list written back to front schedules the
     /// same as one written front to back, which is the entire point of
     /// describing a pipeline rather than sequencing it.
-    fn topological_order(&self) -> Result<Vec<usize>, GraphError> {
+    fn topological_order(&self) -> Result<Vec<usize>, ScheduleError> {
         let count = self.passes.len();
         let mut edges: Vec<Vec<usize>> = vec![Vec::new(); count];
         let mut incoming = vec![0usize; count];
@@ -676,7 +677,7 @@ impl RenderGraph {
             let stuck = (0..count)
                 .find(|index| !order.contains(index))
                 .expect("a pass is missing");
-            return Err(GraphError::Cycle {
+            return Err(ScheduleError::Cycle {
                 pass: self.passes[stuck].label.clone(),
             });
         }
@@ -847,7 +848,7 @@ impl RenderGraph {
 /// For a geometry pass this comes straight from the stage table: a stage
 /// that returns a G-buffer needs one attachment per G-buffer target, and a
 /// depth-only stage needs none.
-fn expected_color_targets(kind: &PassKind, graph: &RenderGraph) -> Option<usize> {
+fn expected_color_targets(kind: &PassKind, graph: &FrameGraph) -> Option<usize> {
     match kind {
         PassKind::Geometry { stage, .. } => Some(match stage.output() {
             // A G-buffer pass writes what the *enabled set* requested, not
@@ -994,7 +995,7 @@ impl Schedule {
 
 /// What is wrong with a pass list.
 #[derive(Clone, Debug, PartialEq)]
-pub enum GraphError {
+pub enum ScheduleError {
     /// A texture descriptor cannot be allocated as described.
     InvalidTexture {
         /// Resource label.
@@ -1103,18 +1104,18 @@ pub enum GraphError {
     },
 }
 
-impl fmt::Display for GraphError {
+impl fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GraphError::InvalidTexture { resource, reason } => {
+            ScheduleError::InvalidTexture { resource, reason } => {
                 write!(f, "texture `{resource}` is invalid: {reason}")
             }
-            GraphError::InvalidTextureUse {
+            ScheduleError::InvalidTextureUse {
                 pass,
                 resource,
                 reason,
             } => write!(f, "pass `{pass}` cannot use texture `{resource}`: {reason}"),
-            GraphError::InvalidIndirectBuffer {
+            ScheduleError::InvalidIndirectBuffer {
                 pass,
                 resource,
                 reason,
@@ -1122,21 +1123,21 @@ impl fmt::Display for GraphError {
                 f,
                 "pass `{pass}` cannot use indirect buffer `{resource}`: {reason}"
             ),
-            GraphError::UnknownResource { pass, resource } => write!(
+            ScheduleError::UnknownResource { pass, resource } => write!(
                 f,
                 "pass `{pass}` names resource {}, which this graph does not have",
                 resource.index()
             ),
-            GraphError::Cycle { pass } => write!(
+            ScheduleError::Cycle { pass } => write!(
                 f,
                 "the passes cannot be ordered: `{pass}` is in a cycle (a pass reading what it \
                  writes wants `Read::previous`, not `Read::current`)"
             ),
-            GraphError::NeverWritten { pass, resource } => write!(
+            ScheduleError::NeverWritten { pass, resource } => write!(
                 f,
                 "pass `{pass}` reads `{resource}`, which no pass writes and nothing imports"
             ),
-            GraphError::WrongColorTargetCount {
+            ScheduleError::WrongColorTargetCount {
                 pass,
                 expected,
                 found,
@@ -1144,7 +1145,7 @@ impl fmt::Display for GraphError {
                 f,
                 "pass `{pass}` has {found} colour attachments but its shader writes {expected}"
             ),
-            GraphError::DepthFormatMismatch {
+            ScheduleError::DepthFormatMismatch {
                 pass,
                 attached,
                 state,
@@ -1152,12 +1153,12 @@ impl fmt::Display for GraphError {
                 f,
                 "pass `{pass}` attaches a {attached:?} depth target but its state says {state:?}"
             ),
-            GraphError::ReadsWhatItWrites { pass, resource } => write!(
+            ScheduleError::ReadsWhatItWrites { pass, resource } => write!(
                 f,
                 "pass `{pass}` samples `{resource}` and draws into it in the same pass; to read \
                  what is already there, load the attachment instead"
             ),
-            GraphError::NoSuchHistory {
+            ScheduleError::NoSuchHistory {
                 pass,
                 resource,
                 history,
@@ -1166,7 +1167,7 @@ impl fmt::Display for GraphError {
                 f,
                 "pass `{pass}` reads `{resource}` {history} frames back, but it keeps {available}"
             ),
-            GraphError::PolicyNeedsStableStorage {
+            ScheduleError::PolicyNeedsStableStorage {
                 pass,
                 resource,
                 policy,
@@ -1189,7 +1190,7 @@ impl fmt::Display for GraphError {
                     )
                 }
             }
-            GraphError::AttachmentNotATexture { pass, resource } => write!(
+            ScheduleError::AttachmentNotATexture { pass, resource } => write!(
                 f,
                 "pass `{pass}` attaches `{resource}`, which is a buffer — attachments are \
                  texture writes; bind it through the pass group instead"
@@ -1198,7 +1199,7 @@ impl fmt::Display for GraphError {
     }
 }
 
-impl std::error::Error for GraphError {}
+impl std::error::Error for ScheduleError {}
 
 #[cfg(test)]
 mod tests {
@@ -1207,7 +1208,7 @@ mod tests {
     #[test]
     fn raster_rectangles_validate_mip_bounds_and_loading_writers_keep_order() {
         use crate::pass::{ViewportRect, DEPTH_FORMAT};
-        let mut graph = RenderGraph::new(TextureFormat::Rgba8Unorm);
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
         let depth = graph.declare_shadow_maps(
             ResourceDesc::color("atlas", DEPTH_FORMAT)
                 .with_extent(Extent::Fixed {
@@ -1245,7 +1246,7 @@ mod tests {
         ] {
             graph.pass_mut(1).unwrap().viewport = Some(rect);
             let error = graph.schedule().unwrap_err();
-            assert!(matches!(error, GraphError::InvalidTextureUse { .. }));
+            assert!(matches!(error, ScheduleError::InvalidTextureUse { .. }));
             assert!(error.to_string().contains("tile 1"));
         }
     }
@@ -1266,7 +1267,7 @@ mod tests {
 
     #[test]
     fn mip_counts_survive_allocation_and_prevent_incompatible_aliasing() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let base_desc = mip_texture().with_mip_levels(1);
         assert!(!base_desc.aliasable_with(&mip_texture()));
         let base = graph.resource(base_desc);
@@ -1306,10 +1307,10 @@ mod tests {
                 }),
             mip_texture().with_dimension(Dimension::D2, 2),
         ] {
-            let mut graph = RenderGraph::new(COLOR);
+            let mut graph = FrameGraph::new(COLOR);
             graph.resource(desc);
             assert!(
-                matches!(graph.schedule(), Err(GraphError::InvalidTexture { resource, .. }) if resource == "mip texture")
+                matches!(graph.schedule(), Err(ScheduleError::InvalidTexture { resource, .. }) if resource == "mip texture")
             );
         }
     }
@@ -1330,7 +1331,7 @@ mod tests {
                 1,
             ),
         ] {
-            let mut graph = RenderGraph::new(COLOR);
+            let mut graph = FrameGraph::new(COLOR);
             let texture = graph.resource(desc);
             graph.pass(
                 PassDesc::screen("invalid view", "test.clear").with_color(
@@ -1340,7 +1341,7 @@ mod tests {
                 ),
             );
             assert!(
-                matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { pass, resource, .. })
+                matches!(graph.schedule(), Err(ScheduleError::InvalidTextureUse { pass, resource, .. })
                 if pass == "invalid view" && resource == "mip texture")
             );
         }
@@ -1348,7 +1349,7 @@ mod tests {
 
     #[test]
     fn depth_mips_are_validated_and_whole_resource_hazards_stay_conservative() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let depth = graph.resource(
             ResourceDesc::color("depth mips", DEPTH_FORMAT)
                 .with_extent(Extent::Fixed {
@@ -1366,9 +1367,9 @@ mod tests {
             .with_depth(DepthAttachment::clear(depth, 1.0).with_mip(4)),
         );
         assert!(
-            matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { resource, .. }) if resource == "depth mips")
+            matches!(graph.schedule(), Err(ScheduleError::InvalidTextureUse { resource, .. }) if resource == "depth mips")
         );
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let image = graph.resource(mip_texture());
         graph.pass(
             PassDesc::screen("same texture", "test.clear")
@@ -1377,7 +1378,7 @@ mod tests {
         );
         assert!(matches!(
             graph.schedule(),
-            Err(GraphError::ReadsWhatItWrites { .. })
+            Err(ScheduleError::ReadsWhatItWrites { .. })
         ));
     }
 
@@ -1389,18 +1390,18 @@ mod tests {
                 .with_dimension(Dimension::Cube, 6)
                 .with_mip_levels(1),
         ] {
-            let mut graph = RenderGraph::new(COLOR);
+            let mut graph = FrameGraph::new(COLOR);
             let texture = graph.resource(desc);
             graph.pass(PassDesc::compute("storage", "test.fill").with_write(texture));
             assert!(
-                matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { pass, .. }) if pass == "storage")
+                matches!(graph.schedule(), Err(ScheduleError::InvalidTextureUse { pass, .. }) if pass == "storage")
             );
         }
     }
 
     #[test]
     fn mismatched_colour_and_depth_mip_extents_are_named() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let colour = graph.resource(mip_texture());
         let depth = graph.resource(
             ResourceDesc::color("depth", DEPTH_FORMAT)
@@ -1421,13 +1422,13 @@ mod tests {
             .with_depth(DepthAttachment::clear(depth, 1.0).with_mip(1)),
         );
         assert!(
-            matches!(graph.schedule(), Err(GraphError::InvalidTextureUse { resource, .. }) if resource == "depth")
+            matches!(graph.schedule(), Err(ScheduleError::InvalidTextureUse { resource, .. }) if resource == "depth")
         );
     }
 
     #[test]
     fn indirect_arguments_order_their_writer_and_infer_buffer_usage() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let args = graph.resource(ResourceDesc::buffer("arguments", 20));
         graph.pass(
             PassDesc::geometry(
@@ -1441,7 +1442,7 @@ mod tests {
                 MaterialStage::FORWARD_LIT,
             )
             .with_state(PassState::FULLSCREEN)
-            .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+            .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
         );
         graph.pass(PassDesc::compute("fill", "test.arguments").with_write(args));
         let schedule = graph
@@ -1456,7 +1457,7 @@ mod tests {
 
     #[test]
     fn an_indirect_texture_is_refused_by_resource_name() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let args = graph.resource(ResourceDesc::color("not arguments", COLOR));
         graph.pass(
             PassDesc::geometry(
@@ -1470,17 +1471,17 @@ mod tests {
                 MaterialStage::FORWARD_LIT,
             )
             .with_state(PassState::FULLSCREEN)
-            .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+            .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
         );
         assert!(
-            matches!(graph.schedule(), Err(GraphError::InvalidIndirectBuffer { resource, .. }) if resource == "not arguments")
+            matches!(graph.schedule(), Err(ScheduleError::InvalidIndirectBuffer { resource, .. }) if resource == "not arguments")
         );
     }
 
     #[test]
     fn invalid_indirect_ranges_are_refused_before_recording() {
         for (offset, count) in [(2, 1), (0, 2), (u64::MAX - 3, 1)] {
-            let mut graph = RenderGraph::new(COLOR);
+            let mut graph = FrameGraph::new(COLOR);
             let args = graph.resource(ResourceDesc::buffer("arguments", 20));
             graph.pass(
                 PassDesc::geometry(
@@ -1494,10 +1495,10 @@ mod tests {
                     MaterialStage::FORWARD_LIT,
                 )
                 .with_state(PassState::FULLSCREEN)
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
             );
             assert!(
-                matches!(graph.schedule(), Err(GraphError::InvalidIndirectBuffer { resource, .. }) if resource == "arguments")
+                matches!(graph.schedule(), Err(ScheduleError::InvalidIndirectBuffer { resource, .. }) if resource == "arguments")
             );
         }
     }
@@ -1517,15 +1518,15 @@ mod tests {
         // `a` is written and consumed before `b` is born, so the two never
         // coexist and one texture serves both. Without this, every
         // intermediate in a postprocess chain costs its own target.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let a = graph.resource(ResourceDesc::color("a", COLOR));
         let b = graph.resource(ResourceDesc::color("b", COLOR));
         graph.pass(writer("write a", a));
-        graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
+        graph.pass(writer("a to target", FrameGraph::TARGET).with_reads([Read::current(a)]));
         graph.pass(writer("write b", b));
         graph.pass(
             PassDesc::screen("b to target", "deferred_lighting")
-                .with_color(Attachment::load(RenderGraph::TARGET))
+                .with_color(Attachment::load(FrameGraph::TARGET))
                 .with_reads([Read::current(b)]),
         );
 
@@ -1539,7 +1540,7 @@ mod tests {
         );
         assert_eq!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
         assert_eq!(
-            schedule.allocation(RenderGraph::TARGET),
+            schedule.allocation(FrameGraph::TARGET),
             Allocation::Imported
         );
     }
@@ -1548,12 +1549,12 @@ mod tests {
     fn overlapping_lifetimes_get_a_texture_each() {
         // `a` is still alive when `b` is born — the pass that writes `b`
         // is sampling `a` at that moment — so sharing would corrupt it.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let a = graph.resource(ResourceDesc::color("a", COLOR));
         let b = graph.resource(ResourceDesc::color("b", COLOR));
         graph.pass(writer("write a", a));
         graph.pass(writer("a to b", b).with_reads([Read::current(a)]));
-        graph.pass(writer("b to target", RenderGraph::TARGET).with_reads([Read::current(b)]));
+        graph.pass(writer("b to target", FrameGraph::TARGET).with_reads([Read::current(b)]));
 
         let schedule = graph.schedule().expect("schedules");
         assert_eq!(schedule.slots().len(), 2);
@@ -1564,10 +1565,10 @@ mod tests {
     fn a_persistent_resource_hands_a_pass_the_previous_frames_contents() {
         // The temporal case: what this frame writes must not be what the
         // next frame reads as "one frame ago".
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let history = graph.resource(ResourceDesc::color("history", COLOR).persistent(2));
         graph.pass(writer("accumulate", history).with_reads([Read::previous(history, 1)]));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(history)]));
+        graph.pass(writer("present", FrameGraph::TARGET).with_reads([Read::current(history)]));
 
         let schedule = graph.schedule().expect("schedules");
         assert_eq!(schedule.slots().len(), 3, "history: 2 is a ring of three");
@@ -1595,9 +1596,9 @@ mod tests {
     fn passes_are_ordered_by_what_they_read() {
         // Declared backwards on purpose: the schedule must not need the
         // author to have got the order right.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let middle = graph.resource(ResourceDesc::color("middle", COLOR));
-        graph.pass(writer("second", RenderGraph::TARGET).with_reads([Read::current(middle)]));
+        graph.pass(writer("second", FrameGraph::TARGET).with_reads([Read::current(middle)]));
         graph.pass(writer("first", middle));
 
         let schedule = graph.schedule().expect("schedules");
@@ -1606,11 +1607,11 @@ mod tests {
 
     #[test]
     fn a_pass_sampling_its_own_attachment_is_reported() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let loop_back = graph.resource(ResourceDesc::color("loop", COLOR));
         graph.pass(writer("self", loop_back).with_reads([Read::current(loop_back)]));
         match graph.schedule() {
-            Err(GraphError::ReadsWhatItWrites { pass, resource }) => {
+            Err(ScheduleError::ReadsWhatItWrites { pass, resource }) => {
                 assert_eq!((pass.as_str(), resource.as_str()), ("self", "loop"));
             }
             other => panic!("expected a read-write hazard, got {other:?}"),
@@ -1619,35 +1620,35 @@ mod tests {
 
     #[test]
     fn two_passes_waiting_on_each_other_are_a_cycle() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let left = graph.resource(ResourceDesc::color("left", COLOR));
         let right = graph.resource(ResourceDesc::color("right", COLOR));
         graph.pass(writer("writes left", left).with_reads([Read::current(right)]));
         graph.pass(writer("writes right", right).with_reads([Read::current(left)]));
-        assert!(matches!(graph.schedule(), Err(GraphError::Cycle { .. })));
+        assert!(matches!(graph.schedule(), Err(ScheduleError::Cycle { .. })));
     }
 
     #[test]
     fn reading_further_back_than_the_ring_goes_is_reported() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let once = graph.resource(ResourceDesc::color("once", COLOR).persistent(1));
         graph.pass(writer("too far", once).with_reads([Read::previous(once, 2)]));
         assert!(matches!(
             graph.schedule(),
-            Err(GraphError::NoSuchHistory { history: 2, .. })
+            Err(ScheduleError::NoSuchHistory { history: 2, .. })
         ));
     }
 
     #[test]
     fn a_geometry_pass_must_have_as_many_targets_as_its_stage_writes() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         graph.pass(
             PassDesc::geometry("gbuffer", draw_all(), MaterialStage::GBUFFER)
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK))
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK))
                 .with_state(PassState::FULLSCREEN),
         );
         match graph.schedule() {
-            Err(GraphError::WrongColorTargetCount {
+            Err(ScheduleError::WrongColorTargetCount {
                 expected, found, ..
             }) => {
                 assert_eq!((expected, found), (abi::GBUFFER_BASE_TARGETS.len(), 1));
@@ -1658,11 +1659,11 @@ mod tests {
 
     #[test]
     fn a_depth_attachment_must_match_the_states_depth_format() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let depth = graph.resource(ResourceDesc::color("depth", DEPTH_FORMAT));
         graph.pass(
             PassDesc::geometry("forward", draw_all(), MaterialStage::FORWARD_LIT)
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK))
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK))
                 .with_depth(DepthAttachment::clear(depth, 1.0))
                 .with_state(
                     PassState::OPAQUE.with_depth_format(Some(TextureFormat::Depth24PlusStencil8)),
@@ -1670,17 +1671,17 @@ mod tests {
         );
         assert!(matches!(
             graph.schedule(),
-            Err(GraphError::DepthFormatMismatch { .. })
+            Err(ScheduleError::DepthFormatMismatch { .. })
         ));
     }
 
     #[test]
     fn reading_a_resource_nobody_writes_is_reported_not_drawn_black() {
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let orphan = graph.resource(ResourceDesc::color("orphan", COLOR));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(orphan)]));
+        graph.pass(writer("present", FrameGraph::TARGET).with_reads([Read::current(orphan)]));
         match graph.schedule() {
-            Err(GraphError::NeverWritten { resource, .. }) => assert_eq!(resource, "orphan"),
+            Err(ScheduleError::NeverWritten { resource, .. }) => assert_eq!(resource, "orphan"),
             other => panic!("expected a never-written error, got {other:?}"),
         }
     }
@@ -1689,10 +1690,10 @@ mod tests {
     fn a_slot_is_created_with_every_usage_its_resources_need() {
         // Drawn into, then sampled: a texture created with only one of the
         // two flags is a validation error at the first frame.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let a = graph.resource(ResourceDesc::color("a", COLOR));
         graph.pass(writer("write a", a));
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(a)]));
+        graph.pass(writer("present", FrameGraph::TARGET).with_reads([Read::current(a)]));
 
         let schedule = graph.schedule().expect("schedules");
         let SlotShape::Texture { usage, .. } = schedule.slots()[0].shape else {
@@ -1706,14 +1707,14 @@ mod tests {
     fn a_pass_that_skips_frames_may_only_write_stable_storage() {
         // The once-baked LUT is the design case: written once, read every
         // frame — sound only because the target survives frames.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let lut = graph.resource(ResourceDesc::color("brdf lut", COLOR).persistent(0));
         graph.pass(
             PassDesc::compute("bake", "brdf_lut")
                 .with_write(lut)
                 .with_policy(Policy::Once),
         );
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(lut)]));
+        graph.pass(writer("present", FrameGraph::TARGET).with_reads([Read::current(lut)]));
         let schedule = graph.schedule().expect("the LUT graph schedules");
         assert_eq!(schedule.order(), &[0, 1]);
         // Storage writes get their usage flag, like any other write.
@@ -1725,16 +1726,16 @@ mod tests {
         // The same bake into a transient is the mistake the rule exists
         // for: the slot is reused within the frame, so the second frame's
         // read would be of whatever rented the texture meanwhile.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let scratch = graph.resource(ResourceDesc::color("scratch", COLOR));
         graph.pass(
             PassDesc::compute("bake", "brdf_lut")
                 .with_write(scratch)
                 .with_policy(Policy::Once),
         );
-        graph.pass(writer("present", RenderGraph::TARGET).with_reads([Read::current(scratch)]));
+        graph.pass(writer("present", FrameGraph::TARGET).with_reads([Read::current(scratch)]));
         match graph.schedule() {
-            Err(GraphError::PolicyNeedsStableStorage {
+            Err(ScheduleError::PolicyNeedsStableStorage {
                 resource, policy, ..
             }) => {
                 assert_eq!(resource, "scratch");
@@ -1745,11 +1746,11 @@ mod tests {
 
         // And writing the frame's own target under a policy is the same
         // mistake wearing the target's face.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         graph.pass(
             PassDesc::screen("backdrop", "lut_view")
                 .with_policy(Policy::Once)
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
         );
         let error = graph.schedule().expect_err("the target is not stable");
         assert!(error.to_string().contains("frame's own target"), "{error}");
@@ -1760,9 +1761,9 @@ mod tests {
         // A compute pass fills a buffer; a screen pass reads it as
         // storage. The read is an ordering edge, exactly as a texture
         // read is — which is the whole of P11's point (plan2 P11).
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let ramp = graph.resource(ResourceDesc::buffer("ramp", 256));
-        graph.pass(writer("show", RenderGraph::TARGET).with_reads([Read::current(ramp)]));
+        graph.pass(writer("show", FrameGraph::TARGET).with_reads([Read::current(ramp)]));
         graph.pass(PassDesc::compute("fill", "ramp_fill").with_write(ramp));
         // Declared second on purpose: the schedule must not need the
         // author to have got the order right.
@@ -1777,13 +1778,13 @@ mod tests {
         // And two buffers never share, however neatly their lifetimes
         // would fit: the aliasing rule is "never" for now, because a
         // buffer aliasing bug corrupts a whole block.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let a = graph.resource(ResourceDesc::buffer("a", 64));
         let b = graph.resource(ResourceDesc::buffer("b", 64));
         graph.pass(PassDesc::compute("write a", "ramp_fill").with_write(a));
-        graph.pass(writer("a to target", RenderGraph::TARGET).with_reads([Read::current(a)]));
+        graph.pass(writer("a to target", FrameGraph::TARGET).with_reads([Read::current(a)]));
         graph.pass(PassDesc::compute("write b", "ramp_fill").with_write(b));
-        graph.pass(writer("b to target", RenderGraph::TARGET).with_reads([Read::current(b)]));
+        graph.pass(writer("b to target", FrameGraph::TARGET).with_reads([Read::current(b)]));
         let schedule = graph.schedule().expect("schedules");
         assert_ne!(schedule.slot(a, 0, 0), schedule.slot(b, 0, 0));
         assert_eq!(schedule.slots().len(), 2, "one slot per buffer");
@@ -1793,11 +1794,11 @@ mod tests {
     fn a_buffer_in_an_attachment_slot_is_named() {
         // Attachments are texture writes; a buffer belongs to the pass
         // group. The mistake is a named error, not a bind-group complaint.
-        let mut graph = RenderGraph::new(COLOR);
+        let mut graph = FrameGraph::new(COLOR);
         let scratch = graph.resource(ResourceDesc::buffer("scratch", 64));
         graph.pass(writer("write", scratch));
         match graph.schedule() {
-            Err(GraphError::AttachmentNotATexture { resource, .. }) => {
+            Err(ScheduleError::AttachmentNotATexture { resource, .. }) => {
                 assert_eq!(resource, "scratch")
             }
             other => panic!("expected an attachment-shape error, got {other:?}"),

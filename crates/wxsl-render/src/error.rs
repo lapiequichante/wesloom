@@ -74,7 +74,7 @@ pub enum RenderError {
         profile: crate::Profile,
     },
     /// A pass list could not be ordered, validated or allocated.
-    Graph(crate::graph::GraphError),
+    Graph(crate::graph::ScheduleError),
     /// A background pipeline swap will never finish: the thread compiling
     /// it is gone. Only reachable if that thread panicked, and reported
     /// rather than left as an indicator counting to a total it can no
@@ -404,8 +404,8 @@ impl From<CodegenError> for RenderError {
     }
 }
 
-impl From<crate::graph::GraphError> for RenderError {
-    fn from(value: crate::graph::GraphError) -> Self {
+impl From<crate::graph::ScheduleError> for RenderError {
+    fn from(value: crate::graph::ScheduleError) -> Self {
         RenderError::Graph(value)
     }
 }

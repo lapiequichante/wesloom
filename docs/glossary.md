@@ -19,7 +19,8 @@ because both are called "the graph" in conversation: a node graph is what a
 material *is*, a render graph is how a *frame* is put together.
 
 **Render graph** — the list of passes and the resources they read and write
-that make up one frame (`wxsl_render::graph::RenderGraph`, built from
+that make up one frame (`wxsl_frame::graph::FrameGraph`, recorded on wgpu
+as `wxsl_render::graph::RenderGraph`, built from
 `wxsl_render::pass::PassDesc`). The engine orders the passes by their
 dependencies, allocates and reuses the transient targets, rotates the
 persistent ones, and records them. A *pipeline* is a render graph; forward

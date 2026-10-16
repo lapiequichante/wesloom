@@ -118,6 +118,7 @@ The ten decisions the rest of the log builds on:
 | [0084](0084-wxsl-an-agent-can-write.md) | A generated node reference, a checked authoring guide, and shaders refused instead of panicking | Accepted |
 | [0085](0085-scene-debugging-views-a-generic-probe-and-the-frame-panel.md) | Scene debugging: debug views on both paths, frame views as editor passes, a generic probe | Accepted |
 | [0086](0086-large-scenes-instanced-runs-per-view-culling-shared-materials.md) | Large scenes: instanced runs, per-view culling by draw bounds, shared materials | Accepted |
+| [0087](0087-one-name-per-type-across-frame-and-render.md) | One name per type: the device-free originals take their own names | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

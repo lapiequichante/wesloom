@@ -59,6 +59,9 @@ the scheduler accounts for that dependency and its indirect usage.
   adapter is explicit. Native `wxsl-render::TargetConfig` constructors
   remain available and convert into the shared config. `Renderer::set_graph`
   and `request_graph` accept shared graphs as well as their wgpu wrapper.
+  The shared originals were later renamed `TargetDesc` and `FrameGraph`,
+  and the scheduler's error `ScheduleError`
+  ([ADR 0087](0087-one-name-per-type-across-frame-and-render.md)).
 - Camera/light values and the existing host layout mirrors move together
   with their tests; `glam` and `bytemuck` remain device-free dependencies.
   Replacing the fixed mirrors with generation is still plan4 B6.

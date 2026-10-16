@@ -7,7 +7,7 @@ use super::{
     Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader,
 };
 use crate::{
-    graph::RenderGraph,
+    graph::FrameGraph,
     pass::{Attachment, Dimension, Extent, PassDesc, Policy, Read, ResourceDesc, ResourceId},
     types::{Color, TextureFormat},
 };
@@ -66,7 +66,7 @@ pub const BACKGROUND: Effect = Effect {
 /// Append a depth-aware background to an opaque linear-colour chain.
 /// Composite transparent layers after this output, then tonemap once.
 pub fn append_background(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     color: ResourceId,
     depth: ResourceId,
     radiance: ResourceId,
@@ -190,7 +190,7 @@ pub struct BakeOutputs {
 /// validated by the ordinary scheduler, without clamping invalid descriptors.
 /// `label` must be unique within the graph; it namespaces resources and passes.
 pub fn append_bake(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     source: ResourceId,
     label: &str,
     cube_size: u32,
@@ -212,7 +212,7 @@ pub fn append_bake(
 /// Register [`RESAMPLE`] as well as the three convolution effects. Separate
 /// staging cubes retain the scheduler's whole-resource hazard contract.
 pub fn append_filtered_bake(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     source: ResourceId,
     label: &str,
     cube_size: u32,
@@ -231,7 +231,7 @@ pub fn append_filtered_bake(
 }
 
 fn append_bake_inner(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     source: ResourceId,
     label: &str,
     cube_size: u32,
@@ -359,11 +359,11 @@ mod tests {
     use super::*;
     #[test]
     fn filtered_chain_and_frame_bindings_order_lighting_without_pass_bindings() {
-        let mut graph = RenderGraph::new(TextureFormat::Rgba8Unorm);
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
         let hdr = graph.resource(ResourceDesc::imported("HDR", TextureFormat::Rgba32Float));
         graph.pass(
             PassDesc::screen("lighting", super::super::DEFERRED_LIGHTING.id)
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
         );
         let maps = append_filtered_bake(&mut graph, hdr, "bake", 16, 4, 5);
         graph.declare_environment_maps(maps.diffuse, maps.specular);
@@ -401,7 +401,7 @@ mod tests {
     }
     #[test]
     fn recipe_orders_every_source_face_before_convolution() {
-        let mut graph = RenderGraph::new(TextureFormat::Rgba8Unorm);
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
         let source = graph.resource(ResourceDesc::imported("hdr", TextureFormat::Rgba16Float));
         let outputs = append_bake(&mut graph, source, "ibl", 16, 4, 5);
         graph.pass(
@@ -410,7 +410,7 @@ mod tests {
                     Read::current(outputs.specular),
                     Read::current(outputs.diffuse),
                 ])
-                .with_color(Attachment::clear(RenderGraph::TARGET, Color::BLACK)),
+                .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK)),
         );
         let schedule = graph.schedule().unwrap();
         assert_eq!(graph.passes().len(), 43);

@@ -932,7 +932,7 @@ impl Renderer {
 
     /// Resize the render targets.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.config.target = wxsl_frame::pipeline::TargetConfig {
+        self.config.target = wxsl_frame::pipeline::TargetDesc {
             width: width.max(1),
             height: height.max(1),
             ..self.config.target

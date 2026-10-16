@@ -1,6 +1,6 @@
 //! Shared pipeline_doc (ADR 0048).
 
-pub use wxsl_frame::pipeline_doc::*;
+pub use wxsl_frame::pipeline_doc::{document_registry, PipelineError};
 
 use crate::effect::EffectRegistry;
 use crate::graph::RenderGraph;

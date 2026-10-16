@@ -22,9 +22,9 @@ pub const wxsl_frame::effect::ibl::DIFFUSE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::EQUIRECT_TO_CUBE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::RESAMPLE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::SPECULAR: wxsl_frame::effect::Effect
-pub fn wxsl_frame::effect::ibl::append_background(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str) -> wxsl_frame::pass::ResourceId
-pub fn wxsl_frame::effect::ibl::append_bake(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
-pub fn wxsl_frame::effect::ibl::append_filtered_bake(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::append_background(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::ibl::append_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::append_filtered_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
 pub mod wxsl_frame::effect::refraction
 pub enum wxsl_frame::effect::refraction::Quality
 pub wxsl_frame::effect::refraction::Quality::Layered
@@ -55,8 +55,8 @@ pub const wxsl_frame::effect::refraction::COMPOSE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::COMPOSE_DEPTH: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::RESOLVE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::SCENE_DEPTH: wxsl_frame::effect::Effect
-pub fn wxsl_frame::effect::refraction::append(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32) -> wxsl_frame::pass::ResourceId
-pub fn wxsl_frame::effect::refraction::append_with_quality(&mut wxsl_frame::graph::RenderGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32, wxsl_frame::effect::refraction::Quality) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::refraction::append(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::refraction::append_with_quality(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32, wxsl_frame::effect::refraction::Quality) -> wxsl_frame::pass::ResourceId
 pub enum wxsl_frame::effect::Downlevel
 pub wxsl_frame::effect::Downlevel::Fragment
 pub wxsl_frame::effect::Downlevel::Fragment::fragment_entry: &'static str
@@ -726,67 +726,67 @@ impl core::marker::Unpin for wxsl_frame::graph::Allocation
 impl core::marker::UnsafeUnpin for wxsl_frame::graph::Allocation
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::Allocation
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::Allocation
-pub enum wxsl_frame::graph::GraphError
-pub wxsl_frame::graph::GraphError::AttachmentNotATexture
-pub wxsl_frame::graph::GraphError::AttachmentNotATexture::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::AttachmentNotATexture::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::Cycle
-pub wxsl_frame::graph::GraphError::Cycle::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::DepthFormatMismatch
-pub wxsl_frame::graph::GraphError::DepthFormatMismatch::attached: core::option::Option<wxsl_frame::types::TextureFormat>
-pub wxsl_frame::graph::GraphError::DepthFormatMismatch::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::DepthFormatMismatch::state: core::option::Option<wxsl_frame::types::TextureFormat>
-pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer
-pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::reason: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidIndirectBuffer::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidTexture
-pub wxsl_frame::graph::GraphError::InvalidTexture::reason: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidTexture::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidTextureUse
-pub wxsl_frame::graph::GraphError::InvalidTextureUse::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidTextureUse::reason: alloc::string::String
-pub wxsl_frame::graph::GraphError::InvalidTextureUse::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::NeverWritten
-pub wxsl_frame::graph::GraphError::NeverWritten::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::NeverWritten::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::NoSuchHistory
-pub wxsl_frame::graph::GraphError::NoSuchHistory::available: u32
-pub wxsl_frame::graph::GraphError::NoSuchHistory::history: u32
-pub wxsl_frame::graph::GraphError::NoSuchHistory::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::NoSuchHistory::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage
-pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::imported: bool
-pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::policy: wxsl_frame::pass::Policy
-pub wxsl_frame::graph::GraphError::PolicyNeedsStableStorage::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::ReadsWhatItWrites
-pub wxsl_frame::graph::GraphError::ReadsWhatItWrites::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::ReadsWhatItWrites::resource: alloc::string::String
-pub wxsl_frame::graph::GraphError::UnknownResource
-pub wxsl_frame::graph::GraphError::UnknownResource::pass: alloc::string::String
-pub wxsl_frame::graph::GraphError::UnknownResource::resource: wxsl_frame::pass::ResourceId
-pub wxsl_frame::graph::GraphError::WrongColorTargetCount
-pub wxsl_frame::graph::GraphError::WrongColorTargetCount::expected: usize
-pub wxsl_frame::graph::GraphError::WrongColorTargetCount::found: usize
-pub wxsl_frame::graph::GraphError::WrongColorTargetCount::pass: alloc::string::String
-impl core::clone::Clone for wxsl_frame::graph::GraphError
-pub fn wxsl_frame::graph::GraphError::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_frame::graph::GraphError
-pub fn wxsl_frame::graph::GraphError::eq(&self, &Self) -> bool
-impl core::error::Error for wxsl_frame::graph::GraphError
-impl core::fmt::Debug for wxsl_frame::graph::GraphError
-pub fn wxsl_frame::graph::GraphError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for wxsl_frame::graph::GraphError
-pub fn wxsl_frame::graph::GraphError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for wxsl_frame::graph::GraphError
-impl core::marker::Freeze for wxsl_frame::graph::GraphError
-impl core::marker::Send for wxsl_frame::graph::GraphError
-impl core::marker::Sync for wxsl_frame::graph::GraphError
-impl core::marker::Unpin for wxsl_frame::graph::GraphError
-impl core::marker::UnsafeUnpin for wxsl_frame::graph::GraphError
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::GraphError
-impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::GraphError
+pub enum wxsl_frame::graph::ScheduleError
+pub wxsl_frame::graph::ScheduleError::AttachmentNotATexture
+pub wxsl_frame::graph::ScheduleError::AttachmentNotATexture::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::AttachmentNotATexture::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::Cycle
+pub wxsl_frame::graph::ScheduleError::Cycle::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::DepthFormatMismatch
+pub wxsl_frame::graph::ScheduleError::DepthFormatMismatch::attached: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_frame::graph::ScheduleError::DepthFormatMismatch::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::DepthFormatMismatch::state: core::option::Option<wxsl_frame::types::TextureFormat>
+pub wxsl_frame::graph::ScheduleError::InvalidIndirectBuffer
+pub wxsl_frame::graph::ScheduleError::InvalidIndirectBuffer::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidIndirectBuffer::reason: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidIndirectBuffer::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidTexture
+pub wxsl_frame::graph::ScheduleError::InvalidTexture::reason: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidTexture::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidTextureUse
+pub wxsl_frame::graph::ScheduleError::InvalidTextureUse::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidTextureUse::reason: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::InvalidTextureUse::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::NeverWritten
+pub wxsl_frame::graph::ScheduleError::NeverWritten::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::NeverWritten::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::NoSuchHistory
+pub wxsl_frame::graph::ScheduleError::NoSuchHistory::available: u32
+pub wxsl_frame::graph::ScheduleError::NoSuchHistory::history: u32
+pub wxsl_frame::graph::ScheduleError::NoSuchHistory::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::NoSuchHistory::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::PolicyNeedsStableStorage
+pub wxsl_frame::graph::ScheduleError::PolicyNeedsStableStorage::imported: bool
+pub wxsl_frame::graph::ScheduleError::PolicyNeedsStableStorage::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::PolicyNeedsStableStorage::policy: wxsl_frame::pass::Policy
+pub wxsl_frame::graph::ScheduleError::PolicyNeedsStableStorage::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::ReadsWhatItWrites
+pub wxsl_frame::graph::ScheduleError::ReadsWhatItWrites::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::ReadsWhatItWrites::resource: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::UnknownResource
+pub wxsl_frame::graph::ScheduleError::UnknownResource::pass: alloc::string::String
+pub wxsl_frame::graph::ScheduleError::UnknownResource::resource: wxsl_frame::pass::ResourceId
+pub wxsl_frame::graph::ScheduleError::WrongColorTargetCount
+pub wxsl_frame::graph::ScheduleError::WrongColorTargetCount::expected: usize
+pub wxsl_frame::graph::ScheduleError::WrongColorTargetCount::found: usize
+pub wxsl_frame::graph::ScheduleError::WrongColorTargetCount::pass: alloc::string::String
+impl core::clone::Clone for wxsl_frame::graph::ScheduleError
+pub fn wxsl_frame::graph::ScheduleError::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::graph::ScheduleError
+pub fn wxsl_frame::graph::ScheduleError::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_frame::graph::ScheduleError
+impl core::fmt::Debug for wxsl_frame::graph::ScheduleError
+pub fn wxsl_frame::graph::ScheduleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::graph::ScheduleError
+pub fn wxsl_frame::graph::ScheduleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::graph::ScheduleError
+impl core::marker::Freeze for wxsl_frame::graph::ScheduleError
+impl core::marker::Send for wxsl_frame::graph::ScheduleError
+impl core::marker::Sync for wxsl_frame::graph::ScheduleError
+impl core::marker::Unpin for wxsl_frame::graph::ScheduleError
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::ScheduleError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::ScheduleError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::ScheduleError
 pub enum wxsl_frame::graph::SlotShape
 pub wxsl_frame::graph::SlotShape::Buffer
 pub wxsl_frame::graph::SlotShape::Buffer::size: u64
@@ -815,42 +815,42 @@ impl core::marker::Unpin for wxsl_frame::graph::SlotShape
 impl core::marker::UnsafeUnpin for wxsl_frame::graph::SlotShape
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::SlotShape
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::SlotShape
-pub struct wxsl_frame::graph::RenderGraph
-impl wxsl_frame::graph::RenderGraph
-pub const wxsl_frame::graph::RenderGraph::STEP_INSPECT_PASS: &'static str
-pub const wxsl_frame::graph::RenderGraph::TARGET: wxsl_frame::pass::ResourceId
-pub fn wxsl_frame::graph::RenderGraph::declare_environment_maps(&mut self, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId)
-pub fn wxsl_frame::graph::RenderGraph::declare_shadow_maps(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
-pub fn wxsl_frame::graph::RenderGraph::environment_maps(&self) -> core::option::Option<[wxsl_frame::pass::ResourceId; 2]>
-pub fn wxsl_frame::graph::RenderGraph::environment_scale(&self) -> f32
-pub fn wxsl_frame::graph::RenderGraph::gbuffer_layout(&self) -> &[wxsl_core::abi::GBufferTarget]
-pub fn wxsl_frame::graph::RenderGraph::make_stable_storage(&mut self, wxsl_frame::pass::ResourceId)
-pub fn wxsl_frame::graph::RenderGraph::new(wxsl_frame::types::TextureFormat) -> Self
-pub fn wxsl_frame::graph::RenderGraph::pass(&mut self, wxsl_frame::pass::PassDesc) -> &mut Self
-pub fn wxsl_frame::graph::RenderGraph::pass_mut(&mut self, usize) -> core::option::Option<&mut wxsl_frame::pass::PassDesc>
-pub fn wxsl_frame::graph::RenderGraph::passes(&self) -> &[wxsl_frame::pass::PassDesc]
-pub fn wxsl_frame::graph::RenderGraph::resource(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
-pub fn wxsl_frame::graph::RenderGraph::resource_by_label(&self, &str) -> core::option::Option<wxsl_frame::pass::ResourceId>
-pub fn wxsl_frame::graph::RenderGraph::resource_desc(&self, wxsl_frame::pass::ResourceId) -> core::option::Option<&wxsl_frame::pass::ResourceDesc>
-pub fn wxsl_frame::graph::RenderGraph::resources(&self) -> &[wxsl_frame::pass::ResourceDesc]
-pub fn wxsl_frame::graph::RenderGraph::schedule(&self) -> core::result::Result<wxsl_frame::graph::Schedule, wxsl_frame::graph::GraphError>
-pub fn wxsl_frame::graph::RenderGraph::set_environment_scale(&mut self, f32)
-pub fn wxsl_frame::graph::RenderGraph::shadow_maps(&self) -> core::option::Option<wxsl_frame::pass::ResourceId>
-pub fn wxsl_frame::graph::RenderGraph::stepped(&self, usize, core::option::Option<(wxsl_frame::pass::ResourceId, &str)>) -> core::result::Result<wxsl_frame::graph::RenderGraph, wxsl_frame::graph::GraphError>
-pub fn wxsl_frame::graph::RenderGraph::with_gbuffer_layout(self, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>) -> Self
-impl core::clone::Clone for wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::graph::RenderGraph::clone(&self) -> Self
-impl core::fmt::Debug for wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::graph::RenderGraph::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl serde_core::ser::Serialize for wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::graph::RenderGraph::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl core::marker::Freeze for wxsl_frame::graph::RenderGraph
-impl core::marker::Send for wxsl_frame::graph::RenderGraph
-impl core::marker::Sync for wxsl_frame::graph::RenderGraph
-impl core::marker::Unpin for wxsl_frame::graph::RenderGraph
-impl core::marker::UnsafeUnpin for wxsl_frame::graph::RenderGraph
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::RenderGraph
-impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::RenderGraph
+pub struct wxsl_frame::graph::FrameGraph
+impl wxsl_frame::graph::FrameGraph
+pub const wxsl_frame::graph::FrameGraph::STEP_INSPECT_PASS: &'static str
+pub const wxsl_frame::graph::FrameGraph::TARGET: wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::FrameGraph::declare_environment_maps(&mut self, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId)
+pub fn wxsl_frame::graph::FrameGraph::declare_shadow_maps(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::FrameGraph::environment_maps(&self) -> core::option::Option<[wxsl_frame::pass::ResourceId; 2]>
+pub fn wxsl_frame::graph::FrameGraph::environment_scale(&self) -> f32
+pub fn wxsl_frame::graph::FrameGraph::gbuffer_layout(&self) -> &[wxsl_core::abi::GBufferTarget]
+pub fn wxsl_frame::graph::FrameGraph::make_stable_storage(&mut self, wxsl_frame::pass::ResourceId)
+pub fn wxsl_frame::graph::FrameGraph::new(wxsl_frame::types::TextureFormat) -> Self
+pub fn wxsl_frame::graph::FrameGraph::pass(&mut self, wxsl_frame::pass::PassDesc) -> &mut Self
+pub fn wxsl_frame::graph::FrameGraph::pass_mut(&mut self, usize) -> core::option::Option<&mut wxsl_frame::pass::PassDesc>
+pub fn wxsl_frame::graph::FrameGraph::passes(&self) -> &[wxsl_frame::pass::PassDesc]
+pub fn wxsl_frame::graph::FrameGraph::resource(&mut self, wxsl_frame::pass::ResourceDesc) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::graph::FrameGraph::resource_by_label(&self, &str) -> core::option::Option<wxsl_frame::pass::ResourceId>
+pub fn wxsl_frame::graph::FrameGraph::resource_desc(&self, wxsl_frame::pass::ResourceId) -> core::option::Option<&wxsl_frame::pass::ResourceDesc>
+pub fn wxsl_frame::graph::FrameGraph::resources(&self) -> &[wxsl_frame::pass::ResourceDesc]
+pub fn wxsl_frame::graph::FrameGraph::schedule(&self) -> core::result::Result<wxsl_frame::graph::Schedule, wxsl_frame::graph::ScheduleError>
+pub fn wxsl_frame::graph::FrameGraph::set_environment_scale(&mut self, f32)
+pub fn wxsl_frame::graph::FrameGraph::shadow_maps(&self) -> core::option::Option<wxsl_frame::pass::ResourceId>
+pub fn wxsl_frame::graph::FrameGraph::stepped(&self, usize, core::option::Option<(wxsl_frame::pass::ResourceId, &str)>) -> core::result::Result<wxsl_frame::graph::FrameGraph, wxsl_frame::graph::ScheduleError>
+pub fn wxsl_frame::graph::FrameGraph::with_gbuffer_layout(self, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>) -> Self
+impl core::clone::Clone for wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::graph::FrameGraph::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::graph::FrameGraph::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::graph::FrameGraph::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::graph::FrameGraph
+impl core::marker::Send for wxsl_frame::graph::FrameGraph
+impl core::marker::Sync for wxsl_frame::graph::FrameGraph
+impl core::marker::Unpin for wxsl_frame::graph::FrameGraph
+impl core::marker::UnsafeUnpin for wxsl_frame::graph::FrameGraph
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::FrameGraph
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::FrameGraph
 pub struct wxsl_frame::graph::Schedule
 impl wxsl_frame::graph::Schedule
 pub fn wxsl_frame::graph::Schedule::allocation(&self, wxsl_frame::pass::ResourceId) -> wxsl_frame::graph::Allocation
@@ -1492,7 +1492,7 @@ pub wxsl_frame::pipeline::StockPipeline::Forward
 impl wxsl_frame::pipeline::StockPipeline
 pub const wxsl_frame::pipeline::StockPipeline::ALL: &'static [wxsl_frame::pipeline::StockPipeline]
 pub fn wxsl_frame::pipeline::StockPipeline::document(&self) -> wxsl_core::graph::Graph
-pub fn wxsl_frame::pipeline::StockPipeline::graph(&self, &wxsl_frame::pipeline::PipelineConfig) -> wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::pipeline::StockPipeline::graph(&self, &wxsl_frame::pipeline::PipelineConfig) -> wxsl_frame::graph::FrameGraph
 pub fn wxsl_frame::pipeline::StockPipeline::is_deferred(&self) -> bool
 pub fn wxsl_frame::pipeline::StockPipeline::name(&self) -> &'static str
 pub fn wxsl_frame::pipeline::StockPipeline::parse(&str) -> core::option::Option<Self>
@@ -1527,10 +1527,10 @@ pub wxsl_frame::pipeline::PipelineConfig::features: alloc::vec::Vec<wxsl_core::l
 pub wxsl_frame::pipeline::PipelineConfig::lighting: wxsl_core::lighting::LightingSet
 pub wxsl_frame::pipeline::PipelineConfig::macros: wxsl_core::macros::MacroSet
 pub wxsl_frame::pipeline::PipelineConfig::profile: wxsl_frame::profile::Profile
-pub wxsl_frame::pipeline::PipelineConfig::target: wxsl_frame::pipeline::TargetConfig
+pub wxsl_frame::pipeline::PipelineConfig::target: wxsl_frame::pipeline::TargetDesc
 impl wxsl_frame::pipeline::PipelineConfig
 pub fn wxsl_frame::pipeline::PipelineConfig::gbuffer_layout(&self) -> alloc::vec::Vec<wxsl_core::abi::GBufferTarget>
-pub fn wxsl_frame::pipeline::PipelineConfig::new(impl core::convert::Into<wxsl_frame::pipeline::TargetConfig>) -> Self
+pub fn wxsl_frame::pipeline::PipelineConfig::new(impl core::convert::Into<wxsl_frame::pipeline::TargetDesc>) -> Self
 pub fn wxsl_frame::pipeline::PipelineConfig::plan(&self) -> core::result::Result<wxsl_core::lighting::GBufferPlan, wxsl_core::lighting::LightingError>
 impl core::clone::Clone for wxsl_frame::pipeline::PipelineConfig
 pub fn wxsl_frame::pipeline::PipelineConfig::clone(&self) -> Self
@@ -1543,35 +1543,35 @@ impl core::marker::Unpin for wxsl_frame::pipeline::PipelineConfig
 impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::PipelineConfig
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::PipelineConfig
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::PipelineConfig
-pub struct wxsl_frame::pipeline::TargetConfig
-pub wxsl_frame::pipeline::TargetConfig::clear_color: wxsl_frame::types::Color
-pub wxsl_frame::pipeline::TargetConfig::format: wxsl_frame::types::TextureFormat
-pub wxsl_frame::pipeline::TargetConfig::height: u32
-pub wxsl_frame::pipeline::TargetConfig::width: u32
-impl wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::new(u32, u32, wxsl_frame::types::TextureFormat) -> Self
-impl core::clone::Clone for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::clone(&self) -> Self
-impl core::cmp::PartialEq for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::eq(&self, &Self) -> bool
-impl core::fmt::Debug for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_frame::pipeline::TargetConfig
-impl core::marker::StructuralPartialEq for wxsl_frame::pipeline::TargetConfig
-impl serde_core::ser::Serialize for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pipeline::TargetConfig
-pub fn wxsl_frame::pipeline::TargetConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for wxsl_frame::pipeline::TargetConfig
-impl core::marker::Send for wxsl_frame::pipeline::TargetConfig
-impl core::marker::Sync for wxsl_frame::pipeline::TargetConfig
-impl core::marker::Unpin for wxsl_frame::pipeline::TargetConfig
-impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::TargetConfig
-impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::TargetConfig
-impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::TargetConfig
+pub struct wxsl_frame::pipeline::TargetDesc
+pub wxsl_frame::pipeline::TargetDesc::clear_color: wxsl_frame::types::Color
+pub wxsl_frame::pipeline::TargetDesc::format: wxsl_frame::types::TextureFormat
+pub wxsl_frame::pipeline::TargetDesc::height: u32
+pub wxsl_frame::pipeline::TargetDesc::width: u32
+impl wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::new(u32, u32, wxsl_frame::types::TextureFormat) -> Self
+impl core::clone::Clone for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::pipeline::TargetDesc
+impl core::marker::StructuralPartialEq for wxsl_frame::pipeline::TargetDesc
+impl serde_core::ser::Serialize for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for wxsl_frame::pipeline::TargetDesc
+pub fn wxsl_frame::pipeline::TargetDesc::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for wxsl_frame::pipeline::TargetDesc
+impl core::marker::Send for wxsl_frame::pipeline::TargetDesc
+impl core::marker::Sync for wxsl_frame::pipeline::TargetDesc
+impl core::marker::Unpin for wxsl_frame::pipeline::TargetDesc
+impl core::marker::UnsafeUnpin for wxsl_frame::pipeline::TargetDesc
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline::TargetDesc
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline::TargetDesc
 pub const wxsl_frame::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE: u32
-pub fn wxsl_frame::pipeline::deferred_graph(wxsl_frame::pipeline::TargetConfig, &wxsl_core::lighting::LightingSet) -> wxsl_frame::graph::RenderGraph
-pub fn wxsl_frame::pipeline::forward_graph(wxsl_frame::pipeline::TargetConfig) -> wxsl_frame::graph::RenderGraph
+pub fn wxsl_frame::pipeline::deferred_graph(wxsl_frame::pipeline::TargetDesc, &wxsl_core::lighting::LightingSet) -> wxsl_frame::graph::FrameGraph
+pub fn wxsl_frame::pipeline::forward_graph(wxsl_frame::pipeline::TargetDesc) -> wxsl_frame::graph::FrameGraph
 pub fn wxsl_frame::pipeline::gbuffer_bytes_per_sample(&wxsl_core::lighting::LightingSet) -> u32
 pub fn wxsl_frame::pipeline::gbuffer_format(wxsl_core::abi::GBufferPrecision) -> wxsl_frame::types::TextureFormat
 pub fn wxsl_frame::pipeline::gbuffer_formats(&wxsl_core::lighting::LightingSet) -> alloc::vec::Vec<wxsl_frame::types::TextureFormat>
@@ -1694,7 +1694,7 @@ impl core::marker::Unpin for wxsl_frame::pipeline_doc::PipelineError
 impl core::marker::UnsafeUnpin for wxsl_frame::pipeline_doc::PipelineError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pipeline_doc::PipelineError
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pipeline_doc::PipelineError
-pub fn wxsl_frame::pipeline_doc::compile(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> core::result::Result<wxsl_frame::graph::RenderGraph, wxsl_frame::pipeline_doc::PipelineError>
+pub fn wxsl_frame::pipeline_doc::compile(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_frame::effect::EffectRegistry, &wxsl_frame::pipeline::PipelineConfig) -> core::result::Result<wxsl_frame::graph::FrameGraph, wxsl_frame::pipeline_doc::PipelineError>
 pub fn wxsl_frame::pipeline_doc::document_registry(&wxsl_frame::effect::EffectRegistry) -> wxsl_core::node::NodeRegistry
 pub mod wxsl_frame::profile
 pub struct wxsl_frame::profile::Profile

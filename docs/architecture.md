@@ -100,7 +100,7 @@ A node definition lists the domains it may appear in, and
 |---|---|---|---|
 | `surface` | a material | `codegen::generate` | one module per material stage |
 | `screen` | a post effect | `codegen::generate_screen` | one fullscreen pass |
-| `document` | a pipeline | `wxsl_frame::pipeline_doc::compile` | a `RenderGraph` |
+| `document` | a pipeline | `wxsl_frame::pipeline_doc::compile` | a `FrameGraph` |
 
 The **scene document** (`wxsl_core::scene`) lists the meshes, materials and
 instances that exist, and says nothing about how they are drawn
@@ -257,7 +257,8 @@ Nothing thresholds or blends encoded values.
 ## Pipelines
 
 A pipeline is **data**: `PassDesc`s over `ResourceDesc`s, held in a
-`RenderGraph`
+`FrameGraph` (`wxsl_frame`), which `wxsl_render`'s `RenderGraph` wraps
+to record it on wgpu
 ([ADR 0021](adr/0021-a-declarative-render-graph-and-a-scene-document.md)).
 It is usually authored as a document over the pipeline vocabulary
 (`wxsl_core::pipeline`), which contains:
@@ -298,7 +299,7 @@ node that expands with scoped names
 
 ### Scheduling
 
-`RenderGraph::schedule` is pure and tested without a device. It:
+`FrameGraph::schedule` is pure and tested without a device. It:
 
 - orders passes by what they read and write, with declaration order as the
   tie-break;

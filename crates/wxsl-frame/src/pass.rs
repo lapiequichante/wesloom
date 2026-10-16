@@ -31,7 +31,7 @@ use crate::types::{
     Face, TextureFormat, TextureUsages,
 };
 
-/// A resource in a [`crate::graph::RenderGraph`], by index.
+/// A resource in a [`crate::graph::FrameGraph`], by index.
 ///
 /// Opaque and `Copy`: a pass holds ids, never textures, so the same pass
 /// list can be scheduled against a 512-pixel preview and a 4K window.

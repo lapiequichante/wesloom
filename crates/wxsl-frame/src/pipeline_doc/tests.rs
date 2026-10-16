@@ -43,16 +43,16 @@ fn environment_settings_and_duplicate_declarations_are_named() {
 }
 use super::*;
 use crate::effect::EffectRegistry;
-use crate::graph::RenderGraph;
+use crate::graph::FrameGraph;
 use crate::pass::{Dimension, PassKind};
-use crate::pipeline::{deferred_graph, forward_graph, PipelineConfig, TargetConfig};
+use crate::pipeline::{deferred_graph, forward_graph, PipelineConfig, TargetDesc};
 use wxsl_core::abi::{self, MaterialStage};
 use wxsl_core::lighting::LightingSet;
 use wxsl_core::pipeline::registry as make_registry;
 use wxsl_core::scene::{self, TagExpr};
 
-fn target() -> TargetConfig {
-    TargetConfig::new(64, 64, TextureFormat::Rgba8Unorm)
+fn target() -> TargetDesc {
+    TargetDesc::new(64, 64, TextureFormat::Rgba8Unorm)
 }
 
 fn config() -> PipelineConfig {
@@ -71,7 +71,7 @@ fn effects() -> EffectRegistry {
 /// point: if it ever fails to compare a field, a document that drifts
 /// from the hand-built list fails here rather than rendering subtly
 /// differently.
-fn same_graph(a: &RenderGraph, b: &RenderGraph) -> bool {
+fn same_graph(a: &FrameGraph, b: &FrameGraph) -> bool {
     fn same_pass(a: &PassDesc, b: &PassDesc) -> bool {
         fn same_kind(a: &PassKind, b: &PassKind) -> bool {
             match (a, b) {
@@ -964,7 +964,7 @@ fn a_deferred_lighting_bloom_chain_compiles_and_schedules() {
             .first()
             .expect("the lighting pass writes the chain's resource")
             .resource;
-        assert_ne!(scene_color, RenderGraph::TARGET);
+        assert_ne!(scene_color, FrameGraph::TARGET);
         assert_eq!(
             compiled.passes()[lighting].reads.len(),
             abi::GBUFFER_BASE_TARGETS.len() + 1
@@ -974,7 +974,7 @@ fn a_deferred_lighting_bloom_chain_compiles_and_schedules() {
         assert_eq!(bloom_pass.reads.len(), 1, "one image input, one read");
         assert_eq!(bloom_pass.reads[0].resource, scene_color);
         assert_eq!(bloom_pass.color.len(), 1);
-        assert_eq!(bloom_pass.color[0].resource, RenderGraph::TARGET);
+        assert_eq!(bloom_pass.color[0].resource, FrameGraph::TARGET);
     }
 }
 
@@ -1082,7 +1082,7 @@ fn a_separable_bloom_chains_horizontal_then_vertical() {
     let glow_read = vertical_pass.reads[1].resource;
     let vertical_wrote = vertical_pass.color[0].resource;
     let horizontal_wrote = horizontal_pass.color[0].resource;
-    assert_ne!(vertical_wrote, RenderGraph::TARGET);
+    assert_ne!(vertical_wrote, FrameGraph::TARGET);
     assert_eq!(
         horizontal_wrote, glow_read,
         "the glow the horizontal pass writes is the vertical pass's second read"
@@ -1090,7 +1090,7 @@ fn a_separable_bloom_chains_horizontal_then_vertical() {
     let tonemap_at = position("tonemap");
     assert_eq!(
         compiled.passes()[tonemap_at].color[0].resource,
-        RenderGraph::TARGET
+        FrameGraph::TARGET
     );
     assert!(
         schedule.order().iter().position(|index| *index == vertical)
@@ -1253,14 +1253,14 @@ fn ramp_document() -> Graph {
 /// document must compile to. The clear colour is the config's, because
 /// the screen pass writes the frame's target and the clear belongs to
 /// the frame (ADR 0039).
-fn ramp_graph() -> RenderGraph {
-    let mut graph = RenderGraph::new(target().format);
+fn ramp_graph() -> FrameGraph {
+    let mut graph = FrameGraph::new(target().format);
     let ramp = graph.resource(ResourceDesc::buffer("ramp", 1024));
     graph.pass(PassDesc::compute("fill ramp", "wxsl.ramp_fill").with_write(ramp));
     graph.pass(
         PassDesc::screen("show ramp", "wxsl.ramp_view")
             .with_color(Attachment::clear(
-                RenderGraph::TARGET,
+                FrameGraph::TARGET,
                 config().target.clear_color,
             ))
             .with_reads([Read::current(ramp)]),
@@ -1841,7 +1841,7 @@ fn peel_config(layers: i32, native: bool) -> PipelineConfig {
 }
 
 /// Geometry passes that actually draw transparent instances.
-fn peel_draws(graph: &RenderGraph) -> Vec<MaterialStage> {
+fn peel_draws(graph: &FrameGraph) -> Vec<MaterialStage> {
     graph
         .passes()
         .iter()

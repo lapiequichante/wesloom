@@ -1,11 +1,11 @@
-//! What a frame is made of: [`TargetConfig`], the stock pipelines, and
+//! What a frame is made of: [`TargetDesc`], the stock pipelines, and
 //! the `wgpu` pipeline cache they draw with.
 //!
 //! Until M1 this module held two hand-written structs, `ForwardPipeline` and
 //! `DeferredPipeline`, each owning its attachments, its depth texture and a
 //! pipeline cache, each writing `begin_render_pass` out by hand. A fourth
 //! pass meant a fourth struct repeating all of it. Then a pipeline became a
-//! [`crate::graph::RenderGraph`] — a list of [`crate::pass::PassDesc`]s
+//! [`crate::graph::FrameGraph`] — a list of [`crate::pass::PassDesc`]s
 //! ([ADR 0021](../../../docs/adr/0021-a-declarative-render-graph-and-a-scene-document.md)) —
 //! and since the pipelines became *documents* (plan2 P3,
 //! [ADR 0033](../../docs/adr/0033-pipelines-are-documents.md)) the shipped
@@ -27,7 +27,7 @@ use wxsl_core::lighting::{ChannelRequest, GBufferPlan, LightingError, LightingSe
 use wxsl_core::macros::MacroSet;
 use wxsl_core::scene::TagExpr;
 
-use crate::graph::RenderGraph;
+use crate::graph::FrameGraph;
 use crate::pass::{
     Attachment, DepthAttachment, DrawSource, Extent, PassDesc, PassState, PassView, Read,
     ResourceDesc, ResourceId, ViewportRect, DEPTH_FORMAT,
@@ -104,7 +104,7 @@ impl StockPipeline {
     /// schedule — the parity tests in `pipeline_doc` and
     /// `stock_pipeline_names_round_trip` exist so that this `expect` is
     /// never the first place a mistake shows up.
-    pub fn graph(&self, config: &PipelineConfig) -> RenderGraph {
+    pub fn graph(&self, config: &PipelineConfig) -> FrameGraph {
         let document = self.document();
         crate::pipeline_doc::compile(
             &document,
@@ -138,7 +138,7 @@ impl StockPipeline {
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
     /// Size, format and clear colour of the final target.
-    pub target: TargetConfig,
+    pub target: TargetDesc,
     /// The lighting models enabled for the deferred path, which decide the
     /// G-buffer's shape.
     pub lighting: LightingSet,
@@ -161,7 +161,7 @@ pub struct PipelineConfig {
 impl PipelineConfig {
     /// A config for `target` with the default lighting set and no
     /// features — the shape every pipeline had before either existed.
-    pub fn new(target: impl Into<TargetConfig>) -> Self {
+    pub fn new(target: impl Into<TargetDesc>) -> Self {
         PipelineConfig {
             target: target.into(),
             lighting: LightingSet::default(),
@@ -268,9 +268,11 @@ pub fn gbuffer_bytes_per_sample(lighting: &LightingSet) -> u32 {
     gbuffer_layout_bytes_per_sample(&lighting.gbuffer_layout())
 }
 
-/// Size, format and clear colour of what is being rendered into.
+/// Size, format and clear colour of what is being rendered into, in the
+/// device-free vocabulary. `wxsl-render`'s `TargetConfig` is the same four
+/// fields in `wgpu` types, and converts both ways.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct TargetConfig {
+pub struct TargetDesc {
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
@@ -291,11 +293,11 @@ pub struct TargetConfig {
     pub clear_color: Color,
 }
 
-impl TargetConfig {
-    /// A config for `width` x `height` in `format`, cleared to a near-black
+impl TargetDesc {
+    /// A target of `width` x `height` in `format`, cleared to a near-black
     /// with a little blue in it.
     pub fn new(width: u32, height: u32, format: TextureFormat) -> Self {
-        TargetConfig {
+        TargetDesc {
             width: width.max(1),
             height: height.max(1),
             format,
@@ -339,7 +341,7 @@ fn everything() -> DrawSource {
 /// milestone exists for the two cases that are not closed: an alpha-tested
 /// leaf and a displaced surface. The normal-offset bias in `shadow.wxsl`
 /// is what handles the acne instead.
-fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
+fn shadow_passes(graph: &mut FrameGraph) -> ResourceId {
     let maps = graph.declare_shadow_maps(
         ResourceDesc::color("shadow maps", DEPTH_FORMAT)
             .with_extent(Extent::Fixed {
@@ -399,8 +401,8 @@ fn shadow_passes(graph: &mut RenderGraph) -> ResourceId {
 /// positions unless the builtin is marked `@invariant`, and `Equal` turns
 /// a one-ulp difference into a hole in the surface. `LessEqual` costs
 /// nothing and tolerates it.
-pub fn forward_graph(target: TargetConfig) -> RenderGraph {
-    let mut graph = RenderGraph::new(target.format);
+pub fn forward_graph(target: TargetDesc) -> FrameGraph {
+    let mut graph = FrameGraph::new(target.format);
     shadow_passes(&mut graph);
     let depth = graph.resource(ResourceDesc::color("forward depth", DEPTH_FORMAT));
     let scene = graph.resource(hdr_chain_target("scene"));
@@ -432,9 +434,9 @@ fn hdr_chain_target(name: &str) -> ResourceDesc {
 /// The pass every stock pipeline ends in: the `tonemap` effect over what
 /// the chain wrote, into the frame's own target
 /// ([ADR 0039](../../docs/adr/0039-tonemap-is-an-effect-and-ambient-reads-the-lut.md)).
-fn display_transform(scene: ResourceId, target: TargetConfig) -> PassDesc {
+fn display_transform(scene: ResourceId, target: TargetDesc) -> PassDesc {
     PassDesc::screen("tonemap", "wxsl.tonemap")
-        .with_color(Attachment::clear(RenderGraph::TARGET, target.clear_color))
+        .with_color(Attachment::clear(FrameGraph::TARGET, target.clear_color))
         .with_reads([Read::current(scene)])
 }
 
@@ -448,9 +450,9 @@ fn display_transform(scene: ResourceId, target: TargetConfig) -> PassDesc {
 /// to it — a depth texture cannot be attached and sampled in the same pass —
 /// which the graph expresses as a read, and therefore as the edge that
 /// orders the two passes.
-pub fn deferred_graph(target: TargetConfig, lighting: &LightingSet) -> RenderGraph {
+pub fn deferred_graph(target: TargetDesc, lighting: &LightingSet) -> FrameGraph {
     let layout = lighting.gbuffer_layout();
-    let mut graph = RenderGraph::new(target.format)
+    let mut graph = FrameGraph::new(target.format)
         // The scheduler checks the material pass's attachment count against
         // this, not against the ABI's base table: a set that requests an id
         // channel or a model target writes them here.
@@ -511,7 +513,7 @@ mod tests {
     }
 
     /// The config every stock pass list is built under here.
-    fn default_config(target: TargetConfig) -> PipelineConfig {
+    fn default_config(target: TargetDesc) -> PipelineConfig {
         PipelineConfig::new(target)
     }
 
@@ -543,7 +545,7 @@ mod tests {
                     .iter()
                     .flat_map(|&index| graph.passes()[index].written().collect::<Vec<_>>())
                     .filter(|&id| {
-                        id != RenderGraph::TARGET
+                        id != FrameGraph::TARGET
                             && matches!(
                                 graph.resources()[id.index()].shape,
                                 crate::pass::ResourceShape::Texture {
@@ -572,12 +574,12 @@ mod tests {
     fn target_config_never_has_a_zero_dimension() {
         // A minimized window reports zero, and a zero-sized texture is a
         // validation error rather than a no-op.
-        let config = TargetConfig::new(0, 0, TextureFormat::Rgba8Unorm);
+        let config = TargetDesc::new(0, 0, TextureFormat::Rgba8Unorm);
         assert_eq!((config.width, config.height), (1, 1));
     }
 
-    fn config() -> TargetConfig {
-        TargetConfig::new(64, 64, TextureFormat::Rgba8Unorm)
+    fn config() -> TargetDesc {
+        TargetDesc::new(64, 64, TextureFormat::Rgba8Unorm)
     }
 
     #[test]
@@ -617,13 +619,13 @@ mod tests {
         // The shading pass writes linear radiance into the chain's own
         // target rather than the frame's; the tonemap pass is what the
         // frame's target sees.
-        assert_ne!(shading.color[0].resource, RenderGraph::TARGET);
+        assert_ne!(shading.color[0].resource, FrameGraph::TARGET);
         let tonemap = &graph.passes()[abi::MAX_SHADOW_TILES + 2];
         assert!(matches!(
             &tonemap.kind,
             PassKind::Screen { effect } if effect == "wxsl.tonemap"
         ));
-        assert_eq!(tonemap.color[0].resource, RenderGraph::TARGET);
+        assert_eq!(tonemap.color[0].resource, FrameGraph::TARGET);
         assert_eq!(tonemap.reads.len(), 1, "the image the chain wrote");
         assert_eq!(tonemap.reads[0].resource, shading.color[0].resource);
 
@@ -737,7 +739,7 @@ mod tests {
         // frame's target — the display transform is the last word.
         assert_ne!(
             graph.passes()[lighting].color[0].resource,
-            RenderGraph::TARGET
+            FrameGraph::TARGET
         );
         assert!(matches!(
             &graph.passes()[tonemap].kind,
@@ -745,7 +747,7 @@ mod tests {
         ));
         assert_eq!(
             graph.passes()[tonemap].color[0].resource,
-            RenderGraph::TARGET
+            FrameGraph::TARGET
         );
         let schedule = graph.schedule().expect("the deferred pass list schedules");
         assert_eq!(schedule.order(), (0..=tonemap).collect::<Vec<_>>());
@@ -755,7 +757,7 @@ mod tests {
     fn both_stock_pipelines_schedule_at_any_size() {
         for pipeline in StockPipeline::ALL {
             for (width, height) in [(1, 1), (64, 64), (3840, 2160)] {
-                let target = TargetConfig::new(width, height, TextureFormat::Rgba8Unorm);
+                let target = TargetDesc::new(width, height, TextureFormat::Rgba8Unorm);
                 pipeline
                     .graph(&PipelineConfig {
                         lighting: default_lighting(),

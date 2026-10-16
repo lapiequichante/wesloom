@@ -30,7 +30,7 @@ use wxsl_frame::{
     pass::{
         Attachment, DepthAttachment, DrawSource, PassDesc, PassKind, Policy, Read, ResourceDesc,
     },
-    pipeline::{PipelineConfig, StockPipeline, TargetConfig},
+    pipeline::{PipelineConfig, StockPipeline, TargetDesc},
     profile::Profile,
     types::{Color, TextureFormat},
 };
@@ -140,7 +140,7 @@ fn binding(kind: PassBinding) -> Json {
     }
 }
 
-fn slot(shape: SlotShape, target: TargetConfig) -> Json {
+fn slot(shape: SlotShape, target: TargetDesc) -> Json {
     let mut value = serde_json::to_value(shape).unwrap();
     if let SlotShape::Texture { extent, layers, .. } = shape {
         let (w, h) = extent.resolve(target.width, target.height);
@@ -212,8 +212,8 @@ const INDIRECT: Effect = Effect {
     downlevel: wxsl_frame::effect::Downlevel::NativeOnly,
 };
 
-fn device_probes(format: TextureFormat) -> Vec<(String, wxsl_frame::graph::RenderGraph)> {
-    use wxsl_frame::graph::RenderGraph as Plan;
+fn device_probes(format: TextureFormat) -> Vec<(String, wxsl_frame::graph::FrameGraph)> {
+    use wxsl_frame::graph::FrameGraph as Plan;
     let mut buffer = Plan::new(format);
     let ramp = buffer.resource(ResourceDesc::buffer("ramp", 1024).persistent(0));
     buffer.pass(
@@ -548,8 +548,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .map(|feature| feature.name)
         .collect::<Vec<_>>();
-    let mut config =
-        PipelineConfig::new(TargetConfig::new(width, height, TextureFormat::Rgba8Unorm));
+    let mut config = PipelineConfig::new(TargetDesc::new(width, height, TextureFormat::Rgba8Unorm));
     config.features = lighting::feature_requests(&features)?;
     config.profile = profile;
     let mut model_names = scene
@@ -849,7 +848,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         graphs.push(("gallery".into(), graph));
     }
     if sample.as_deref() == Some("filter") {
-        let mut graph = wxsl_frame::graph::RenderGraph::new(config.target.format);
+        let mut graph = wxsl_frame::graph::FrameGraph::new(config.target.format);
         let linear = graph.resource(ResourceDesc::color("linear", TextureFormat::Rgba16Float));
         let encoded = graph.resource(ResourceDesc::color("encoded", TextureFormat::Rgba16Float));
         let depth = graph.resource(ResourceDesc::color("depth", TextureFormat::Depth32Float));
@@ -871,7 +870,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             PassDesc::screen("fxaa", "wxsl.fxaa")
                 .with_reads([Read::current(encoded)])
                 .with_color(Attachment::clear(
-                    wxsl_frame::graph::RenderGraph::TARGET,
+                    wxsl_frame::graph::FrameGraph::TARGET,
                     Color::BLACK,
                 )),
         );
@@ -1030,7 +1029,7 @@ fn render_reference(
     checker: &[u8],
     env: &Environment,
     config: &PipelineConfig,
-    graphs: &[(String, wxsl_frame::graph::RenderGraph)],
+    graphs: &[(String, wxsl_frame::graph::FrameGraph)],
     effects: &EffectRegistry,
     library: ShaderLibrary,
     hdri: Option<&(u32, u32, Vec<[f32; 3]>)>,

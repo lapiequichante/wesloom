@@ -3,7 +3,7 @@
 use super::{
     Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader,
 };
-use crate::graph::RenderGraph;
+use crate::graph::FrameGraph;
 use crate::pass::{
     Attachment, DepthAttachment, Dimension, DrawSource, PassDesc, PassState, Read, ResourceDesc,
     ResourceId,
@@ -182,7 +182,7 @@ pub const COMPOSE_DEPTH: Effect = Effect {
 /// each crossing has an entry and exit. Two torus crossings use four interfaces.
 /// Arrays keep the binding cost independent of this count.
 pub fn append(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     scene: ResourceId,
     depth: ResourceId,
     environment: ResourceId,
@@ -203,7 +203,7 @@ pub fn append(
 /// Same peel data, with an explicit precision/cost choice. `Precise` retains
 /// the ray marcher; `Layered` composes front/back pairs back to front.
 pub fn append_with_quality(
-    graph: &mut RenderGraph,
+    graph: &mut FrameGraph,
     scene: ResourceId,
     depth: ResourceId,
     environment: ResourceId,

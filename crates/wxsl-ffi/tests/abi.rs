@@ -11,7 +11,7 @@ use wxsl_core::material::MaterialConfig;
 use wxsl_core::node::{Value, ValueType};
 use wxsl_ffi::ffi::*;
 use wxsl_frame::effect::{EffectRegistry, BLOOM};
-use wxsl_frame::pipeline::{PipelineConfig, StockPipeline, TargetConfig};
+use wxsl_frame::pipeline::{PipelineConfig, StockPipeline, TargetDesc};
 use wxsl_frame::types::TextureFormat;
 use wxsl_render::library::ShaderLibrary;
 use wxsl_render::material::Material;
@@ -112,7 +112,7 @@ fn header_is_generated_from_the_exported_declarations() {
 
 #[test]
 fn both_presets_export_the_actual_shared_plan_and_schedule() {
-    let config = PipelineConfig::new(TargetConfig::new(800, 600, TextureFormat::Rgba8Unorm));
+    let config = PipelineConfig::new(TargetDesc::new(800, 600, TextureFormat::Rgba8Unorm));
     for stock in StockPipeline::ALL {
         let output =
             ResultOwner::call(wxsl_compile_pipeline, json!({"pipeline": stock.document()}));
@@ -350,8 +350,7 @@ fn capability_refusal_and_enabled_feature_match_the_shared_check() {
                 WxslStatus::Incompatible
             }
         );
-        let mut config =
-            PipelineConfig::new(TargetConfig::new(800, 600, TextureFormat::Rgba8Unorm));
+        let mut config = PipelineConfig::new(TargetDesc::new(800, 600, TextureFormat::Rgba8Unorm));
         config.features = wxsl_core::lighting::feature_requests(&features).unwrap();
         let setup = wxsl_frame::setup::RenderSetup::for_stock(
             StockPipeline::Deferred,

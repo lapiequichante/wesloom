@@ -15,7 +15,9 @@ pub use wxsl_frame::pipeline::{
     MAX_GBUFFER_BYTES_PER_SAMPLE,
 };
 
-/// Size, format and clear colour of what is being rendered into.
+/// Size, format and clear colour of what is being rendered into, in `wgpu`
+/// types: the device-side mirror of [`wxsl_frame::pipeline::TargetDesc`],
+/// which [`PipelineConfig::target`] holds. Each converts into the other.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetConfig {
     /// Width in pixels.
@@ -56,7 +58,7 @@ impl TargetConfig {
     }
 }
 
-impl From<TargetConfig> for wxsl_frame::pipeline::TargetConfig {
+impl From<TargetConfig> for wxsl_frame::pipeline::TargetDesc {
     fn from(target: TargetConfig) -> Self {
         Self {
             width: target.width,
@@ -67,8 +69,8 @@ impl From<TargetConfig> for wxsl_frame::pipeline::TargetConfig {
     }
 }
 
-impl From<wxsl_frame::pipeline::TargetConfig> for TargetConfig {
-    fn from(target: wxsl_frame::pipeline::TargetConfig) -> Self {
+impl From<wxsl_frame::pipeline::TargetDesc> for TargetConfig {
+    fn from(target: wxsl_frame::pipeline::TargetDesc) -> Self {
         Self {
             width: target.width,
             height: target.height,
