@@ -20,9 +20,15 @@ on C++ through [Dawn](dawn/README.md).
 - **A library of about 100 base nodes:** math, colour, noise, SDFs, PBR and
   other lighting models, sky. They are original or audited permissive ports
   ([ADR 0053](docs/adr/0053-permissive-shader-ports-retain-their-provenance.md)).
+- **Scenes and glTF.** A scene document holds meshes, materials and
+  lights; GLB files import into one, with their materials as node graphs
+  ([ADR 0080](docs/adr/0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)).
 - **An optional node editor.** It draws itself with the renderer, so it
   pulls in no GUI toolkit
   ([ADR 0013](docs/adr/0013-the-editor-draws-itself-with-wxsl-render.md)).
+  It edits materials, pipelines and scenes, with debug views and a pixel
+  probe, and an MCP server lets an agent drive it
+  ([ADR 0083](docs/adr/0083-an-mcp-server-over-the-editors-commands.md)).
 - **Targets:** native through wgpu, the browser on WebGPU or WebGL2, and
   C++ through a data-only C ABI.
 
@@ -33,6 +39,8 @@ cargo run -p wxsl --example pbr_cube                        # one material, F/D 
 cargo run -p wxsl --example gallery                         # every pipeline feature, arrow keys to browse
 cargo run -p wxsl --features editor --example editor        # the node editor
 cargo run -p wxsl --features editor --example editor -- --screenshot out.png
+cargo run -p wxsl --features gltf --example viewer          # a GLB under an HDR environment
+cargo run -p wxsl --features mcp --example editor -- --mcp 8765   # the editor, driven by an agent
 ```
 
 `pbr_cube`'s material is
@@ -43,14 +51,21 @@ comments explaining the format. Each example's `--help` lists its options.
 
 ```toml
 [dependencies]
-wxsl = "0"                                              # renderer + node library
-wxsl = { version = "0", default-features = false }      # graph model and codegen only, no wgpu
-wxsl = { version = "0", features = ["editor"] }         # plus the editor
-wxsl = { version = "0", features = ["gltf"] }           # plus glTF/GLB geometry import
+wxsl = "0.1"                                              # renderer + node library
+wxsl = { version = "0.1", default-features = false }      # graph model and codegen only, no wgpu
+wxsl = { version = "0.1", features = ["editor"] }         # plus the editor
+wxsl = { version = "0.1", features = ["gltf"] }           # plus glTF/GLB scene import
+wxsl = { version = "0.1", features = ["mcp"] }            # plus the editor's MCP server
 ```
 
 The `wxsl` crate's documentation (`cargo doc -p wxsl --open`) starts with a
 minimal program.
+
+**Stability.** What each crate exports at its root, the document formats
+and the C ABI are the stable surface; module paths and all of `wxsl-frame`
+are not
+([ADR 0078](docs/adr/0078-three-api-tiers-pinned-by-public-api-snapshots.md)).
+Changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Crates
 
@@ -60,8 +75,10 @@ minimal program.
 | [`wxsl-lang`](crates/wxsl-lang) | The WXSL → WGSL compiler. |
 | [`wxsl-frame`](crates/wxsl-frame) | Device-free frame plans: pipeline documents, scheduling, effects. |
 | [`wxsl-stdlib`](crates/wxsl-stdlib) | The node library, one `.wxsl` file per node. |
+| [`wxsl-gltf`](crates/wxsl-gltf) | glTF/GLB import into scene documents. No wgpu. |
 | [`wxsl-render`](crates/wxsl-render) | The wgpu renderer and its 2D UI layer. |
 | [`wxsl-editor`](crates/wxsl-editor) | The visual editor. |
+| [`wxsl-mcp`](crates/wxsl-mcp) | An MCP server over the editor's commands, for agents. |
 | [`wxsl-ffi`](crates/wxsl-ffi) | The C ABI that C/C++ hosts and the Dawn backend use. |
 | [`wxsl`](crates/wxsl) | The facade: re-exports the above behind features. |
 
@@ -85,3 +102,8 @@ Workspace code is dual-licensed MIT / Apache-2.0
 ports keep their original licenses and notices: see [`NOTICE`](NOTICE).
 Applications can redistribute the attributions from
 `wxsl_stdlib::THIRD_PARTY_NOTICES`.
+
+The assets under [`resources/`](resources) are not part of any crate and
+keep their own licenses, recorded beside them: the fonts are SIL OFL 1.1,
+the glTF sample models are Khronos samples under their listed licenses,
+and the HDR environment is CC0.

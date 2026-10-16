@@ -2913,7 +2913,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wxsl"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "glam",
  "image",
@@ -2935,7 +2935,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2943,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-editor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "glam",
  "serde",
@@ -2957,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-ffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-frame"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-gltf"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "glam",
  "gltf",
@@ -3003,7 +3003,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-lang"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-mcp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "png",
  "serde",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-render"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -3042,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "wxsl-stdlib"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "wxsl-core",
  "wxsl-lang",

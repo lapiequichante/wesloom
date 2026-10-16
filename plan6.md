@@ -677,9 +677,15 @@ Extends pass stepping (N9) from a material to a whole scene.
 
 ### C4 — Stabilization and 0.1.0 *(last)*
 
-* Freeze the stable tier as C2 defined it.
+* Freeze the stable tier as C2 defined it. *Done (2026-10-16):* the
+  snapshots were already a CI gate, and `AGENTS.md` now asks for a
+  `CHANGELOG.md` entry with every stable change.
 * Bump the version to `0.1.0`, start a `CHANGELOG.md`, and run
-  `cargo publish --dry-run` on the published crates.
+  `cargo publish --dry-run` on the published crates. *The bump and the
+  changelog are done (2026-10-16), and the README names the 0.1 crates, the
+  scenes, the MCP server and the asset licenses. Not run, by decision:
+  `cargo publish`, including `--dry-run`, and the `v0.1.0` tag the
+  changelog links to.*
 * Re-audit `NOTICE` and the licenses of every packaged crate (ADR 0053).
   *Done (2026-10-16):*
   * the six ported shaders are the six `NOTICE` entries, each with its

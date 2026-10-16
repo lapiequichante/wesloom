@@ -94,7 +94,9 @@ bash scripts/public-api.sh                     # --bless after an intended API c
 A change to a public item updates `api/<crate>.txt` with
 `bash scripts/public-api.sh --bless` (pinned nightly, see the script). A
 crate's root re-exports are its stable surface; module paths are unstable
-(ADR 0078). Don't add a root re-export casually.
+(ADR 0078). Don't add a root re-export casually. Since 0.1.0, a change to
+the stable surface (a root re-export, a document format, the C ABI) also
+adds an entry under `[Unreleased]` in `CHANGELOG.md`.
 
 A change to crate or feature boundaries is not finished until the
 `--no-default-features` and `--features editor` checks pass, as well as
