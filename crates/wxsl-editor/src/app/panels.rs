@@ -183,10 +183,6 @@ pub(super) fn toolbar_panel(
     {
         requests.mesh = Some(MeshKind::ALL[selected]);
     }
-    if button(ui, &mut cursor, "toolbar.add", "add node", false) {
-        // Where "the middle of the canvas" is, the toolbar does not know.
-        requests.add_at_center = true;
-    }
     if button(ui, &mut cursor, "toolbar.fit", "fit", false) {
         requests.fit = true;
     }

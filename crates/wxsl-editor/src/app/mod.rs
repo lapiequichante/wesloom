@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!  ┌─────────────────────────────────────────────────────────────┐
-//!  │ toolbar: name · path · mesh · add · fit · tidy · …          │
+//!  │ toolbar: name · path · mesh · fit · tidy · …                │
 //!  ├───────────┬──────────────────────────────┬──────────────────┤
 //!  │ palette   │ node canvas                  │ preview          │
 //!  │ (search,  │ (pan, zoom, link, unlink,    │ selected node    │
@@ -1378,19 +1378,6 @@ impl Editor {
         } else {
             Document::Material
         };
-        if requests.add_at_center {
-            let at = canvas_rect.center();
-            requests.add_at = Some(if pipeline_mode {
-                self.pipeline
-                    .as_ref()
-                    .expect("pipeline mode opened the canvas")
-                    .canvas
-                    .view
-                    .to_graph(canvas_rect, at)
-            } else {
-                self.canvas.view.to_graph(canvas_rect, at)
-            });
-        }
         if let Some(delta) = requests.spin_drag {
             self.preview.drag(delta);
         }
@@ -1717,9 +1704,6 @@ pub(crate) struct Requests {
     pub(crate) mode: Option<CanvasMode>,
     /// Open the palette to add a node at this graph-space point.
     pub(crate) add_at: Option<Vec2>,
-    /// Open the palette to add a node in the middle of the canvas, wherever
-    /// that is — a widget outside the canvas does not know.
-    pub(crate) add_at_center: bool,
     /// A node a palette row asked for.
     pub(crate) add: Option<AddNode>,
     /// Where the row was let go, in screen pixels — a palette row is a
