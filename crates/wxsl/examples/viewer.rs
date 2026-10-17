@@ -5,7 +5,7 @@
 //! README for their licenses); any other path opens that file.
 //!
 //! ```text
-//! cargo run -p wxsl --features gltf --example viewer                    # damaged-helmet
+//! cargo run -p wxsl --features gltf --example viewer
 //! cargo run -p wxsl --features gltf --example viewer -- car-concept
 //! cargo run -p wxsl --features gltf --example viewer -- glam-velvet-sofa
 //! cargo run -p wxsl --features gltf --example viewer -- path/to/model.glb
@@ -46,9 +46,11 @@ use wxsl::scene::SceneResources;
 
 /// The demos: a name, and the file under `resources/glb/`.
 const DEMOS: &[(&str, &str)] = &[
+    ("wxsl-car", "WXSLCar/wxslCar.glb"),
+    ("wxsl-garage", "WXSLGarage/wxslGarage.glb"),
+    ("glam-velvet-sofa", "GlamVelvetSofa/GlamVelvetSofa.glb"),
     ("damaged-helmet", "DamagedHelmet/DamagedHelmet.glb"),
     ("car-concept", "CarConcept/CarConcept.glb"),
-    ("glam-velvet-sofa", "GlamVelvetSofa/GlamVelvetSofa.glb"),
 ];
 
 const USAGE: &str = "viewer [demo|file.glb] [--hdr file.hdr] [--screenshot out.png] [--size WxH]
