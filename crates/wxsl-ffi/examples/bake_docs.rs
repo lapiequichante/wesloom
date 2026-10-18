@@ -945,7 +945,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .map_err(|e| e.to_string())
                 })
                 .transpose()?;
-            passes.push(json!({"bindings": native.pass_binding_kinds(pass, params).into_iter().map(binding).collect::<Vec<_>>(), "view_slot": pass.view.slot(), "draws": draws, "params": parameter_file}));
+            // The cull mode of each call a draw makes, so the C++ renderer
+            // draws a double-sided material without its own rule (ADR 0090).
+            let sides = draws
+                .iter()
+                .map(|&draw| {
+                    let material = &native_materials[scene.instances[draw].material];
+                    pass.state
+                        .sides(material.double_sided())
+                        .map(|state| state.cull_mode)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            passes.push(json!({"bindings": native.pass_binding_kinds(pass, params).into_iter().map(binding).collect::<Vec<_>>(), "view_slot": pass.view.slot(), "draws": draws, "sides": sides, "params": parameter_file}));
         }
         data["pass_data"] = json!(passes);
     }

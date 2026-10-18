@@ -826,6 +826,92 @@ fn the_clearcoat_model_uses_the_extra_target_it_asks_for() {
     );
 }
 
+/// The glTF clear coat (ADR 0091): strength, roughness and the coat's own
+/// normal reach direct and ambient light through the model channel, the
+/// two pipelines agree, and no coat is exactly PBR.
+#[test]
+fn the_gltf_clearcoat_transports_strength_roughness_and_normal() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let mut ambient = lit();
+    ambient.lights.clear();
+    ambient.ambient_sky = Vec3::splat(0.7);
+    ambient.ambient_ground = Vec3::splat(0.1);
+
+    let base = {
+        let mut graph = glossy(&scene.registry, "lacquer", 0.7);
+        let output = graph
+            .nodes()
+            .find(|(_, node)| node.def == abi::SURFACE_OUTPUT_ID)
+            .map(|(id, _)| id)
+            .unwrap();
+        graph.set_param(output, "base_color", Value::Vec3([0.05, 0.1, 0.4]));
+        (graph, output)
+    };
+    let coated = |strength: f32, normal: Option<[f32; 3]>| {
+        let (mut graph, output) = base.clone();
+        graph.set_param(output, "clearcoat", Value::F32(strength));
+        graph.set_param(output, "clearcoat_roughness", Value::F32(0.05));
+        if let Some(normal) = normal {
+            graph.set_param(output, "clearcoat_normal", Value::Vec3(normal));
+        }
+        graph
+    };
+    let center = Vec3::ZERO;
+    let pbr = scene.material(&base.0, &named("pbr"));
+    let bare = scene.material(&coated(0.0, None), &named("gltf_clearcoat"));
+    let coat = scene.material(&coated(1.0, None), &named("gltf_clearcoat"));
+    let tilted = scene.material(
+        &coated(1.0, Some([0.6, 0.8, 0.0])),
+        &named("gltf_clearcoat"),
+    );
+
+    let mut images = Vec::new();
+    for pipeline in [StockPipeline::Deferred, StockPipeline::Forward] {
+        scene.renderer.set_pipeline(pipeline);
+        let mut frame = Vec::new();
+        for material in [&pbr, &bare, &coat, &tilted] {
+            frame.push((
+                scene.render(&[material; 3]),
+                scene.render_in(&[material; 3], &ambient),
+            ));
+        }
+        images.push(frame);
+    }
+    for (index, ((direct_d, ambient_d), (direct_f, ambient_f))) in
+        images[0].iter().zip(&images[1]).enumerate()
+    {
+        assert!(
+            probe::patch_gap(direct_d, direct_f, camera(), center, 6) <= 4.0,
+            "material {index}: the pipelines disagree on direct light"
+        );
+        assert!(
+            probe::patch_gap(ambient_d, ambient_f, camera(), center, 6) <= 4.0,
+            "material {index}: the pipelines disagree on ambient light"
+        );
+    }
+    let [pbr, bare, coat, tilted] = &images[0][..] else {
+        unreachable!()
+    };
+    assert!(
+        probe::patch_gap(&pbr.0, &bare.0, camera(), center, 6) <= 1.0
+            && probe::patch_gap(&pbr.1, &bare.1, camera(), center, 6) <= 1.0,
+        "no coat should shade as plain PBR"
+    );
+    assert!(
+        probe::patch_gap(&pbr.0, &coat.0, camera(), center, 6) > 8.0,
+        "the coat's lobe never reached direct light"
+    );
+    assert!(
+        probe::patch_gap(&pbr.1, &coat.1, camera(), center, 6) > 4.0,
+        "the coat never reached ambient light"
+    );
+    assert!(
+        probe::patch_gap(&coat.0, &tilted.0, camera(), center, 6) > 8.0,
+        "the coat normal never reached the coat's lobe"
+    );
+}
+
 /// A material naming a model the set does not enable is reported at
 /// compile time, naming the model.
 #[test]

@@ -277,6 +277,7 @@ pub const wxsl_core::abi::DISCARD_FN: &str
 pub const wxsl_core::abi::DISCARD_OUTPUT_ID: &str
 pub const wxsl_core::abi::ENCODE_NORMAL_FN: &str
 pub const wxsl_core::abi::ENVIRONMENT_LUT_SIZE: u32
+pub const wxsl_core::abi::FACING_CONTEXT_FN: &str
 pub const wxsl_core::abi::FEATURE_DEBUG_NORMALS: &str
 pub const wxsl_core::abi::FEATURE_INSTANCE_TEXTURE: &str
 pub const wxsl_core::abi::FEATURE_PREVIOUS_FRAME: &str
@@ -284,6 +285,7 @@ pub const wxsl_core::abi::FEATURE_RECEIVE_SHADOWS: &str
 pub const wxsl_core::abi::FEATURE_RELATIVE_TO_EYE: &str
 pub const wxsl_core::abi::FRAGMENT_FN: &str
 pub const wxsl_core::abi::FRAGMENT_OUTPUT_ID: &str
+pub const wxsl_core::abi::FRONT_FACING_VAR: &str
 pub const wxsl_core::abi::GBUFFER_BASE_TARGETS: &[wxsl_core::abi::GBufferTarget]
 pub const wxsl_core::abi::GBUFFER_MODULE: &str
 pub const wxsl_core::abi::GBUFFER_STRUCT: &str
@@ -1711,6 +1713,7 @@ pub mod wxsl_core::material
 pub struct wxsl_core::material::MaterialConfig
 pub wxsl_core::material::MaterialConfig::bakes: bool
 pub wxsl_core::material::MaterialConfig::cast_shadow: bool
+pub wxsl_core::material::MaterialConfig::double_sided: bool
 pub wxsl_core::material::MaterialConfig::features: alloc::vec::Vec<wxsl_core::lighting::ChannelRequest>
 pub wxsl_core::material::MaterialConfig::forward_shaded: bool
 pub wxsl_core::material::MaterialConfig::macros: wxsl_core::macros::MacroSet
@@ -1722,6 +1725,7 @@ pub wxsl_core::material::MaterialConfig::tags: wxsl_core::scene::Tags
 impl wxsl_core::material::MaterialConfig
 pub fn wxsl_core::material::MaterialConfig::forward_shaded(self, bool) -> Self
 pub fn wxsl_core::material::MaterialConfig::resolve(&self, &wxsl_core::lighting::LightingSet) -> core::result::Result<wxsl_core::material::ResolvedMaterialConfig, wxsl_core::lighting::LightingError>
+pub fn wxsl_core::material::MaterialConfig::with_double_sided(self, bool) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_features(self, alloc::vec::Vec<wxsl_core::lighting::ChannelRequest>) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_macros(wxsl_core::macros::MacroSet) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_max_layers(self, i32) -> Self
@@ -1752,6 +1756,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_core::material::MaterialConfi
 pub struct wxsl_core::material::ResolvedMaterialConfig
 pub wxsl_core::material::ResolvedMaterialConfig::bakes: bool
 pub wxsl_core::material::ResolvedMaterialConfig::cast_shadow: bool
+pub wxsl_core::material::ResolvedMaterialConfig::double_sided: bool
 pub wxsl_core::material::ResolvedMaterialConfig::forward_shaded: bool
 pub wxsl_core::material::ResolvedMaterialConfig::lighting: wxsl_core::lighting::MaterialLighting
 pub wxsl_core::material::ResolvedMaterialConfig::macros: wxsl_core::macros::MacroSet
@@ -3967,6 +3972,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_core::macros::MacroSet
 pub struct wxsl_core::MaterialConfig
 pub wxsl_core::MaterialConfig::bakes: bool
 pub wxsl_core::MaterialConfig::cast_shadow: bool
+pub wxsl_core::MaterialConfig::double_sided: bool
 pub wxsl_core::MaterialConfig::features: alloc::vec::Vec<wxsl_core::lighting::ChannelRequest>
 pub wxsl_core::MaterialConfig::forward_shaded: bool
 pub wxsl_core::MaterialConfig::macros: wxsl_core::macros::MacroSet
@@ -3978,6 +3984,7 @@ pub wxsl_core::MaterialConfig::tags: wxsl_core::scene::Tags
 impl wxsl_core::material::MaterialConfig
 pub fn wxsl_core::material::MaterialConfig::forward_shaded(self, bool) -> Self
 pub fn wxsl_core::material::MaterialConfig::resolve(&self, &wxsl_core::lighting::LightingSet) -> core::result::Result<wxsl_core::material::ResolvedMaterialConfig, wxsl_core::lighting::LightingError>
+pub fn wxsl_core::material::MaterialConfig::with_double_sided(self, bool) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_features(self, alloc::vec::Vec<wxsl_core::lighting::ChannelRequest>) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_macros(wxsl_core::macros::MacroSet) -> Self
 pub fn wxsl_core::material::MaterialConfig::with_max_layers(self, i32) -> Self
@@ -4228,6 +4235,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_core::node::NodeRegistry
 pub struct wxsl_core::ResolvedMaterialConfig
 pub wxsl_core::ResolvedMaterialConfig::bakes: bool
 pub wxsl_core::ResolvedMaterialConfig::cast_shadow: bool
+pub wxsl_core::ResolvedMaterialConfig::double_sided: bool
 pub wxsl_core::ResolvedMaterialConfig::forward_shaded: bool
 pub wxsl_core::ResolvedMaterialConfig::lighting: wxsl_core::lighting::MaterialLighting
 pub wxsl_core::ResolvedMaterialConfig::macros: wxsl_core::macros::MacroSet

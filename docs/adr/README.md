@@ -121,6 +121,8 @@ The ten decisions the rest of the log builds on:
 | [0087](0087-one-name-per-type-across-frame-and-render.md) | One name per type: the device-free originals take their own names | Accepted |
 | [0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md) | One model channel shared by every model, the id in the normal target | Accepted |
 | [0089](0089-the-surface-output-hands-its-shaded-colour-to-a-fragment-output.md) | The surface output hands its shaded colour to a fragment output | Accepted |
+| [0090](0090-a-double-sided-material-turns-off-its-passes-culling.md) | A double-sided material turns off its passes' culling | Accepted |
+| [0091](0091-the-gltf-clear-coat-is-a-model-of-its-own-authored-on-the-surface.md) | The glTF clear coat is a model of its own, authored on the surface | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

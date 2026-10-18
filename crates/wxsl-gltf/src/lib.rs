@@ -58,8 +58,9 @@ use wxsl_core::scene::{
 /// The name every generated material graph carries.
 pub const GLTF_PBR_GRAPH: &str = "gltf_pbr";
 
-/// Tag of a material the file marks double-sided. The stock passes cull
-/// back faces for every draw, so honouring it is a pipeline's choice.
+/// Tag of a material the file marks double-sided, which also sets the
+/// material's `double_sided` (ADR 0090). The tag is for a pass that
+/// selects on it.
 pub const TAG_DOUBLE_SIDED: &str = "double_sided";
 
 /// Tag the refraction pass selects (ADR 0067), set on transmissive
@@ -613,34 +614,8 @@ impl<'a> Importer<'a> {
             match self.texture_slot(&info, false) {
                 Ok(texture) => {
                     bindings.push(("normal_texture".to_string(), texture));
-                    let sample = graph.sample("normal_texture", &info);
-                    let channels = graph.node("convert.split.vec4f");
-                    graph.wire((sample, "out"), (channels, "v"));
-                    let encoded = graph.node("convert.combine.vec3f");
-                    for channel in ["x", "y", "z"] {
-                        graph.wire((channels, channel), (encoded, channel));
-                    }
-                    let doubled = graph.node("math.multiply");
-                    graph.generics(doubled, ValueType::Vec3, ValueType::F32);
-                    graph.wire((encoded, "out"), (doubled, "a"));
-                    graph.set(doubled, "b", Value::F32(2.0));
-                    let decoded = graph.node("math.subtract");
-                    graph.generics(decoded, ValueType::Vec3, ValueType::F32);
-                    graph.wire((doubled, "out"), (decoded, "a"));
-                    graph.set(decoded, "b", Value::F32(1.0));
-                    let scale = graph.param("normal_scale", Value::F32(normal.scale()));
-                    let mapped = graph.node("space.apply_normal_map");
-                    graph.wire((decoded, "out"), (mapped, "tangent_normal"));
-                    for (input, socket) in [
-                        ("input.world_normal", "normal"),
-                        ("input.world_tangent", "tangent"),
-                        ("input.world_bitangent", "bitangent"),
-                    ] {
-                        let read = graph.node(input);
-                        graph.wire((read, "out"), (mapped, socket));
-                    }
-                    graph.wire((scale, "out"), (mapped, "strength"));
-                    graph.output((mapped, "out"), "normal");
+                    let mapped = graph.normal_map("normal", &info, normal.scale());
+                    graph.output(mapped, "normal");
                 }
                 Err(message) => warn(&mut self.warnings, format!("normalTexture: {message}")),
             }
@@ -765,20 +740,58 @@ impl<'a> Importer<'a> {
             }
         }
         if let Some(clearcoat) = material.extension_value("KHR_materials_clearcoat") {
-            if number(clearcoat, "clearcoatFactor", 0.0) > 0.0
+            let factor = number(clearcoat, "clearcoatFactor", 0.0);
+            if factor > 0.0
                 && choose(
                     &mut model,
                     &mut self.warnings,
                     "KHR_materials_clearcoat",
-                    "wxsl.clearcoat",
+                    "wxsl.gltf_clearcoat",
                 )
             {
-                warn(
-                    &mut self.warnings,
-                    "clearcoat strength and roughness follow the `wxsl.clearcoat` model's \
-                     convention, not the file's factors and textures"
-                        .to_string(),
-                );
+                // Strength in the red of its texture, roughness in the
+                // green of its own; each times its factor.
+                for (field, value, key, channel) in [
+                    ("clearcoat", factor, "clearcoatTexture", "x"),
+                    (
+                        "clearcoat_roughness",
+                        number(clearcoat, "clearcoatRoughnessFactor", 0.0),
+                        "clearcoatRoughnessTexture",
+                        "y",
+                    ),
+                ] {
+                    let factor = graph.param(&format!("{field}_factor"), Value::F32(value));
+                    let out = match self.extension_texture(clearcoat.get(key)) {
+                        Ok(Some((texture, info))) => {
+                            let slot = format!("{field}_texture");
+                            bindings.push((slot.clone(), texture));
+                            let sample = graph.sample(&slot, &info);
+                            let channels = graph.node("convert.split.vec4f");
+                            graph.wire((sample, "out"), (channels, "v"));
+                            graph.multiply((channels, channel), (factor, "out"), ValueType::F32)
+                        }
+                        Ok(None) => (factor, "out"),
+                        Err(message) => {
+                            warn(&mut self.warnings, format!("{key}: {message}"));
+                            (factor, "out")
+                        }
+                    };
+                    graph.output(out, field);
+                }
+                let normal = clearcoat.get("clearcoatNormalTexture");
+                match self.extension_texture(normal) {
+                    Ok(Some((texture, info))) => {
+                        bindings.push(("clearcoat_normal_texture".to_string(), texture));
+                        let scale = normal.map_or(1.0, |normal| number(normal, "scale", 1.0));
+                        let mapped = graph.normal_map("clearcoat_normal", &info, scale);
+                        graph.output(mapped, "clearcoat_normal");
+                    }
+                    Ok(None) => {}
+                    Err(message) => warn(
+                        &mut self.warnings,
+                        format!("clearcoatNormalTexture: {message}"),
+                    ),
+                }
             }
         }
         if let Some(sheen) = material.extension_value("KHR_materials_sheen") {
@@ -808,17 +821,11 @@ impl<'a> Importer<'a> {
 
         if material.double_sided() {
             tags.push(TAG_DOUBLE_SIDED);
-            warn(
-                &mut self.warnings,
-                format!(
-                    "double-sided: tagged `{TAG_DOUBLE_SIDED}`, but the stock passes cull back \
-                     faces"
-                ),
-            );
         }
 
         let mut entry =
             MaterialEntry::new(name.clone(), graph.finish()).with_tags(Tags::from_iter(tags));
+        entry.config.double_sided = material.double_sided();
         if let Some(model) = model {
             entry = entry.with_lighting(model);
         }
@@ -851,6 +858,32 @@ impl<'a> Importer<'a> {
             transform,
         };
         let texture = self.texture_slot(&info, srgb)?;
+        Ok(Some((texture, info)))
+    }
+
+    /// An extension's texture reference, which exists only as JSON: its
+    /// scene texture (linear) and how it is read.
+    fn extension_texture(
+        &mut self,
+        json: Option<&Json>,
+    ) -> Result<Option<(usize, TexInfo)>, String> {
+        let Some(json) = json else { return Ok(None) };
+        let index = json
+            .get("index")
+            .and_then(Json::as_u64)
+            .ok_or("no texture index")? as usize;
+        let texture = self
+            .document
+            .textures()
+            .nth(index)
+            .ok_or_else(|| format!("no texture {index}"))?;
+        let info = TexInfo::raw(
+            texture,
+            json.get("texCoord").and_then(Json::as_u64).unwrap_or(0) as u32,
+            json.get("extensions")
+                .and_then(|extensions| extensions.get("KHR_texture_transform")),
+        );
+        let texture = self.texture_slot(&info, false)?;
         Ok(Some((texture, info)))
     }
 
@@ -1137,6 +1170,39 @@ impl<'r> PbrGraph<'r> {
         self.wire(a, (node, "a"));
         self.wire(b, (node, "b"));
         (node, "out")
+    }
+
+    /// A tangent-space normal map over the geometric frame, sampled from
+    /// slot `<name>_texture` and scaled in x and y by param `<name>_scale`.
+    fn normal_map(&mut self, name: &str, info: &TexInfo, scale: f32) -> (NodeId, &'static str) {
+        let sample = self.sample(&format!("{name}_texture"), info);
+        let channels = self.node("convert.split.vec4f");
+        self.wire((sample, "out"), (channels, "v"));
+        let encoded = self.node("convert.combine.vec3f");
+        for channel in ["x", "y", "z"] {
+            self.wire((channels, channel), (encoded, channel));
+        }
+        let doubled = self.node("math.multiply");
+        self.generics(doubled, ValueType::Vec3, ValueType::F32);
+        self.wire((encoded, "out"), (doubled, "a"));
+        self.set(doubled, "b", Value::F32(2.0));
+        let decoded = self.node("math.subtract");
+        self.generics(decoded, ValueType::Vec3, ValueType::F32);
+        self.wire((doubled, "out"), (decoded, "a"));
+        self.set(decoded, "b", Value::F32(1.0));
+        let scale = self.param(&format!("{name}_scale"), Value::F32(scale));
+        let mapped = self.node("space.apply_normal_map");
+        self.wire((decoded, "out"), (mapped, "tangent_normal"));
+        for (input, socket) in [
+            ("input.world_normal", "normal"),
+            ("input.world_tangent", "tangent"),
+            ("input.world_bitangent", "bitangent"),
+        ] {
+            let read = self.node(input);
+            self.wire((read, "out"), (mapped, socket));
+        }
+        self.wire((scale, "out"), (mapped, "strength"));
+        (mapped, "out")
     }
 
     /// Sample texture slot `slot` (and its sampler, `<slot>_sampler`)

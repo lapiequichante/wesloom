@@ -81,6 +81,18 @@ pub struct MaterialConfig {
     /// and the variant cache keeps the two apart on their macro sets.
     #[cfg_attr(feature = "serde", serde(default = "yes"))]
     pub receive_shadow: bool,
+    /// Whether both faces are drawn, a back face lit with its normal
+    /// flipped toward the viewer
+    /// ([ADR 0090](../../docs/adr/0090-a-double-sided-material-turns-off-its-passes-culling.md)).
+    ///
+    /// Code and a selection both: the fragment entry reads which face it
+    /// is on, and each pass draws the material with the states
+    /// `PassState::sides` gives it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub double_sided: bool,
     /// What this material *is*, for a pass's tag expression to select on.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tags: Tags,
@@ -156,6 +168,7 @@ impl Default for MaterialConfig {
             model: None,
             cast_shadow: true,
             receive_shadow: true,
+            double_sided: false,
             tags: Tags::new(),
             render_order: 0,
             forward_shaded: false,
@@ -185,6 +198,12 @@ impl MaterialConfig {
     pub fn with_shadows(mut self, cast: bool, receive: bool) -> Self {
         self.cast_shadow = cast;
         self.receive_shadow = receive;
+        self
+    }
+
+    /// Draw both faces (ADR 0090).
+    pub fn with_double_sided(mut self, double_sided: bool) -> Self {
+        self.double_sided = double_sided;
         self
     }
 
@@ -258,6 +277,7 @@ impl MaterialConfig {
             macros,
             lighting,
             cast_shadow: self.cast_shadow,
+            double_sided: self.double_sided,
             tags: self.tags.clone(),
             render_order: self.render_order,
             forward_shaded: self.forward_shaded,
@@ -283,6 +303,9 @@ pub struct ResolvedMaterialConfig {
     pub lighting: MaterialLighting,
     /// Whether the shadow passes draw this material.
     pub cast_shadow: bool,
+    /// Whether both faces are drawn (ADR 0090): codegen flips a back
+    /// face's frame, and the renderer draws with `PassState::sides`.
+    pub double_sided: bool,
     /// Which group of a pass draws this material, ascending (plan5 D4).
     pub render_order: i32,
     /// How many peel layers this transparent may consume (plan5 D5): zero

@@ -531,6 +531,7 @@ pub wxsl_render::material::Material::name: alloc::string::String
 impl wxsl_render::material::Material
 pub fn wxsl_render::material::Material::cast_shadow(&self) -> bool
 pub fn wxsl_render::material::Material::config(&self) -> &wxsl_core::material::ResolvedMaterialConfig
+pub fn wxsl_render::material::Material::double_sided(&self) -> bool
 pub fn wxsl_render::material::Material::from_graph(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry) -> core::result::Result<Self, wxsl_render::error::RenderError>
 pub fn wxsl_render::material::Material::from_graph_with_macros(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_core::macros::MacroSet) -> core::result::Result<Self, wxsl_render::error::RenderError>
 pub fn wxsl_render::material::Material::instance_attributes(&self) -> &[wxsl_core::resources::FieldLayout]
@@ -3455,6 +3456,7 @@ pub wxsl_render::Material::name: alloc::string::String
 impl wxsl_render::material::Material
 pub fn wxsl_render::material::Material::cast_shadow(&self) -> bool
 pub fn wxsl_render::material::Material::config(&self) -> &wxsl_core::material::ResolvedMaterialConfig
+pub fn wxsl_render::material::Material::double_sided(&self) -> bool
 pub fn wxsl_render::material::Material::from_graph(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry) -> core::result::Result<Self, wxsl_render::error::RenderError>
 pub fn wxsl_render::material::Material::from_graph_with_macros(&wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_core::macros::MacroSet) -> core::result::Result<Self, wxsl_render::error::RenderError>
 pub fn wxsl_render::material::Material::instance_attributes(&self) -> &[wxsl_core::resources::FieldLayout]

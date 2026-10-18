@@ -1727,7 +1727,15 @@ impl Renderer {
                         variants.push((instance..instance + 1, variant));
                     }
                     self.drawn[index] = variants.iter().map(|(run, _)| run.len() as u32).sum();
-                    self.calls[index] = variants.len() as u32;
+                    // A double-sided run in a blended pass is two calls
+                    // (ADR 0090).
+                    self.calls[index] = variants
+                        .iter()
+                        .map(|(run, _)| {
+                            let material = draws.items()[run.start as usize].material;
+                            pass.state.sides(material.double_sided()).count() as u32
+                        })
+                        .sum();
                     self.triangles[index] = variants
                         .iter()
                         .map(|(run, _)| {
@@ -1861,67 +1869,72 @@ fn record_pass(
                     bound_shape = Some(shape);
                 }
                 let groups = layouts.layouts(device, item.material.interface());
-                let pipeline = pipelines.geometry(
-                    device,
-                    bindings.layout(),
-                    &MaterialGroups {
-                        vertex: item.material.vertex_attributes(),
-                        material: groups.material.as_ref(),
-                        user: groups.user.as_ref(),
-                        signature: item.material.signature(),
-                    },
-                    pass.pass_layout.as_ref(),
-                    variant,
-                    item.material.shader(*stage).fragment_entry.as_deref(),
-                    pass.desc.state,
-                    &pass.color_formats,
-                    &pass.pass_bindings,
-                );
-                render.set_pipeline(pipeline);
-                // Groups 1 and 2 are the material's — one it fills and one
-                // it only describes — and both are per draw, because the
-                // resources behind them are the application's.
-                if groups.material.is_some() {
-                    let group = item
-                        .bindings
-                        .and_then(MaterialBindings::bind_group)
-                        .ok_or_else(|| RenderError::MissingDrawBindings {
-                            material: item.material.name.clone(),
-                            group: "material",
-                        })?;
-                    render.set_bind_group(abi::GROUP_MATERIAL, group, &[]);
-                }
-                if groups.user.is_some() {
-                    let group = item.user.ok_or_else(|| RenderError::MissingDrawBindings {
-                        material: item.material.name.clone(),
-                        group: "user",
-                    })?;
-                    render.set_bind_group(abi::GROUP_USER, group, &[]);
-                }
-                item.mesh
-                    .bind_attributes(render, item.material.vertex_attributes());
-                match source {
-                    DrawSource::Scene(_) => {
-                        item.mesh.draw_instances(render, run.clone());
+                // Once per side the material draws in this pass, with the
+                // state for that side (ADR 0090): one call for nearly
+                // every draw, two for a double-sided one that blends.
+                for state in pass.desc.state.sides(item.material.double_sided()) {
+                    let pipeline = pipelines.geometry(
+                        device,
+                        bindings.layout(),
+                        &MaterialGroups {
+                            vertex: item.material.vertex_attributes(),
+                            material: groups.material.as_ref(),
+                            user: groups.user.as_ref(),
+                            signature: item.material.signature(),
+                        },
+                        pass.pass_layout.as_ref(),
+                        variant,
+                        item.material.shader(*stage).fragment_entry.as_deref(),
+                        state,
+                        &pass.color_formats,
+                        &pass.pass_bindings,
+                    );
+                    render.set_pipeline(pipeline);
+                    // Groups 1 and 2 are the material's — one it fills and one
+                    // it only describes — and both are per draw, because the
+                    // resources behind them are the application's.
+                    if groups.material.is_some() {
+                        let group = item
+                            .bindings
+                            .and_then(MaterialBindings::bind_group)
+                            .ok_or_else(|| RenderError::MissingDrawBindings {
+                                material: item.material.name.clone(),
+                                group: "material",
+                            })?;
+                        render.set_bind_group(abi::GROUP_MATERIAL, group, &[]);
                     }
-                    DrawSource::Indirect {
-                        buffer: _,
-                        offset,
-                        count,
-                        ..
-                    } => {
-                        // One call per record rather than
-                        // `multi_draw_indexed_indirect`, which is a native
-                        // extension: the point here is that the draw path
-                        // is the same, not that it is already optimal.
-                        item.mesh.bind(render);
-                        for record in 0..u64::from(*count) {
-                            render.draw_indexed_indirect(
-                                pass.indirect_buffer
-                                    .as_ref()
-                                    .expect("record resolved the indirect buffer"),
-                                offset + record * 20,
-                            );
+                    if groups.user.is_some() {
+                        let group = item.user.ok_or_else(|| RenderError::MissingDrawBindings {
+                            material: item.material.name.clone(),
+                            group: "user",
+                        })?;
+                        render.set_bind_group(abi::GROUP_USER, group, &[]);
+                    }
+                    item.mesh
+                        .bind_attributes(render, item.material.vertex_attributes());
+                    match source {
+                        DrawSource::Scene(_) => {
+                            item.mesh.draw_instances(render, run.clone());
+                        }
+                        DrawSource::Indirect {
+                            buffer: _,
+                            offset,
+                            count,
+                            ..
+                        } => {
+                            // One call per record rather than
+                            // `multi_draw_indexed_indirect`, which is a native
+                            // extension: the point here is that the draw path
+                            // is the same, not that it is already optimal.
+                            item.mesh.bind(render);
+                            for record in 0..u64::from(*count) {
+                                render.draw_indexed_indirect(
+                                    pass.indirect_buffer
+                                        .as_ref()
+                                        .expect("record resolved the indirect buffer"),
+                                    offset + record * 20,
+                                );
+                            }
                         }
                     }
                 }

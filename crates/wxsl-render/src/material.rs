@@ -183,6 +183,12 @@ impl Material {
         self.config.cast_shadow
     }
 
+    /// Whether both faces are drawn (ADR 0090): each pass draws this
+    /// material with `PassState::sides`.
+    pub fn double_sided(&self) -> bool {
+        self.config.double_sided
+    }
+
     /// Which group of a pass draws this material, ascending (plan5 D4).
     pub fn render_order(&self) -> i32 {
         self.config.render_order

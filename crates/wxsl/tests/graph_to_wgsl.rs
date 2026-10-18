@@ -186,6 +186,41 @@ fn every_forward_debug_view_compiles_and_validates() {
     }
 }
 
+/// A double-sided material (ADR 0090): every stage with a fragment that
+/// reads the surface turns a back face's frame toward the viewer, and
+/// each module still validates.
+#[test]
+fn a_double_sided_material_flips_its_back_faces_in_every_stage() {
+    let registry = wxsl::stdlib::registry();
+    let config = wxsl::core::material::MaterialConfig::default().with_double_sided(true);
+    let material =
+        Material::with_config(&demo_graph(), &registry, &config).expect("codegen succeeds");
+    for &stage in MaterialStage::ALL {
+        let wgsl = compile(&material, stage)
+            .unwrap_or_else(|error| panic!("`{stage:?}` does not compile: {error}"));
+        let module = naga::front::wgsl::parse_str(&wgsl).expect("naga parses it");
+        if let Err(error) = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        {
+            panic!("`{stage:?}`: {}", error.emit_to_string(&wgsl));
+        }
+        // The refraction surface keeps the geometric side: it tells entry
+        // from exit by it.
+        let flips = stage != MaterialStage::REFRACTION_SURFACE && wgsl.contains("@fragment");
+        assert_eq!(
+            wgsl.contains("@builtin(front_facing)"),
+            flips,
+            "`{stage:?}`:\n{wgsl}"
+        );
+    }
+    let single = Material::from_graph(&demo_graph(), &registry).expect("codegen succeeds");
+    let forward = compile(&single, MaterialStage::FORWARD_LIT).expect("forward_lit compiles");
+    assert!(!forward.contains("front_facing"), "{forward}");
+}
+
 #[test]
 fn macro_variables_change_the_compiled_shader() {
     let registry = wxsl::stdlib::registry();

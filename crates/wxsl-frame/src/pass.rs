@@ -520,6 +520,26 @@ impl PassState {
         self.depth_write = write;
         self
     }
+
+    /// The states a material draws with in a pass with this state, in
+    /// draw order
+    /// ([ADR 0090](../../docs/adr/0090-a-double-sided-material-turns-off-its-passes-culling.md)).
+    ///
+    /// The pass's own state for a single-sided material or a pass that
+    /// culls nothing. A double-sided material turns culling off in an
+    /// opaque pass, and in a blended one draws its back faces, then its
+    /// front faces, so its far side composites under its near side.
+    pub fn sides(self, double_sided: bool) -> impl Iterator<Item = PassState> + Clone {
+        let states = match (double_sided, self.cull_mode, self.blend) {
+            (false, _, _) | (true, None, _) => [Some(self), None],
+            (true, Some(_), None) => [Some(self.with_cull_mode(None)), None],
+            (true, Some(_), Some(_)) => [
+                Some(self.with_cull_mode(Some(Face::Front))),
+                Some(self.with_cull_mode(Some(Face::Back))),
+            ],
+        };
+        states.into_iter().flatten()
+    }
 }
 
 /// The depth format a pass gets unless it asks for another.
@@ -1016,6 +1036,27 @@ impl PassDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_double_sided_material_turns_off_culling_or_draws_each_side() {
+        let sides = |state: PassState, double| state.sides(double).collect::<Vec<_>>();
+        let opaque = PassState::OPAQUE;
+        assert_eq!(sides(opaque, false), [opaque]);
+        assert_eq!(sides(opaque, true), [opaque.with_cull_mode(None)]);
+        // Blended: back faces first, so the near side lands on top.
+        let blended = opaque.with_blend(ALPHA_OVER);
+        assert_eq!(sides(blended, false), [blended]);
+        assert_eq!(
+            sides(blended, true),
+            [
+                blended.with_cull_mode(Some(Face::Front)),
+                blended.with_cull_mode(Some(Face::Back)),
+            ]
+        );
+        // A pass that already draws both faces is left alone.
+        let open = blended.with_cull_mode(None);
+        assert_eq!(sides(open, true), [open]);
+    }
 
     #[test]
     fn only_matching_transients_may_share_a_texture() {

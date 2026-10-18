@@ -117,3 +117,16 @@ fn surface_context(vertex: VertexOut) -> SurfaceContext {
     ctx.time = frame_time();
     return ctx;
 }
+
+// A double-sided material's context on the face being drawn (ADR 0090).
+//
+// A back face turns its whole frame toward the viewer, so lighting sees
+// the side being looked at and a normal map's bumps stay on that side.
+fn facing_context(ctx: SurfaceContext, front: bool) -> SurfaceContext {
+    var out = ctx;
+    let side = select(-1.0, 1.0, front);
+    out.world_normal = ctx.world_normal * side;
+    out.world_tangent = ctx.world_tangent * side;
+    out.world_bitangent = ctx.world_bitangent * side;
+    return out;
+}

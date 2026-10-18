@@ -1306,6 +1306,9 @@ The material a graph produces. Unconnected inputs keep their default: the geomet
 - in `iridescence_ior: f32 = 1.3f` (optional): Thin-film index of refraction, 1..3.
 - in `sheen_color: vec3f = vec3f(0.0, 0.0, 0.0)` (optional): Linear RGB sheen reflectance, 0..1; black disables the layer.
 - in `sheen_roughness: f32 = 0.5f` (optional): Perceptual roughness of the Charlie sheen layer, 0..1.
+- in `clearcoat: f32 = 0.0f` (optional): Clear-coat strength, 0..1 (glTF clearcoat); read by the glTF clear-coat model.
+- in `clearcoat_roughness: f32 = 0.0f` (optional): Perceptual roughness of the clear coat, 0..1.
+- in `clearcoat_normal: vec3f` (optional): Clear-coat normal in world space. Unconnected: geometric normal.
 - out `color: vec4f`: The surface lit by the pipeline: linear radiance and alpha. Only an `output.fragment` chain can read it.
 - only in surface graphs
 

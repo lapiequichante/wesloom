@@ -849,6 +849,25 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
               feature's channel — the model a plan without the feature shades \
               as plain PBR.",
     },
+    LightingModel {
+        id: 9,
+        name: "wxsl.gltf_clearcoat",
+        module: "package::lighting::models::gltf_clearcoat",
+        function: "lighting_gltf_clearcoat",
+        ambient: Some("ambient_gltf_clearcoat"),
+        extra: Some(ModelExtra {
+            target: GBufferTarget {
+                field: "gltf_clearcoat",
+                doc: "x = coat strength, y = coat roughness, zw = octahedral coat normal",
+                precision: GBufferPrecision::HighDynamicRange,
+            },
+            pack: "pack_gltf_clearcoat",
+        }),
+        feature: None,
+        doc: "PBR under a graph-authored clear coat with the glTF \
+              KHR_materials_clearcoat parameters: strength, roughness and a \
+              normal of its own.",
+    },
 ];
 
 /// The id of the model [`default_set`] shades with, and the

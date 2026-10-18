@@ -467,7 +467,7 @@ struct Renderer::Impl {
             const auto &bindings = plan.at("pass_data").at(p).at("bindings");
             for (size_t b = 0; b < bindings.size(); ++b)
               entries.push_back(layout_entry(static_cast<uint32_t>(b), bindings.at(b)));
-            render_pipeline(pass, layout(entries), index);
+            render_pipeline(pass, layout(entries), index, pass.at("state").at("cull_mode"));
             check();
           }
         }
@@ -993,9 +993,12 @@ struct Renderer::Impl {
     }
     return group(frame_layout, entries);
   }
+  // `cull` is the call's cull mode, which a double-sided material changes
+  // from the pass's (ADR 0090); the bundle exports it per draw.
   gpu::RenderPipeline render_pipeline(const Json &pass, gpu::BindGroupLayout pass_layout,
-                                      size_t material) {
-    const auto key = current.at("graph").dump() + pass.dump() + std::to_string(material);
+                                      size_t material, const Json &cull) {
+    const auto key = current.at("graph").dump() + pass.dump() + std::to_string(material) +
+                     cull.dump();
     if (const auto found = render_pipelines.find(key); found != render_pipelines.end())
       return found->second;
     const bool geometry = pass.at("kind").contains("geometry");
@@ -1085,7 +1088,6 @@ struct Renderer::Impl {
     }
     descriptor.primitive.topology = gpu::PrimitiveTopology::TriangleList;
     descriptor.primitive.frontFace = gpu::FrontFace::CCW;
-    const auto &cull = pass.at("state").at("cull_mode");
     descriptor.primitive.cullMode =
         cull.is_null() ? gpu::CullMode::None
                        : named<gpu::CullMode>(cull, {{"back", gpu::CullMode::Back},
@@ -1256,32 +1258,36 @@ struct Renderer::Impl {
           const auto offset = extra.at("view_slot").get<uint32_t>() * view_stride;
           if (pass.at("kind").contains("geometry")) {
             const auto &source = pass.at("kind").at("geometry").at("source");
-            for (const auto &draw_index : extra.at("draws")) {
-              const auto draw = draw_index.get<uint32_t>();
+            const auto &draws = extra.at("draws");
+            for (size_t d = 0; d < draws.size(); ++d) {
+              const auto draw = draws.at(d).get<uint32_t>();
               const auto &item = data.at("draws").at(draw);
               const auto material = item.at("material").get<size_t>(),
                          mesh = item.at("mesh").get<size_t>();
-              render.SetPipeline(render_pipeline(pass, pass_layout, material));
-              render.SetBindGroup(WXSL_GROUP_FRAME, frame_group(material, detached), 1, &offset);
-              render.SetBindGroup(WXSL_GROUP_MATERIAL, materials.at(material).group);
-              render.SetBindGroup(WXSL_GROUP_PASS, pass_group);
-              render.SetVertexBuffer(0, vertices.at(mesh));
-              render.SetIndexBuffer(indices.at(mesh), gpu::IndexFormat::Uint32);
-              if (source.contains("indirect")) {
-                const auto &args = source.at("indirect");
-                auto &arguments = resolve(args.at("buffer"));
-                if (!arguments.buffer)
-                  throw std::runtime_error("indirect arguments are not a buffer: " + label);
-                for (uint64_t record = 0; record < args.at("count").get<uint32_t>(); ++record)
-                  render.DrawIndexedIndirect(arguments.buffer,
-                                             args.at("offset").get<uint64_t>() + record * 20);
-              } else if (source.contains("scene")) {
-                render.DrawIndexed(data.at("meshes").at(mesh).at("index_count"), 1, 0, 0, draw);
-              } else
-                throw std::runtime_error("unknown draw source: " + label);
+              for (const auto &cull : extra.at("sides").at(d)) {
+                render.SetPipeline(render_pipeline(pass, pass_layout, material, cull));
+                render.SetBindGroup(WXSL_GROUP_FRAME, frame_group(material, detached), 1, &offset);
+                render.SetBindGroup(WXSL_GROUP_MATERIAL, materials.at(material).group);
+                render.SetBindGroup(WXSL_GROUP_PASS, pass_group);
+                render.SetVertexBuffer(0, vertices.at(mesh));
+                render.SetIndexBuffer(indices.at(mesh), gpu::IndexFormat::Uint32);
+                if (source.contains("indirect")) {
+                  const auto &args = source.at("indirect");
+                  auto &arguments = resolve(args.at("buffer"));
+                  if (!arguments.buffer)
+                    throw std::runtime_error("indirect arguments are not a buffer: " + label);
+                  for (uint64_t record = 0; record < args.at("count").get<uint32_t>(); ++record)
+                    render.DrawIndexedIndirect(arguments.buffer,
+                                               args.at("offset").get<uint64_t>() + record * 20);
+                } else if (source.contains("scene")) {
+                  render.DrawIndexed(data.at("meshes").at(mesh).at("index_count"), 1, 0, 0, draw);
+                } else
+                  throw std::runtime_error("unknown draw source: " + label);
+              }
             }
           } else {
-            render.SetPipeline(render_pipeline(pass, pass_layout, 0));
+            render.SetPipeline(
+                render_pipeline(pass, pass_layout, 0, pass.at("state").at("cull_mode")));
             render.SetBindGroup(WXSL_GROUP_FRAME, frame_group(materials.size(), detached), 1, &offset);
             render.SetBindGroup(WXSL_GROUP_PASS, pass_group);
             render.Draw(3);

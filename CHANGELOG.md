@@ -17,6 +17,18 @@ an entry.
 - An `exposure` input on the tonemap nodes, and an `exposure` parameter on
   the `tonemap` effect. Both default to 1.
 - Every shipped lighting model in `default_set()`, now that they fit.
+- `double_sided` on a material (`MaterialConfig`, and the scene
+  document's material entries): both faces are drawn, a back face lit
+  with its normal flipped. Opaque passes stop culling it; blended passes
+  draw its back faces, then its front faces. glTF's `doubleSided` sets it
+  and is no longer a warning
+  ([ADR 0090](docs/adr/0090-a-double-sided-material-turns-off-its-passes-culling.md)).
+- The `wxsl.gltf_clearcoat` lighting model, and `clearcoat`,
+  `clearcoat_roughness` and `clearcoat_normal` inputs on `output.surface`:
+  a clear coat with glTF's parameters. The glTF importer maps
+  `KHR_materials_clearcoat` onto it, factors, textures and coat normal
+  included, instead of onto `wxsl.clearcoat`
+  ([ADR 0091](docs/adr/0091-the-gltf-clear-coat-is-a-model-of-its-own-authored-on-the-surface.md)).
 
 ### Changed
 

@@ -626,20 +626,38 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         true => abi::VELOCITY_CONTEXT_FN,
         false => abi::SURFACE_CONTEXT_FN,
     };
+    // A double-sided material sees a back face through a frame turned
+    // toward the viewer (ADR 0090), except on the refraction surface,
+    // which tells entry from exit by the side the normal is on.
+    let facing =
+        options.material.double_sided && stage.output() != abi::StageOutput::RefractionSurface;
+    let context = match facing {
+        true => format!(
+            "{facing}({context_fn}(vertex), {front})",
+            facing = abi::FACING_CONTEXT_FN,
+            front = abi::FRONT_FACING_VAR,
+        ),
+        false => format!("{context_fn}(vertex)"),
+    };
     let prologue = match velocity || peel_depth {
         true => match parts.discard.is_some() {
             true => format!(
-                "    let {ctx} = {context}(vertex);\n{unpack}{test}",
+                "    let {ctx} = {context};\n{unpack}{test}",
                 ctx = abi::CONTEXT_VAR,
-                context = context_fn,
             ),
             false => String::new(),
         },
         false => format!(
-            "    let {ctx} = {context}(vertex);\n{unpack}{test}",
+            "    let {ctx} = {context};\n{unpack}{test}",
             ctx = abi::CONTEXT_VAR,
-            context = context_fn,
         ),
+    };
+    let params = match facing {
+        true => format!(
+            "{params}, @builtin(front_facing) {}: bool",
+            abi::FRONT_FACING_VAR
+        ),
+        false => params,
     };
     write_peel_declarations(out, stage);
     // The shaded colour, through the graph's fragment chain when it has

@@ -1341,6 +1341,7 @@ pub wxsl_frame::pass::PassState::depth_write: bool
 impl wxsl_frame::pass::PassState
 pub const wxsl_frame::pass::PassState::FULLSCREEN: wxsl_frame::pass::PassState
 pub const wxsl_frame::pass::PassState::OPAQUE: wxsl_frame::pass::PassState
+pub fn wxsl_frame::pass::PassState::sides(self, bool) -> impl core::iter::traits::iterator::Iterator<Item = wxsl_frame::pass::PassState> + core::clone::Clone
 pub fn wxsl_frame::pass::PassState::with_blend(self, wxsl_frame::types::BlendState) -> Self
 pub fn wxsl_frame::pass::PassState::with_cull_mode(self, core::option::Option<wxsl_frame::types::Face>) -> Self
 pub fn wxsl_frame::pass::PassState::with_depth_format(self, core::option::Option<wxsl_frame::types::TextureFormat>) -> Self

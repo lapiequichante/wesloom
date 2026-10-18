@@ -70,6 +70,13 @@ pub const VERTEX_OUT_STRUCT: &str = "VertexOut";
 pub const TRANSFORM_VERTEX_FN: &str = "transform_vertex";
 /// Builds a [`CONTEXT_STRUCT`] from a [`VERTEX_OUT_STRUCT`].
 pub const SURFACE_CONTEXT_FN: &str = "surface_context";
+/// Turns a [`CONTEXT_STRUCT`]'s frame toward the viewer on a back face: a
+/// double-sided material's fragment entry calls it on its context
+/// ([ADR 0090](../../docs/adr/0090-a-double-sided-material-turns-off-its-passes-culling.md)).
+pub const FACING_CONTEXT_FN: &str = "facing_context";
+/// The fragment entry's `@builtin(front_facing)` parameter, declared only
+/// by a double-sided material.
+pub const FRONT_FACING_VAR: &str = "wxsl_front_facing";
 
 /// Per-vertex inputs handed to the generated vertex function.
 ///
@@ -1664,6 +1671,24 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
         ty: ValueType::F32,
         doc: "Perceptual roughness of the Charlie sheen layer, 0..1.",
         editable_default: Some(Value::F32(0.5)),
+    },
+    SurfaceField {
+        name: "clearcoat",
+        ty: ValueType::F32,
+        doc: "Clear-coat strength, 0..1 (glTF clearcoat); read by the glTF clear-coat model.",
+        editable_default: Some(Value::F32(0.0)),
+    },
+    SurfaceField {
+        name: "clearcoat_roughness",
+        ty: ValueType::F32,
+        doc: "Perceptual roughness of the clear coat, 0..1.",
+        editable_default: Some(Value::F32(0.0)),
+    },
+    SurfaceField {
+        name: "clearcoat_normal",
+        ty: ValueType::Vec3,
+        doc: "Clear-coat normal in world space. Unconnected: geometric normal.",
+        editable_default: None,
     },
 ];
 

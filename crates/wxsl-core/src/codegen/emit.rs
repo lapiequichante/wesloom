@@ -214,6 +214,9 @@ impl Emitter<'_> {
                 self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_FN);
             }
             self.request_import(abi::VERTEX_MODULE, abi::SURFACE_CONTEXT_FN);
+            if self.options.material.double_sided {
+                self.request_import(abi::VERTEX_MODULE, abi::FACING_CONTEXT_FN);
+            }
             // The stages that read pass-group depth sample it at texel
             // centres through the frame's point sampler (ADR 0075).
             if matches!(

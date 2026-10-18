@@ -220,6 +220,80 @@ fn the_cube_is_lit_and_the_background_is_not() {
     );
 }
 
+/// From inside the cube every face is a back face (ADR 0090): a
+/// single-sided cube shows nothing, a double-sided one shows its inside,
+/// lit by a light inside it, which only reaches it if the back faces'
+/// normals were turned toward the viewer.
+#[test]
+fn a_double_sided_cube_is_seen_and_lit_from_inside() {
+    let Some(gpu) = gpu() else { return };
+    let registry = wxsl::stdlib::registry();
+    let environment = Environment {
+        camera: Camera {
+            eye: Vec3::new(0.0, 0.0, 0.5),
+            target: Vec3::new(0.0, 0.0, -1.0),
+            aspect: 1.0,
+            ..Camera::default()
+        },
+        lights: vec![Light::point(Vec3::new(0.0, 0.3, 0.3), Vec3::ONE, 4.0)],
+        time: 1.0,
+        ..Environment::default()
+    };
+    let target = OffscreenTarget::new(&gpu.device, SIZE, SIZE);
+    let mesh = wxsl::render::Mesh::cube(&gpu.device, 1.6);
+    let attributes = demo_attributes();
+    let mut centers = Vec::new();
+    for double_sided in [false, true] {
+        let config = wxsl::core::material::MaterialConfig::default()
+            .with_shadows(false, false)
+            .with_double_sided(double_sided);
+        let material = Material::with_config(&demo_graph(), &registry, &config).expect("compiles");
+        let mut renderer = Renderer::new(
+            &gpu.device,
+            wxsl::stdlib_library(),
+            TargetConfig::new(SIZE, SIZE, target.format()),
+        )
+        .expect("the stdlib library satisfies the ABI");
+        let bindings = demo_bindings(&gpu, &mut renderer, &material);
+        let draws = wxsl::render::single_draw(
+            DrawItem::new(&mesh, &material)
+                .with_bindings(&bindings)
+                .with_attributes(&attributes),
+        );
+        for pipeline in StockPipeline::ALL {
+            renderer.set_pipeline(*pipeline);
+            renderer
+                .render(
+                    &gpu.device,
+                    &gpu.queue,
+                    &RenderRequest {
+                        view: target.view(),
+                        environment: &environment,
+                        draws: &draws,
+                    },
+                )
+                .unwrap_or_else(|error| panic!("cannot render the {pipeline} pipeline: {error}"));
+            gpu.wait();
+            let image = target.read_rgba8(&gpu.device, &gpu.queue);
+            centers.push((double_sided, *pipeline, pixel(&image, SIZE / 2, SIZE / 2)));
+        }
+    }
+    for (double_sided, pipeline, center) in centers {
+        match double_sided {
+            false => assert!(
+                center[0] < 12 && center[1] < 12,
+                "{pipeline}: a single-sided cube is culled from inside, got {center:?}"
+            ),
+            // About 220 lit, 130 with the ambient term alone: the light
+            // inside reaches the walls only through flipped normals.
+            true => assert!(
+                center[0] > 170,
+                "{pipeline}: a double-sided cube should be lit from inside, got {center:?}"
+            ),
+        }
+    }
+}
+
 #[test]
 fn both_pipelines_produce_the_same_image() {
     let Some(gpu) = gpu() else { return };

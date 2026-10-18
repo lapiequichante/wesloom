@@ -298,11 +298,22 @@ fn layered_extensions_pick_a_model_and_report_the_rest() {
         ImportWarning::Material { material, message }
             if material == "film" && message.starts_with("KHR_materials_clearcoat ignored")
     )));
-    assert_eq!(model(2), Some("wxsl.clearcoat"));
+    assert_eq!(model(2), Some("wxsl.gltf_clearcoat"));
+    assert_eq!(
+        param(&materials[2].graph, "clearcoat_factor"),
+        Some(Value::F32(1.0))
+    );
 
     let glass = &materials[3];
     assert!(glass.config.tags.contains(wxsl_gltf::TAG_REFRACTIVE));
     assert!(glass.config.tags.contains(wxsl_gltf::TAG_DOUBLE_SIDED));
+    // Drawn from both sides by the stock passes (ADR 0090): no warning.
+    assert!(glass.config.double_sided);
+    assert!(!materials[4].config.double_sided);
+    assert!(!imported
+        .warnings
+        .iter()
+        .any(|warning| warning.to_string().contains("double-sided")));
     assert!(!glass.config.tags.contains(TAG_TRANSPARENT));
     assert_eq!(param(&glass.graph, "ior"), Some(Value::F32(1.4)));
     assert_eq!(
@@ -320,9 +331,56 @@ fn layered_extensions_pick_a_model_and_report_the_rest() {
         "wxsl.pbr",
         "wxsl.sheen",
         "wxsl.iridescent",
-        "wxsl.clearcoat",
+        "wxsl.gltf_clearcoat",
     ] {
         assert!(lighting.by_name(name).is_some(), "{name}");
+    }
+}
+
+/// `KHR_materials_clearcoat` in full (ADR 0091): both factors, both
+/// textures in their channels, and the coat's own normal map.
+#[test]
+fn clearcoat_maps_its_factors_textures_and_normal_onto_the_gltf_model() {
+    let mut glb = Glb::default();
+    glb.uses("KHR_materials_clearcoat");
+    let grey = glb.png([128, 128, 128, 255]);
+    let strength = glb.texture(grey);
+    let roughness = glb.texture(grey);
+    let normal = glb.texture(grey);
+    let material = glb.material(json!({
+        "name": "lacquer",
+        "extensions": { "KHR_materials_clearcoat": {
+            "clearcoatFactor": 0.8,
+            "clearcoatTexture": { "index": strength },
+            "clearcoatRoughnessFactor": 0.3,
+            "clearcoatRoughnessTexture": { "index": roughness },
+            "clearcoatNormalTexture": { "index": normal, "scale": 0.5 }
+        } }
+    }));
+    let mesh = glb.triangle(Some(material), false);
+    glb.node(json!({ "mesh": mesh }), None);
+    let imported = import(glb);
+    assert_compiles(&imported);
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    let lacquer = &imported.scene.materials[0];
+    assert_eq!(lacquer.config.model.as_deref(), Some("wxsl.gltf_clearcoat"));
+    for (name, value) in [
+        ("clearcoat_factor", 0.8),
+        ("clearcoat_roughness_factor", 0.3),
+        ("clearcoat_normal_scale", 0.5),
+    ] {
+        assert_eq!(
+            param(&lacquer.graph, name),
+            Some(Value::F32(value)),
+            "{name}"
+        );
+    }
+    for slot in [
+        "clearcoat_texture",
+        "clearcoat_roughness_texture",
+        "clearcoat_normal_texture",
+    ] {
+        assert!(lacquer.bindings.textures.contains_key(slot), "{slot}");
     }
 }
 

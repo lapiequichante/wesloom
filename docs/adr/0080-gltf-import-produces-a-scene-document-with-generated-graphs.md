@@ -53,8 +53,9 @@ could not reuse it through the data-only C ABI (ADR 0049).
   - `KHR_materials_ior`;
   - sheen → `wxsl.sheen` (ADR 0059);
   - iridescence → `wxsl.iridescent` (ADR 0058);
-  - clearcoat → `wxsl.clearcoat`, whose coat follows the model's own
-    convention;
+  - clearcoat → `wxsl.gltf_clearcoat`, with its factors, textures and
+    coat normal (ADR 0091; until then, `wxsl.clearcoat`, whose coat
+    followed the model's own convention);
   - `KHR_lights_punctual` → the `environment` block, intensities 1:1;
   - perspective cameras.
 
@@ -71,9 +72,12 @@ could not reuse it through the data-only C ABI (ADR 0049).
   - a KTX2 or WebP image;
   - an orthographic camera;
   - a non-triangle primitive;
-  - a second scene;
-  - a double-sided material, which is tagged `double_sided` while the
-    stock passes cull back faces.
+  - a second scene.
+
+  A double-sided material was warned about too, until
+  [ADR 0090](0090-a-double-sided-material-turns-off-its-passes-culling.md)
+  made the stock passes draw it: it now sets `double_sided` and keeps the
+  `double_sided` tag.
 - **Images** given by a file URI stay `file` textures relative to the
   glTF file. Buffer-view and data-URI images are supplied encoded and
   decoded on upload (the `images` feature, now PNG and JPEG).
@@ -104,10 +108,9 @@ could not reuse it through the data-only C ABI (ADR 0049).
   stdlib where they were not.
 - ADR 0021's "geometry only" stance is amended.
 - Not done:
-  - extension textures (sheen, iridescence, clearcoat, transmission,
-    thickness);
+  - extension textures (sheen, iridescence, transmission, thickness;
+    clearcoat's are mapped since ADR 0091);
   - `KHR_materials_specular` and `KHR_materials_variants`;
-  - per-material culling;
   - KTX2;
   - skinning, morph targets and animation (plan6 decision 5).
 - `examples/viewer.rs` opens a file under an HDR environment and routes
