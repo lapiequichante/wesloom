@@ -1141,7 +1141,8 @@ pub enum StageOutput {
     /// Two `vec4f` targets: the front accumulator and the back one. The
     /// native shade pass writes both from one draw.
     PeelResolve,
-    /// Two optical layer targets: world normal/depth and transmission/IOR.
+    /// Three optical layer targets: world normal/depth, transmission/IOR,
+    /// and base colour/transmission factor (ADR 0093).
     RefractionSurface,
 }
 
@@ -1150,7 +1151,8 @@ impl StageOutput {
     pub fn color_targets(self) -> usize {
         match self {
             StageOutput::Color | StageOutput::Velocity | StageOutput::PeelDepth => 1,
-            StageOutput::PeelResolve | StageOutput::RefractionSurface => 2,
+            StageOutput::PeelResolve => 2,
+            StageOutput::RefractionSurface => 3,
             StageOutput::GBuffer => GBUFFER_BASE_TARGETS.len(),
             StageOutput::Nothing => 0,
         }
@@ -1701,6 +1703,18 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
         name: "specular_occlusion",
         ty: ValueType::F32,
         doc: "Share of the environment maps' reflection that arrives, 1 = unoccluded.",
+        editable_default: Some(Value::F32(1.0)),
+    },
+    SurfaceField {
+        name: "transmission",
+        ty: ValueType::F32,
+        doc: "Share of light pass.refraction lets through; the rest is the glass's diffuse base colour.",
+        editable_default: Some(Value::F32(1.0)),
+    },
+    SurfaceField {
+        name: "thickness",
+        ty: ValueType::F32,
+        doc: "0 is thin-walled glass for pass.refraction: one interface, no bending, tinted by base_color.",
         editable_default: Some(Value::F32(1.0)),
     },
 ];

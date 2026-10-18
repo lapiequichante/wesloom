@@ -1,5 +1,8 @@
 // Original front/back optical composition, far pairs before near pairs (ADR 0068).
 // There is no depth-field search. Both reprojections have fixed, small work.
+// Thin-walled glass and the transmission factor follow glTF (ADR 0093): a
+// thin layer is one interface over whatever is behind it, tinted by its
+// base colour, and 1 - transmission of every layer is diffuse base colour.
 import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
 
 @group(3) @binding(0) var background: texture_2d<f32>;
@@ -8,6 +11,7 @@ import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_s
 @group(3) @binding(3) var environment: texture_cube<f32>;
 @group(3) @binding(4) var normal_layers: texture_2d_array<f32>;
 @group(3) @binding(5) var optical_layers: texture_2d_array<f32>;
+@group(3) @binding(6) var surface_layers: texture_2d_array<f32>;
 
 @vertex
 fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -50,6 +54,20 @@ fn surface(layer: i32, uv: vec2f) -> vec4f {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+// Diffuse light on a normal: the radiance cube's smallest mip (a level
+// past the last clamps to it; GLSL ES has no level count), a cosine lobe's
+// stand-in that needs no second cube binding.
+fn irradiance(normal: vec3f) -> vec3f {
+    return textureSampleLevel(environment, environment_lut_sampler, normal, 16.0).rgb * scene.environment_scale * scene.exposure;
+}
+
+// What leaves a layer's surface besides reflection: `through` (the light
+// it transmits) weighed by the transmission factor, the rest its diffuse
+// base colour.
+fn body(through: vec3f, surface: vec4f, normal: vec3f) -> vec3f {
+    return through * surface.a + surface.rgb * irradiance(normal) * (1.0 - surface.a);
+}
+
 fn fresnel(eta_i: f32, eta_t: f32, cosine: f32) -> f32 {
     let ci = clamp(cosine, 0.0, 1.0);
     let eta = eta_i / eta_t;
@@ -90,6 +108,26 @@ fn optical_exit(uv: vec2f, front: vec4f, back: vec4f, internal: vec3f, incident:
     return ExitSurface(start + internal * distance, nb, distance);
 }
 
+// One thin-walled interface over `behind`: reflection, then the
+// transmitted light tinted by the base colour, all over its coverage. The
+// normal is turned toward the viewer, so either side is a front.
+fn thin_over(behind: vec3f, uv: vec2f, nd: vec4f, material: vec4f, surface: vec4f) -> vec3f {
+    let incident = normalize(unproject(uv, nd.w) - camera.position.xyz);
+    var n = normalize(nd.xyz);
+    if dot(n, incident) > 0.0 {
+        n = -n;
+    }
+    let f = fresnel(1.0, abs(material.w), -dot(incident, n));
+    let glass = sky(reflect(incident, n)) * f + body(behind * surface.rgb, surface, n) * (1.0 - f);
+    return mix(behind, glass, material.g);
+}
+
+// Whether a layer is in front of the opaque scene at `pixel`.
+fn visible(nd: vec4f, pixel: vec2i) -> bool {
+    return dot(nd.xyz, nd.xyz) >= 0.5
+        && nd.w < textureSampleLevel(opaque_depth, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(opaque_depth)), 0.0).x;
+}
+
 @fragment
 fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let pixel = vec2i(p.xy);
@@ -99,9 +137,21 @@ fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let layer = i32(params.layer);
     let front = textureLoad(normal_layers, pixel, layer, 0);
     let material = textureLoad(optical_layers, pixel, layer, 0);
-    if dot(front.xyz, front.xyz) < 0.5 || material.w <= 0.0
-        || front.w >= textureSampleLevel(opaque_depth, point_sampler, (vec2f(pixel) + 0.5) / vec2f(textureDimensions(opaque_depth)), 0.0).x {
+    let front_surface = textureLoad(surface_layers, pixel, layer, 0);
+    if !visible(front, pixel) || material.w <= 0.0 {
         return original;
+    }
+    // A thin front is not half of a pair: its pair slot holds the next
+    // sheet, composed first when it is thin too. (A thin sheet in front of
+    // a solid's entry leaves that solid out; see ADR 0093.)
+    if material.r < 0.0 {
+        var behind = original.rgb;
+        let next = textureLoad(normal_layers, pixel, layer + 1, 0);
+        let next_material = textureLoad(optical_layers, pixel, layer + 1, 0);
+        if visible(next, pixel) && next.w > front.w && next_material.r < 0.0 {
+            behind = thin_over(behind, uv, next, next_material, textureLoad(surface_layers, pixel, layer + 1, 0));
+        }
+        return vec4f(thin_over(behind, uv, front, material, front_surface), 1.0);
     }
     let start = unproject(uv, front.w);
     let incident = normalize(start - camera.position.xyz);
@@ -121,13 +171,13 @@ fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
     // transparent has already modified the background.
     if ior <= 1.0001 {
         let attenuation = pow(max(material.rgb, vec3f(0.0001)), vec3f(thickness));
-        return vec4f(original.rgb * attenuation, 1.0);
+        return vec4f(body(original.rgb * attenuation, front_surface, nf), 1.0);
     }
     let internal = refract(incident, nf, 1.0 / ior);
     let entry_f = fresnel(1.0, ior, -dot(incident, nf));
     let entry_light = sky(reflect(incident, nf));
     if !paired {
-        return vec4f(entry_light * entry_f + original.rgb * (1.0 - entry_f), 1.0);
+        return vec4f(entry_light * entry_f + body(original.rgb, front_surface, nf) * (1.0 - entry_f), 1.0);
     }
     // Local exit plane, followed by two reprojections onto the captured
     // back surface. The bound prevents a grazing plane from inventing an
@@ -163,6 +213,6 @@ fn fragment(@builtin(position) p: vec4f) -> @location(0) vec4f {
         }
     }
     let transmitted = behind * (1.0 - exit_f) + exit_light * exit_f;
-    let color = entry_light * entry_f + transmitted * attenuation * (1.0 - entry_f);
+    let color = entry_light * entry_f + body(transmitted * attenuation, front_surface, nf) * (1.0 - entry_f);
     return vec4f(color, 1.0);
 }

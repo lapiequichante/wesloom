@@ -15,6 +15,13 @@
 //! The near half is `dof_near.wxsl`, which composites the foreground
 //! over this pass's result.
 //!
+//! The weight is also a scatter test: a sample counts only as far as its
+//! own disc reaches, `saturate(coc - distance + 1)`. A focused pixel's
+//! disc is a point, so a heavily blurred background next to it does not
+//! gather it in, and the sharp object keeps its edge instead of haloing
+//! into the blur. The pixel itself always counts, so the sum is never
+//! empty.
+//!
 //! Pixels at or in front of focus pass through untouched — their gather
 //! belongs to the near pass, and blurring a focused pixel by a zero
 //! radius is a no-op spent thirty times.
@@ -60,20 +67,20 @@ fn dof_far_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // zeros, which would streak black into the blur. Clamp to edge — all
     // three transients are the pass's own resolution.
     let size = vec2i(textureDimensions(color_image)) - vec2i(1, 1);
-    var sum = vec3f(0.0);
-    var weight_sum = 0.0;
+    var sum = base;
+    var weight_sum = 1.0;
     for (var tap = 0u; tap < TAPS; tap += 1) {
         let offset = disk_sample(tap, TAPS) * radius;
         let sample = clamp(pixel + vec2i(round(offset)), vec2i(0), size);
         let sample_coc = textureLoad(coc_image, sample, 0).x;
         // A near sample is a foreground object in front of this
-        // background: fade it out rather than smearing it in.
-        let weight = smoothstep(-2.0, 0.0, sample_coc);
+        // background: fade it out rather than smearing it in. A sample
+        // whose own disc does not reach this pixel (a focused one) is
+        // not gathered either.
+        let reach = saturate(min(sample_coc, params.max_coc) - length(offset) + 1.0);
+        let weight = smoothstep(-2.0, 0.0, sample_coc) * reach;
         sum += textureLoad(color_image, sample, 0).rgb * weight;
         weight_sum += weight;
-    }
-    if weight_sum <= 0.0 {
-        return vec4f(base, 1.0);
     }
     return vec4f(sum / weight_sum, 1.0);
 }

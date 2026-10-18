@@ -39,10 +39,19 @@ an entry.
   and `<model>.color.prt`. It also rewires imported materials to read
   the bake through the new `lighting.prt_*` and `lighting.sh_irradiance`
   nodes. The `viewer` example loads both files, and `P` cycles off,
-  grayscale and colour
+  grayscale and colour. `--albedo` (`Albedo::base_color_only`) colours
+  the bounces by the base colour alone, ignoring metallic
   ([ADR 0092](docs/adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
 - `ImportedScene::material_sources`: the glTF material each imported
   material was built from.
+- `transmission` and `thickness` inputs on `output.surface`, both 1 by
+  default. `pass.refraction` mixes `1 - transmission` of the glass's
+  diffuse base colour into what it lets through, and composes a
+  thickness of 0 as thin-walled glass: one interface, no bending, tinted
+  by the base colour, over its alpha. The `refraction_surface` stage
+  writes a third target. The glTF importer maps `transmissionFactor`,
+  and a material without `KHR_materials_volume` is thin-walled
+  ([ADR 0093](docs/adr/0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)).
 
 ### Changed
 

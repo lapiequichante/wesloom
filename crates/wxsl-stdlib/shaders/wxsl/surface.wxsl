@@ -36,6 +36,8 @@ struct Surface {
     clearcoat_normal: vec3f,
     diffuse_occlusion: vec3f,
     specular_occlusion: f32,
+    transmission: f32,
+    thickness: f32,
 }
 
 // A neutral dielectric surface using the geometric normal.
@@ -69,5 +71,8 @@ fn default_surface(ctx: SurfaceContext) -> Surface {
     // Environment-map visibility, from a bake such as PRT (ADR 0092).
     out.diffuse_occlusion = vec3f(1.0);
     out.specular_occlusion = 1.0;
+    // Clear solid glass for pass.refraction (ADRs 0067, 0093).
+    out.transmission = 1.0;
+    out.thickness = 1.0;
     return out;
 }

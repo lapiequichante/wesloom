@@ -37,6 +37,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::Transfer
 impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::Transfer
 pub struct wxsl_prt::Albedo
 impl wxsl_prt::Albedo
+pub fn wxsl_prt::Albedo::base_color_only(self) -> Self
 pub fn wxsl_prt::Albedo::load(impl core::convert::AsRef<std::path::Path>, &wxsl_gltf::ImportedScene) -> core::result::Result<Self, wxsl_prt::PrtError>
 pub fn wxsl_prt::Albedo::sample(&self, usize, [[f32; 2]; 2]) -> [f32; 3]
 pub fn wxsl_prt::Albedo::uniform([f32; 3]) -> Self

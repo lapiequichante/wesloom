@@ -135,6 +135,7 @@ pub const COMPOSE: Effect = Effect {
         image("environment"),
         image("normal_layers"),
         image("optical_layers"),
+        image("surface_layers"),
     ],
     outputs: &[],
     parameters: &[EffectParameter {
@@ -241,6 +242,13 @@ pub fn append_with_quality(
         ResourceDesc::color(format!("{name} optics"), TextureFormat::Rgba16Float)
             .with_dimension(Dimension::D2Array, layers),
     );
+    // Base colour and transmission factor (ADR 0093). A third RGBA16F
+    // target keeps the surface pass at 32 bytes per sample, WebGPU's
+    // baseline.
+    let surfaces = graph.resource(
+        ResourceDesc::color(format!("{name} surfaces"), TextureFormat::Rgba16Float)
+            .with_dimension(Dimension::D2Array, layers),
+    );
     let reads = vec![
         Read::current(scene),
         Read::current(depth),
@@ -292,6 +300,7 @@ pub fn append_with_quality(
                 .with_layer(layer),
             )
             .with_color(Attachment::clear(optics, Color::TRANSPARENT).with_layer(layer))
+            .with_color(Attachment::clear(surfaces, Color::TRANSPARENT).with_layer(layer))
             .with_depth(DepthAttachment::load(peeled))
             .with_state(
                 PassState::OPAQUE
@@ -347,6 +356,7 @@ pub fn append_with_quality(
                         Read::current(environment),
                         Read::current(normals),
                         Read::current(optics),
+                        Read::current(surfaces),
                     ]),
             );
             graph.pass(

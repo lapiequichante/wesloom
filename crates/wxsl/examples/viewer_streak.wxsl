@@ -1,0 +1,64 @@
+//! viewer_streak — the viewer's `S` key: the model smeared as if it
+//! crossed the frame fast, the camera and the background still.
+//!
+//! No velocity buffer: the whole model moves by one screen vector, the
+//! `motion` parameter (uv over the exposure), and the model is whatever
+//! has depth (the sky is the clear, 1). Each pixel averages the shutter:
+//! at time t the model sits displaced by `motion * t`, so this pixel shows
+//! the model point at `uv - motion * t` when that is model, and the
+//! background otherwise. The background this pixel hides behind the model
+//! is unknown; the nearest stand-in is the background the sample found.
+//! The trail therefore reaches over the background, and the model's own
+//! edges go translucent, which a gather along the pixel's own velocity
+//! cannot do.
+
+import package::wxsl::bindings::point_sampler;
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var depth_image: texture_2d<f32>;
+
+/// Samples across the exposure. The offset is jittered per pixel, so a
+/// long streak reads as fine grain rather than ghost copies.
+const TAPS: u32 = 48;
+
+@vertex
+fn viewer_streak_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle covering the viewport, from three vertices and
+    // no vertex buffer: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+fn is_model(uv: vec2f) -> bool {
+    return textureSampleLevel(depth_image, point_sampler, uv, 0.0).x < 1.0;
+}
+
+@fragment
+fn viewer_streak_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(color_image));
+    let pixel = vec2i(position.xy);
+    let uv = position.xy / size;
+    let own = textureLoad(color_image, pixel, 0).rgb;
+    if dot(params.motion, params.motion) <= 0.0 {
+        return vec4f(own, 1.0);
+    }
+    let own_is_model = is_model(uv);
+    // Interleaved gradient noise (Jimenez 2014): a per-pixel phase.
+    let jitter = fract(52.9829189 * fract(dot(position.xy, vec2f(0.06711056, 0.00583715))));
+    let last = vec2i(size) - vec2i(1);
+    var sum = vec3f(0.0);
+    for (var tap = 0u; tap < TAPS; tap += 1) {
+        let t = (f32(tap) + jitter) / f32(TAPS) - 0.5;
+        let sample_uv = clamp(uv - params.motion * t, vec2f(0.0), vec2f(1.0));
+        let sample = textureLoad(color_image, clamp(vec2i(sample_uv * size), vec2i(0), last), 0).rgb;
+        if is_model(sample_uv) || !own_is_model {
+            // The model passing over this pixel, or this pixel's own
+            // background when nothing does.
+            sum += select(own, sample, is_model(sample_uv));
+        } else {
+            sum += sample;
+        }
+    }
+    return vec4f(sum / f32(TAPS), 1.0);
+}

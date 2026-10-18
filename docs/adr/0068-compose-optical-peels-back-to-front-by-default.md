@@ -57,3 +57,8 @@ The ignored `gallery` test `glass_quality_timing` measures the same warmed
 precise 165.75 ms, then layered 8.41 ms after switching back. This is roughly
 20× faster, not a portable timing guarantee. The local HDR screenshot also
 retains the sphere's inverted environment and the torus's blue absorption.
+
+[ADR 0093](0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)
+adds thin-walled layers and a transmission factor to this composition: a
+third optical target, and a thin front composed as one interface rather
+than as half of a pair.

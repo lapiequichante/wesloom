@@ -506,18 +506,11 @@ impl<'a> Importer<'a> {
         let mut base_factor = pbr.base_color_factor();
 
         // Transmission and volume: the refraction tier (ADR 0067).
+        // Without KHR_materials_volume the glass is thin-walled (thickness
+        // 0, ADR 0093).
         let mut refractive = None;
         if let Some(transmission) = material.transmission() {
             if transmission.transmission_factor() > 0.0 {
-                if transmission.transmission_factor() < 1.0 {
-                    warn(
-                        &mut self.warnings,
-                        format!(
-                            "transmission factor {} is drawn as clear glass",
-                            transmission.transmission_factor()
-                        ),
-                    );
-                }
                 if transmission.transmission_texture().is_some() {
                     warn(
                         &mut self.warnings,
@@ -525,7 +518,9 @@ impl<'a> Importer<'a> {
                     );
                 }
                 let mut distance = 1e9;
+                let mut thickness = 0.0;
                 if let Some(volume) = material.volume() {
+                    thickness = volume.thickness_factor();
                     if volume.attenuation_distance().is_finite() {
                         distance = volume.attenuation_distance();
                     }
@@ -537,7 +532,7 @@ impl<'a> Importer<'a> {
                         warn(&mut self.warnings, "thicknessTexture ignored".to_string());
                     }
                 }
-                refractive = Some(distance);
+                refractive = Some((distance, transmission.transmission_factor(), thickness));
                 tags = vec![TAG_REFRACTIVE];
             }
         }
@@ -690,9 +685,13 @@ impl<'a> Importer<'a> {
             let ior = graph.param("ior", Value::F32(ior));
             graph.output((ior, "out"), "ior");
         }
-        if let Some(distance) = refractive {
+        if let Some((distance, transmission, thickness)) = refractive {
             let distance = graph.param("attenuation_distance", Value::F32(distance));
             graph.output((distance, "out"), "attenuation_distance");
+            let transmission = graph.param("transmission_factor", Value::F32(transmission));
+            graph.output((transmission, "out"), "transmission");
+            let thickness = graph.param("thickness_factor", Value::F32(thickness));
+            graph.output((thickness, "out"), "thickness");
         }
 
         // The layered extensions each select a lighting model; a material

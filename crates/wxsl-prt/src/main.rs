@@ -4,6 +4,7 @@
 //! cargo run -p wxsl-prt --release -- resources/glb/WXSLCar/wxslCar.glb
 //! cargo run -p wxsl-prt --release -- model.glb --bounces 2 --rays 512 --floor
 //! cargo run -p wxsl-prt --release -- model.glb --transfer color
+//! cargo run -p wxsl-prt --release -- model.glb --albedo
 //! ```
 //!
 //! By default both modes are baked from the same rays and written beside
@@ -17,11 +18,12 @@ use std::time::Instant;
 use wxsl_prt::{Albedo, BakeOptions, Transfer};
 
 const USAGE: &str = "wxsl-prt <model.glb> [--transfer gray|color|both] [--bounces N] [--rays N]
-         [--floor] [--threads N] [--out-dir DIR]
+         [--floor] [--albedo] [--threads N] [--out-dir DIR]
   --transfer   which modes to write (default both): <model>.gray.prt, <model>.color.prt
   --bounces N  diffuse bounces after the shadowed light (default 1, 0 = shadows only)
   --rays N     rays per vertex (default 256)
   --floor      an infinite floor under the model blocks the lower hemisphere
+  --albedo     bounces take the base colour alone, ignoring metallic
   --threads N  worker threads (default: every core)
   --out-dir    where to write (default: beside the model)";
 
@@ -46,6 +48,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut model = None;
     let mut directory = None;
     let mut options = BakeOptions::default();
+    let mut base_color_only = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let mut value = || arguments.next().ok_or(format!("{argument} needs a value"));
@@ -55,6 +58,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             "--bounces" => options.bounces = value()?.parse()?,
             "--threads" => options.threads = value()?.parse()?,
             "--floor" => options.floor = true,
+            "--albedo" => base_color_only = true,
             "--transfer" => {
                 options.transfers = match value()?.as_str() {
                     "gray" => vec![Transfer::Gray],
@@ -77,7 +81,10 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let started = Instant::now();
     let imported = wxsl_gltf::import(&model, &wxsl_stdlib::registry())?;
-    let albedo = Albedo::load(&model, &imported)?;
+    let mut albedo = Albedo::load(&model, &imported)?;
+    if base_color_only {
+        albedo = albedo.base_color_only();
+    }
     let vertices: usize = imported.meshes.iter().map(|mesh| mesh.vertices.len()).sum();
     let triangles: usize = imported
         .meshes

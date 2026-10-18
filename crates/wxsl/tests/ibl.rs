@@ -23,7 +23,7 @@ fn optical_documents_roundtrip_and_expand_into_baseline_layers_on_both_paths() {
         assert_eq!(optical.len(), 6);
         assert!(optical
             .iter()
-            .all(|p| p.color.len() == 2 && p.state.blend.is_none()));
+            .all(|p| p.color.len() == 3 && p.state.blend.is_none()));
         let layers = plan.passes().iter().filter(|p| matches!(&p.kind, PassKind::Screen { effect } if effect == "wxsl.refraction_layer")).collect::<Vec<_>>();
         assert_eq!(
             layers.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),

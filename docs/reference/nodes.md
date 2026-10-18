@@ -1389,6 +1389,8 @@ The material a graph produces. Unconnected inputs keep their default: the geomet
 - in `clearcoat_normal: vec3f` (optional): Clear-coat normal in world space. Unconnected: geometric normal.
 - in `diffuse_occlusion: vec3f = vec3f(1.0, 1.0, 1.0)` (optional): Share of the environment maps' diffuse light that arrives, per channel (PRT).
 - in `specular_occlusion: f32 = 1.0f` (optional): Share of the environment maps' reflection that arrives, 1 = unoccluded.
+- in `transmission: f32 = 1.0f` (optional): Share of light pass.refraction lets through; the rest is the glass's diffuse base colour.
+- in `thickness: f32 = 1.0f` (optional): 0 is thin-walled glass for pass.refraction: one interface, no bending, tinted by base_color.
 - out `color: vec4f`: The surface lit by the pipeline: linear radiance and alpha. Only an `output.fragment` chain can read it.
 - only in surface graphs
 
@@ -1978,7 +1980,7 @@ Advance the optical peel's near bound. Reads: `depth` (Opaque or peeled depth.),
 
 #### `pass.screen.wxsl.refraction_layer` · optical layer
 
-Compose a front/back optical pair over the farther scene. Reads: `background` (Optical layer or linear radiance.), `background_depth` (Optical layer or linear radiance.), `depth` (Opaque or peeled depth.), `environment` (Optical layer or linear radiance.), `normal_layers` (Optical layer or linear radiance.), `optical_layers` (Optical layer or linear radiance.).
+Compose a front/back optical pair over the farther scene. Reads: `background` (Optical layer or linear radiance.), `background_depth` (Optical layer or linear radiance.), `depth` (Opaque or peeled depth.), `environment` (Optical layer or linear radiance.), `normal_layers` (Optical layer or linear radiance.), `optical_layers` (Optical layer or linear radiance.), `surface_layers` (Optical layer or linear radiance.).
 
 - in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
 - in `background: color_target`: Optical layer or linear radiance.
@@ -1987,6 +1989,7 @@ Compose a front/back optical pair over the farther scene. Reads: `background` (O
 - in `environment: color_target`: Optical layer or linear radiance.
 - in `normal_layers: color_target`: Optical layer or linear radiance.
 - in `optical_layers: color_target`: Optical layer or linear radiance.
+- in `surface_layers: color_target`: Optical layer or linear radiance.
 - out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
 - setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
 - only in document graphs

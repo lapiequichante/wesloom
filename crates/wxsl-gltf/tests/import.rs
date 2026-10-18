@@ -276,12 +276,18 @@ fn layered_extensions_pick_a_model_and_report_the_rest() {
         "doubleSided": true,
         "extensions": {
             "KHR_materials_transmission": { "transmissionFactor": 1.0 },
-            "KHR_materials_volume": { "attenuationDistance": 0.5, "attenuationColor": [0.5, 1.0, 1.0] },
+            "KHR_materials_volume": {
+                "thicknessFactor": 0.02, "attenuationDistance": 0.5, "attenuationColor": [0.5, 1.0, 1.0]
+            },
             "KHR_materials_ior": { "ior": 1.4 }
         }
     }));
     let veil = glb.material(json!({ "name": "veil", "alphaMode": "BLEND" }));
-    for material in [velvet, film, paint, glass, veil] {
+    let sheet = glb.material(json!({
+        "name": "sheet",
+        "extensions": { "KHR_materials_transmission": { "transmissionFactor": 0.6 } }
+    }));
+    for material in [velvet, film, paint, glass, veil, sheet] {
         let mesh = glb.triangle(Some(material), false);
         glb.node(json!({ "mesh": mesh }), None);
     }
@@ -326,7 +332,31 @@ fn layered_extensions_pick_a_model_and_report_the_rest() {
         param(&glass.graph, "base_color_factor"),
         Some(Value::Vec4([0.5, 1.0, 1.0, 1.0]))
     );
+    assert_eq!(
+        param(&glass.graph, "transmission_factor"),
+        Some(Value::F32(1.0))
+    );
+    assert_eq!(
+        param(&glass.graph, "thickness_factor"),
+        Some(Value::F32(0.02))
+    );
     assert!(materials[4].config.tags.contains(TAG_TRANSPARENT));
+    // No volume: thin-walled, and a partial factor is kept, not warned
+    // about (ADR 0093).
+    let sheet = &materials[5];
+    assert!(sheet.config.tags.contains(wxsl_gltf::TAG_REFRACTIVE));
+    assert_eq!(
+        param(&sheet.graph, "transmission_factor"),
+        Some(Value::F32(0.6))
+    );
+    assert_eq!(
+        param(&sheet.graph, "thickness_factor"),
+        Some(Value::F32(0.0))
+    );
+    assert!(!imported
+        .warnings
+        .iter()
+        .any(|warning| warning.to_string().contains("transmission factor")));
 
     let lighting = imported.lighting().expect("the models make a set");
     for name in [

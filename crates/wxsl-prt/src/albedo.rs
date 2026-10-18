@@ -104,6 +104,16 @@ impl Albedo {
         })
     }
 
+    /// Drop the metallic weighting: each surface bounces its base colour,
+    /// factor times texture, metals included.
+    pub fn base_color_only(mut self) -> Self {
+        for surface in &mut self.materials {
+            surface.metallic = 0.0;
+            surface.metallic_texture = None;
+        }
+        self
+    }
+
     /// The diffuse colour of `material` at the two UV sets.
     pub fn sample(&self, material: usize, uv: [[f32; 2]; 2]) -> [f32; 3] {
         let Some(surface) = self.materials.get(material) else {
@@ -287,6 +297,8 @@ mod tests {
         let mut albedo = checker();
         albedo.materials[0].metallic = 0.75;
         assert_eq!(albedo.sample(0, [[0.0; 2], [0.1, 0.5]]), [0.25, 0.0, 0.0]);
+        let albedo = albedo.base_color_only();
+        assert_eq!(albedo.sample(0, [[0.0; 2], [0.1, 0.5]]), [1.0, 0.0, 0.0]);
         assert!((SRGB[128] - 0.2158).abs() < 1e-3);
         assert_eq!(Albedo::uniform([0.5; 3]).sample(3, [[0.0; 2]; 2]), [0.5; 3]);
         assert_eq!(wrap(-0.25, 4, Wrap::Mirror), 0);

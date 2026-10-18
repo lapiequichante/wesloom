@@ -334,7 +334,7 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface, stage: abi:
 fn write_peel_declarations(out: &mut String, stage: abi::MaterialStage) {
     let bindings = match stage {
         abi::MaterialStage::REFRACTION_SURFACE => {
-            "\nstruct WxslOpticalLayer {\n    @location(0) normal_depth: vec4f,\n    @location(1) transmission_ior: vec4f,\n}\n"
+            "\nstruct WxslOpticalLayer {\n    @location(0) normal_depth: vec4f,\n    @location(1) transmission_ior: vec4f,\n    @location(2) surface: vec4f,\n}\n"
         }
         abi::MaterialStage::PEEL_FRONT | abi::MaterialStage::PEEL_DEPTH | abi::MaterialStage::REFRACTION_DEPTH => {
             "\n@group(3) @binding(0) var wxsl_scene_depth: texture_2d<f32>;\n\
@@ -677,13 +677,22 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         ctx = abi::CONTEXT_VAR,
     ));
     let body = match stage.output() {
+        // Thin-walled glass (thickness 0, ADR 0093) has no entry or exit:
+        // a red channel of -1 marks it, green carries its coverage, and
+        // its IOR is stored facing the viewer whichever side was drawn.
         abi::StageOutput::RefractionSurface => format!(
             "-> WxslOpticalLayer {{\n{prologue}    \
              let s = {material}({ctx}{args});\n    \
              let n = normalize(s.normal);\n    \
              let sign = select(-1.0, 1.0, dot(n, {ctx}.view_direction) >= 0.0);\n    \
-             let transmission = pow(clamp(s.base_color, vec3f(0.0001), vec3f(1.0)), vec3f(1.0 / max(s.attenuation_distance, 0.0001)));\n    \
-             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(transmission, sign * clamp(s.ior, 1.0, 3.0)));\n}}\n",
+             let base = clamp(s.base_color, vec3f(0.0001), vec3f(1.0));\n    \
+             let transmission = pow(base, vec3f(1.0 / max(s.attenuation_distance, 0.0001)));\n    \
+             let ior = clamp(s.ior, 1.0, 3.0);\n    \
+             let surface = vec4f(base, clamp(s.transmission, 0.0, 1.0));\n    \
+             if s.thickness <= 0.0 {{\n        \
+             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(-1.0, clamp(s.alpha, 0.0, 1.0), 0.0, ior), surface);\n    \
+             }}\n    \
+             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(transmission, sign * ior), surface);\n}}\n",
             material = options.material_fn,
             ctx = abi::CONTEXT_VAR,
         ),

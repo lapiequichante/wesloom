@@ -340,6 +340,10 @@ fn append_self_peel(graph: &mut wxsl::render::graph::RenderGraph) -> Result<(), 
         ResourceDesc::color("torus self optics", TextureFormat::Rgba16Float)
             .with_dimension(Dimension::D2Array, 4),
     );
+    let surfaces = graph.resource(
+        ResourceDesc::color("torus self surfaces", TextureFormat::Rgba16Float)
+            .with_dimension(Dimension::D2Array, 4),
+    );
     // Ordinary opaque passes exclude the data-only copy of the torus.
     for i in 0..graph.passes().len() {
         if let PassKind::Geometry { stage, source, .. } = &mut graph.pass_mut(i).unwrap().kind {
@@ -399,6 +403,7 @@ fn append_self_peel(graph: &mut wxsl::render::graph::RenderGraph) -> Result<(), 
                 .with_layer(layer),
             )
             .with_color(Attachment::clear(optics, Color::TRANSPARENT).with_layer(layer))
+            .with_color(Attachment::clear(surfaces, Color::TRANSPARENT).with_layer(layer))
             .with_state(
                 PassState::OPAQUE
                     .with_cull_mode(None)

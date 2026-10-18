@@ -13,7 +13,8 @@
 //! cargo run -p wxsl --features gltf --release --example viewer -- --grid 30 --bench 200
 //! ```
 //!
-//! `--zoom Z` frames the screenshot closer (below 1) or further.
+//! `--zoom Z` frames the screenshot closer (below 1) or further, and
+//! `--yaw A` turns it around the model (radians, 0 looks from +Z).
 //!
 //! `--grid N` repeats the model N×N times, and `--bench FRAMES` renders
 //! that many frames headless, framed and from inside the grid, and prints
@@ -29,6 +30,11 @@
 //! button moves the sharp distance (horizontally, from the model's centre)
 //! and the amount of blur (vertically, up for more); `D` turns the depth
 //! of field off and on.
+//!
+//! `S` (or `--streak`) smears the model as if it shot along the world's Z
+//! axis within the exposure, the background still: a viewer-local screen
+//! effect over the model's depth (`viewer_streak.wxsl`), no velocity
+//! buffer.
 //!
 //! **Precomputed radiance transfer** (ADR 0092). When a model has bakes
 //! beside it (`wxslCar.gray.prt` and `wxslCar.color.prt` beside
@@ -86,11 +92,12 @@ const DEMOS: &[(&str, &str)] = &[
 ];
 
 const USAGE: &str = "viewer [demo|file.glb] [--hdr file.hdr] [--screenshot out.png] [--size WxH]
-              [--grid N] [--bench FRAMES] [--prt off|gray|color] [--zoom Z]
-              [--focus F] [--blur B] [--no-dof]
+              [--grid N] [--bench FRAMES] [--prt off|gray|color] [--zoom Z] [--yaw A]
+              [--focus F] [--blur B] [--no-dof] [--streak]
 demos: wxsl-car (default), wxsl-garage, glam-velvet-sofa, damaged-helmet, car-concept
 window: drag orbits, scroll zooms, 1/2/3 switch demo, Space toggles the turntable,
         right-drag sets the focus (x) and the blur (y), D toggles depth of field,
+        S toggles a motion blur along Z,
         P cycles PRT off / gray / color (when the model has .prt bakes),
         H cycles the environment (sunrise, overcast, sunny), Esc quits";
 
@@ -115,7 +122,10 @@ struct Options {
     bench: Option<u32>,
     prt: Prt,
     zoom: f32,
+    yaw: f32,
     lens: Lens,
+    /// Whether the model streaks along Z (`S`).
+    streak: bool,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -128,7 +138,9 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         bench: None,
         prt: Prt::Color,
         zoom: 1.0,
+        yaw: Orbit::default().yaw,
         lens: Lens::default(),
+        streak: false,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -141,9 +153,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--prt" => options.prt = Prt::parse(&value()?)?,
             "--no-prt" => options.prt = Prt::Off,
             "--zoom" => options.zoom = value()?.parse()?,
+            "--yaw" => options.yaw = value()?.parse()?,
             "--focus" => options.lens.focus = value()?.parse()?,
             "--blur" => options.lens.blur = value()?.parse()?,
             "--no-dof" => options.lens.enabled = false,
+            "--streak" => options.streak = true,
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -246,9 +260,18 @@ fn add_ibl(
             2,
         );
     }
+    let hdr_target = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
+    // The streak, on the linear image; `streak_motion` sets it every frame
+    // and a zero motion passes the image through.
+    let streaked = graph.resource(hdr_target("viewer streaked"));
+    graph.pass(
+        PassDesc::screen(STREAK_PASS, STREAK.id)
+            .with_color(Attachment::clear(streaked, Color::TRANSPARENT))
+            .with_reads([Read::current(background), Read::current(depth)]),
+    );
+    let background = streaked;
     // Depth of field over the linear image, before the tonemap; the lens
     // is set every frame by `Lens::apply`.
-    let hdr_target = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
     let coc = graph.resource(hdr_target("viewer dof coc"));
     let far = graph.resource(hdr_target("viewer dof far"));
     let focused = graph.resource(hdr_target("viewer dof"));
@@ -287,6 +310,75 @@ fn add_ibl(
     );
     renderer.set_graph(graph)?;
     renderer.import_resource("viewer HDR", hdr.view.clone());
+    Ok(())
+}
+
+/// The streak's pass, which `streak_motion` sets.
+const STREAK_PASS: &str = "viewer streak";
+
+/// The `S` key's effect: the model smeared along one screen vector.
+const STREAK: wxsl::render::effect::Effect = {
+    use wxsl::render::effect::{
+        Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter, EffectShader,
+    };
+    Effect {
+        id: "viewer.streak",
+        label: "streak",
+        description: "Smear what has depth along one screen vector, over a still background.",
+        kind: EffectKind::Screen {
+            vertex_entry: "viewer_streak_vs",
+            fragment_entry: "viewer_streak_fs",
+        },
+        inputs: &[
+            EffectInput {
+                name: "color",
+                kind: EffectInputKind::Image,
+                description: "The frame, as linear radiance.",
+                history: 0,
+            },
+            EffectInput {
+                name: "depth",
+                kind: EffectInputKind::Image,
+                description: "Opaque depth; 1 is the background.",
+                history: 0,
+            },
+        ],
+        outputs: &[],
+        parameters: &[EffectParameter {
+            name: "motion",
+            default: Value::Vec2([0.0, 0.0]),
+        }],
+        shader: EffectShader::Source {
+            path: "package::viewer::streak",
+            wxsl: include_str!("viewer_streak.wxsl"),
+        },
+        downlevel: Downlevel::Portable,
+    }
+};
+
+/// How far the model travels along Z during the exposure, in model radii.
+const STREAK_LENGTH: f32 = 0.05;
+
+/// Set the streak for `camera`: the screen vector of a move along +Z from
+/// the model's centre, or zero when `on` is false.
+fn streak_motion(
+    renderer: &mut Renderer,
+    camera: &Camera,
+    radius: f32,
+    on: bool,
+) -> Result<(), Box<dyn Error>> {
+    let motion = if on {
+        let view_proj = camera.view_proj();
+        let screen = |point: Vec3| {
+            let clip = view_proj * point.extend(1.0);
+            glam::Vec2::new(clip.x, -clip.y) / clip.w * 0.5
+        };
+        let target = camera.target;
+        screen(target + Vec3::Z * radius * STREAK_LENGTH) - screen(target)
+    } else {
+        glam::Vec2::ZERO
+    };
+    renderer.set_pass_param(STREAK_PASS, "motion", Value::Vec2(motion.to_array()))?;
     Ok(())
 }
 
@@ -710,6 +802,7 @@ fn renderer_for(gpu: &GpuContext, target: TargetConfig) -> Result<Renderer, Box<
         renderer.add_effect(effect);
     }
     renderer.add_effect(wxsl::effects::fxaa(&wxsl::stdlib::registry())?);
+    renderer.add_effect(STREAK);
     Ok(renderer)
 }
 
@@ -729,10 +822,17 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     )?;
     let orbit = Orbit {
         zoom: options.zoom,
+        yaw: options.yaw,
         ..Orbit::default()
     };
     let environment = environment(&model, orbit, width as f32 / height as f32);
     options.lens.apply(&mut renderer, &environment.camera)?;
+    streak_motion(
+        &mut renderer,
+        &environment.camera,
+        model.radius,
+        options.streak,
+    )?;
     let draws = model.resources().draw_list();
     // The environment maps are baked by the first frame; render twice so
     // the saved one is the steady state.
@@ -938,6 +1038,14 @@ impl App {
         {
             eprintln!("cannot set the lens: {error}");
         }
+        if let Err(error) = streak_motion(
+            &mut state.renderer,
+            &environment.camera,
+            state.model.radius,
+            self.options.streak,
+        ) {
+            eprintln!("cannot set the streak: {error}");
+        }
         if let Err(error) = state.renderer.render(
             &state.gpu.device,
             &state.gpu.queue,
@@ -1060,6 +1168,10 @@ impl ApplicationHandler for App {
                     lens.enabled = !lens.enabled;
                     println!("depth of field {}", if lens.enabled { "on" } else { "off" });
                 }
+                KeyCode::KeyS => {
+                    self.options.streak = !self.options.streak;
+                    println!("streak {}", if self.options.streak { "on" } else { "off" });
+                }
                 KeyCode::Digit1 => self.switch(0),
                 KeyCode::Digit2 => self.switch(1),
                 KeyCode::Digit3 => self.switch(2),
@@ -1106,6 +1218,12 @@ fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
     for (name, orbit) in views {
         let environment = environment(&model, orbit, aspect);
         options.lens.apply(&mut renderer, &environment.camera)?;
+        streak_motion(
+            &mut renderer,
+            &environment.camera,
+            model.radius,
+            options.streak,
+        )?;
         let (mut cpu, mut wall, mut gpu_ms) = (0.0, 0.0, Vec::new());
         // Two frames first: the environment bake and the shader compiles.
         for frame in 0..frames + 2 {

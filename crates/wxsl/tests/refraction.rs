@@ -51,6 +51,25 @@ fn glass(h: &probe::Harness, ior: f32, tint: [f32; 3]) -> Material {
     .unwrap()
 }
 
+/// Thin-walled (`thickness` 0) or solid glass with a transmission factor
+/// (ADR 0093).
+fn sheet(h: &probe::Harness, tint: [f32; 3], transmission: f32, thickness: f32) -> Material {
+    let mut graph = Graph::new("test sheet");
+    let out = graph.add_node("output.surface");
+    graph.set_param(out, "ior", Value::F32(1.5));
+    graph.set_param(out, "base_color", Value::Vec3(tint));
+    graph.set_param(out, "transmission", Value::F32(transmission));
+    graph.set_param(out, "thickness", Value::F32(thickness));
+    Material::with_config(
+        &graph,
+        &h.registry,
+        &MaterialConfig::default()
+            .with_shadows(false, false)
+            .with_tags(Tags::from_iter(["refractive"])),
+    )
+    .unwrap()
+}
+
 fn setup(h: &mut probe::Harness) {
     setup_count(h, 3);
 }
@@ -363,4 +382,59 @@ fn peeled_torus_normals_alternate_entry_exit_on_all_four_interfaces() {
             "layer {layer} has reversed orientation: front={front}, back={back}"
         );
     }
+}
+
+#[test]
+fn thin_walled_glass_tints_without_bending_and_transmission_mixes_in_its_base_colour() {
+    let Some(gpu) = probe::gpu() else { return };
+    let mut h = probe::Harness::new(gpu);
+    setup(&mut h);
+    let sphere = Mesh::sphere(&h.gpu.device, 0.85);
+    let [solid, thin, red, milky, solid_milky] = [
+        sheet(&h, [1.0; 3], 1.0, 1.0),
+        sheet(&h, [1.0; 3], 1.0, 0.0),
+        sheet(&h, [1.0, 0.1, 0.1], 1.0, 0.0),
+        sheet(&h, [1.0, 0.1, 0.1], 0.0, 0.0),
+        sheet(&h, [1.0; 3], 0.0, 1.0),
+    ];
+    let mut draw = |material| {
+        let draws = std::iter::once(DrawItem::new(&sphere, material)).collect();
+        render(&mut h, &draws)
+    };
+    let (solid, thin, red, milky, solid_milky) = (
+        draw(&solid),
+        draw(&thin),
+        draw(&red),
+        draw(&milky),
+        draw(&solid_milky),
+    );
+    let background = render(&mut h, &DrawList::new());
+    // Only Fresnel changes a clear thin sheet; a solid also bends the bars.
+    let error = |image: &[u8]| -> u64 {
+        image
+            .iter()
+            .zip(&background)
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum()
+    };
+    assert!(
+        error(&thin) * 3 < error(&solid),
+        "thin {} solid {}",
+        error(&thin),
+        error(&solid)
+    );
+    let centre = probe::SIZE / 2;
+    let (behind, tinted) = (
+        probe::pixel(&background, centre, centre),
+        probe::pixel(&red, centre, centre),
+    );
+    assert!(
+        tinted[1] + 20 < behind[1] && tinted[0] + 20 > behind[0],
+        "base colour tints thin glass: {behind:?} -> {tinted:?}"
+    );
+    assert!(
+        changed(&milky, &red) > 40,
+        "transmission 0 shows the base colour, not what is behind"
+    );
+    assert!(changed(&solid_milky, &solid) > 40);
 }

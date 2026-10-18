@@ -234,7 +234,9 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
             ray = normalize(eta * ray + (eta * cos_i - cos_t) * n);
             medium = next_medium;
             inside = entering;
-            absorption = select(vec3f(1.0), material.rgb, entering);
+            // Thin-walled glass (red -1, ADR 0093) is traced here as a
+            // clear solid; only the layered composition models it.
+            absorption = select(vec3f(1.0), material.rgb, entering && material.r >= 0.0);
         }
         var next = trace(hit.position + ray * 0.003, ray, inside);
         if next.layer < 0 {

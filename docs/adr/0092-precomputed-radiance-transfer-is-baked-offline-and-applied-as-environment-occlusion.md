@@ -124,6 +124,9 @@ Three things had to be decided:
 * **Diffuse bounces only.** A metal has no diffuse albedo, so a mostly
   metallic model (the sample car) gains almost nothing from bounces;
   its interreflections are specular, which this transfer cannot carry.
+  `--albedo` (`Albedo::base_color_only`) bakes the bounces from the base
+  colour alone, as if every surface were a dielectric: not physical for
+  a metal, but it gives a painted car coloured bounces.
 * **Back faces.** A bounce off the unbaked back of a surface sends
   nothing, and a double-sided material's back faces read the front
   side's transfer.
