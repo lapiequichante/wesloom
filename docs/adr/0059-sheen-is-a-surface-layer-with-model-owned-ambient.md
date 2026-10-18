@@ -55,3 +55,8 @@ coverage and render parity; no ambient override changes old models.
 * Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
   the sheen data rides in the shared `model` target, so sheen now fits
   beside other models and is in `default_set()`.
+* `ambient_sheen` samples the environment maps when the frame has them,
+  like `default_ambient`. The sheen lobe takes the diffuse cube's
+  irradiance, and both terms apply `diffuse_occlusion` and
+  `specular_occlusion` (ADR 0092). Before this, a sheen material ignored
+  the IBL and kept the two-colour hemisphere under any HDR.

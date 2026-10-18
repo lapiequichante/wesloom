@@ -1,17 +1,25 @@
 // The sheen-layer lighting model
 //
 // PBR under a graph-authored Charlie/Neubelt layer. The stored RGB colour
-// and perceptual roughness control both direct light and analytic ambient.
-// The hemispherical response fit budgets energy removed from the base;
-// this is the current two-colour environment approximation, not a cubemap
-// prefilter. See ADR 0059. Original composition over shipped BRDF primitives.
+// and perceptual roughness control both direct light and ambient.
+// The hemispherical response fit budgets energy removed from the base; the
+// sheen lobe is lit by the environment's irradiance (the maps when the
+// frame has them, the analytic hemisphere when not), not a prefiltered
+// Charlie lookup. See ADR 0059. Original composition over shipped BRDF
+// primitives.
 
 import package::lighting::models::pbr::lighting_pbr;
 import package::lighting::charlie_distribution::charlie_distribution;
 import package::lighting::visibility_neubelt::visibility_neubelt;
 import package::lighting::sheen_ibl_response::sheen_ibl_response;
 import package::lighting::ambient_environment::ambient_environment;
-import package::wxsl::bindings::{LightSample, scene, environment_brdf};
+import package::wxsl::bindings::{
+    LightSample,
+    scene,
+    environment_brdf,
+    environment_diffuse_radiance,
+    environment_specular_radiance,
+};
 import package::wxsl::surface::{Surface, SurfaceContext};
 
 fn pack_sheen(surface: Surface) -> vec4f {
@@ -46,14 +54,29 @@ fn ambient_sheen(surface: Surface, ctx: SurfaceContext, extra: vec4f) -> vec3f {
     let normal = normalize(surface.normal);
     let view = normalize(ctx.view_direction);
     let n_dot_v = saturate(dot(normal, view));
-    let base = ambient_environment(normal, view, surface.base_color, surface.metallic,
-        surface.roughness, scene.ambient_sky, scene.ambient_ground,
-        environment_brdf(n_dot_v, surface.roughness));
+    let brdf = environment_brdf(n_dot_v, surface.roughness);
+    // The base is the library's default ambient, restated here because a
+    // model module cannot call the generated one.
+    var base: vec3f;
+    var irradiance: vec3f;
+    if scene.environment_enabled > 0.0 {
+        let metallic = saturate(surface.metallic);
+        let f0 = mix(vec3f(0.04), surface.base_color, metallic);
+        irradiance = environment_diffuse_radiance(normal) * surface.diffuse_occlusion
+            * scene.environment_scale;
+        base = surface.base_color * (1.0 - metallic) * irradiance
+            + environment_specular_radiance(reflect(-view, normal), surface.roughness)
+                * (f0 * brdf.x + vec3f(brdf.y)) * surface.specular_occlusion
+                * scene.environment_scale;
+    } else {
+        base = ambient_environment(normal, view, surface.base_color, surface.metallic,
+            surface.roughness, scene.ambient_sky, scene.ambient_ground, brdf);
+        irradiance = mix(scene.ambient_ground, scene.ambient_sky, normal.y * 0.5 + 0.5);
+    }
     let weight = max(extra.x, max(extra.y, extra.z));
     if weight <= 0.0 {
         return base;
     }
     let response = sheen_ibl_response(n_dot_v, extra.w);
-    let irradiance = mix(scene.ambient_ground, scene.ambient_sky, normal.y * 0.5 + 0.5);
     return base * (1.0 - weight * response) + extra.rgb * irradiance * response;
 }
