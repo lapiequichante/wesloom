@@ -1,0 +1,19 @@
+// PRT visibility
+//
+// The visibility a precomputed radiance transfer bake stores beside the
+// transfer (ADR 0092): the bent normal, the mean unblocked direction,
+// scaled by the ambient occlusion. It is in the last stream's z and w in
+// both modes, so this reads `prt1` of a grayscale bake and `prt3` of a
+// colour one. Feed it to `lighting.prt_specular_occlusion`.
+//
+// Original implementation.
+
+import package::lighting::prt_unpack::prt_unpack;
+
+fn prt_visibility(
+    last: vec4f, // The bake's last stream. @default 0.0
+) -> vec3f {
+    let x = prt_unpack(last.z);
+    let yz = prt_unpack(last.w);
+    return vec3f(x.y, yz.x, yz.y);
+}

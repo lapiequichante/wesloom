@@ -10,6 +10,7 @@ members = [
     "crates/wxsl-stdlib",
     "crates/wxsl-gltf",
     "crates/wxsl-mcp",
+    "crates/wxsl-prt",
     "crates/wxsl",
 ]
 
@@ -30,6 +31,7 @@ wxsl-editor = { path = "crates/wxsl-editor", version = "0.1.0" }
 wxsl-stdlib = { path = "crates/wxsl-stdlib", version = "0.1.0" }
 wxsl-gltf = { path = "crates/wxsl-gltf", version = "0.1.0" }
 wxsl-mcp = { path = "crates/wxsl-mcp", version = "0.1.0" }
+wxsl-prt = { path = "crates/wxsl-prt", version = "0.1.0" }
 
 # Parser generator for the WXSL shading language (ADR 0011). Build
 # dependency of wxsl-lang only; `lalrpop-util` is the runtime half.

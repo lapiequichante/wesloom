@@ -220,6 +220,11 @@ literal the shader compiler inlined, once in the uniform address space and
 once in the storage one. Those two files are what notice if the alignment
 rules are ever got wrong.
 
+**Drift (ADR 0092).** `MAX_VERTEX_ATTRIBUTES` is now six. A colour PRT
+bake spends four streams, and a glTF material reading `uv1` beside it
+needs a fifth. The base stream plus six still leaves one of WebGPU's
+eight slots free.
+
 If this changes, also update `wxsl_core::abi`'s vertex and instance
 tables, `docs/architecture.md`'s bind-group table, and
 `crates/wxsl-stdlib/shaders/README.md`'s.

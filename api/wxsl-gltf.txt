@@ -121,6 +121,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportError
 pub struct wxsl_gltf::ImportedScene
 pub wxsl_gltf::ImportedScene::directory: core::option::Option<std::path::PathBuf>
 pub wxsl_gltf::ImportedScene::images: alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub wxsl_gltf::ImportedScene::material_sources: alloc::vec::Vec<core::option::Option<usize>>
 pub wxsl_gltf::ImportedScene::meshes: alloc::vec::Vec<wxsl_gltf::geometry::Geometry>
 pub wxsl_gltf::ImportedScene::scene: wxsl_core::scene::Scene
 pub wxsl_gltf::ImportedScene::warnings: alloc::vec::Vec<wxsl_gltf::ImportWarning>

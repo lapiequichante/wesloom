@@ -1,0 +1,57 @@
+// PRT diffuse occlusion (colour)
+//
+// `lighting.prt_diffuse_occlusion` for a colour bake (ADR 0092): the
+// transfer has one set of coefficients per channel, because the light a
+// red panel bounces onto its neighbours is red. `wxsl-prt` packs it into
+// four streams, `prt0` to `prt3`: red and green paired per coefficient
+// first, then blue and the visibility as a grayscale bake lays them out.
+//
+// Original implementation.
+
+import package::lighting::prt_unpack::prt_unpack;
+import package::lighting::sh_irradiance::sh_irradiance;
+
+fn prt_diffuse_occlusion_color(
+    prt0: vec4f,   // The bake's first stream. @default 0.0
+    prt1: vec4f,   // The second stream. @default 0.0
+    prt2: vec4f,   // The third stream. @default 0.0
+    prt3: vec4f,   // The fourth stream. @default 0.0
+    normal: vec3f, // The normal the bake used: the geometric one. @default 0.0, 1.0, 0.0
+    sh0: vec3f,    // Environment radiance, band 0. @default 0.0
+    sh1: vec3f,    // Band 1, m = -1 (y). @default 0.0
+    sh2: vec3f,    // Band 1, m = 0 (z). @default 0.0
+    sh3: vec3f,    // Band 1, m = 1 (x). @default 0.0
+    sh4: vec3f,    // Band 2, m = -2 (xy). @default 0.0
+    sh5: vec3f,    // Band 2, m = -1 (yz). @default 0.0
+    sh6: vec3f,    // Band 2, m = 0 (3z² - 1). @default 0.0
+    sh7: vec3f,    // Band 2, m = 1 (xz). @default 0.0
+    sh8: vec3f,    // Band 2, m = 2 (x² - y²). @default 0.0
+) -> vec3f {
+    // Red and green of coefficient k.
+    let c0 = prt_unpack(prt0.x);
+    let c1 = prt_unpack(prt0.y);
+    let c2 = prt_unpack(prt0.z);
+    let c3 = prt_unpack(prt0.w);
+    let c4 = prt_unpack(prt1.x);
+    let c5 = prt_unpack(prt1.y);
+    let c6 = prt_unpack(prt1.z);
+    let c7 = prt_unpack(prt1.w);
+    let c8 = prt_unpack(prt2.x);
+    // Blue, two coefficients at a time.
+    let b01 = prt_unpack(prt2.z);
+    let b23 = prt_unpack(prt2.w);
+    let b45 = prt_unpack(prt3.x);
+    let b67 = prt_unpack(prt3.y);
+    let b8 = prt_unpack(prt3.z);
+    let transferred = sh0 * vec3f(c0, b01.x) + sh1 * vec3f(c1, b01.y)
+        + sh2 * vec3f(c2, b23.x) + sh3 * vec3f(c3, b23.y)
+        + sh4 * vec3f(c4, b45.x) + sh5 * vec3f(c5, b45.y)
+        + sh6 * vec3f(c6, b67.x) + sh7 * vec3f(c7, b67.y)
+        + sh8 * vec3f(c8, b8.x);
+    let open = sh_irradiance(normal, sh0, sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8);
+    return select(
+        clamp(transferred / max(open, vec3f(1e-6)), vec3f(0.0), vec3f(4.0)),
+        vec3f(1.0),
+        open <= vec3f(1e-6),
+    );
+}

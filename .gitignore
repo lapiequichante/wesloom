@@ -13,6 +13,10 @@
 
 .agent-tmp
 
+
+# for the ressources that can easily be computed : 
+*.prt
+
 # Editor/OS cruft
 .vscode/
 .idea/

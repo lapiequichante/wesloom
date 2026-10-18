@@ -25,6 +25,8 @@ image = { workspace = true, features = ["hdr"] }
 wgpu = { workspace = true }
 glam = { workspace = true }
 naga = { workspace = true }
+# The viewer's precomputed radiance transfer (ADR 0092).
+wxsl-prt = { workspace = true }
 
 # The browser example's glue (ADR 0075); the same versions wgpu's web
 # backends already pull in.
@@ -195,4 +197,8 @@ required-features = ["render", "stdlib"]
 
 [[test]]
 name = "ibl"
+required-features = ["render", "stdlib"]
+
+[[test]]
+name = "prt"
 required-features = ["render", "stdlib"]

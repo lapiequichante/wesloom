@@ -80,6 +80,7 @@ fn a_material_becomes_a_gltf_pbr_graph_with_its_factors_and_bindings() {
     let material = &imported.scene.materials[0];
     let graph = &material.graph;
     assert_eq!(material.name, "everything");
+    assert_eq!(imported.material_sources, [Some(0)]);
     assert_eq!(
         param(graph, "base_color_factor"),
         Some(Value::Vec4([1.0, 0.5, 0.5, 1.0]))
@@ -150,6 +151,7 @@ fn nodes_keep_their_hierarchy_and_a_shared_mesh_is_read_once() {
     // The spec's default material: white, metallic 1, roughness 1.
     let material = &scene.materials[0];
     assert_eq!(material.name, "default");
+    assert_eq!(imported.material_sources, [None]);
     assert_eq!(
         param(&material.graph, "metallic_factor"),
         Some(Value::F32(1.0))

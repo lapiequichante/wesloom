@@ -13,13 +13,33 @@
 //! cargo run -p wxsl --features gltf --release --example viewer -- --grid 30 --bench 200
 //! ```
 //!
+//! `--zoom Z` frames the screenshot closer (below 1) or further.
+//!
 //! `--grid N` repeats the model N×N times, and `--bench FRAMES` renders
 //! that many frames headless, framed and from inside the grid, and prints
 //! the frame times with the draws and draw calls (plan6 G3, ADR 0086).
 //!
 //! In the window: drag to orbit, scroll to zoom, `1`/`2`/`3` switch demo,
-//! `Space` toggles the turntable, `Esc` quits. `--hdr <file.hdr>` replaces
-//! the environment.
+//! `Space` toggles the turntable, `P` toggles PRT, `H` cycles the
+//! environments in `resources/hdri/` (sunrise, overcast, sunny),
+//! `Esc` quits. `--hdr <file.hdr>` starts on another environment, which
+//! `H` cycles with the others.
+//!
+//! The frame ends in depth of field and FXAA. Dragging with the right
+//! button moves the sharp distance (horizontally, from the model's centre)
+//! and the amount of blur (vertically, up for more); `D` turns the depth
+//! of field off and on.
+//!
+//! **Precomputed radiance transfer** (ADR 0092). When a model has bakes
+//! beside it (`wxslCar.gray.prt` and `wxslCar.color.prt` beside
+//! `wxslCar.glb`, made by
+//! `cargo run -p wxsl-prt --release -- resources/glb/WXSLCar/wxslCar.glb`),
+//! its materials read them: the environment's diffuse light is shadowed by
+//! the model itself and bounced off it, in grayscale or in colour, and its
+//! reflections are occluded. `P` cycles off, grayscale and colour, and
+//! `--prt off|gray|color` picks the start (colour by default), for
+//! screenshots to compare. The environment is projected onto spherical
+//! harmonics when the HDR loads, so `--hdr` relights the bakes.
 //!
 //! The lighting is image-based only, unless the file carries
 //! `KHR_lights_punctual` lights: the HDR is convolved into diffuse and GGX
@@ -39,10 +59,22 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::asset::ImportedScene;
 use wxsl::core::scene::MeshSource;
+use wxsl::core::Value;
 use wxsl::render::environment::EnvironmentImage;
 use wxsl::render::gpu::{GpuContext, OffscreenTarget};
+use wxsl::render::mesh::{AttributeValues, MeshData};
+use wxsl::render::scene::SceneImage;
 use wxsl::render::{Camera, Environment, RenderRequest, Renderer, TargetConfig};
 use wxsl::scene::SceneResources;
+use wxsl_prt::{Sh9, Transfer};
+
+/// The environments `H` cycles, under `resources/hdri/`; the first is the
+/// default.
+const HDRS: &[&str] = &[
+    "lakeside_sunrise_1k.hdr",
+    "kloofendal_overcast_1k.hdr",
+    "kloofendal_48d_partly_cloudy_1k.hdr",
+];
 
 /// The demos: a name, and the file under `resources/glb/`.
 const DEMOS: &[(&str, &str)] = &[
@@ -54,9 +86,13 @@ const DEMOS: &[(&str, &str)] = &[
 ];
 
 const USAGE: &str = "viewer [demo|file.glb] [--hdr file.hdr] [--screenshot out.png] [--size WxH]
-              [--grid N] [--bench FRAMES]
-demos: damaged-helmet (default), car-concept, glam-velvet-sofa
-window: drag orbits, scroll zooms, 1/2/3 switch demo, Space toggles the turntable, Esc quits";
+              [--grid N] [--bench FRAMES] [--prt off|gray|color] [--zoom Z]
+              [--focus F] [--blur B] [--no-dof]
+demos: wxsl-car (default), wxsl-garage, glam-velvet-sofa, damaged-helmet, car-concept
+window: drag orbits, scroll zooms, 1/2/3 switch demo, Space toggles the turntable,
+        right-drag sets the focus (x) and the blur (y), D toggles depth of field,
+        P cycles PRT off / gray / color (when the model has .prt bakes),
+        H cycles the environment (sunrise, overcast, sunny), Esc quits";
 
 fn resources_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources")
@@ -77,16 +113,22 @@ struct Options {
     size: (u32, u32),
     grid: u32,
     bench: Option<u32>,
+    prt: Prt,
+    zoom: f32,
+    lens: Lens,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut options = Options {
         model: DEMOS[0].0.to_string(),
-        hdr: resources_dir().join("hdri/lakeside_sunrise_1k.hdr"),
+        hdr: resources_dir().join("hdri").join(HDRS[0]),
         screenshot: None,
         size: (1280, 720),
         grid: 1,
         bench: None,
+        prt: Prt::Color,
+        zoom: 1.0,
+        lens: Lens::default(),
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -96,6 +138,12 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--grid" => options.grid = value()?.parse::<u32>()?.max(1),
             "--bench" => options.bench = Some(value()?.parse()?),
+            "--prt" => options.prt = Prt::parse(&value()?)?,
+            "--no-prt" => options.prt = Prt::Off,
+            "--zoom" => options.zoom = value()?.parse()?,
+            "--focus" => options.lens.focus = value()?.parse()?,
+            "--blur" => options.lens.blur = value()?.parse()?,
+            "--no-dof" => options.lens.enabled = false,
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -114,20 +162,30 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     Ok(options)
 }
 
+/// The environment: the uploaded HDR, and its projection onto spherical
+/// harmonics for the PRT bake to be lit by.
+struct Hdr {
+    image: EnvironmentImage,
+    sh: Sh9,
+}
+
 /// Read a Radiance `.hdr` and upload it as the IBL source.
-fn load_hdr(gpu: &GpuContext, path: &Path) -> Result<EnvironmentImage, Box<dyn Error>> {
+fn load_hdr(gpu: &GpuContext, path: &Path) -> Result<Hdr, Box<dyn Error>> {
     let image = image::ImageReader::open(path)?
         .with_guessed_format()?
         .decode()?
         .to_rgb32f();
     let pixels: Vec<[f32; 3]> = image.pixels().map(|pixel| pixel.0).collect();
-    Ok(wxsl::render::environment::upload_environment_image(
-        &gpu.device,
-        &gpu.queue,
-        image.width(),
-        image.height(),
-        &pixels,
-    )?)
+    Ok(Hdr {
+        image: wxsl::render::environment::upload_environment_image(
+            &gpu.device,
+            &gpu.queue,
+            image.width(),
+            image.height(),
+            &pixels,
+        )?,
+        sh: wxsl_prt::sh::project_equirect(image.width(), image.height(), &pixels),
+    })
 }
 
 /// The stock forward pipeline, with the HDR convolved into the
@@ -140,8 +198,8 @@ fn add_ibl(
     refractive: bool,
 ) -> Result<(), Box<dyn Error>> {
     use wxsl::render::effect::{ibl, refraction};
-    use wxsl::render::pass::{DrawSource, PassKind, Read, ResourceDesc};
-    use wxsl::render::types::TextureFormat;
+    use wxsl::render::pass::{Attachment, DrawSource, PassDesc, PassKind, Read, ResourceDesc};
+    use wxsl::render::types::{Color, TextureFormat};
 
     renderer.set_pipeline(wxsl::render::StockPipeline::Forward);
     renderer.remove_import("viewer HDR");
@@ -188,16 +246,143 @@ fn add_ibl(
             2,
         );
     }
-    graph.pass_mut(tonemap).ok_or("tonemap pass")?.reads[0] = Read::current(background);
+    // Depth of field over the linear image, before the tonemap; the lens
+    // is set every frame by `Lens::apply`.
+    let hdr_target = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
+    let coc = graph.resource(hdr_target("viewer dof coc"));
+    let far = graph.resource(hdr_target("viewer dof far"));
+    let focused = graph.resource(hdr_target("viewer dof"));
+    let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
+    graph.pass(
+        PassDesc::screen(DOF_CIRCLES, "wxsl.dof_coc")
+            .with_color(clear(coc))
+            .with_reads([Read::current(depth)]),
+    );
+    graph.pass(
+        PassDesc::screen("viewer dof far", "wxsl.dof_far")
+            .with_color(clear(far))
+            .with_reads([Read::current(background), Read::current(coc)])
+            .with_parameter("max_coc", Value::F32(MAX_COC)),
+    );
+    graph.pass(
+        PassDesc::screen("viewer dof near", "wxsl.dof_near")
+            .with_color(clear(focused))
+            .with_reads([
+                Read::current(background),
+                Read::current(coc),
+                Read::current(far),
+            ])
+            .with_parameter("max_coc", Value::F32(MAX_COC)),
+    );
+    // FXAA after the tonemap, on display values: the tonemap writes an
+    // intermediate, and FXAA takes over its attachment.
+    let encoded = graph.resource(hdr_target("viewer encoded"));
+    let pass = graph.pass_mut(tonemap).ok_or("tonemap pass")?;
+    pass.reads[0] = Read::current(focused);
+    let presented = std::mem::replace(&mut pass.color[0], clear(encoded));
+    graph.pass(
+        PassDesc::screen("viewer fxaa", "wxsl.fxaa")
+            .with_color(presented)
+            .with_reads([Read::current(encoded)]),
+    );
     renderer.set_graph(graph)?;
     renderer.import_resource("viewer HDR", hdr.view.clone());
     Ok(())
 }
 
+/// The depth-of-field pass the lens' numbers go to.
+const DOF_CIRCLES: &str = "viewer dof circles";
+/// The widest blur disc, in pixels.
+const MAX_COC: f32 = 24.0;
+
+/// The depth of field's lens, relative to the orbit so that it frames any
+/// model alike.
+#[derive(Clone, Copy)]
+struct Lens {
+    /// The sharp distance over the camera's distance to the model's centre.
+    focus: f32,
+    /// How much blur: the aperture, relative to the scene's size.
+    blur: f32,
+    enabled: bool,
+}
+
+impl Default for Lens {
+    fn default() -> Self {
+        Lens {
+            focus: 1.0,
+            blur: 1.0,
+            enabled: true,
+        }
+    }
+}
+
+impl Lens {
+    /// Set the circles-of-confusion pass for `camera`, which looks at the
+    /// model's centre.
+    fn apply(self, renderer: &mut Renderer, camera: &Camera) -> Result<(), Box<dyn Error>> {
+        let distance = (camera.target - camera.eye).length();
+        // A 100 mm lens; the f-number shrinks with the scene so that the
+        // same blur reads the same on a helmet and on a garage. Disabled,
+        // a pinhole: every disc is under a pixel.
+        let f_number = if self.enabled {
+            120.0 / (distance * self.blur).max(1e-6)
+        } else {
+            1e6
+        };
+        for (name, value) in [
+            ("near", camera.near),
+            ("far", camera.far),
+            ("focus", distance * self.focus),
+            ("f_number", f_number),
+            ("focal", 0.1f32.min(distance * self.focus * 0.5)),
+        ] {
+            renderer.set_pass_param(DOF_CIRCLES, name, Value::F32(value))?;
+        }
+        Ok(())
+    }
+}
+
+/// What the viewer shows of a model's PRT bakes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Prt {
+    Off,
+    Gray,
+    Color,
+}
+
+impl Prt {
+    const CYCLE: [Prt; 3] = [Prt::Off, Prt::Gray, Prt::Color];
+
+    fn transfer(self) -> Option<Transfer> {
+        match self {
+            Prt::Off => None,
+            Prt::Gray => Some(Transfer::Gray),
+            Prt::Color => Some(Transfer::Color),
+        }
+    }
+
+    fn parse(text: &str) -> Result<Self, String> {
+        match text {
+            "off" => Ok(Prt::Off),
+            "gray" => Ok(Prt::Gray),
+            "color" => Ok(Prt::Color),
+            other => Err(format!("--prt is off, gray or color, not `{other}`")),
+        }
+    }
+}
+
 /// One opened file, ready to draw.
 struct Model {
     imported: ImportedScene,
-    resources: SceneResources,
+    /// One set per PRT bake found beside the file, each reading its own
+    /// streams; one plain set when there is none.
+    variants: Vec<(Option<Transfer>, SceneResources)>,
+    /// The variant drawn.
+    active: usize,
+    /// What it shows.
+    prt: Prt,
+    /// Whether the IBL pipeline has the refraction tier.
+    refractive: bool,
     center: Vec3,
     radius: f32,
 }
@@ -206,9 +391,10 @@ impl Model {
     fn open(
         gpu: &GpuContext,
         renderer: &mut Renderer,
-        hdr: &EnvironmentImage,
+        hdr: &Hdr,
         path: &Path,
         grid: u32,
+        prt: Prt,
     ) -> Result<Self, Box<dyn Error>> {
         let started = Instant::now();
         let mut imported = wxsl::asset::import_gltf(path)?;
@@ -230,26 +416,191 @@ impl Model {
             .materials
             .iter()
             .any(|material| material.config.tags.contains(wxsl::asset::TAG_REFRACTIVE));
-        add_ibl(renderer, hdr, refractive)?;
+        add_ibl(renderer, &hdr.image, refractive)?;
         renderer.set_lighting(imported.lighting()?)?;
-        let mut resources = SceneResources::load_imported(
-            &gpu.device,
-            &imported,
-            &wxsl::stdlib::registry(),
-            renderer.lighting(),
-            &[],
-        )?;
-        resources.create_bindings(&gpu.device, &gpu.queue, renderer)?;
-        resources.upload(&gpu.device, &gpu.queue)?;
-        println!("  loaded in {:.0?}", started.elapsed());
+        let meshes: Vec<MeshData> = imported
+            .meshes
+            .iter()
+            .map(wxsl::render::gltf::mesh_data)
+            .collect();
+        let mut variants = Vec::new();
+        for bake in prt_bakes(&imported, path, grid)? {
+            let (mut scene, mut streams) = (imported.clone(), meshes.clone());
+            attach_prt(&mut scene, &mut streams, &bake, &hdr.sh)?;
+            let resources = load_resources(gpu, renderer, &scene, &streams)?;
+            variants.push((Some(bake.transfer), resources));
+        }
+        if variants.is_empty() {
+            variants.push((None, load_resources(gpu, renderer, &imported, &meshes)?));
+        }
         let (center, radius) = bounds(&imported);
-        Ok(Model {
+        let mut model = Model {
             imported,
-            resources,
+            variants,
+            active: 0,
+            prt: Prt::Off,
+            refractive,
             center,
             radius,
-        })
+        };
+        model.set_prt(gpu, prt)?;
+        println!("  loaded in {:.0?}", started.elapsed());
+        Ok(model)
     }
+
+    fn resources(&self) -> &SceneResources {
+        &self.variants[self.active].1
+    }
+
+    /// What this model can show: off, then each bake it has.
+    fn modes(&self) -> Vec<Prt> {
+        Prt::CYCLE
+            .into_iter()
+            .filter(|mode| match mode.transfer() {
+                None => self.variants.iter().any(|(transfer, _)| transfer.is_some()),
+                Some(wanted) => self
+                    .variants
+                    .iter()
+                    .any(|(transfer, _)| *transfer == Some(wanted)),
+            })
+            .collect()
+    }
+
+    /// Light the model with `hdr`: the pipeline bakes its maps again, and
+    /// every PRT variant takes its spherical harmonics.
+    fn set_hdr(
+        &mut self,
+        gpu: &GpuContext,
+        renderer: &mut Renderer,
+        hdr: &Hdr,
+    ) -> Result<(), Box<dyn Error>> {
+        add_ibl(renderer, &hdr.image, self.refractive)?;
+        for (transfer, resources) in &mut self.variants {
+            if transfer.is_none() {
+                continue;
+            }
+            for material in 0..resources.materials().len() {
+                if let Some(bindings) = resources.bindings_mut(material) {
+                    for (index, coefficient) in hdr.sh.iter().enumerate() {
+                        let name = format!("{}{index}", wxsl_prt::SH_PARAM_PREFIX);
+                        bindings.set(&name, Value::Vec3(*coefficient))?;
+                    }
+                }
+            }
+            resources.upload(&gpu.device, &gpu.queue)?;
+        }
+        Ok(())
+    }
+
+    /// Show `prt`, or the nearest mode this model has. Off draws a baked
+    /// variant at strength 0, which is no PRT without a recompile.
+    fn set_prt(&mut self, gpu: &GpuContext, prt: Prt) -> Result<(), Box<dyn Error>> {
+        let modes = self.modes();
+        let prt = match prt {
+            _ if modes.contains(&prt) => prt,
+            // Colour asked for and only grayscale baked, or the reverse.
+            Prt::Gray | Prt::Color => modes.last().copied().unwrap_or(Prt::Off),
+            Prt::Off => Prt::Off,
+        };
+        self.active = match prt.transfer() {
+            Some(wanted) => self
+                .variants
+                .iter()
+                .position(|(transfer, _)| *transfer == Some(wanted))
+                .unwrap_or(0),
+            None => self.active,
+        };
+        self.prt = prt;
+        let (transfer, resources) = &mut self.variants[self.active];
+        if transfer.is_some() {
+            let strength = Value::F32(if prt == Prt::Off { 0.0 } else { 1.0 });
+            for material in 0..resources.materials().len() {
+                if let Some(bindings) = resources.bindings_mut(material) {
+                    bindings.set(wxsl_prt::STRENGTH_PARAM, strength)?;
+                }
+            }
+        }
+        resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+}
+
+/// Compile and upload `imported` with `meshes`, against the renderer's
+/// plan.
+fn load_resources(
+    gpu: &GpuContext,
+    renderer: &mut Renderer,
+    imported: &ImportedScene,
+    meshes: &[MeshData],
+) -> Result<SceneResources, Box<dyn Error>> {
+    let mut resources = SceneResources::load_resolved(
+        &gpu.device,
+        &imported.scene,
+        &wxsl::stdlib::registry(),
+        imported.directory.as_deref(),
+        renderer.lighting(),
+        &[],
+        meshes,
+    )?;
+    resources.set_images(
+        imported
+            .images
+            .iter()
+            .map(|bytes| SceneImage::Encoded(bytes.clone()))
+            .collect(),
+    );
+    resources.create_bindings(&gpu.device, &gpu.queue, renderer)?;
+    Ok(resources)
+}
+
+/// The PRT bakes beside `path`: `<stem>.gray.prt` and `<stem>.color.prt`,
+/// whichever exist.
+fn prt_bakes(
+    imported: &ImportedScene,
+    path: &Path,
+    grid: u32,
+) -> Result<Vec<wxsl_prt::Bake>, Box<dyn Error>> {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let mut bakes = Vec::new();
+    for transfer in Transfer::ALL {
+        let file = path.with_file_name(format!("{stem}.{}.prt", transfer.name()));
+        if !file.exists() {
+            continue;
+        }
+        // The bake is for the model where the file puts it, not for copies.
+        if grid > 1 {
+            println!("  {}: not used with --grid", file.display());
+            continue;
+        }
+        let bake = wxsl_prt::Bake::read(std::io::BufReader::new(std::fs::File::open(&file)?))
+            .and_then(|bake| bake.check(imported).map(|()| bake))
+            .map_err(|error| format!("{}: {error}", file.display()))?;
+        println!("  PRT: {}", file.display());
+        bakes.push(bake);
+    }
+    Ok(bakes)
+}
+
+/// Put `bake`'s streams on `meshes` and rewire every material of
+/// `imported` to read them, lit by `environment`.
+fn attach_prt(
+    imported: &mut ImportedScene,
+    meshes: &mut [MeshData],
+    bake: &wxsl_prt::Bake,
+    environment: &Sh9,
+) -> Result<(), Box<dyn Error>> {
+    for (index, mesh) in meshes.iter_mut().enumerate() {
+        let streams = bake.streams(index).ok_or("bake and model disagree")?;
+        for (name, values) in bake.transfer.streams().iter().zip(streams) {
+            mesh.attributes
+                .insert(name.to_string(), AttributeValues::Vec4(values));
+        }
+    }
+    let registry = wxsl::stdlib::registry();
+    for material in &mut imported.scene.materials {
+        wxsl_prt::apply(&mut material.graph, &registry, environment, bake.transfer)?;
+    }
+    Ok(())
 }
 
 /// Repeat every instance of `imported` on a `grid`×`grid` floor, spaced by
@@ -314,9 +665,17 @@ impl Default for Orbit {
     }
 }
 
+/// The closest the camera comes to the model's centre, in metres.
+const MIN_DISTANCE: f32 = 0.1;
+
+/// The camera's distance at zoom 1: the whole model in a 45° field.
+fn framed_distance(model: &Model) -> f32 {
+    model.radius / (45f32.to_radians() * 0.5).sin() * 1.05
+}
+
 fn environment(model: &Model, orbit: Orbit, aspect: f32) -> Environment {
     let fov_y = 45f32.to_radians();
-    let distance = model.radius / (fov_y * 0.5).sin() * orbit.zoom * 1.05;
+    let distance = framed_distance(model) * orbit.zoom;
     let direction = Vec3::new(
         orbit.yaw.sin() * orbit.pitch.cos(),
         orbit.pitch.sin(),
@@ -350,6 +709,7 @@ fn renderer_for(gpu: &GpuContext, target: TargetConfig) -> Result<Renderer, Box<
     ] {
         renderer.add_effect(effect);
     }
+    renderer.add_effect(wxsl::effects::fxaa(&wxsl::stdlib::registry())?);
     Ok(renderer)
 }
 
@@ -365,9 +725,15 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
         &hdr,
         &model_path(&options.model),
         options.grid,
+        options.prt,
     )?;
-    let environment = environment(&model, Orbit::default(), width as f32 / height as f32);
-    let draws = model.resources.draw_list();
+    let orbit = Orbit {
+        zoom: options.zoom,
+        ..Orbit::default()
+    };
+    let environment = environment(&model, orbit, width as f32 / height as f32);
+    options.lens.apply(&mut renderer, &environment.camera)?;
+    let draws = model.resources().draw_list();
     // The environment maps are baked by the first frame; render twice so
     // the saved one is the steady state.
     for _ in 0..2 {
@@ -400,7 +766,7 @@ struct State {
     gpu: GpuContext,
     renderer: Renderer,
     format: wgpu::TextureFormat,
-    hdr: EnvironmentImage,
+    hdr: Hdr,
     model: Model,
 }
 
@@ -411,6 +777,8 @@ struct App {
     orbit: Orbit,
     turntable: bool,
     dragging: bool,
+    /// The right button is down: the mouse moves the lens.
+    focusing: bool,
     cursor: Option<(f64, f64)>,
     last_frame: Instant,
 }
@@ -448,6 +816,7 @@ impl App {
             &hdr,
             &model_path(&self.options.model),
             self.options.grid,
+            self.options.prt,
         )?;
         let mut state = State {
             window,
@@ -474,6 +843,7 @@ impl App {
             &state.hdr,
             &model_path(name),
             self.options.grid,
+            self.options.prt,
         ) {
             Ok(model) => {
                 state.model = model;
@@ -482,6 +852,54 @@ impl App {
                 state.window.set_title(&format!("wxsl viewer — {name}"));
             }
             Err(error) => eprintln!("cannot open {name}: {error}"),
+        }
+    }
+
+    /// The next environment: the ones in `HDRS`, and a `--hdr` file
+    /// outside them.
+    fn cycle_hdr(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let directory = resources_dir().join("hdri");
+        let mut cycle: Vec<PathBuf> = HDRS.iter().map(|name| directory.join(name)).collect();
+        if !cycle.contains(&self.options.hdr) {
+            cycle.insert(0, self.options.hdr.clone());
+        }
+        let at = cycle.iter().position(|path| *path == self.options.hdr);
+        let next = &cycle[at.map_or(0, |at| (at + 1) % cycle.len())];
+        let switched = load_hdr(&state.gpu, next).and_then(|hdr| {
+            state.model.set_hdr(&state.gpu, &mut state.renderer, &hdr)?;
+            state.hdr = hdr;
+            Ok(())
+        });
+        match switched {
+            Ok(()) => {
+                self.options.hdr = next.clone();
+                println!("environment {}", next.display());
+            }
+            Err(error) => eprintln!("cannot load {}: {error}", next.display()),
+        }
+    }
+
+    /// The next of off, grayscale and colour this model has.
+    fn cycle_prt(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let modes = state.model.modes();
+        if modes.is_empty() {
+            println!("no PRT bake for {}", self.options.model);
+            return;
+        }
+        let at = modes.iter().position(|mode| *mode == state.model.prt);
+        let next = modes[at.map_or(0, |at| (at + 1) % modes.len())];
+        match state.model.set_prt(&state.gpu, next) {
+            Ok(()) => {
+                self.options.prt = state.model.prt;
+                println!("PRT {:?}", state.model.prt);
+            }
+            Err(error) => eprintln!("cannot switch PRT: {error}"),
         }
     }
 
@@ -513,13 +931,20 @@ impl App {
             self.orbit,
             size.width as f32 / size.height.max(1) as f32,
         );
+        if let Err(error) = self
+            .options
+            .lens
+            .apply(&mut state.renderer, &environment.camera)
+        {
+            eprintln!("cannot set the lens: {error}");
+        }
         if let Err(error) = state.renderer.render(
             &state.gpu.device,
             &state.gpu.queue,
             &RenderRequest {
                 view: &view,
                 environment: &environment,
-                draws: &state.model.resources.draw_list(),
+                draws: &state.model.resources().draw_list(),
             },
         ) {
             eprintln!("cannot render: {error}");
@@ -578,11 +1003,30 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => self.dragging = state == ElementState::Pressed,
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                self.focusing = state == ElementState::Pressed;
+                if !self.focusing {
+                    let lens = self.options.lens;
+                    println!("focus {:.2}, blur {:.2}", lens.focus, lens.blur);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
-                if let (true, Some((x, y))) = (self.dragging, self.cursor) {
-                    self.orbit.yaw -= (position.x - x) as f32 * 0.008;
-                    self.orbit.pitch =
-                        (self.orbit.pitch + (position.y - y) as f32 * 0.008).clamp(-1.45, 1.45);
+                if let Some((x, y)) = self.cursor {
+                    let (dx, dy) = ((position.x - x) as f32, (position.y - y) as f32);
+                    if self.dragging {
+                        self.orbit.yaw -= dx * 0.008;
+                        self.orbit.pitch = (self.orbit.pitch + dy * 0.008).clamp(-1.45, 1.45);
+                    }
+                    if self.focusing {
+                        let lens = &mut self.options.lens;
+                        // Right moves the sharp plane away; up blurs more.
+                        lens.focus = (lens.focus * (dx * 0.004).exp()).clamp(0.1, 10.0);
+                        lens.blur = (lens.blur * (-dy * 0.006).exp()).clamp(0.02, 20.0);
+                    }
                 }
                 self.cursor = Some((position.x, position.y));
             }
@@ -591,7 +1035,11 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(position) => position.y as f32 / 40.0,
                 };
-                self.orbit.zoom = (self.orbit.zoom * 0.9f32.powf(lines)).clamp(0.2, 5.0);
+                // Down to `MIN_DISTANCE` from the centre, whatever the size.
+                let closest = self.state.as_ref().map_or(0.2, |state| {
+                    (MIN_DISTANCE / framed_distance(&state.model)).min(0.2)
+                });
+                self.orbit.zoom = (self.orbit.zoom * 0.9f32.powf(lines)).clamp(closest, 5.0);
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -605,6 +1053,13 @@ impl ApplicationHandler for App {
             } => match code {
                 KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
                 KeyCode::Space => self.turntable = !self.turntable,
+                KeyCode::KeyP => self.cycle_prt(),
+                KeyCode::KeyH => self.cycle_hdr(),
+                KeyCode::KeyD => {
+                    let lens = &mut self.options.lens;
+                    lens.enabled = !lens.enabled;
+                    println!("depth of field {}", if lens.enabled { "on" } else { "off" });
+                }
                 KeyCode::Digit1 => self.switch(0),
                 KeyCode::Digit2 => self.switch(1),
                 KeyCode::Digit3 => self.switch(2),
@@ -635,6 +1090,7 @@ fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
         &hdr,
         &model_path(&options.model),
         options.grid,
+        options.prt,
     )?;
     let aspect = width as f32 / height as f32;
     let views = [
@@ -649,11 +1105,12 @@ fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
     ];
     for (name, orbit) in views {
         let environment = environment(&model, orbit, aspect);
+        options.lens.apply(&mut renderer, &environment.camera)?;
         let (mut cpu, mut wall, mut gpu_ms) = (0.0, 0.0, Vec::new());
         // Two frames first: the environment bake and the shader compiles.
         for frame in 0..frames + 2 {
             let started = Instant::now();
-            let draws = model.resources.draw_list();
+            let draws = model.resources().draw_list();
             renderer.render(
                 &gpu.device,
                 &gpu.queue,
@@ -685,7 +1142,7 @@ fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
         println!(
             "{name}: {} instances, {draws} draws in {calls} calls · cpu {:.2} ms · \
              cpu+wait {:.2} ms · gpu {gpu_text}",
-            model.resources.instance_count(),
+            model.resources().instance_count(),
             per(cpu),
             per(wall),
         );
@@ -710,6 +1167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         orbit: Orbit::default(),
         turntable: true,
         dragging: false,
+        focusing: false,
         cursor: None,
         last_frame: Instant::now(),
     };

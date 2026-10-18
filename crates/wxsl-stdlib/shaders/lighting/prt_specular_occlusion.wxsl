@@ -1,0 +1,29 @@
+// PRT specular occlusion
+//
+// The share of the environment's reflection that reaches a point, from
+// the ambient occlusion a precomputed radiance transfer bake stores
+// (ADR 0092). Feed it to the surface's `specular_occlusion`.
+//
+// `visibility` is the bent normal scaled by the occlusion, as
+// `lighting.prt_visibility` decodes it; its length is the occlusion.
+// A diffuse occlusion over-darkens a reflection: a panel open to 90% of
+// the sky still reflects that sky almost fully, even at grazing angles,
+// where the reflection is strongest. So the occlusion is mapped through
+// the published approximation of Lagarde and de Rousiers ("Moving
+// Frostbite to PBR", 2014), which keeps an open surface near 1, closes
+// a cavity, and lets smooth surfaces keep more of their reflection than
+// rough ones.
+//
+// Original implementation, written from the paper's formula.
+
+fn prt_specular_occlusion(
+    visibility: vec3f,     // Bent normal times occlusion. @default 0.0, 0.0, 1.0
+    normal: vec3f,         // Shading normal. @default 0.0, 1.0, 0.0
+    view_direction: vec3f, // From the surface towards the eye. @default 0.0, 0.0, 1.0
+    roughness: f32,        // Perceptual roughness. @default 0.5
+) -> f32 {
+    let occlusion = min(length(visibility), 1.0);
+    let n_dot_v = saturate(dot(normalize(normal), normalize(view_direction)));
+    let alpha = saturate(roughness) * saturate(roughness);
+    return saturate(pow(n_dot_v + occlusion, exp2(-16.0 * alpha - 1.0)) - 1.0 + occlusion);
+}

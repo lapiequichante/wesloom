@@ -28,6 +28,7 @@ graph LR
     render["wxsl-render<br/>wgpu renderer + UI layer"]
     editor["wxsl-editor<br/>visual editor"]
     mcp["wxsl-mcp<br/>MCP server"]
+    prt["wxsl-prt<br/>offline PRT bake"]
     facade["wxsl<br/>facade"]
 
     lang --> core
@@ -40,6 +41,7 @@ graph LR
     render -. "gltf feature" .-> gltf
     editor --> core & render & lang
     mcp --> core & editor & render
+    prt --> core & gltf & stdlib
     facade --> core
     facade -. features .-> render & editor & stdlib & mcp
 ```
@@ -61,8 +63,13 @@ and lists which edges must never appear. Three edges need explaining:
   gets the same import through `wxsl-ffi`
   ([ADR 0080](adr/0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)).
 
-`wxsl-core`, `wxsl-frame`, `wxsl-lang`, `wxsl-gltf` and `wxsl-ffi` never
-touch a device.
+- **`wxsl-prt` is an offline tool.** It bakes precomputed radiance
+  transfer on the CPU and rewrites imported graphs to read it. No other
+  crate depends on it; the `viewer` example uses it as a dev-dependency
+  ([ADR 0092](adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
+
+`wxsl-core`, `wxsl-frame`, `wxsl-lang`, `wxsl-gltf`, `wxsl-prt` and
+`wxsl-ffi` never touch a device.
 That is what lets the scheduler, layouts and compiler be tested in CI
 without a GPU, and shared with Dawn
 ([ADR 0048](adr/0048-the-frame-plan-is-device-free.md)).

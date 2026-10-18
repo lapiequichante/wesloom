@@ -2929,6 +2929,7 @@ dependencies = [
  "wxsl-editor",
  "wxsl-gltf",
  "wxsl-mcp",
+ "wxsl-prt",
  "wxsl-render",
  "wxsl-stdlib",
 ]
@@ -3022,6 +3023,17 @@ dependencies = [
  "wxsl-editor",
  "wxsl-lang",
  "wxsl-render",
+ "wxsl-stdlib",
+]
+
+[[package]]
+name = "wxsl-prt"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "gltf",
+ "wxsl-core",
+ "wxsl-gltf",
  "wxsl-stdlib",
 ]
 

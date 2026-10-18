@@ -1,0 +1,20 @@
+[package]
+name = "wxsl-prt"
+description = "Offline precomputed radiance transfer for wxsl: per-vertex SH visibility baked on the CPU, applied to imported materials."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+wxsl-core = { workspace = true }
+wxsl-gltf = { workspace = true }
+# Reading the file again for the albedo of the bounces: the materials and
+# their decoded images.
+gltf = { workspace = true }
+# The registry the importer builds its graphs from, for the binary.
+wxsl-stdlib = { workspace = true }
+glam = { workspace = true }

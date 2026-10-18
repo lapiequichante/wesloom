@@ -1,0 +1,16 @@
+// PRT unpack
+//
+// The two values a precomputed radiance transfer bake packs into one
+// float (ADR 0092). Each is a 12-bit code over [-4, 4]; the float holds
+// `high * 4096 + low`, an integer a 32-bit float stores exactly, so the
+// pair survives any vertex fetch. Returns (high, low).
+//
+// Original implementation.
+
+fn prt_unpack(
+    packed: f32, // Two codes, high * 4096 + low. @default 0.0
+) -> vec2f {
+    let high = floor(packed / 4096.0);
+    let low = packed - high * 4096.0;
+    return (vec2f(high, low) - 2047.0) * (4.0 / 2047.0);
+}

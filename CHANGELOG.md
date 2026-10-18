@@ -29,9 +29,24 @@ an entry.
   `KHR_materials_clearcoat` onto it, factors, textures and coat normal
   included, instead of onto `wxsl.clearcoat`
   ([ADR 0091](docs/adr/0091-the-gltf-clear-coat-is-a-model-of-its-own-authored-on-the-surface.md)).
+- `diffuse_occlusion` and `specular_occlusion` inputs on `output.surface`,
+  both 1 by default. They scale the environment maps' diffuse and
+  specular light on the forward path; deferred draws without them.
+- The `wxsl-prt` crate and its `wxsl-prt` binary. They bake precomputed
+  radiance transfer for a glTF file on the CPU: shadows, plus diffuse
+  bounces coloured by each material's albedo sampled at the hit's UV.
+  The bake is written in grayscale and in colour, to `<model>.gray.prt`
+  and `<model>.color.prt`. It also rewires imported materials to read
+  the bake through the new `lighting.prt_*` and `lighting.sh_irradiance`
+  nodes. The `viewer` example loads both files, and `P` cycles off,
+  grayscale and colour
+  ([ADR 0092](docs/adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
+- `ImportedScene::material_sources`: the glTF material each imported
+  material was built from.
 
 ### Changed
 
+- A material may declare six per-vertex attributes, up from four.
 - The G-buffer stores the normal octahedrally, with the lighting model's
   id beside it, and every model's data in one shared `model` target:
   24 bytes per sample, or 32 with model data, whatever the set

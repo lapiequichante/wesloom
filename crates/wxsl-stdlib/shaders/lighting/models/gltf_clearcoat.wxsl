@@ -81,10 +81,13 @@ fn ambient_gltf_clearcoat(surface: Surface, ctx: SurfaceContext, extra: vec4f) -
         let metallic = saturate(surface.metallic);
         let f0 = mix(vec3f(0.04), surface.base_color, metallic);
         base = (surface.base_color * (1.0 - metallic) * environment_diffuse_radiance(normal)
+                * surface.diffuse_occlusion
             + environment_specular_radiance(reflect(-view_direction, normal), surface.roughness)
-                * (f0 * brdf.x + vec3f(brdf.y))) * scene.environment_scale;
+                * (f0 * brdf.x + vec3f(brdf.y)) * surface.specular_occlusion)
+            * scene.environment_scale;
         coat = environment_specular_radiance(reflect(-view_direction, coat_normal), roughness)
-            * (0.04 * coat_brdf.x + coat_brdf.y) * scene.environment_scale;
+            * (0.04 * coat_brdf.x + coat_brdf.y) * surface.specular_occlusion
+            * scene.environment_scale;
     } else {
         base = ambient_environment(normal, view_direction, surface.base_color,
             surface.metallic, surface.roughness, scene.ambient_sky, scene.ambient_ground,

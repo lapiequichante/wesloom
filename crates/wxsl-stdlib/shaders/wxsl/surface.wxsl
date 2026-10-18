@@ -34,6 +34,8 @@ struct Surface {
     clearcoat: f32,
     clearcoat_roughness: f32,
     clearcoat_normal: vec3f,
+    diffuse_occlusion: vec3f,
+    specular_occlusion: f32,
 }
 
 // A neutral dielectric surface using the geometric normal.
@@ -64,5 +66,8 @@ fn default_surface(ctx: SurfaceContext) -> Surface {
     // glTF's coat without a normal texture is unmapped: the geometric
     // normal, not the base layer's.
     out.clearcoat_normal = normalize(ctx.world_normal);
+    // Environment-map visibility, from a bake such as PRT (ADR 0092).
+    out.diffuse_occlusion = vec3f(1.0);
+    out.specular_occlusion = 1.0;
     return out;
 }

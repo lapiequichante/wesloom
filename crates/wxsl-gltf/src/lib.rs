@@ -97,6 +97,10 @@ pub struct ImportedScene {
     pub directory: Option<PathBuf>,
     /// Everything the importer could not map, by name.
     pub warnings: Vec<ImportWarning>,
+    /// Per document material, the index of the glTF material it was
+    /// built from; `None` for the spec's default material. What a tool
+    /// that reads the file again needs to find a material's textures.
+    pub material_sources: Vec<Option<usize>>,
 }
 
 impl ImportedScene {
@@ -308,12 +312,17 @@ impl<'a> Importer<'a> {
         }
         self.fit_lighting_budget();
 
+        let mut material_sources = vec![None; self.scene.materials.len()];
+        for (source, entry) in &self.materials {
+            material_sources[*entry] = *source;
+        }
         ImportedScene {
             scene: self.scene,
             meshes: self.meshes,
             images: self.images,
             directory,
             warnings: self.warnings,
+            material_sources,
         }
     }
 

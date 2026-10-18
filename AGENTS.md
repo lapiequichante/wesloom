@@ -33,6 +33,7 @@ truth.
 | `wxsl-ffi`: data-only C ABI | `core`, `frame`, `lang`, `stdlib`, `gltf` | no (ADR 0049) |
 | `wxsl-stdlib`: node library | `wxsl-core` (+ `wxsl-lang` at build time) | no |
 | `wxsl-gltf`: glTF import, scene documents out | `core`, `frame` (the registry is an argument) | no (ADR 0080) |
+| `wxsl-prt`: offline PRT bake (shadows, bounces), a CLI and graph rewiring | `core`, `gltf`, `stdlib` | no (ADR 0092) |
 | `wxsl-render`: wgpu renderer and UI layer | `core`, `frame`, `lang` (+ `gltf` behind its feature) | yes |
 | `wxsl-editor`: node editor, draws itself | `core`, `render`, `lang` | yes (ADR 0013) |
 | `wxsl-mcp`: MCP server over editor commands | `core`, `editor`, `render` | yes (ADR 0083) |
@@ -128,6 +129,7 @@ Each test file's header says what it covers.
 | the authoring guide, or a diagnostic it quotes | `cargo test -p wxsl-mcp`, then `cargo test -p wxsl --features mcp --test mcp` |
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
+| the PRT bake or its nodes (ADR 0092) | `cargo test -p wxsl-prt`, then `cargo test -p wxsl --test prt` |
 | a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, `gallery -- --screenshot`, or `viewer -- <demo> --screenshot out.png` |
 
 The wasm check is
@@ -244,6 +246,8 @@ The ADR named on each line holds the reasoning.
     lets an agent drive the editor. `crates/wxsl/tests/transcripts/`
     holds recorded agent sessions, replayed by `--test mcp`.
 - `resources/glb/`: Khronos sample models and their licenses.
+- `cargo run -p wxsl-prt --release -- <model.glb>` bakes the PRT sidecars
+  (`<model>.gray.prt`, `<model>.color.prt`) the `viewer` picks up.
 - `crates/wxsl/assets/`:
   - `pbr_cube.wxsl.json` is the commented node format;
   - `*.scene.json` are scene documents.

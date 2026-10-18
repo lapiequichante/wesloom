@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (182)
+- [Shader nodes](#shader-nodes) (188)
 - [Pipeline nodes](#pipeline-nodes) (29)
 
 ## Shader nodes
@@ -776,6 +776,68 @@ As `lighting.pbr_direct`, but keeping the diffuse and specular halves separate. 
 - out `diffuse: vec3f`
 - out `specular: vec3f`
 
+#### `lighting.prt_diffuse_occlusion` · PRT diffuse occlusion
+
+The share of the environment's diffuse light that reaches a point, per channel, from a grayscale precomputed radiance transfer bake (ADR 0092). Feed it to the surface's `diffuse_occlusion`.
+
+- in `prt0: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's first stream.
+- in `prt1: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's second stream.
+- in `normal: vec3f = vec3f(0.0, 1.0, 0.0)`: The normal the bake used: the geometric one.
+- in `sh0: vec3f = vec3f(0.0, 0.0, 0.0)`: Environment radiance, band 0.
+- in `sh1: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = -1 (y).
+- in `sh2: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 0 (z).
+- in `sh3: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 1 (x).
+- in `sh4: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -2 (xy).
+- in `sh5: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -1 (yz).
+- in `sh6: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 0 (3z² - 1).
+- in `sh7: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 1 (xz).
+- in `sh8: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 2 (x² - y²).
+- out `out: vec3f`
+
+#### `lighting.prt_diffuse_occlusion_color` · PRT diffuse occlusion (colour)
+
+`lighting.prt_diffuse_occlusion` for a colour bake (ADR 0092): the transfer has one set of coefficients per channel, because the light a red panel bounces onto its neighbours is red. `wxsl-prt` packs it into four streams, `prt0` to `prt3`: red and green paired per coefficient first, then blue and the visibility as a grayscale bake lays them out.
+
+- in `prt0: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's first stream.
+- in `prt1: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The second stream.
+- in `prt2: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The third stream.
+- in `prt3: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The fourth stream.
+- in `normal: vec3f = vec3f(0.0, 1.0, 0.0)`: The normal the bake used: the geometric one.
+- in `sh0: vec3f = vec3f(0.0, 0.0, 0.0)`: Environment radiance, band 0.
+- in `sh1: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = -1 (y).
+- in `sh2: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 0 (z).
+- in `sh3: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 1 (x).
+- in `sh4: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -2 (xy).
+- in `sh5: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -1 (yz).
+- in `sh6: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 0 (3z² - 1).
+- in `sh7: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 1 (xz).
+- in `sh8: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 2 (x² - y²).
+- out `out: vec3f`
+
+#### `lighting.prt_specular_occlusion` · PRT specular occlusion
+
+The share of the environment's reflection that reaches a point, from the ambient occlusion a precomputed radiance transfer bake stores (ADR 0092). Feed it to the surface's `specular_occlusion`.
+
+- in `visibility: vec3f = vec3f(0.0, 0.0, 1.0)`: Bent normal times occlusion.
+- in `normal: vec3f = vec3f(0.0, 1.0, 0.0)`: Shading normal.
+- in `view_direction: vec3f = vec3f(0.0, 0.0, 1.0)`: From the surface towards the eye.
+- in `roughness: f32 = 0.5f`: Perceptual roughness.
+- out `out: f32`
+
+#### `lighting.prt_unpack` · PRT unpack
+
+The two values a precomputed radiance transfer bake packs into one float (ADR 0092). Each is a 12-bit code over [-4, 4]; the float holds `high * 4096 + low`, an integer a 32-bit float stores exactly, so the pair survives any vertex fetch. Returns (high, low).
+
+- in `packed: f32 = 0.0f`: Two codes, high * 4096 + low.
+- out `out: vec2f`
+
+#### `lighting.prt_visibility` · PRT visibility
+
+The visibility a precomputed radiance transfer bake stores beside the transfer (ADR 0092): the bent normal, the mean unblocked direction, scaled by the ambient occlusion. It is in the last stream's z and w in both modes, so this reads `prt1` of a grayscale bake and `prt3` of a colour one. Feed it to `lighting.prt_specular_occlusion`.
+
+- in `last: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's last stream.
+- out `out: vec3f`
+
 #### `lighting.rayleigh_phase` · Rayleigh phase
 
 How Rayleigh scattering distributes light over angles: symmetric front and back, dimmest at right angles, the reason the sky is brightest toward and away from the sun and bluest to the side. The value is a probability density (per steradian), not a colour — feed it the scattering coefficient for one.
@@ -792,6 +854,22 @@ Roughness widened by the screen-space variance of the normal: where a surface fo
 - in `strength: f32 = 1.0f`: How much variance to absorb, 0..1.
 - out `out: f32`
 - fragment stage only
+
+#### `lighting.sh_irradiance` · SH irradiance
+
+The irradiance an environment given as order-3 spherical harmonics delivers to a surface facing `normal`: its radiance through the clamped cosine, unshadowed. `sh0`..`sh8` are radiance coefficients in the order `wxsl_prt::sh` uses: band 0, band 1 as (y, z, x), band 2 as (xy, yz, 3z² - 1, xz, x² - y²).
+
+- in `normal: vec3f = vec3f(0.0, 1.0, 0.0)`: Surface normal.
+- in `sh0: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 0.
+- in `sh1: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = -1 (y).
+- in `sh2: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 0 (z).
+- in `sh3: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 1, m = 1 (x).
+- in `sh4: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -2 (xy).
+- in `sh5: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = -1 (yz).
+- in `sh6: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 0 (3z² - 1).
+- in `sh7: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 1 (xz).
+- in `sh8: vec3f = vec3f(0.0, 0.0, 0.0)`: Band 2, m = 2 (x² - y²).
+- out `out: vec3f`
 
 #### `lighting.sheen_ibl_response` · Sheen IBL response
 
@@ -1309,6 +1387,8 @@ The material a graph produces. Unconnected inputs keep their default: the geomet
 - in `clearcoat: f32 = 0.0f` (optional): Clear-coat strength, 0..1 (glTF clearcoat); read by the glTF clear-coat model.
 - in `clearcoat_roughness: f32 = 0.0f` (optional): Perceptual roughness of the clear coat, 0..1.
 - in `clearcoat_normal: vec3f` (optional): Clear-coat normal in world space. Unconnected: geometric normal.
+- in `diffuse_occlusion: vec3f = vec3f(1.0, 1.0, 1.0)` (optional): Share of the environment maps' diffuse light that arrives, per channel (PRT).
+- in `specular_occlusion: f32 = 1.0f` (optional): Share of the environment maps' reflection that arrives, 1 = unoccluded.
 - out `color: vec4f`: The surface lit by the pipeline: linear radiance and alpha. Only an `output.fragment` chain can read it.
 - only in surface graphs
 

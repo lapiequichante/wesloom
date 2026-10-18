@@ -1,0 +1,33 @@
+// SH irradiance
+//
+// The irradiance an environment given as order-3 spherical harmonics
+// delivers to a surface facing `normal`: its radiance through the clamped
+// cosine, unshadowed. `sh0`..`sh8` are radiance coefficients in the order
+// `wxsl_prt::sh` uses: band 0, band 1 as (y, z, x), band 2 as (xy, yz,
+// 3z² - 1, xz, x² - y²).
+//
+// Original implementation; the real SH basis and the clamped-cosine
+// weights pi, 2pi/3 and pi/4 per band (Ramamoorthi and Hanrahan 2001)
+// are standard.
+
+fn sh_irradiance(
+    normal: vec3f, // Surface normal. @default 0.0, 1.0, 0.0
+    sh0: vec3f,    // Band 0. @default 0.0
+    sh1: vec3f,    // Band 1, m = -1 (y). @default 0.0
+    sh2: vec3f,    // Band 1, m = 0 (z). @default 0.0
+    sh3: vec3f,    // Band 1, m = 1 (x). @default 0.0
+    sh4: vec3f,    // Band 2, m = -2 (xy). @default 0.0
+    sh5: vec3f,    // Band 2, m = -1 (yz). @default 0.0
+    sh6: vec3f,    // Band 2, m = 0 (3z² - 1). @default 0.0
+    sh7: vec3f,    // Band 2, m = 1 (xz). @default 0.0
+    sh8: vec3f,    // Band 2, m = 2 (x² - y²). @default 0.0
+) -> vec3f {
+    let n = normalize(normal);
+    return sh0 * (0.282095 * 3.141593)
+        + (sh1 * n.y + sh2 * n.z + sh3 * n.x) * (0.488603 * 2.094395)
+        + (sh4 * (1.092548 * n.x * n.y)
+            + sh5 * (1.092548 * n.y * n.z)
+            + sh6 * (0.315392 * (3.0 * n.z * n.z - 1.0))
+            + sh7 * (1.092548 * n.x * n.z)
+            + sh8 * (0.546274 * (n.x * n.x - n.y * n.y))) * 0.785398;
+}

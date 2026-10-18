@@ -1,0 +1,125 @@
+pub mod wxsl_prt
+pub mod wxsl_prt::sh
+pub fn wxsl_prt::sh::basis(glam::f32::vec3::Vec3) -> [f32; 9]
+pub fn wxsl_prt::sh::equirect_direction(f32, f32) -> glam::f32::vec3::Vec3
+pub fn wxsl_prt::sh::irradiance(&wxsl_prt::sh::Sh9, glam::f32::vec3::Vec3) -> [f32; 3]
+pub fn wxsl_prt::sh::project_equirect(u32, u32, &[[f32; 3]]) -> wxsl_prt::sh::Sh9
+pub fn wxsl_prt::sh::transfer(&wxsl_prt::sh::Sh9, &[f32; 9]) -> [f32; 3]
+pub type wxsl_prt::sh::Sh9 = [[f32; 3]; 9]
+pub enum wxsl_prt::Transfer
+pub wxsl_prt::Transfer::Color
+pub wxsl_prt::Transfer::Gray
+impl wxsl_prt::Transfer
+pub const wxsl_prt::Transfer::ALL: [wxsl_prt::Transfer; 2]
+pub fn wxsl_prt::Transfer::coefficients(self) -> usize
+pub fn wxsl_prt::Transfer::name(self) -> &'static str
+pub fn wxsl_prt::Transfer::streams(self) -> &'static [&'static str]
+pub fn wxsl_prt::Transfer::values_per_vertex(self) -> usize
+impl core::clone::Clone for wxsl_prt::Transfer
+pub fn wxsl_prt::Transfer::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_prt::Transfer
+impl core::cmp::PartialEq for wxsl_prt::Transfer
+pub fn wxsl_prt::Transfer::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_prt::Transfer
+pub fn wxsl_prt::Transfer::default() -> Self
+impl core::fmt::Debug for wxsl_prt::Transfer
+pub fn wxsl_prt::Transfer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_prt::Transfer
+pub fn wxsl_prt::Transfer::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for wxsl_prt::Transfer
+impl core::marker::StructuralPartialEq for wxsl_prt::Transfer
+impl core::marker::Freeze for wxsl_prt::Transfer
+impl core::marker::Send for wxsl_prt::Transfer
+impl core::marker::Sync for wxsl_prt::Transfer
+impl core::marker::Unpin for wxsl_prt::Transfer
+impl core::marker::UnsafeUnpin for wxsl_prt::Transfer
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::Transfer
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::Transfer
+pub struct wxsl_prt::Albedo
+impl wxsl_prt::Albedo
+pub fn wxsl_prt::Albedo::load(impl core::convert::AsRef<std::path::Path>, &wxsl_gltf::ImportedScene) -> core::result::Result<Self, wxsl_prt::PrtError>
+pub fn wxsl_prt::Albedo::sample(&self, usize, [[f32; 2]; 2]) -> [f32; 3]
+pub fn wxsl_prt::Albedo::uniform([f32; 3]) -> Self
+impl core::clone::Clone for wxsl_prt::Albedo
+pub fn wxsl_prt::Albedo::clone(&self) -> Self
+impl core::default::Default for wxsl_prt::Albedo
+pub fn wxsl_prt::Albedo::default() -> Self
+impl core::fmt::Debug for wxsl_prt::Albedo
+pub fn wxsl_prt::Albedo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_prt::Albedo
+impl core::marker::Send for wxsl_prt::Albedo
+impl core::marker::Sync for wxsl_prt::Albedo
+impl core::marker::Unpin for wxsl_prt::Albedo
+impl core::marker::UnsafeUnpin for wxsl_prt::Albedo
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::Albedo
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::Albedo
+pub struct wxsl_prt::Bake
+pub wxsl_prt::Bake::meshes: alloc::vec::Vec<alloc::vec::Vec<f32>>
+pub wxsl_prt::Bake::transfer: wxsl_prt::Transfer
+impl wxsl_prt::Bake
+pub fn wxsl_prt::Bake::check(&self, &wxsl_gltf::ImportedScene) -> core::result::Result<(), wxsl_prt::PrtError>
+pub fn wxsl_prt::Bake::read(impl alloc::io::read::Read) -> core::result::Result<Self, wxsl_prt::PrtError>
+pub fn wxsl_prt::Bake::streams(&self, usize) -> core::option::Option<alloc::vec::Vec<alloc::vec::Vec<[f32; 4]>>>
+pub fn wxsl_prt::Bake::write(&self, impl core::io::write::Write) -> core::result::Result<(), wxsl_prt::PrtError>
+impl core::clone::Clone for wxsl_prt::Bake
+pub fn wxsl_prt::Bake::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_prt::Bake
+pub fn wxsl_prt::Bake::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_prt::Bake
+pub fn wxsl_prt::Bake::default() -> Self
+impl core::fmt::Debug for wxsl_prt::Bake
+pub fn wxsl_prt::Bake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_prt::Bake
+impl core::marker::Freeze for wxsl_prt::Bake
+impl core::marker::Send for wxsl_prt::Bake
+impl core::marker::Sync for wxsl_prt::Bake
+impl core::marker::Unpin for wxsl_prt::Bake
+impl core::marker::UnsafeUnpin for wxsl_prt::Bake
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::Bake
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::Bake
+pub struct wxsl_prt::BakeOptions
+pub wxsl_prt::BakeOptions::bounces: u32
+pub wxsl_prt::BakeOptions::floor: bool
+pub wxsl_prt::BakeOptions::rays: u32
+pub wxsl_prt::BakeOptions::threads: usize
+pub wxsl_prt::BakeOptions::transfers: alloc::vec::Vec<wxsl_prt::Transfer>
+impl core::clone::Clone for wxsl_prt::BakeOptions
+pub fn wxsl_prt::BakeOptions::clone(&self) -> Self
+impl core::default::Default for wxsl_prt::BakeOptions
+pub fn wxsl_prt::BakeOptions::default() -> Self
+impl core::fmt::Debug for wxsl_prt::BakeOptions
+pub fn wxsl_prt::BakeOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_prt::BakeOptions
+impl core::marker::Send for wxsl_prt::BakeOptions
+impl core::marker::Sync for wxsl_prt::BakeOptions
+impl core::marker::Unpin for wxsl_prt::BakeOptions
+impl core::marker::UnsafeUnpin for wxsl_prt::BakeOptions
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::BakeOptions
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::BakeOptions
+pub struct wxsl_prt::PrtError(pub alloc::string::String)
+impl core::clone::Clone for wxsl_prt::PrtError
+pub fn wxsl_prt::PrtError::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_prt::PrtError
+impl core::cmp::PartialEq for wxsl_prt::PrtError
+pub fn wxsl_prt::PrtError::eq(&self, &Self) -> bool
+impl core::convert::From<core::io::error::Error> for wxsl_prt::PrtError
+pub fn wxsl_prt::PrtError::from(core::io::error::Error) -> Self
+impl core::error::Error for wxsl_prt::PrtError
+impl core::fmt::Debug for wxsl_prt::PrtError
+pub fn wxsl_prt::PrtError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_prt::PrtError
+pub fn wxsl_prt::PrtError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_prt::PrtError
+impl core::marker::Freeze for wxsl_prt::PrtError
+impl core::marker::Send for wxsl_prt::PrtError
+impl core::marker::Sync for wxsl_prt::PrtError
+impl core::marker::Unpin for wxsl_prt::PrtError
+impl core::marker::UnsafeUnpin for wxsl_prt::PrtError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::PrtError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::PrtError
+pub const wxsl_prt::SH_PARAM_PREFIX: &str
+pub const wxsl_prt::STREAMS: [&str; 4]
+pub const wxsl_prt::STRENGTH_PARAM: &str
+pub fn wxsl_prt::apply(&mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_prt::sh::Sh9, wxsl_prt::Transfer) -> core::result::Result<(), wxsl_prt::PrtError>
+pub fn wxsl_prt::bake(&wxsl_gltf::ImportedScene, &wxsl_prt::Albedo, &wxsl_prt::BakeOptions) -> core::result::Result<alloc::vec::Vec<wxsl_prt::Bake>, wxsl_prt::PrtError>
+pub type wxsl_prt::Sh9 = [[f32; 3]; 9]

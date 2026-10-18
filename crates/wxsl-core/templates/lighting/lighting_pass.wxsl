@@ -32,6 +32,10 @@ ${UNPACKED_STRUCT}fn ${UNPACK_FN}(${UNPACK_PARAMS}) -> UnpackedGBuffer {
     out.surface.clearcoat = 0.0;
     out.surface.clearcoat_roughness = 0.0;
     out.surface.clearcoat_normal = out.surface.normal;
+    // No room in the G-buffer: deferred draws without baked visibility
+    // (ADR 0092).
+    out.surface.diffuse_occlusion = vec3f(1.0);
+    out.surface.specular_occlusion = 1.0;
 ${MODEL_ID_LINE}${EXTRAS_UNPACK}    return out;
 }
 

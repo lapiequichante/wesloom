@@ -292,10 +292,11 @@ pub const MAX_VARYING_LOCATIONS: usize = 16;
 /// How many per-vertex attributes a material may declare.
 ///
 /// Each is its own vertex buffer (ADR 0024), and WebGPU guarantees eight
-/// slots with the base stream taking one. Four rather than seven, so that
-/// a mesh may carry a couple of streams no material asked for without the
-/// budget being an accident of what happens to be bound.
-pub const MAX_VERTEX_ATTRIBUTES: usize = 4;
+/// slots with the base stream taking one. Six rather than seven, so that
+/// the budget is not an accident of what happens to be bound; six, not
+/// the original four, so that a colour PRT bake (four streams, ADR 0092)
+/// fits beside a glTF material's `uv1`.
+pub const MAX_VERTEX_ATTRIBUTES: usize = 6;
 
 /// Shades a surface to a final `vec4f` colour
 /// ([`MaterialStage::FORWARD_LIT`]).
@@ -1689,6 +1690,18 @@ pub const SURFACE_FIELDS: &[SurfaceField] = &[
         ty: ValueType::Vec3,
         doc: "Clear-coat normal in world space. Unconnected: geometric normal.",
         editable_default: None,
+    },
+    SurfaceField {
+        name: "diffuse_occlusion",
+        ty: ValueType::Vec3,
+        doc: "Share of the environment maps' diffuse light that arrives, per channel (PRT).",
+        editable_default: Some(Value::Vec3([1.0, 1.0, 1.0])),
+    },
+    SurfaceField {
+        name: "specular_occlusion",
+        ty: ValueType::F32,
+        doc: "Share of the environment maps' reflection that arrives, 1 = unoccluded.",
+        editable_default: Some(Value::F32(1.0)),
     },
 ];
 
