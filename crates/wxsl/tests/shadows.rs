@@ -637,6 +637,98 @@ fn rectangular_area_light_casts_a_penumbra_and_emits_on_one_side() {
     }
 }
 
+/// A source radius turns the hard edge into a penumbra as wide as similar
+/// triangles say, and finds no blocker on open ground (ADR 0098): the
+/// blocker search must not take the receiver for its own caster.
+#[test]
+fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "soft receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(&graph, &MaterialConfig::default());
+    // A lamp 3 m up over the 1 m quad at 1 m: the hard edge lands at
+    // x = 0.75 and a 0.6 m source spreads it ±0.3. The sun's edge is at
+    // x = 0.5, spread ±tan(0.2). Each is probed 0.4 of the way out, a
+    // pixel or more from the edge.
+    let lights = [
+        (
+            Light::point(Vec3::new(0.0, 3.0, 0.0), Vec3::ONE, 27.0).casting_shadow(4.0),
+            0.6,
+            0.75,
+            0.12,
+        ),
+        (
+            Light::directional(Vec3::Y, Vec3::ONE, 3.0).casting_shadow(4.0),
+            0.2,
+            0.5,
+            0.08,
+        ),
+    ];
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        for (light, radius, edge, probe) in lights {
+            let kind = format!("{} {:?}", pipeline.name(), light.kind);
+            let mut env = lit(false);
+            env.lights = vec![light.with_source_radius(radius)];
+            let soft_empty = scene.render(&env, &ground, None);
+            env.lights[0].casts_shadow = false;
+            let open = scene.render(&env, &ground, None);
+            for (actual, expected) in soft_empty.chunks_exact(4).zip(open.chunks_exact(4)) {
+                assert!(
+                    actual[1].abs_diff(expected[1]) <= 1,
+                    "{kind}: open ground darkened: {} vs {}",
+                    actual[1],
+                    expected[1]
+                );
+            }
+            let unlit = scene.render(&env, &ground, Some(&caster));
+            env.lights[0].casts_shadow = true;
+            let soft = scene.render(&env, &ground, Some(&caster));
+            env.lights = vec![light];
+            let hard = scene.render(&env, &ground, Some(&caster));
+            let at = |image: &[u8], x: f32| i16::from(brightness(image, Vec3::new(x, 0.0, 0.0)));
+            let full = at(&unlit, edge);
+            let umbra = at(&hard, 0.0);
+            assert!(
+                full - umbra > i16::from(SHADOW_DROP),
+                "{kind}: the caster shadows"
+            );
+            assert_eq!(at(&soft, 0.0), umbra, "{kind}: the centre stays umbra");
+            // Inside the hard edge the source peeks round the caster;
+            // outside it, part of the source is already hidden.
+            let inside = at(&soft, edge - probe);
+            let outside = at(&soft, edge + probe);
+            assert!(
+                at(&hard, edge - probe) + 10 < inside,
+                "{kind}: lit inside the edge: {inside} vs {}",
+                at(&hard, edge - probe)
+            );
+            // The display transform compresses the lit side, so the
+            // outer half of a penumbra reads fainter than the inner.
+            assert!(
+                outside + 2 < at(&hard, edge + probe),
+                "{kind}: shadowed outside the edge: {outside} vs {}",
+                at(&hard, edge + probe)
+            );
+            assert!(inside < outside, "{kind}: the penumbra brightens outward");
+            // Pixels neither umbra nor lit, along a sweep one pixel apart.
+            let between = |image: &[u8]| {
+                (0..16)
+                    .map(|i| edge - 0.6 + i as f32 * 0.075)
+                    .filter(|&x| at(image, x) > umbra + 3 && at(image, x) + 3 < at(&unlit, x))
+                    .count()
+            };
+            assert!(between(&hard) <= 1, "{kind}: the hard edge is a pixel wide");
+            assert!(
+                between(&soft) >= 4,
+                "{kind}: the soft edge spans {}",
+                between(&soft)
+            );
+        }
+    }
+}
+
 #[test]
 fn spotlight_cone_cookie_and_shadow_agree_on_both_paths() {
     let Some(gpu) = gpu() else { return };

@@ -59,7 +59,12 @@ an entry.
   writes a third target. The glTF importer maps `transmissionFactor`,
   and a material without `KHR_materials_volume` is thin-walled
   ([ADR 0093](docs/adr/0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)).
-
+- Contact-hardening shadows: `Light::with_source_radius` gives a point,
+  spot or directional light a source size, and its shadow is sharp where
+  it touches its caster and wider farther away. The light row's `radius`
+  carries it (a directional light's as the tangent of its angular
+  radius); the C layout is unchanged
+  ([ADR 0098](docs/adr/0098-contact-hardening-shadows-search-blockers-through-the-comparison-sampler.md)).
 - IES profiles on point and spot lights: `Light::with_profile` names a
   cookie layer holding a profile baked by `IesProfile::texels`
   (`wxsl_render::environment`). In the C header, the light row's

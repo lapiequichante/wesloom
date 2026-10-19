@@ -129,6 +129,7 @@ The ten decisions the rest of the log builds on:
 | [0095](0095-unshadowed-area-lights-sample-where-the-lobe-and-the-falloff-are.md) | Unshadowed area lights sample where the lobe and the falloff are | Accepted |
 | [0096](0096-area-lights-are-integrated-with-ltc-by-the-models-that-can.md) | Area lights are integrated with LTC by the models that can | Accepted |
 | [0097](0097-ies-profiles-are-baked-into-a-cookie-layer.md) | IES profiles are baked into a cookie layer | Accepted |
+| [0098](0098-contact-hardening-shadows-search-blockers-through-the-comparison-sampler.md) | Contact-hardening shadows search blockers through the comparison sampler | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

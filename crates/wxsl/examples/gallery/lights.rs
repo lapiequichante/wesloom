@@ -315,6 +315,7 @@ pub(crate) fn lights(demo: &str) -> Option<Vec<Light>> {
                     )
                     .with_profile(HEADLIGHT_LAYER)
                     .casting_shadow(8.0)
+                    .with_source_radius(HEADLIGHT_RADIUS)
                 })
                 .collect(),
         ),
@@ -329,6 +330,8 @@ const CAR_FRONT: f32 = 0.0;
 const HEADLIGHT_AIM: Vec3 = Vec3::new(0.0, -0.012, -1.0);
 /// The profile's brightest direction, in the gallery's units.
 const HEADLIGHT_INTENSITY: f32 = 1500.0;
+/// The lamp's lens, as the source its shadows soften from (ADR 0098).
+const HEADLIGHT_RADIUS: f32 = 0.09;
 /// How far ahead the end wall stands.
 const ROAD_END: f32 = -26.0;
 

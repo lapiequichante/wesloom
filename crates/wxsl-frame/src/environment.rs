@@ -187,7 +187,10 @@ pub struct Light {
     pub area_u: Vec3,
     /// Second perpendicular half-edge of a rectangle; zero for other lights.
     pub area_v: Vec3,
-    /// A tube's radius; its half-axis is `area_u`.
+    /// A tube's radius (its half-axis is `area_u`), or the source radius
+    /// a point, spot or directional light's shadow softens from: world
+    /// units for a point or spot, the tangent of the angular radius for a
+    /// directional light. Zero keeps the fixed-kernel shadow (ADR 0098).
     pub radius: f32,
     /// Direction away from a spotlight, normalized by its constructor.
     pub spot_direction: Vec3,
@@ -463,6 +466,27 @@ impl Light {
         self.range > 0.0
             && matches!(self.kind, LightKind::Point | LightKind::Spot)
             && !self.casts_shadow
+    }
+
+    /// Soften this point, spot or directional light's shadow as from a
+    /// source of this radius: sharp where a shadow touches its caster,
+    /// wider the farther the receiver is behind it (ADR 0098). World
+    /// units for a point or spot; for a directional light, its angular
+    /// radius in radians (the sun's is about 0.0047).
+    pub fn with_source_radius(mut self, radius: f32) -> Self {
+        assert!(
+            matches!(
+                self.kind,
+                LightKind::Point | LightKind::Spot | LightKind::Directional
+            ),
+            "a source radius softens a point, spot or directional shadow"
+        );
+        assert!(radius.is_finite() && radius >= 0.0);
+        self.radius = match self.kind {
+            LightKind::Directional => radius.min(1.5).tan(),
+            _ => radius,
+        };
+        self
     }
 
     /// Set the normal-offset bias, in world units.
@@ -1348,6 +1372,21 @@ mod tests {
     #[should_panic(expected = "point or spot")]
     fn only_points_and_spots_take_a_profile() {
         let _ = Light::directional(Vec3::Y, Vec3::ONE, 1.0).with_profile(0);
+    }
+
+    #[test]
+    fn a_source_radius_rides_in_the_radius_and_a_suns_is_a_tangent() {
+        let point = Light::point(Vec3::ZERO, Vec3::ONE, 1.0).with_source_radius(0.1);
+        assert_eq!(point.uniform(0, 0).radius, 0.1);
+        let sun = Light::directional(Vec3::Y, Vec3::ONE, 1.0).with_source_radius(0.2);
+        assert_eq!(sun.uniform(0, 0).radius, 0.2_f32.tan());
+    }
+
+    #[test]
+    #[should_panic(expected = "source radius")]
+    fn a_rectangle_takes_no_source_radius() {
+        let _ =
+            Light::rectangle(Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::ONE, 1.0).with_source_radius(0.1);
     }
 
     #[test]

@@ -299,6 +299,23 @@ pub(crate) fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "soft-shadow",
+            blurb: "the point lamp as a 20 cm globe: contact-hardening shadows, sharp \
+                    where a pillar meets the floor and wider with distance, found by a \
+                    blocker search over the comparison sampler (ADR 0098)",
+            pipeline: Pipeline::Stock(StockPipeline::Deferred),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "area-shadow",
             blurb: "a one-sided rectangular emitter with sixteen shadowed quadrature points — finite-area lighting and penumbrae (ADR 0072)",
             pipeline: Pipeline::Stock(StockPipeline::Deferred),

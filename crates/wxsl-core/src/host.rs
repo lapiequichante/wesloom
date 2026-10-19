@@ -113,7 +113,8 @@ pub fn structures() -> Vec<Structure> {
                 // light had before the field (ADR 0076).
                 field("range", "range", F32),
                 field("area_u", "area_u", Vector(3)),
-                // A tube's radius; padding for every other kind.
+                // A tube's radius, or the source radius a point, spot
+                // or directional shadow softens from (ADR 0098).
                 field("radius", "radius", F32),
                 field("area_v", "area_v", Vector(3)),
                 // A point or spot light's IES profile: a layer of the

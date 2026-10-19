@@ -52,6 +52,15 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
                 .casting_shadow(8.0),
             Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 7.0),
         ],
+        None if demo.name == "soft-shadow" => vec![
+            // The same lamp as a 20 cm globe: the pillars' shadows start
+            // sharp at their feet and widen away from them, while the
+            // floating cubes cast soft ones throughout (ADR 0098).
+            Light::point(Vec3::new(0.0, 4.2, 0.0), Vec3::new(1.0, 0.9, 0.75), 40.0)
+                .casting_shadow(8.0)
+                .with_source_radius(0.1),
+            Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 7.0),
+        ],
         None if demo.name == "area-shadow" => vec![
             gallery_area_light(),
             Light::point(Vec3::new(-4.5, 1.4, -3.5), Vec3::new(0.3, 0.4, 0.65), 3.0),
@@ -177,7 +186,12 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
             }
         } else if matches!(
             demo.name,
-            "point-shadow" | "spot-shadow" | "spot-cookie" | "sixteen" | "clustered"
+            "point-shadow"
+                | "soft-shadow"
+                | "spot-shadow"
+                | "spot-cookie"
+                | "sixteen"
+                | "clustered"
         ) {
             // Level with the lamp ring: the cube's shadow spreading outward
             // and the sixteen pools of colour both read from a low angle.

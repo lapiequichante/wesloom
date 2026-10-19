@@ -302,7 +302,7 @@ impl Stage {
         }
         if matches!(
             demo.name,
-            "point-shadow" | "area-shadow" | "spot-shadow" | "spot-cookie"
+            "point-shadow" | "soft-shadow" | "area-shadow" | "spot-shadow" | "spot-cookie"
         ) {
             // Six faces, one lamp: two cubes under the light, and the
             // floor catching both shadows in every direction the lamp
@@ -335,6 +335,22 @@ impl Stage {
             ]
             .into_iter()
             .collect();
+            if demo.name == "soft-shadow" {
+                // Pillars standing on the floor, 0.4 wide and 3.2 tall:
+                // where a shadow touches its caster.
+                for (x, z) in [(-2.4, -0.6), (-1.0, 2.0), (3.0, -1.8)] {
+                    draws.push(
+                        DrawItem::new(&self.mesh, &self.material)
+                            .with_transform(
+                                floor
+                                    * Mat4::from_translation(Vec3::new(x, 1.6, z))
+                                    * Mat4::from_scale(Vec3::new(0.25, 2.0, 0.25)),
+                            )
+                            .with_bindings(&self.bindings)
+                            .with_attributes(&cool),
+                    );
+                }
+            }
             if demo.name == "area-shadow" {
                 let light = gallery_area_light();
                 // The shared plate is 3.4 units wide; match the emitter bounds.

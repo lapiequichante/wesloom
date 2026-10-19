@@ -561,6 +561,7 @@ pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_profile(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_source_radius(self, f32) -> Self
 impl core::clone::Clone for wxsl_frame::environment::Light
 pub fn wxsl_frame::environment::Light::clone(&self) -> Self
 impl core::fmt::Debug for wxsl_frame::environment::Light
