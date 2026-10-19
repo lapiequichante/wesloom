@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (189)
+- [Shader nodes](#shader-nodes) (191)
 - [Pipeline nodes](#pipeline-nodes) (29)
 
 ## Shader nodes
@@ -28,6 +28,21 @@ A 0..1 sine oscillation. Wire the `input.time` node into it.
 - in `frequency: f32 = 1.0f`: Cycles per second.
 - in `phase: f32 = 0.0f`: Offset in turns.
 - out `out: f32`
+
+#### `animation.skin` · Skin
+
+Linear blend skinning from a bone texture: the vertex moved by up to four joints, weighted. Wire its outputs into the vertex output.
+
+- in `bones: texture_2d<f32>`
+- in `joints: vec4f`: The four joint indices, as floats.
+- in `weights: vec4f = vec4f(1.0, 0.0, 0.0, 0.0)`: Their weights, summing to 1.
+- in `frame: f32 = 0.0f`: The bone texture's row.
+- in `position: vec3f`: The vertex's object-space position.
+- in `normal: vec3f = vec3f(0.0, 1.0, 0.0)`: Its object-space normal.
+- in `tangent: vec3f = vec3f(1.0, 0.0, 0.0)`: Its object-space tangent.
+- out `offset: vec3f`
+- out `normal: vec3f`
+- out `tangent: vec3f`
 
 <a id="shader-color"></a>
 
@@ -547,6 +562,13 @@ The vertex's normal in object space, unit length.
 The vertex's position in object space, before the model transform.
 
 - out `out: vec3f`: The vertex's position in object space, before the model transform.
+- only in surface graphs
+
+#### `input.object_tangent` · Object tangent
+
+The vertex's tangent in object space, unit length.
+
+- out `out: vec3f`: The vertex's tangent in object space, unit length.
 - only in surface graphs
 
 #### `input.pixel` · Pixel
@@ -1417,6 +1439,8 @@ Computes one declared interpolant in the vertex stage, to be read per fragment. 
 Moves the vertex, in object space, before it is transformed. The one place a material graph runs in the vertex stage — so everything feeding it is compiled there too, including into a shadow pass, which is what makes a displaced object cast a displaced shadow.
 
 - in `position_offset: vec3f = vec3f(0.0, 0.0, 0.0)` (optional): Object-space offset added to the vertex position.
+- in `normal: vec3f` (optional): Object-space normal replacing the mesh's; unconnected, the mesh's.
+- in `tangent: vec3f` (optional): Object-space tangent replacing the mesh's, its bitangent sign kept; unconnected, the mesh's.
 - only in surface graphs
 
 <a id="shader-param"></a>

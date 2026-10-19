@@ -490,3 +490,62 @@ fn plain_materials_take_the_layered_model_when_both_overflow_the_g_buffer() {
             <= wxsl_frame::pipeline::MAX_GBUFFER_BYTES_PER_SAMPLE
     );
 }
+
+/// A skinned primitive: one joint, raised by a clip; and the same mesh
+/// unskinned elsewhere (ADR 0099).
+fn skinned() -> Glb {
+    let mut glb = Glb::default();
+    let mesh = glb.skinned_triangle();
+    let joint = glb.node(json!({ "name": "joint" }), None);
+    glb.node(json!({ "name": "skinned", "mesh": mesh, "skin": 0 }), None);
+    glb.node(json!({ "name": "static", "mesh": mesh }), None);
+    glb.json["skins"] = json!([{ "joints": [joint] }]);
+    let times = glb.floats(&[0.0, 1.0], "SCALAR");
+    let lifts = glb.floats(&[0.0, 0.0, 0.0, 0.0, 2.0, 0.0], "VEC3");
+    glb.json["animations"] = json!([{
+        "name": "lift",
+        "samplers": [{ "input": times, "output": lifts }],
+        "channels": [{ "sampler": 0, "target": { "node": joint, "path": "translation" } }],
+    }]);
+    glb
+}
+
+#[test]
+fn a_skinned_primitive_is_skinned_by_its_own_material() {
+    let imported = import(skinned());
+    assert_compiles(&imported);
+    // One material per (material, skin): the static placement keeps the
+    // plain one.
+    assert_eq!(imported.material_skins, vec![Some(0), None]);
+    let skinned = &imported.scene.materials[0].graph;
+    for name in [wxsl_gltf::JOINTS_ATTRIBUTE, wxsl_gltf::WEIGHTS_ATTRIBUTE] {
+        assert!(skinned.attribute(name).is_some(), "declares `{name}`");
+    }
+    assert_eq!(param(skinned, wxsl_gltf::BONE_FRAME_PARAM), Some(Value::F32(0.0)));
+    assert!(imported.scene.materials[1]
+        .graph
+        .attribute(wxsl_gltf::JOINTS_ATTRIBUTE)
+        .is_none());
+    assert_eq!(imported.meshes[0].joints.as_deref(), Some(&[[0u16; 4]; 3][..]));
+    let skin = &imported.skins[0];
+    assert_eq!(skin.joints, vec![0]);
+    assert_eq!(imported.scene.nodes[skin.node].name, "skinned");
+}
+
+#[test]
+fn clips_bake_into_one_row_per_frame_after_the_imported_pose() {
+    let imported = import(skinned());
+    let [clip] = &imported.animations[..] else {
+        panic!("one clip");
+    };
+    assert_eq!((clip.name.as_str(), clip.duration), ("lift", 1.0));
+    let bones = wxsl_gltf::BoneTexture::bake(&imported, 0, 2.0);
+    // Three texels for the one joint; the imported pose, then 0, 0.5 and
+    // 1 s of the clip.
+    assert_eq!((bones.width, bones.height), (3, 4));
+    assert_eq!(bones.clips, vec![(1, 3)]);
+    let lift = |row: usize| bones.texels[row * 3 + 1][3];
+    assert_eq!([lift(0), lift(1), lift(2), lift(3)], [0.0, 0.0, 1.0, 2.0]);
+    assert_eq!(bones.frame(0, 0.6), 2.0);
+    assert_eq!(bones.frame(0, 1.6), 1.0, "loops");
+}

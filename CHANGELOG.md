@@ -11,6 +11,15 @@ an entry.
 
 ### Added
 
+- GPU skinning. `output.vertex` takes optional object-space `normal` and
+  `tangent` inputs, `input.object_tangent` reads the mesh's tangent, and
+  `animation.skin` blends four joints from a bone texture. The glTF import
+  keeps skins and clips (`ImportedScene::skins`, `animations`,
+  `material_skins`), imports `JOINTS_0`/`WEIGHTS_0` as the `joints` and
+  `weights` streams, and skins a skinned primitive's material from
+  `bone_texture` at `bone_frame`, which `BoneTexture::bake` fills
+  ([ADR 0099](docs/adr/0099-skins-and-animations-are-baked-into-a-bone-texture-and-skinned-in-the-vertex-stage.md)).
+
 - `ColorSpace::Normal` (`"normal"` in a scene document) and the
   `lighting.normal_spread_roughness` node. A normal map's mips keep their
   mean direction and, in alpha, the roughness the averaged-away detail

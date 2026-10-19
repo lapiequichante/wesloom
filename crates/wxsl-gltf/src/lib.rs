@@ -26,6 +26,11 @@
 //! uses beyond [`MAPPED_EXTENSIONS`], and every ignored texture or setting,
 //! is an [`ImportWarning`] naming it.
 //!
+//! - **Skins and animations** ([`animation`], ADR 0099) are kept as data:
+//!   a skinned primitive's material reads [`JOINTS_ATTRIBUTE`] and
+//!   [`WEIGHTS_ATTRIBUTE`] and is skinned in its vertex stage from a bone
+//!   texture the host bakes and binds at [`BONE_TEXTURE_SLOT`].
+//!
 //! [`geometry`] is the lower half on its own: triangle primitives as CPU
 //! geometry, for a `file` mesh source.
 //!
@@ -37,12 +42,16 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod animation;
 pub mod geometry;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub use geometry::{Geometry, Vertex, COLOR_ATTRIBUTE, UV1_ATTRIBUTE};
+pub use animation::{Animation, BoneTexture, Skin};
+pub use geometry::{
+    Geometry, Vertex, COLOR_ATTRIBUTE, JOINTS_ATTRIBUTE, UV1_ATTRIBUTE, WEIGHTS_ATTRIBUTE,
+};
 use gltf::material::AlphaMode;
 use gltf::texture::{MagFilter, MinFilter, WrappingMode};
 use serde_json::Value as Json;
@@ -66,6 +75,14 @@ pub const TAG_DOUBLE_SIDED: &str = "double_sided";
 /// Tag the refraction pass selects (ADR 0067), set on transmissive
 /// materials.
 pub const TAG_REFRACTIVE: &str = "refractive";
+
+/// The texture slot a skinned material reads its bone matrices from
+/// ([`BoneTexture`]); the host binds it.
+pub const BONE_TEXTURE_SLOT: &str = "bone_texture";
+
+/// The parameter a skinned material reads its bone texture's row at: the
+/// frame to show.
+pub const BONE_FRAME_PARAM: &str = "bone_frame";
 
 /// The extensions the importer maps. Any other one the file uses is a
 /// warning.
@@ -101,6 +118,13 @@ pub struct ImportedScene {
     /// built from; `None` for the spec's default material. What a tool
     /// that reads the file again needs to find a material's textures.
     pub material_sources: Vec<Option<usize>>,
+    /// The skeletons skinned primitives use, in first-use order.
+    pub skins: Vec<Skin>,
+    /// Per document material, the skin it is skinned by: a skinned
+    /// material's [`BONE_TEXTURE_SLOT`] wants that skin's bones.
+    pub material_skins: Vec<Option<usize>>,
+    /// The file's clips, over the document's nodes.
+    pub animations: Vec<Animation>,
 }
 
 impl ImportedScene {
@@ -249,8 +273,14 @@ struct Importer<'a> {
     warnings: Vec<ImportWarning>,
     /// Per glTF mesh: its primitives' scene meshes and glTF materials.
     mesh_primitives: BTreeMap<usize, Vec<(usize, gltf::Material<'a>)>>,
-    /// Per glTF material (`None`: the default material): its entry.
-    materials: BTreeMap<Option<usize>, usize>,
+    /// Per glTF material (`None`: the default material) and skin: its
+    /// entry.
+    materials: BTreeMap<(Option<usize>, Option<usize>), usize>,
+    /// Per glTF node visited: its document node.
+    nodes: BTreeMap<usize, usize>,
+    /// Per skin used, in first-use order: the glTF skin and the document
+    /// node of the first mesh it skins.
+    skins: Vec<(gltf::Skin<'a>, usize)>,
     /// Per (glTF texture, colour space): its entry, or `None` when its
     /// image is unusable.
     textures: BTreeMap<(usize, u8), Option<usize>>,
@@ -275,6 +305,8 @@ impl<'a> Importer<'a> {
             warnings: Vec::new(),
             mesh_primitives: BTreeMap::new(),
             materials: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            skins: Vec::new(),
             textures: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
@@ -311,10 +343,14 @@ impl<'a> Importer<'a> {
             self.scene.environment = Some(environment);
         }
         self.fit_lighting_budget();
+        let skins = self.read_skins();
+        let animations = self.read_animations();
 
         let mut material_sources = vec![None; self.scene.materials.len()];
-        for (source, entry) in &self.materials {
+        let mut material_skins = vec![None; self.scene.materials.len()];
+        for ((source, skin), entry) in &self.materials {
             material_sources[*entry] = *source;
+            material_skins[*entry] = *skin;
         }
         ImportedScene {
             scene: self.scene,
@@ -323,7 +359,122 @@ impl<'a> Importer<'a> {
             directory,
             warnings: self.warnings,
             material_sources,
+            skins,
+            material_skins,
+            animations,
         }
+    }
+
+    /// The skins primitives were skinned by, their joints mapped to
+    /// document nodes.
+    fn read_skins(&mut self) -> Vec<Skin> {
+        let skins = std::mem::take(&mut self.skins);
+        skins
+            .iter()
+            .map(|(skin, node)| {
+                let name = skin
+                    .name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("skin {}", skin.index()));
+                let joints = skin
+                    .joints()
+                    .map(|joint| match self.nodes.get(&joint.index()) {
+                        Some(&joint) => joint,
+                        None => {
+                            self.warnings.push(ImportWarning::Node {
+                                node: name.clone(),
+                                message: format!(
+                                    "joint {} is outside the default scene; it stays at the mesh",
+                                    joint.index()
+                                ),
+                            });
+                            *node
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let reader =
+                    skin.reader(|buffer| self.buffers.get(buffer.index()).map(|d| &d.0[..]));
+                let inverse_bind = match reader.read_inverse_bind_matrices() {
+                    Some(matrices) => matrices.map(flatten).collect(),
+                    None => vec![flatten(glam::Mat4::IDENTITY.to_cols_array_2d()); joints.len()],
+                };
+                Skin {
+                    name,
+                    joints,
+                    inverse_bind,
+                    node: *node,
+                }
+            })
+            .collect()
+    }
+
+    /// The file's clips, over the document's nodes. Morph target weights
+    /// are warned about and left out.
+    fn read_animations(&mut self) -> Vec<Animation> {
+        use animation::{Channel, Interpolation, Property};
+        use gltf::animation::util::ReadOutputs;
+        let mut animations = Vec::new();
+        for clip in self.document.animations() {
+            let name = clip
+                .name()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("animation {}", clip.index()));
+            let mut channels = Vec::new();
+            let mut morphs = false;
+            for channel in clip.channels() {
+                let Some(&node) = self.nodes.get(&channel.target().node().index()) else {
+                    continue;
+                };
+                let reader =
+                    channel.reader(|buffer| self.buffers.get(buffer.index()).map(|d| &d.0[..]));
+                let (Some(times), Some(outputs)) = (reader.read_inputs(), reader.read_outputs())
+                else {
+                    continue;
+                };
+                let widen = |[x, y, z]: [f32; 3]| [x, y, z, 0.0];
+                let (property, values): (Property, Vec<[f32; 4]>) = match outputs {
+                    ReadOutputs::Translations(values) => {
+                        (Property::Translation, values.map(widen).collect())
+                    }
+                    ReadOutputs::Rotations(values) => {
+                        (Property::Rotation, values.into_f32().collect())
+                    }
+                    ReadOutputs::Scales(values) => (Property::Scale, values.map(widen).collect()),
+                    ReadOutputs::MorphTargetWeights(_) => {
+                        morphs = true;
+                        continue;
+                    }
+                };
+                channels.push(Channel {
+                    node,
+                    property,
+                    interpolation: match channel.sampler().interpolation() {
+                        gltf::animation::Interpolation::Linear => Interpolation::Linear,
+                        gltf::animation::Interpolation::Step => Interpolation::Step,
+                        gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
+                    },
+                    times: times.collect(),
+                    values,
+                });
+            }
+            if morphs {
+                self.warnings.push(ImportWarning::Node {
+                    node: name.clone(),
+                    message: "morph target weights are not supported; their channels were ignored"
+                        .to_string(),
+                });
+            }
+            let duration = channels
+                .iter()
+                .filter_map(|channel| channel.times.last().copied())
+                .fold(0.0, f32::max);
+            animations.push(Animation {
+                name,
+                channels,
+                duration,
+            });
+        }
+        animations
     }
 
     /// A layered model next to the default one can overflow the G-buffer
@@ -394,10 +545,20 @@ impl<'a> Importer<'a> {
             entry = entry.with_parent(parent);
         }
         let index = self.scene.add_node(entry);
+        self.nodes.insert(node.index(), index);
 
         if let Some(mesh) = node.mesh() {
             for (primitive, material) in self.primitives(&mesh) {
-                let material = self.material(&material);
+                let skinned = matches!(
+                    self.scene.meshes[primitive].source,
+                    MeshSource::Embedded { index }
+                        if self.meshes[index].joints.is_some() && self.meshes[index].weights.is_some()
+                );
+                let skin = node
+                    .skin()
+                    .filter(|_| skinned)
+                    .map(|skin| self.skin(skin, index));
+                let material = self.material(&material, skin);
                 self.scene.add_instance(
                     Instance::new(primitive, material)
                         .with_node(index)
@@ -470,20 +631,46 @@ impl<'a> Importer<'a> {
         read
     }
 
-    /// The material entry for `material`, built on first use. A primitive
-    /// with none has the spec's default material (white, metallic 1,
-    /// roughness 1), whose index is `None`.
-    fn material(&mut self, material: &gltf::Material<'a>) -> usize {
-        if let Some(&entry) = self.materials.get(&material.index()) {
+    /// The index of `skin` in the import, placed by document node `node`.
+    /// The bones are baked relative to the first node a skin is met at; a
+    /// second node placing it elsewhere is warned about.
+    fn skin(&mut self, skin: gltf::Skin<'a>, node: usize) -> usize {
+        if let Some(at) = self
+            .skins
+            .iter()
+            .position(|(known, _)| known.index() == skin.index())
+        {
+            let first = self.skins[at].1;
+            if first != node && self.scene.node_world(first) != self.scene.node_world(node) {
+                self.warnings.push(ImportWarning::Node {
+                    node: self.scene.nodes[node].name.clone(),
+                    message: format!(
+                        "skin {} is already placed by `{}`; this placement follows that one",
+                        skin.index(),
+                        self.scene.nodes[first].name
+                    ),
+                });
+            }
+            return at;
+        }
+        self.skins.push((skin, node));
+        self.skins.len() - 1
+    }
+
+    /// The material entry for `material` (skinned by `skin`), built on
+    /// first use. A primitive with none has the spec's default material
+    /// (white, metallic 1, roughness 1), whose index is `None`.
+    fn material(&mut self, material: &gltf::Material<'a>, skin: Option<usize>) -> usize {
+        if let Some(&entry) = self.materials.get(&(material.index(), skin)) {
             return entry;
         }
-        let entry = self.build_material(material);
+        let entry = self.build_material(material, skin.is_some());
         let entry = self.scene.add_material(entry);
-        self.materials.insert(material.index(), entry);
+        self.materials.insert((material.index(), skin), entry);
         entry
     }
 
-    fn build_material(&mut self, material: &gltf::Material<'_>) -> MaterialEntry {
+    fn build_material(&mut self, material: &gltf::Material<'_>, skinned: bool) -> MaterialEntry {
         let name = material
             .name()
             .map(str::to_string)
@@ -840,6 +1027,9 @@ impl<'a> Importer<'a> {
 
         if material.double_sided() {
             tags.push(TAG_DOUBLE_SIDED);
+        }
+        if skinned {
+            graph.skin();
         }
 
         let mut entry =
@@ -1250,6 +1440,55 @@ impl<'r> PbrGraph<'r> {
         self.wire(map.spread, (node, "spread"));
         self.wire(map.strength, (node, "strength"));
         (node, "out")
+    }
+
+    /// The vertex stage of a skinned material: `animation.skin` over the
+    /// declared joints and weights, from the bone texture at the frame
+    /// parameter, into the vertex output.
+    fn skin(&mut self) {
+        let attribute = |this: &mut Self, name: &str| {
+            this.graph
+                .declare_attribute(AttributeDecl::vertex(name, ValueType::Vec4));
+            let node = this.graph.add_resolved(
+                this.registry,
+                Node::new("input.attribute").with_setting(SETTING_NAME, name),
+            );
+            this.generic(node, "T", ValueType::Vec4);
+            node
+        };
+        let joints = attribute(self, JOINTS_ATTRIBUTE);
+        let weights = attribute(self, WEIGHTS_ATTRIBUTE);
+        let bones = self.graph.add_resolved(
+            self.registry,
+            Node::new("texture.texture_2d").with_setting(SETTING_NAME, BONE_TEXTURE_SLOT),
+        );
+        let frame = self.param(BONE_FRAME_PARAM, Value::F32(0.0));
+        let skin = self.node("animation.skin");
+        self.wire((bones, "out"), (skin, "bones"));
+        self.wire((joints, "out"), (skin, "joints"));
+        self.wire((weights, "out"), (skin, "weights"));
+        self.wire((frame, "out"), (skin, "frame"));
+        for (input, socket) in [
+            ("input.object_position", "position"),
+            ("input.object_normal", "normal"),
+            ("input.object_tangent", "tangent"),
+        ] {
+            let read = self.node(input);
+            self.wire((read, "out"), (skin, socket));
+        }
+        let vertex = self.node(wxsl_core::abi::VERTEX_OUTPUT_ID);
+        self.wire(
+            (skin, "offset"),
+            (vertex, wxsl_core::abi::SOCKET_POSITION_OFFSET),
+        );
+        self.wire(
+            (skin, "normal"),
+            (vertex, wxsl_core::abi::SOCKET_VERTEX_NORMAL),
+        );
+        self.wire(
+            (skin, "tangent"),
+            (vertex, wxsl_core::abi::SOCKET_VERTEX_TANGENT),
+        );
     }
 
     /// Sample texture slot `slot` (and its sampler, `<slot>_sampler`)

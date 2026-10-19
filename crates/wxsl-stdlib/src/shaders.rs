@@ -72,6 +72,7 @@ modules! {
     // Granular functions, one per file, grouped by category.
     "package::animation::ease_in_out_cubic" => "animation/ease_in_out_cubic.wxsl",
     "package::animation::pulse" => "animation/pulse.wxsl",
+    "package::animation::skin" => "animation/skin.wxsl",
 
     "package::color::bloom_threshold" => "color/bloom_threshold.wxsl",
     "package::color::hsv_to_rgb" => "color/hsv_to_rgb.wxsl",

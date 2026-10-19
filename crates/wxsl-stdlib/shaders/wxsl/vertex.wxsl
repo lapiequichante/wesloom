@@ -38,6 +38,7 @@ struct VertexOut {
 struct VertexContext {
     object_position: vec3f,
     object_normal: vec3f,
+    object_tangent: vec3f,
     world_position: vec3f,
     world_normal: vec3f,
     world_tangent: vec3f,
@@ -58,6 +59,7 @@ fn vertex_context(input: VertexIn) -> VertexContext {
     var out: VertexContext;
     out.object_position = input.position;
     out.object_normal = input.normal;
+    out.object_tangent = input.tangent.xyz;
     out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;
@@ -90,6 +92,24 @@ fn transform_vertex_offset(input: VertexIn, offset: vec3f) -> VertexOut {
     out.world_bitangent = cross(normal, tangent) * input.tangent.w;
     out.uv = input.uv;
     return out;
+}
+
+// What a graph's vertex output computes, in object space: an offset added
+// to the position, and the normal and tangent that replace the mesh's (a
+// skinned mesh's deformed frame; the mesh's own when unconnected).
+struct VertexDisplacement {
+    offset: vec3f,
+    normal: vec3f,
+    tangent: vec3f,
+}
+
+// `transform_vertex_offset` over a displaced vertex: the frame the graph
+// computed replaces the mesh's before the model transform.
+fn transform_vertex_displaced(input: VertexIn, displacement: VertexDisplacement) -> VertexOut {
+    var displaced = input;
+    displaced.normal = displacement.normal;
+    displaced.tangent = vec4f(displacement.tangent, input.tangent.w);
+    return transform_vertex_offset(displaced, displacement.offset);
 }
 
 // Object space to clip space, undisplaced.

@@ -85,6 +85,7 @@ fn previous_vertex_context(input: VertexIn) -> VertexContext {
     var out: VertexContext;
     out.object_position = input.position;
     out.object_normal = input.normal;
+    out.object_tangent = input.tangent.xyz;
     out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;

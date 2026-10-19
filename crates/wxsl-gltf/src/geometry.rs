@@ -16,7 +16,9 @@
 //!   [`Geometry::colors`] and [`Geometry::uv1`], which a material reads as
 //!   the declared attributes [`COLOR_ATTRIBUTE`] and [`UV1_ATTRIBUTE`]
 //!   ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
-//!   Joints and weights want a skinning stage that does not exist yet.
+//! * **`JOINTS_0` and `WEIGHTS_0`** come across as [`Geometry::joints`] and
+//!   [`Geometry::weights`], uploaded as the streams [`JOINTS_ATTRIBUTE`]
+//!   and [`WEIGHTS_ATTRIBUTE`] a skinned material declares (ADR 0099).
 
 use std::path::Path;
 
@@ -29,6 +31,11 @@ use crate::ImportError;
 pub const COLOR_ATTRIBUTE: &str = "color";
 /// Name a glTF `TEXCOORD_1` stream is imported under.
 pub const UV1_ATTRIBUTE: &str = "uv1";
+/// Name a glTF `JOINTS_0` stream is imported under: four joint indices as
+/// floats, since vertex streams are float (ADR 0024).
+pub const JOINTS_ATTRIBUTE: &str = "joints";
+/// Name a glTF `WEIGHTS_0` stream is imported under.
+pub const WEIGHTS_ATTRIBUTE: &str = "weights";
 
 /// One vertex, in the host layout `wxsl_core::host` fixes for `Vertex`
 /// (48 bytes; `WxslVertex` in `wxsl_host.h`).
@@ -56,6 +63,11 @@ pub struct Geometry {
     pub colors: Option<Vec<[f32; 4]>>,
     /// `TEXCOORD_1`, one per vertex, when the file has it.
     pub uv1: Option<Vec<[f32; 2]>>,
+    /// `JOINTS_0`, one per vertex, when the file has it: indices into its
+    /// skin's joints.
+    pub joints: Option<Vec<[u16; 4]>>,
+    /// `WEIGHTS_0`, one per vertex, alongside [`Geometry::joints`].
+    pub weights: Option<Vec<[f32; 4]>>,
 }
 
 /// Every triangle primitive of a glTF or GLB file, in depth-first node
@@ -181,11 +193,21 @@ pub(crate) fn read_primitive(
         .read_tex_coords(1)
         .map(|coords| coords.into_f32().collect::<Vec<_>>())
         .filter(|values| values.len() == positions.len());
+    let joints = reader
+        .read_joints(0)
+        .map(|joints| joints.into_u16().collect::<Vec<_>>())
+        .filter(|values| values.len() == positions.len());
+    let weights = reader
+        .read_weights(0)
+        .map(|weights| weights.into_f32().collect::<Vec<_>>())
+        .filter(|values| values.len() == positions.len());
     Some(Geometry {
         vertices,
         indices,
         colors,
         uv1,
+        joints,
+        weights,
     })
 }
 

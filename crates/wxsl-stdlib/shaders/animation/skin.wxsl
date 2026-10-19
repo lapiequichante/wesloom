@@ -1,0 +1,59 @@
+// Skin
+//
+// Linear blend skinning from a bone texture: the vertex moved by up to
+// four joints, weighted. Wire its outputs into the vertex output.
+//
+// The texture holds one row per animation frame and three texels per
+// joint, the rows of its 3×4 matrix from the mesh's bind pose to its pose
+// in that frame (ADR 0099). The host bakes every clip into it once, so
+// playing an animation only moves `frame`.
+//
+// Everything is object space. The normal and tangent are turned by the
+// blended matrix's linear part, which is right while the joints do not
+// scale unevenly.
+
+struct Skinned {
+    offset: vec3f,
+    normal: vec3f,
+    tangent: vec3f,
+}
+
+fn skin(
+    bones: texture_2d<f32>,
+    joints: vec4f,   // The four joint indices, as floats.
+    weights: vec4f,  // Their weights, summing to 1. @default 1.0, 0.0, 0.0, 0.0
+    frame: f32,      // The bone texture's row. @default 0.0
+    position: vec3f, // The vertex's object-space position.
+    normal: vec3f,   // Its object-space normal. @default 0.0, 1.0, 0.0
+    tangent: vec3f,  // Its object-space tangent. @default 1.0, 0.0, 0.0
+) -> Skinned {
+    let size = vec2i(textureDimensions(bones));
+    let row = clamp(i32(frame), 0, size.y - 1);
+    var r0 = vec4f(0.0);
+    var r1 = vec4f(0.0);
+    var r2 = vec4f(0.0);
+    for (var i = 0; i < 4; i++) {
+        let weight = weights[i];
+        if weight != 0.0 {
+            let column = clamp(i32(joints[i]) * 3, 0, size.x - 3);
+            r0 += textureLoad(bones, vec2i(column, row), 0) * weight;
+            r1 += textureLoad(bones, vec2i(column + 1, row), 0) * weight;
+            r2 += textureLoad(bones, vec2i(column + 2, row), 0) * weight;
+        }
+    }
+    var out: Skinned;
+    // No weight at all: the vertex stays where the mesh put it.
+    if dot(weights, vec4f(1.0)) == 0.0 {
+        out.offset = vec3f(0.0);
+        out.normal = normal;
+        out.tangent = tangent;
+        return out;
+    }
+    let p = vec4f(position, 1.0);
+    out.offset = vec3f(dot(r0, p), dot(r1, p), dot(r2, p)) - position;
+    let linear = mat3x3f(r0.xyz, r1.xyz, r2.xyz);
+    // `linear` holds the rows, so `v * linear` is the matrix times `v`.
+    out.normal = normalize(normal * linear);
+    out.tangent = normalize(tangent * linear);
+    return out;
+}

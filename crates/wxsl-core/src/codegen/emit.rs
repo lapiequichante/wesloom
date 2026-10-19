@@ -201,12 +201,15 @@ impl Emitter<'_> {
         if displaces || interpolates {
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_STRUCT);
         }
+        if displaces {
+            self.request_import(abi::VERTEX_MODULE, abi::VERTEX_DISPLACEMENT_STRUCT);
+        }
         if self.options.emit_entry_points {
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_IN_STRUCT);
             self.request_import(abi::VERTEX_MODULE, abi::VERTEX_OUT_STRUCT);
             if displaces {
                 self.request_import(abi::VERTEX_MODULE, abi::VERTEX_CONTEXT_FN);
-                self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_OFFSET_FN);
+                self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_DISPLACED_FN);
             } else {
                 self.request_import(abi::VERTEX_MODULE, abi::TRANSFORM_VERTEX_FN);
             }
@@ -779,16 +782,22 @@ impl Emitter<'_> {
         if let Some(vertex) = &parts.vertex {
             let _ = write!(
                 out,
-                "\nfn {}({}: {}{attributes}) -> vec3f {{\n",
+                "\nfn {}({}: {}{attributes}) -> {} {{\n",
                 abi::VERTEX_FN,
                 abi::VERTEX_CONTEXT_VAR,
                 abi::VERTEX_CONTEXT_STRUCT,
+                abi::VERTEX_DISPLACEMENT_STRUCT,
             );
             out.push_str(&vertex.body);
+            let normal = format!("{}.object_normal", abi::VERTEX_CONTEXT_VAR);
+            let tangent = format!("{}.object_tangent", abi::VERTEX_CONTEXT_VAR);
             let _ = writeln!(
                 out,
-                "    return {};",
-                vertex.input(abi::SOCKET_POSITION_OFFSET, "vec3f(0.0, 0.0, 0.0)")
+                "    return {}({}, {}, {});",
+                abi::VERTEX_DISPLACEMENT_STRUCT,
+                vertex.input(abi::SOCKET_POSITION_OFFSET, "vec3f(0.0, 0.0, 0.0)"),
+                vertex.input(abi::SOCKET_VERTEX_NORMAL, &normal),
+                vertex.input(abi::SOCKET_VERTEX_TANGENT, &tangent),
             );
             out.push_str("}\n");
         }

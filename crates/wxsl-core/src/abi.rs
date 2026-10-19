@@ -92,6 +92,12 @@ pub const VERTEX_CONTEXT_FN: &str = "vertex_context";
 /// [`TRANSFORM_VERTEX_FN`] with an object-space position offset applied
 /// before the model transform.
 pub const TRANSFORM_VERTEX_OFFSET_FN: &str = "transform_vertex_offset";
+/// [`TRANSFORM_VERTEX_FN`] with a [`VERTEX_DISPLACEMENT_STRUCT`] applied:
+/// what the vertex entry of a graph with a vertex output calls.
+pub const TRANSFORM_VERTEX_DISPLACED_FN: &str = "transform_vertex_displaced";
+/// What [`VERTEX_FN`] returns: the object-space offset, normal and tangent
+/// a graph's vertex output computes.
+pub const VERTEX_DISPLACEMENT_STRUCT: &str = "VertexDisplacement";
 
 /// Module path of the velocity stage's ABI, the twin of [`VERTEX_MODULE`]
 /// for the one stage whose vertex entry differs: it transforms every
@@ -1572,6 +1578,13 @@ pub const VERTEX_ONLY_FIELDS: &[ContextField] = &[
         doc: "The vertex's normal in object space, unit length.",
         domains: Domains::SURFACE,
     },
+    ContextField {
+        name: "object_tangent",
+        ty: ValueType::Vec3,
+        label: "Object tangent",
+        doc: "The vertex's tangent in object space, unit length.",
+        domains: Domains::SURFACE,
+    },
 ];
 
 /// One field of [`SURFACE_STRUCT`], i.e. one input of the output node.
@@ -1926,6 +1939,12 @@ pub const SHADED_VAR: &str = "wxsl_shaded";
 pub const VARYING_OUTPUT_ID: &str = "output.varying";
 /// The input socket [`VERTEX_OUTPUT_ID`] takes its offset on.
 pub const SOCKET_POSITION_OFFSET: &str = "position_offset";
+/// The input socket [`VERTEX_OUTPUT_ID`] takes a replacement object-space
+/// normal on.
+pub const SOCKET_VERTEX_NORMAL: &str = "normal";
+/// The input socket [`VERTEX_OUTPUT_ID`] takes a replacement object-space
+/// tangent on.
+pub const SOCKET_VERTEX_TANGENT: &str = "tangent";
 /// The input socket [`DISCARD_OUTPUT_ID`] takes its condition on.
 pub const SOCKET_DISCARD: &str = "discard";
 /// Input socket of [`VARYING_OUTPUT_ID`].
@@ -2043,6 +2062,19 @@ pub fn vertex_output_def() -> NodeDefinition {
             Socket::new(SOCKET_POSITION_OFFSET, ValueType::Vec3)
                 .with_doc("Object-space offset added to the vertex position.")
                 .with_default(Value::Vec3([0.0, 0.0, 0.0]))
+                .optional(),
+        )
+        .input(
+            Socket::new(SOCKET_VERTEX_NORMAL, ValueType::Vec3)
+                .with_doc("Object-space normal replacing the mesh's; unconnected, the mesh's.")
+                .optional(),
+        )
+        .input(
+            Socket::new(SOCKET_VERTEX_TANGENT, ValueType::Vec3)
+                .with_doc(
+                    "Object-space tangent replacing the mesh's, its bitangent sign kept; \
+                     unconnected, the mesh's.",
+                )
                 .optional(),
         )
         .vertex_output()

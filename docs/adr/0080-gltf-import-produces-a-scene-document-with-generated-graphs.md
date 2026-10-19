@@ -112,7 +112,9 @@ could not reuse it through the data-only C ABI (ADR 0049).
     clearcoat's are mapped since ADR 0091);
   - `KHR_materials_specular` and `KHR_materials_variants`;
   - KTX2;
-  - skinning, morph targets and animation (plan6 decision 5).
+  - morph targets (plan6 decision 5). Skinning and animation are
+    imported since
+    [ADR 0099](0099-skins-and-animations-are-baked-into-a-bone-texture-and-skinned-in-the-vertex-stage.md).
 - `examples/viewer.rs` opens a file under an HDR environment and routes
   `refractive` materials through the refraction tier. The Khronos samples
   it names are in `resources/glb/`, with their licenses.

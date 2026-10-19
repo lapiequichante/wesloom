@@ -402,7 +402,7 @@ pub(super) fn write_entry_points(
     let transform = |args: &str| match parts.vertex.is_some() {
         true => format!(
             "{}(input, {}({}{args}))",
-            abi::TRANSFORM_VERTEX_OFFSET_FN,
+            abi::TRANSFORM_VERTEX_DISPLACED_FN,
             abi::VERTEX_FN,
             abi::VERTEX_CONTEXT_VAR,
         ),
@@ -433,9 +433,15 @@ pub(super) fn write_entry_points(
     };
     let (offset_now, offset_previous) = match parts.vertex.is_some() {
         true => (
-            format!("{}({}{attrs_arg})", abi::VERTEX_FN, abi::VERTEX_CONTEXT_VAR),
+            // Positions only: in the velocity stage the shading basis feeds
+            // nothing but a discard.
             format!(
-                "{}({}(input){attrs_arg})",
+                "{}({}{attrs_arg}).offset",
+                abi::VERTEX_FN,
+                abi::VERTEX_CONTEXT_VAR
+            ),
+            format!(
+                "{}({}(input){attrs_arg}).offset",
                 abi::VERTEX_FN,
                 abi::PREVIOUS_CONTEXT_FN,
             ),

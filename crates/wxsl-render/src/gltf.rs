@@ -10,9 +10,13 @@
 //! a file whose parts land on top of each other is not an import, it is a
 //! puzzle. `COLOR_0` and `TEXCOORD_1` become the named streams
 //! [`COLOR_ATTRIBUTE`] and [`UV1_ATTRIBUTE`]
-//! ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)).
+//! ([ADR 0024](../../../docs/adr/0024-a-material-declares-the-geometry-it-requires.md)),
+//! and `JOINTS_0` and `WEIGHTS_0` the streams [`JOINTS_ATTRIBUTE`] and
+//! [`WEIGHTS_ATTRIBUTE`] a skinned material reads (ADR 0099).
 
-pub use wxsl_gltf::geometry::{Geometry, COLOR_ATTRIBUTE, UV1_ATTRIBUTE};
+pub use wxsl_gltf::geometry::{
+    Geometry, COLOR_ATTRIBUTE, JOINTS_ATTRIBUTE, UV1_ATTRIBUTE, WEIGHTS_ATTRIBUTE,
+};
 
 use crate::error::RenderError;
 use crate::mesh::{AttributeValues, MeshData, Vertex};
@@ -63,6 +67,18 @@ pub fn mesh_data(geometry: &Geometry) -> MeshData {
             AttributeValues::Vec2(uv1.clone()),
         );
     }
+    // Joint indices as floats: vertex streams are float (ADR 0024), and
+    // every index below 2^24 survives the trip.
+    if let (Some(joints), Some(weights)) = (&geometry.joints, &geometry.weights) {
+        data.attributes.insert(
+            JOINTS_ATTRIBUTE.to_string(),
+            AttributeValues::Vec4(joints.iter().map(|joint| joint.map(f32::from)).collect()),
+        );
+        data.attributes.insert(
+            WEIGHTS_ATTRIBUTE.to_string(),
+            AttributeValues::Vec4(weights.clone()),
+        );
+    }
     data
 }
 
@@ -86,6 +102,7 @@ mod tests {
             indices: vec![0, 1, 2],
             colors: Some(vec![[1.0; 4]; 3]),
             uv1: Some(vec![[0.5; 2]; 3]),
+            ..Geometry::default()
         };
         let data = mesh_data(&geometry);
         assert!(matches!(

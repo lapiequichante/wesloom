@@ -18,7 +18,8 @@ impl Default for Glb {
                 "asset": { "version": "2.0" },
                 "buffers": [], "bufferViews": [], "accessors": [],
                 "images": [], "textures": [], "samplers": [], "materials": [],
-                "meshes": [], "nodes": [], "scenes": [{ "nodes": [] }], "scene": 0,
+                "meshes": [], "nodes": [], "skins": [], "animations": [],
+                "scenes": [{ "nodes": [] }], "scene": 0,
             }),
             bin: Vec::new(),
         }
@@ -73,6 +74,34 @@ impl Glb {
             accessor["max"] = json!(max);
         }
         self.push("accessors", accessor)
+    }
+
+    /// An unsigned short `VEC4` accessor, as `JOINTS_0` is.
+    pub fn joints(&mut self, values: &[u16]) -> usize {
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let view = self.view(&bytes);
+        self.push(
+            "accessors",
+            json!({
+                "bufferView": view, "componentType": 5123,
+                "count": values.len() / 4, "type": "VEC4",
+            }),
+        )
+    }
+
+    /// The triangle of [`Glb::triangle`], every vertex bound to joint 0 of
+    /// its skin; returns the mesh.
+    pub fn skinned_triangle(&mut self) -> usize {
+        let mesh = self.triangle(None, false);
+        let joints = self.joints(&[0; 12]);
+        let weights = self.floats(&[1.0, 0.0, 0.0, 0.0].repeat(3), "VEC4");
+        let attributes = &mut self.json["meshes"][mesh]["primitives"][0]["attributes"];
+        attributes["JOINTS_0"] = json!(joints);
+        attributes["WEIGHTS_0"] = json!(weights);
+        mesh
     }
 
     /// One triangle in the xy plane facing +z, with UVs; returns the mesh.

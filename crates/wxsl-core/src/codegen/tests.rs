@@ -240,8 +240,8 @@ fn a_time_driven_displacement_answers_for_both_frames() {
         .source;
     assert!(
         source.contains(
-            "transform_vertex_velocity(input, wxsl_vertex(vtx, attrs), \
-             wxsl_vertex(previous_vertex_context(input), attrs))"
+            "transform_vertex_velocity(input, wxsl_vertex(vtx, attrs).offset, \
+             wxsl_vertex(previous_vertex_context(input), attrs).offset)"
         ),
         "both offsets come from the one partition, twice-contexted: {source}"
     );

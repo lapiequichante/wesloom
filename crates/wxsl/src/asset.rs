@@ -28,8 +28,8 @@
 use std::path::Path;
 
 pub use wxsl_gltf::{
-    ImportError, ImportWarning, ImportedScene, GLTF_PBR_GRAPH, MAPPED_EXTENSIONS, TAG_DOUBLE_SIDED,
-    TAG_REFRACTIVE,
+    Animation, BoneTexture, ImportError, ImportWarning, ImportedScene, Skin, BONE_FRAME_PARAM,
+    BONE_TEXTURE_SLOT, GLTF_PBR_GRAPH, MAPPED_EXTENSIONS, TAG_DOUBLE_SIDED, TAG_REFRACTIVE,
 };
 
 /// Import a `.gltf` or `.glb` file, its materials built from the stdlib.

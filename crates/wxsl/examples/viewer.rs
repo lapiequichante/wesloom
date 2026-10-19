@@ -47,6 +47,14 @@
 //! screenshots to compare. The environment is projected onto spherical
 //! harmonics when the HDR loads, so `--hdr` relights the bakes.
 //!
+//! **Skinned models** (ADR 0099) play their clips: each skin's clips are
+//! baked into a bone texture when the file opens, and the GPU skins the
+//! vertices from it, so a frame only moves the row the materials read.
+//! `A` cycles the clips and the imported pose; `--clip N` picks the first
+//! one and `--time T` where a screenshot is taken in it
+//! (`viewer -- me --clip 2 --time 1.2 --screenshot out.png`). PRT bakes are
+//! not used on a skinned model.
+//!
 //! The lighting is image-based only, unless the file carries
 //! `KHR_lights_punctual` lights: the HDR is convolved into diffuse and GGX
 //! cubes once, and drawn behind the model. Transmissive materials (the
@@ -63,7 +71,7 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, Window
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
-use wxsl::asset::ImportedScene;
+use wxsl::asset::{BoneTexture, ImportedScene, BONE_FRAME_PARAM, BONE_TEXTURE_SLOT};
 use wxsl::core::scene::MeshSource;
 use wxsl::core::Value;
 use wxsl::render::environment::EnvironmentImage;
@@ -86,6 +94,7 @@ const HDRS: &[&str] = &[
 const DEMOS: &[(&str, &str)] = &[
     ("wxsl-car", "WXSLCar/wxslCar.glb"),
     ("wxsl-garage", "WXSLGarage/wxslGarage.glb"),
+    ("me", "me_car/me_car.glb"),
     ("glam-velvet-sofa", "GlamVelvetSofa/GlamVelvetSofa.glb"),
     ("damaged-helmet", "DamagedHelmet/DamagedHelmet.glb"),
     ("car-concept", "CarConcept/CarConcept.glb"),
@@ -93,11 +102,11 @@ const DEMOS: &[(&str, &str)] = &[
 
 const USAGE: &str = "viewer [demo|file.glb] [--hdr file.hdr] [--screenshot out.png] [--size WxH]
               [--grid N] [--bench FRAMES] [--prt off|gray|color] [--zoom Z] [--yaw A]
-              [--focus F] [--blur B] [--no-dof] [--streak]
-demos: wxsl-car (default), wxsl-garage, glam-velvet-sofa, damaged-helmet, car-concept
+              [--focus F] [--blur B] [--no-dof] [--streak] [--clip N] [--time T]
+demos: wxsl-car (default), wxsl-garage, me, glam-velvet-sofa, damaged-helmet, car-concept
 window: drag orbits, scroll zooms, 1/2/3 switch demo, Space toggles the turntable,
         right-drag sets the focus (x) and the blur (y), D toggles depth of field,
-        S toggles a motion blur along Z,
+        S toggles a motion blur along Z, A cycles a skinned model's clips,
         P cycles PRT off / gray / color (when the model has .prt bakes),
         H cycles the environment (sunrise, overcast, sunny), Esc quits";
 
@@ -126,6 +135,10 @@ struct Options {
     lens: Lens,
     /// Whether the model streaks along Z (`S`).
     streak: bool,
+    /// The clip a skinned model starts playing.
+    clip: usize,
+    /// Where in it a screenshot or a bench is taken, in seconds.
+    time: f32,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -141,6 +154,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         yaw: Orbit::default().yaw,
         lens: Lens::default(),
         streak: false,
+        clip: 0,
+        time: 0.0,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -158,6 +173,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--blur" => options.lens.blur = value()?.parse()?,
             "--no-dof" => options.lens.enabled = false,
             "--streak" => options.streak = true,
+            "--clip" => options.clip = value()?.parse()?,
+            "--time" => options.time = value()?.parse()?,
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -463,9 +480,86 @@ impl Prt {
     }
 }
 
+/// The rate clips are baked into the bone textures at.
+const BONE_FPS: f32 = 60.0;
+
+/// One skin's baked clips, uploaded (ADR 0099).
+struct Bones {
+    baked: BoneTexture,
+    view: wgpu::TextureView,
+}
+
+impl Bones {
+    /// Bake skin `skin` of `imported` through every clip and upload it as
+    /// half floats: the material group's textures are filterable.
+    fn upload(gpu: &GpuContext, imported: &ImportedScene, skin: usize) -> Self {
+        let baked = BoneTexture::bake(imported, skin, BONE_FPS);
+        let size = wgpu::Extent3d {
+            width: baked.width,
+            height: baked.height,
+            depth_or_array_layers: 1,
+        };
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("viewer bones"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let bytes: Vec<u8> = baked
+            .texels
+            .iter()
+            .flatten()
+            .flat_map(|value| f16_bits(*value).to_le_bytes())
+            .collect();
+        gpu.queue.write_texture(
+            texture.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(baked.width * 8),
+                rows_per_image: None,
+            },
+            size,
+        );
+        Bones {
+            baked,
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        }
+    }
+}
+
+/// `value` as IEEE half-float bits, rounded to nearest.
+fn f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = bits & 0x7f_ffff;
+    if exponent >= 31 {
+        // Too large, or not a number: infinity keeps the sign at least.
+        return sign | 0x7c00;
+    }
+    if exponent <= 0 {
+        if exponent < -10 {
+            return sign;
+        }
+        let mantissa = (mantissa | 0x80_0000) >> (1 - exponent);
+        return sign | ((mantissa + 0x1000) >> 13) as u16;
+    }
+    // A carry out of the mantissa rounds into the exponent, as it should.
+    sign | (((exponent as u32) << 10) + ((mantissa + 0x1000) >> 13)) as u16
+}
+
 /// One opened file, ready to draw.
 struct Model {
     imported: ImportedScene,
+    /// One per skin, in [`ImportedScene::skins`] order.
+    bones: Vec<Bones>,
+    /// The clip playing, or `None` for the pose the file was saved in.
+    clip: Option<usize>,
     /// One set per PRT bake found beside the file, each reading its own
     /// streams; one plain set when there is none.
     variants: Vec<(Option<Transfer>, SceneResources)>,
@@ -487,6 +581,7 @@ impl Model {
         path: &Path,
         grid: u32,
         prt: Prt,
+        clip: usize,
     ) -> Result<Self, Box<dyn Error>> {
         let started = Instant::now();
         let mut imported = wxsl::asset::import_gltf(path)?;
@@ -515,19 +610,35 @@ impl Model {
             .iter()
             .map(wxsl::render::gltf::mesh_data)
             .collect();
+        let bones: Vec<Bones> = (0..imported.skins.len())
+            .map(|skin| Bones::upload(gpu, &imported, skin))
+            .collect();
+        for (index, animation) in imported.animations.iter().enumerate() {
+            println!(
+                "  clip {index}: `{}`, {:.2} s",
+                animation.name, animation.duration
+            );
+        }
         let mut variants = Vec::new();
         for bake in prt_bakes(&imported, path, grid)? {
             let (mut scene, mut streams) = (imported.clone(), meshes.clone());
             attach_prt(&mut scene, &mut streams, &bake, &hdr.sh)?;
-            let resources = load_resources(gpu, renderer, &scene, &streams)?;
+            let resources = load_resources(gpu, renderer, &scene, &streams, &bones)?;
             variants.push((Some(bake.transfer), resources));
         }
         if variants.is_empty() {
-            variants.push((None, load_resources(gpu, renderer, &imported, &meshes)?));
+            variants.push((
+                None,
+                load_resources(gpu, renderer, &imported, &meshes, &bones)?,
+            ));
         }
-        let (center, radius) = bounds(&imported);
+        let clip = (!imported.animations.is_empty())
+            .then_some(clip.min(imported.animations.len().saturating_sub(1)));
+        let (center, radius) = bounds(&imported, clip);
         let mut model = Model {
             imported,
+            bones,
+            clip,
             variants,
             active: 0,
             prt: Prt::Off,
@@ -542,6 +653,38 @@ impl Model {
 
     fn resources(&self) -> &SceneResources {
         &self.variants[self.active].1
+    }
+
+    /// Show the playing clip at `time` seconds: every skinned material of
+    /// the drawn variant reads its bone texture's row for it.
+    fn animate(&mut self, gpu: &GpuContext, time: f32) -> Result<(), Box<dyn Error>> {
+        let (_, resources) = &mut self.variants[self.active];
+        for (material, skin) in self.imported.material_skins.iter().enumerate() {
+            let (Some(skin), Some(bindings)) = (skin, resources.bindings_mut(material)) else {
+                continue;
+            };
+            let frame = match self.clip {
+                Some(clip) => self.bones[*skin].baked.frame(clip, time),
+                None => 0.0,
+            };
+            bindings.set(BONE_FRAME_PARAM, Value::F32(frame))?;
+        }
+        resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+
+    /// The next clip, then the pose the file was saved in.
+    fn cycle_clip(&mut self) {
+        let count = self.imported.animations.len();
+        self.clip = match self.clip {
+            Some(clip) if clip + 1 < count => Some(clip + 1),
+            Some(_) => None,
+            None => (count > 0).then_some(0),
+        };
+        match self.clip {
+            Some(clip) => println!("clip `{}`", self.imported.animations[clip].name),
+            None => println!("no clip"),
+        }
     }
 
     /// What this model can show: off, then each bake it has.
@@ -624,6 +767,7 @@ fn load_resources(
     renderer: &mut Renderer,
     imported: &ImportedScene,
     meshes: &[MeshData],
+    bones: &[Bones],
 ) -> Result<SceneResources, Box<dyn Error>> {
     let mut resources = SceneResources::load_resolved(
         &gpu.device,
@@ -642,6 +786,11 @@ fn load_resources(
             .collect(),
     );
     resources.create_bindings(&gpu.device, &gpu.queue, renderer)?;
+    for (material, skin) in imported.material_skins.iter().enumerate() {
+        if let (Some(skin), Some(bindings)) = (skin, resources.bindings_mut(material)) {
+            bindings.set_texture(BONE_TEXTURE_SLOT, &bones[*skin].view)?;
+        }
+    }
     Ok(resources)
 }
 
@@ -662,6 +811,12 @@ fn prt_bakes(
         // The bake is for the model where the file puts it, not for copies.
         if grid > 1 {
             println!("  {}: not used with --grid", file.display());
+            continue;
+        }
+        // Nor for a skinned model, whose surface moves away from the one
+        // the bake saw.
+        if !imported.skins.is_empty() {
+            println!("  {}: not used on a skinned model", file.display());
             continue;
         }
         let bake = wxsl_prt::Bake::read(std::io::BufReader::new(std::fs::File::open(&file)?))
@@ -701,7 +856,7 @@ fn repeat(imported: &mut ImportedScene, grid: u32) {
     if grid <= 1 {
         return;
     }
-    let (_, radius) = bounds(imported);
+    let (_, radius) = bounds(imported, None);
     let scene = &mut imported.scene;
     let originals = std::mem::take(&mut scene.instances);
     for row in 0..grid {
@@ -719,16 +874,46 @@ fn repeat(imported: &mut ImportedScene, grid: u32) {
     }
 }
 
-/// The centre and radius of every instance's vertices, in world space.
-fn bounds(imported: &ImportedScene) -> (Vec3, f32) {
+/// The centre and radius of every instance's vertices, in world space; a
+/// skinned one's where its joints put it rather than its node, at the
+/// start of `clip` or in the pose the file was saved in.
+fn bounds(imported: &ImportedScene, clip: Option<usize>) -> (Vec3, f32) {
     let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for instance in &imported.scene.instances {
-        let MeshSource::Embedded { index } = imported.scene.meshes[instance.mesh].source else {
+    let mut posed = imported.scene.clone();
+    if let Some(animation) = clip.and_then(|clip| imported.animations.get(clip)) {
+        animation.pose(0.0, &imported.scene.nodes, &mut posed.nodes);
+    }
+    let scene = &imported.scene;
+    for instance in &scene.instances {
+        let MeshSource::Embedded { index } = scene.meshes[instance.mesh].source else {
             continue;
         };
-        let world = Mat4::from_cols_array(&imported.scene.instance_world(instance));
-        for vertex in &imported.meshes[index].vertices {
-            let point = world.transform_point3(Vec3::from_array(vertex.position));
+        let geometry = &imported.meshes[index];
+        let world = Mat4::from_cols_array(&scene.instance_world(instance));
+        let joints: Vec<Mat4> = match imported.material_skins[instance.material] {
+            Some(skin) => {
+                let skin = &imported.skins[skin];
+                skin.joint_matrices(&posed, &scene.node_world(skin.node))
+                    .iter()
+                    .map(Mat4::from_cols_array)
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        for (at, vertex) in geometry.vertices.iter().enumerate() {
+            let mut point = Vec3::from_array(vertex.position);
+            if let (false, Some(indices), Some(weights)) =
+                (joints.is_empty(), &geometry.joints, &geometry.weights)
+            {
+                point = indices[at]
+                    .iter()
+                    .zip(weights[at])
+                    .filter_map(|(&joint, weight)| {
+                        Some(joints.get(joint as usize)?.transform_point3(point) * weight)
+                    })
+                    .sum();
+            }
+            let point = world.transform_point3(point);
             min = min.min(point);
             max = max.max(point);
         }
@@ -812,14 +997,16 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     let target = OffscreenTarget::new(&gpu.device, width, height);
     let hdr = load_hdr(&gpu, &options.hdr)?;
     let mut renderer = renderer_for(&gpu, TargetConfig::new(width, height, target.format()))?;
-    let model = Model::open(
+    let mut model = Model::open(
         &gpu,
         &mut renderer,
         &hdr,
         &model_path(&options.model),
         options.grid,
         options.prt,
+        options.clip,
     )?;
+    model.animate(&gpu, options.time)?;
     let orbit = Orbit {
         zoom: options.zoom,
         yaw: options.yaw,
@@ -881,6 +1068,8 @@ struct App {
     focusing: bool,
     cursor: Option<(f64, f64)>,
     last_frame: Instant,
+    /// Where the playing clip is, in seconds.
+    clip_time: f32,
 }
 
 impl App {
@@ -917,6 +1106,7 @@ impl App {
             &model_path(&self.options.model),
             self.options.grid,
             self.options.prt,
+            self.options.clip,
         )?;
         let mut state = State {
             window,
@@ -944,11 +1134,13 @@ impl App {
             &model_path(name),
             self.options.grid,
             self.options.prt,
+            self.options.clip,
         ) {
             Ok(model) => {
                 state.model = model;
                 self.options.model = name.to_string();
                 self.orbit = Orbit::default();
+                self.clip_time = 0.0;
                 state.window.set_title(&format!("wxsl viewer — {name}"));
             }
             Err(error) => eprintln!("cannot open {name}: {error}"),
@@ -1009,9 +1201,13 @@ impl App {
         if self.turntable && !self.dragging {
             self.orbit.yaw += elapsed * 0.3;
         }
+        self.clip_time += elapsed;
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        if let Err(error) = state.model.animate(&state.gpu, self.clip_time) {
+            eprintln!("cannot animate: {error}");
+        }
         let frame = match state.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -1168,6 +1364,13 @@ impl ApplicationHandler for App {
                     lens.enabled = !lens.enabled;
                     println!("depth of field {}", if lens.enabled { "on" } else { "off" });
                 }
+                KeyCode::KeyA => {
+                    if let Some(state) = self.state.as_mut() {
+                        state.model.cycle_clip();
+                        self.options.clip = state.model.clip.unwrap_or(0);
+                        self.clip_time = 0.0;
+                    }
+                }
                 KeyCode::KeyS => {
                     self.options.streak = !self.options.streak;
                     println!("streak {}", if self.options.streak { "on" } else { "off" });
@@ -1196,14 +1399,16 @@ fn bench(options: &Options, frames: u32) -> Result<(), Box<dyn Error>> {
     let target = OffscreenTarget::new(&gpu.device, width, height);
     let hdr = load_hdr(&gpu, &options.hdr)?;
     let mut renderer = renderer_for(&gpu, TargetConfig::new(width, height, target.format()))?;
-    let model = Model::open(
+    let mut model = Model::open(
         &gpu,
         &mut renderer,
         &hdr,
         &model_path(&options.model),
         options.grid,
         options.prt,
+        options.clip,
     )?;
+    model.animate(&gpu, options.time)?;
     let aspect = width as f32 / height as f32;
     let views = [
         ("framed", Orbit::default()),
@@ -1288,6 +1493,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         focusing: false,
         cursor: None,
         last_frame: Instant::now(),
+        clip_time: 0.0,
     };
     event_loop.run_app(&mut app)?;
     match app.error {
