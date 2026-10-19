@@ -11,6 +11,13 @@ an entry.
 
 ### Added
 
+- `ColorSpace::Normal` (`"normal"` in a scene document) and the
+  `lighting.normal_spread_roughness` node. A normal map's mips keep their
+  mean direction and, in alpha, the roughness the averaged-away detail
+  adds; the glTF importer reads normal and coat-normal textures that way
+  and widens the matching roughness, so mip transitions stop showing on
+  flake paint and brushed metal
+  ([ADR 0094](docs/adr/0094-a-normal-maps-mips-keep-their-spread-and-widen-the-roughness.md)).
 - `output.fragment`, and a `color` output on `output.surface`: nodes
   between the two change a material's lit colour, under either pipeline
   ([ADR 0089](docs/adr/0089-the-surface-output-hands-its-shaded-colour-to-a-fragment-output.md)).

@@ -2552,6 +2552,7 @@ pub fn wxsl_core::resources::texels_per_row(u32) -> u32
 pub mod wxsl_core::scene
 pub enum wxsl_core::scene::ColorSpace
 pub wxsl_core::scene::ColorSpace::Linear
+pub wxsl_core::scene::ColorSpace::Normal
 pub wxsl_core::scene::ColorSpace::Srgb
 impl core::clone::Clone for wxsl_core::scene::ColorSpace
 pub fn wxsl_core::scene::ColorSpace::clone(&self) -> Self

@@ -81,3 +81,6 @@ file reads as v2 unchanged.
 - [ADR 0080](0080-gltf-import-produces-a-scene-document-with-generated-graphs.md)
   adds an `embedded` mesh source, for geometry supplied with the
   document, within schema 2.
+- [ADR 0094](0094-a-normal-maps-mips-keep-their-spread-and-widen-the-roughness.md)
+  adds a `normal` colour space, for normal maps whose mips keep their
+  spread, within schema 2.

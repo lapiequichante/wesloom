@@ -1,0 +1,21 @@
+// Normal spread roughness
+//
+// Roughness widened by the detail a normal map's mips averaged away. A
+// texture in the `normal` colour space keeps, in each mip's alpha, the
+// GGX alpha its normals' spread adds (ADR 0094); wire that alpha into
+// `spread`. Far away, where a flake or a brushed groove shrinks below a
+// texel, its highlight then turns into the wider, dimmer lobe it really
+// is instead of a mirror, and the mip transitions stop showing.
+//
+// Lobes add their variances: alpha² grows by (strength · spread)², with
+// alpha = roughness² (perceptual roughness, as `distribution_ggx`).
+// `strength` is the normal map's own strength, since it scales the slopes.
+fn normal_spread_roughness(
+    roughness: f32, // Perceptual roughness, 0..1. @default 0.5
+    spread: f32,    // The normal texture's alpha. @default 0.0
+    strength: f32,  // The normal map's strength. @default 1.0
+) -> f32 {
+    let r = clamp(roughness, 0.0, 1.0);
+    let widened = max(spread, 0.0) * strength;
+    return sqrt(sqrt(min(r * r * r * r + widened * widened, 1.0)));
+}

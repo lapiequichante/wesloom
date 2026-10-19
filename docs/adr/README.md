@@ -125,6 +125,7 @@ The ten decisions the rest of the log builds on:
 | [0091](0091-the-gltf-clear-coat-is-a-model-of-its-own-authored-on-the-surface.md) | The glTF clear coat is a model of its own, authored on the surface | Accepted |
 | [0092](0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md) | Precomputed radiance transfer is baked offline and applied as environment occlusion | Accepted |
 | [0093](0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md) | Thin-walled glass and the transmission factor are optical-layer data | Accepted |
+| [0094](0094-a-normal-maps-mips-keep-their-spread-and-widen-the-roughness.md) | A normal map's mips keep their spread, and it widens the roughness | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

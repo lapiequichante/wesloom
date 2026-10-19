@@ -253,7 +253,7 @@ struct Importer<'a> {
     materials: BTreeMap<Option<usize>, usize>,
     /// Per (glTF texture, colour space): its entry, or `None` when its
     /// image is unusable.
-    textures: BTreeMap<(usize, bool), Option<usize>>,
+    textures: BTreeMap<(usize, u8), Option<usize>>,
     /// Per glTF image: its source, or why it is unusable.
     sources: BTreeMap<usize, Result<TextureSource, String>>,
 }
@@ -585,16 +585,15 @@ impl<'a> Importer<'a> {
         // Metallic and roughness: blue and green of one texture.
         let metallic = graph.param("metallic_factor", Value::F32(pbr.metallic_factor()));
         let roughness = graph.param("roughness_factor", Value::F32(pbr.roughness_factor()));
-        match self.texture_ref(pbr.metallic_roughness_texture().as_ref(), false) {
+        let roughness = match self.texture_ref(pbr.metallic_roughness_texture().as_ref(), false) {
             Ok(Some((texture, info))) => {
                 bindings.push(("metallic_roughness_texture".to_string(), texture));
                 let sample = graph.sample("metallic_roughness_texture", &info);
                 let channels = graph.node("convert.split.vec4f");
                 graph.wire((sample, "out"), (channels, "v"));
                 let m = graph.multiply((channels, "z"), (metallic, "out"), ValueType::F32);
-                let r = graph.multiply((channels, "y"), (roughness, "out"), ValueType::F32);
                 graph.output(m, "metallic");
-                graph.output(r, "roughness");
+                graph.multiply((channels, "y"), (roughness, "out"), ValueType::F32)
             }
             other => {
                 if let Err(message) = other {
@@ -604,26 +603,30 @@ impl<'a> Importer<'a> {
                     );
                 }
                 graph.output((metallic, "out"), "metallic");
-                graph.output((roughness, "out"), "roughness");
+                (roughness, "out")
             }
-        }
+        };
 
-        // Normal map: tangent space, scaled in x and y.
+        // Normal map: tangent space, scaled in x and y. The detail its
+        // mips average away widens the roughness (ADR 0094).
+        let mut roughness = roughness;
         if let Some(normal) = material.normal_texture() {
             let info = TexInfo::raw(
                 normal.texture(),
                 normal.tex_coord(),
                 normal.extension_value("KHR_texture_transform"),
             );
-            match self.texture_slot(&info, false) {
+            match self.texture_slot(&info, ColorSpace::Normal) {
                 Ok(texture) => {
                     bindings.push(("normal_texture".to_string(), texture));
                     let mapped = graph.normal_map("normal", &info, normal.scale());
-                    graph.output(mapped, "normal");
+                    graph.output(mapped.normal, "normal");
+                    roughness = graph.spread_roughness(roughness, &mapped);
                 }
                 Err(message) => warn(&mut self.warnings, format!("normalTexture: {message}")),
             }
         }
+        graph.output(roughness, "roughness");
 
         // Occlusion: red, blended toward 1 by strength.
         if let Some(occlusion) = material.occlusion_texture() {
@@ -632,7 +635,7 @@ impl<'a> Importer<'a> {
                 occlusion.tex_coord(),
                 occlusion.extension_value("KHR_texture_transform"),
             );
-            match self.texture_slot(&info, false) {
+            match self.texture_slot(&info, ColorSpace::Linear) {
                 Ok(texture) => {
                     bindings.push(("occlusion_texture".to_string(), texture));
                     let sample = graph.sample("occlusion_texture", &info);
@@ -759,6 +762,7 @@ impl<'a> Importer<'a> {
             {
                 // Strength in the red of its texture, roughness in the
                 // green of its own; each times its factor.
+                let mut coat_roughness = None;
                 for (field, value, key, channel) in [
                     ("clearcoat", factor, "clearcoatTexture", "x"),
                     (
@@ -769,7 +773,7 @@ impl<'a> Importer<'a> {
                     ),
                 ] {
                     let factor = graph.param(&format!("{field}_factor"), Value::F32(value));
-                    let out = match self.extension_texture(clearcoat.get(key)) {
+                    let out = match self.extension_texture(clearcoat.get(key), ColorSpace::Linear) {
                         Ok(Some((texture, info))) => {
                             let slot = format!("{field}_texture");
                             bindings.push((slot.clone(), texture));
@@ -784,15 +788,21 @@ impl<'a> Importer<'a> {
                             (factor, "out")
                         }
                     };
-                    graph.output(out, field);
+                    if field == "clearcoat" {
+                        graph.output(out, field);
+                    } else {
+                        coat_roughness = Some(out);
+                    }
                 }
+                let mut coat_roughness = coat_roughness.expect("set by the loop");
                 let normal = clearcoat.get("clearcoatNormalTexture");
-                match self.extension_texture(normal) {
+                match self.extension_texture(normal, ColorSpace::Normal) {
                     Ok(Some((texture, info))) => {
                         bindings.push(("clearcoat_normal_texture".to_string(), texture));
                         let scale = normal.map_or(1.0, |normal| number(normal, "scale", 1.0));
                         let mapped = graph.normal_map("clearcoat_normal", &info, scale);
-                        graph.output(mapped, "clearcoat_normal");
+                        graph.output(mapped.normal, "clearcoat_normal");
+                        coat_roughness = graph.spread_roughness(coat_roughness, &mapped);
                     }
                     Ok(None) => {}
                     Err(message) => warn(
@@ -800,6 +810,7 @@ impl<'a> Importer<'a> {
                         format!("clearcoatNormalTexture: {message}"),
                     ),
                 }
+                graph.output(coat_roughness, "clearcoat_roughness");
             }
         }
         if let Some(sheen) = material.extension_value("KHR_materials_sheen") {
@@ -865,15 +876,21 @@ impl<'a> Importer<'a> {
                 .unwrap_or(info.tex_coord()),
             transform,
         };
-        let texture = self.texture_slot(&info, srgb)?;
+        let space = if srgb {
+            ColorSpace::Srgb
+        } else {
+            ColorSpace::Linear
+        };
+        let texture = self.texture_slot(&info, space)?;
         Ok(Some((texture, info)))
     }
 
     /// An extension's texture reference, which exists only as JSON: its
-    /// scene texture (linear) and how it is read.
+    /// scene texture (in `space`) and how it is read.
     fn extension_texture(
         &mut self,
         json: Option<&Json>,
+        space: ColorSpace,
     ) -> Result<Option<(usize, TexInfo)>, String> {
         let Some(json) = json else { return Ok(None) };
         let index = json
@@ -891,20 +908,21 @@ impl<'a> Importer<'a> {
             json.get("extensions")
                 .and_then(|extensions| extensions.get("KHR_texture_transform")),
         );
-        let texture = self.texture_slot(&info, false)?;
+        let texture = self.texture_slot(&info, space)?;
         Ok(Some((texture, info)))
     }
 
     /// The scene texture for `info` in the given colour space, created on
     /// first use.
-    fn texture_slot(&mut self, info: &TexInfo, srgb: bool) -> Result<usize, String> {
+    fn texture_slot(&mut self, info: &TexInfo, space: ColorSpace) -> Result<usize, String> {
+        let key = (info.texture, space as u8);
         if info.tex_coord > 1 {
             return Err(format!(
                 "TEXCOORD_{} is not imported; only sets 0 and 1 are",
                 info.tex_coord
             ));
         }
-        if let Some(known) = self.textures.get(&(info.texture, srgb)) {
+        if let Some(known) = self.textures.get(&key) {
             return known.ok_or_else(|| "its image is unusable".to_string());
         }
         let texture = self
@@ -931,7 +949,7 @@ impl<'a> Importer<'a> {
             }
         };
         let Ok(source) = source else {
-            self.textures.insert((info.texture, srgb), None);
+            self.textures.insert(key, None);
             return Err("its image is unusable".to_string());
         };
         let name = texture
@@ -939,14 +957,10 @@ impl<'a> Importer<'a> {
             .or_else(|| image.name())
             .map(str::to_string)
             .unwrap_or_else(|| format!("texture {}", texture.index()));
-        let mut entry = TextureEntry::new(name, source).with_color_space(if srgb {
-            ColorSpace::Srgb
-        } else {
-            ColorSpace::Linear
-        });
+        let mut entry = TextureEntry::new(name, source).with_color_space(space);
         entry.sampler = sampler(&texture.sampler());
         let index = self.scene.add_texture(entry);
-        self.textures.insert((info.texture, srgb), Some(index));
+        self.textures.insert(key, Some(index));
         Ok(index)
     }
 
@@ -1099,6 +1113,14 @@ impl UvTransform {
     }
 }
 
+/// A normal map's outputs: the shading normal, the spread in its mips'
+/// alpha, and the strength that scales both.
+struct NormalMap {
+    normal: (NodeId, &'static str),
+    spread: (NodeId, &'static str),
+    strength: (NodeId, &'static str),
+}
+
 /// The `gltf_pbr` graph under construction.
 struct PbrGraph<'r> {
     graph: Graph,
@@ -1182,7 +1204,7 @@ impl<'r> PbrGraph<'r> {
 
     /// A tangent-space normal map over the geometric frame, sampled from
     /// slot `<name>_texture` and scaled in x and y by param `<name>_scale`.
-    fn normal_map(&mut self, name: &str, info: &TexInfo, scale: f32) -> (NodeId, &'static str) {
+    fn normal_map(&mut self, name: &str, info: &TexInfo, scale: f32) -> NormalMap {
         let sample = self.sample(&format!("{name}_texture"), info);
         let channels = self.node("convert.split.vec4f");
         self.wire((sample, "out"), (channels, "v"));
@@ -1210,7 +1232,24 @@ impl<'r> PbrGraph<'r> {
             self.wire((read, "out"), (mapped, socket));
         }
         self.wire((scale, "out"), (mapped, "strength"));
-        (mapped, "out")
+        NormalMap {
+            normal: (mapped, "out"),
+            spread: (channels, "w"),
+            strength: (scale, "out"),
+        }
+    }
+
+    /// `roughness` widened by the spread `map`'s mips averaged away.
+    fn spread_roughness(
+        &mut self,
+        roughness: (NodeId, &'static str),
+        map: &NormalMap,
+    ) -> (NodeId, &'static str) {
+        let node = self.node("lighting.normal_spread_roughness");
+        self.wire(roughness, (node, "roughness"));
+        self.wire(map.spread, (node, "spread"));
+        self.wire(map.strength, (node, "strength"));
+        (node, "out")
     }
 
     /// Sample texture slot `slot` (and its sampler, `<slot>_sampler`)

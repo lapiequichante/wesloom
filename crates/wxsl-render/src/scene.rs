@@ -798,7 +798,10 @@ fn upload_texture(
     image: &Decoded,
 ) -> SceneTexture {
     let srgb = entry.color_space == ColorSpace::Srgb;
-    let levels = mip_chain(image, srgb);
+    let levels = match entry.color_space {
+        ColorSpace::Normal => normal_mip_chain(image),
+        _ => mip_chain(image, srgb),
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(&entry.name),
         size: wgpu::Extent3d {
@@ -857,6 +860,10 @@ fn sampler_descriptor<'a>(label: &'a str, sampler: &SamplerEntry) -> wgpu::Sampl
         Wrap::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
         Wrap::ClampToEdge => wgpu::AddressMode::ClampToEdge,
     };
+    // Anisotropic filtering keeps grazing surfaces off coarse mips. wgpu
+    // allows it only when every filter is linear, and falls back to 1
+    // where the adapter lacks it.
+    let linear = [sampler.mag, sampler.min, sampler.mipmap] == [Filter::Linear; 3];
     wgpu::SamplerDescriptor {
         label: Some(label),
         address_mode_u: wrap(sampler.wrap_u),
@@ -867,6 +874,7 @@ fn sampler_descriptor<'a>(label: &'a str, sampler: &SamplerEntry) -> wgpu::Sampl
             Filter::Nearest => wgpu::MipmapFilterMode::Nearest,
             Filter::Linear => wgpu::MipmapFilterMode::Linear,
         },
+        anisotropy_clamp: if linear { 16 } else { 1 },
         ..Default::default()
     }
 }
@@ -946,6 +954,88 @@ fn mip_chain(image: &Decoded, srgb: bool) -> Vec<Decoded> {
             pixels,
         });
     }
+}
+
+/// The mip chain of a tangent-space normal map (ADR 0094). Each level's
+/// RGB is the mean direction of the full-size unit normals it covers, and
+/// its alpha the GGX alpha their spread adds: a von Mises–Fisher lobe
+/// fitted to the mean's length `r` has `κ = (3r − r³) / (1 − r²)`, and its
+/// slope variance `1/κ` per axis widens GGX's `α²` by `2/κ`. Alpha holds
+/// `√(2/κ)`, so a nearly flat level keeps its precision near 0.
+fn normal_mip_chain(image: &Decoded) -> Vec<Decoded> {
+    let (width, height) = (image.width.max(1), image.height.max(1));
+    // Unnormalised means, in f32: a box of box means is the mean of the
+    // whole footprint, so the spread is measured against full size.
+    let mut means: Vec<[f32; 3]> = image
+        .pixels
+        .chunks_exact(4)
+        .map(|texel| {
+            let n = [0, 1, 2].map(|c| texel[c] as f32 / 255.0 * 2.0 - 1.0);
+            let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if length > 1e-6 {
+                n.map(|c| c / length)
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        })
+        .collect();
+    let encode = |mean: &[f32; 3], full_size: bool| {
+        let r = (mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2]).sqrt();
+        let direction = if r > 1e-6 {
+            mean.map(|c| c / r)
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        let spread = if full_size || r >= 1.0 {
+            0.0
+        } else {
+            let r = r.max(1e-4);
+            (2.0 * (1.0 - r * r) / (r * (3.0 - r * r))).sqrt().min(1.0)
+        };
+        let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        [
+            byte(direction[0] * 0.5 + 0.5),
+            byte(direction[1] * 0.5 + 0.5),
+            byte(direction[2] * 0.5 + 0.5),
+            byte(spread),
+        ]
+    };
+
+    let mut levels = vec![Decoded {
+        width,
+        height,
+        pixels: image
+            .pixels
+            .chunks_exact(4)
+            .flat_map(|texel| [texel[0], texel[1], texel[2], 0])
+            .collect(),
+    }];
+    let (mut above_width, mut above_height) = (width, height);
+    while above_width > 1 || above_height > 1 {
+        let (width, height) = ((above_width / 2).max(1), (above_height / 2).max(1));
+        let mut below = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let texel = |dx: u32, dy: u32| {
+                    let (sx, sy) = (
+                        (x * 2 + dx).min(above_width - 1),
+                        (y * 2 + dy).min(above_height - 1),
+                    );
+                    means[(sy * above_width + sx) as usize]
+                };
+                let corners = [texel(0, 0), texel(1, 0), texel(0, 1), texel(1, 1)];
+                below.push([0, 1, 2].map(|c| corners.iter().map(|n| n[c]).sum::<f32>() / 4.0));
+            }
+        }
+        levels.push(Decoded {
+            width,
+            height,
+            pixels: below.iter().flat_map(|mean| encode(mean, false)).collect(),
+        });
+        means = below;
+        (above_width, above_height) = (width, height);
+    }
+    levels
 }
 
 #[cfg(feature = "gltf")]
@@ -1088,5 +1178,47 @@ mod tests {
         assert_eq!(srgb[1].pixels, [188, 188, 188, 255]);
         let linear = mip_chain(&image, false);
         assert_eq!(linear[1].pixels, [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn a_normal_mip_keeps_a_unit_direction_and_puts_the_spread_in_alpha() {
+        // Four normals tilted 45° to ±x and ±y: their mean points straight
+        // up, shorter than a unit by cos 45°.
+        let tilt = |x: f32, y: f32| {
+            let s = std::f32::consts::FRAC_1_SQRT_2;
+            [x * s, y * s, s, 1.0].map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8)
+        };
+        let image = Decoded {
+            width: 2,
+            height: 2,
+            pixels: [
+                tilt(1.0, 0.0),
+                tilt(-1.0, 0.0),
+                tilt(0.0, 1.0),
+                tilt(0.0, -1.0),
+            ]
+            .concat(),
+        };
+        let levels = normal_mip_chain(&image);
+        assert_eq!(levels.len(), 2);
+        assert!(levels[0].pixels.chunks(4).all(|texel| texel[3] == 0));
+        let [x, y, z, spread] = levels[1].pixels[..] else {
+            panic!("one texel");
+        };
+        assert_eq!([x, y, z], [128, 128, 255]);
+        // r ≈ 0.707 (quantised), so √(2/κ) ≈ 0.69.
+        let expected = {
+            let r = std::f32::consts::FRAC_1_SQRT_2;
+            (2.0 * (1.0 - r * r) / (r * (3.0 - r * r))).sqrt()
+        };
+        assert!((spread as f32 / 255.0 - expected).abs() < 0.02, "{spread}");
+
+        // A flat map spreads nothing.
+        let flat = Decoded {
+            width: 2,
+            height: 2,
+            pixels: [[128u8, 128, 255, 255]; 4].concat(),
+        };
+        assert_eq!(normal_mip_chain(&flat)[1].pixels[3], 0);
     }
 }

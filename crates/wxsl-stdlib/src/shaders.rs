@@ -129,6 +129,7 @@ modules! {
     "package::lighting::hg_phase" => "lighting/hg_phase.wxsl",
     "package::lighting::ior_to_f0" => "lighting/ior_to_f0.wxsl",
     "package::lighting::iridescence" => "lighting/iridescence.wxsl",
+    "package::lighting::normal_spread_roughness" => "lighting/normal_spread_roughness.wxsl",
     "package::lighting::pbr_direct" => "lighting/pbr_direct.wxsl",
     "package::lighting::pbr_direct_split" => "lighting/pbr_direct_split.wxsl",
     "package::lighting::prt_diffuse_occlusion" => "lighting/prt_diffuse_occlusion.wxsl",

@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (188)
+- [Shader nodes](#shader-nodes) (189)
 - [Pipeline nodes](#pipeline-nodes) (29)
 
 ## Shader nodes
@@ -748,6 +748,15 @@ The spectral reflectance of a thin film over a base surface: Snell's refraction 
 - in `thickness_nm: f32 = 300.0f`: Film thickness, nanometres.
 - in `film_ior: f32 = 1.3f`: The film's IOR, 1..3; 1 is the air interface.
 - out `out: vec3f`
+
+#### `lighting.normal_spread_roughness` · Normal spread roughness
+
+Roughness widened by the detail a normal map's mips averaged away. A texture in the `normal` colour space keeps, in each mip's alpha, the GGX alpha its normals' spread adds (ADR 0094); wire that alpha into `spread`. Far away, where a flake or a brushed groove shrinks below a texel, its highlight then turns into the wider, dimmer lobe it really is instead of a mirror, and the mip transitions stop showing.
+
+- in `roughness: f32 = 0.5f`: Perceptual roughness, 0..1.
+- in `spread: f32 = 0.0f`: The normal texture's alpha.
+- in `strength: f32 = 1.0f`: The normal map's strength.
+- out `out: f32`
 
 #### `lighting.pbr_direct` · PBR direct light
 

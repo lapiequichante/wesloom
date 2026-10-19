@@ -678,8 +678,13 @@ pub enum ColorSpace {
     /// emission.
     #[default]
     Srgb,
-    /// Data stored as is: normals, roughness, occlusion.
+    /// Data stored as is: roughness, occlusion.
     Linear,
+    /// A tangent-space normal map, stored as is in RGB. Its mips keep the
+    /// mean direction of the texels they cover, and their spread in alpha
+    /// as the GGX alpha it adds (`lighting.normal_spread_roughness`,
+    /// ADR 0094). Alpha is 0 at full size.
+    Normal,
 }
 
 /// How a texture is filtered and wrapped.

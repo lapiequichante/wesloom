@@ -107,13 +107,22 @@ fn a_material_becomes_a_gltf_pbr_graph_with_its_factors_and_bindings() {
         assert_eq!(slots[slot], slots[&format!("{slot}_sampler")], "{slot}");
     }
     // A texture is one entry per colour space it is read in: the albedo
-    // twice as colour, the data texture three times as data.
+    // twice as colour, the data texture twice as data and once as a
+    // normal map, whose mips differ.
     let space = |slot: &str| imported.scene.textures[slots[slot]].color_space;
     assert_eq!(space("base_color_texture"), ColorSpace::Srgb);
     assert_eq!(space("emissive_texture"), ColorSpace::Srgb);
-    assert_eq!(space("normal_texture"), ColorSpace::Linear);
-    assert_eq!(slots["normal_texture"], slots["occlusion_texture"]);
-    assert_eq!(imported.scene.textures.len(), 2);
+    assert_eq!(space("occlusion_texture"), ColorSpace::Linear);
+    assert_eq!(space("normal_texture"), ColorSpace::Normal);
+    assert_eq!(
+        slots["metallic_roughness_texture"],
+        slots["occlusion_texture"]
+    );
+    assert_eq!(imported.scene.textures.len(), 3);
+    // The normal map's spread widens the roughness.
+    assert!(graph
+        .nodes()
+        .any(|(_, node)| node.def == "lighting.normal_spread_roughness"));
     assert_eq!(imported.images.len(), 2);
     assert!(matches!(
         imported.scene.textures[0].source,
