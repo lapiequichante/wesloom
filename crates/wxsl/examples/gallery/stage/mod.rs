@@ -66,7 +66,7 @@ pub(crate) struct Stage {
     pub(crate) grid_floor: DemoMaterial,
     pub(crate) shadow_floor: DemoMaterial,
     pub(crate) area_emitter: DemoMaterial,
-    /// The `area-texture` and `neon` demos' floor, wall and emitters.
+    /// The `area-texture`, `neon` and `headlights` demos' scenery.
     pub(crate) lights: lights::LightStage,
     pub(crate) grid_floor_mesh: Mesh,
     pub(crate) camera_override: Option<(Camera, Option<Camera>)>,

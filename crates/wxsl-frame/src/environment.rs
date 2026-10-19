@@ -197,6 +197,10 @@ pub struct Light {
     pub spot_outer_angle: f32,
     /// Optional layer of the application-supplied spotlight cookie texture.
     pub cookie_layer: Option<u32>,
+    /// Optional layer of the cookie texture holding a point or spot
+    /// light's IES profile, as [`crate::ies::IesProfile::texels`] lays it
+    /// out (ADR 0097).
+    pub profile_layer: Option<u32>,
     /// Whether this light renders a shadow map.
     ///
     /// A directional light renders one tile per cascade
@@ -260,6 +264,7 @@ impl Light {
         spot_inner_angle: 0.4,
         spot_outer_angle: 0.7,
         cookie_layer: None,
+        profile_layer: None,
         casts_shadow: false,
         shadow_extent: 8.0,
         shadow_distance: 32.0,
@@ -374,6 +379,19 @@ impl Light {
             "cookies require a spotlight, a rectangle or a tube"
         );
         self.cookie_layer = Some(layer);
+        self
+    }
+
+    /// Shape this point or spot light's intensity by the IES profile in
+    /// this layer of Renderer::set_light_cookies: γ = 0 along
+    /// [`Light::spot_direction`] (straight down for a point light), C = 0
+    /// to its right, C = 90° up (ADR 0097). A spot's cone still applies.
+    pub fn with_profile(mut self, layer: u32) -> Self {
+        assert!(
+            matches!(self.kind, LightKind::Point | LightKind::Spot),
+            "IES profiles require a point or spot light"
+        );
+        self.profile_layer = Some(layer);
         self
     }
 
@@ -676,7 +694,7 @@ impl Light {
             area_u: self.area_u.to_array(),
             radius: self.radius,
             area_v: self.area_v.to_array(),
-            _padding2: 0.0,
+            profile_layer: self.profile_layer.unwrap_or(u32::MAX),
             spot_direction: self.spot_direction.to_array(),
             spot_outer_cos: self.spot_outer_angle.cos(),
             spot_inner_cos: self.spot_inner_angle.cos(),
@@ -1315,6 +1333,21 @@ mod tests {
         assert_eq!(env.shadow_tiles().len(), 96);
         assert_eq!(uniform.lights[0].area_u, Vec3::X.to_array());
         assert_eq!(uniform.lights[0].area_v, Vec3::Z.to_array());
+    }
+
+    #[test]
+    fn a_profile_rides_in_the_light_row_and_none_is_the_max_layer() {
+        let spot = Light::spot(Vec3::ZERO, Vec3::NEG_Z, 0.3, 0.5, Vec3::ONE, 1.0);
+        assert_eq!(spot.uniform(0, 0).profile_layer, u32::MAX);
+        assert_eq!(spot.with_profile(3).uniform(0, 0).profile_layer, 3);
+        let point = Light::point(Vec3::ZERO, Vec3::ONE, 1.0).with_profile(1);
+        assert_eq!(point.uniform(0, 0).profile_layer, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "point or spot")]
+    fn only_points_and_spots_take_a_profile() {
+        let _ = Light::directional(Vec3::Y, Vec3::ONE, 1.0).with_profile(0);
     }
 
     #[test]

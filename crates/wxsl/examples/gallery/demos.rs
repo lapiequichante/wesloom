@@ -341,6 +341,23 @@ pub(crate) fn demos() -> Vec<Demo> {
             warmup: 0,
         },
         Demo {
+            name: "headlights",
+            blurb: "two car headlights: spots shaped by an IES profile (a synthetic \
+                    low beam with its asymmetric cutoff) baked into a cookie layer, \
+                    each casting a shadow, down a road at night (ADR 0097)",
+            pipeline: Pipeline::Document(deferred_pyramid_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "spot-shadow", blurb: "a focused cone with soft angular falloff and one shadow tile (ADR 0073)",
             pipeline: Pipeline::Stock(StockPipeline::Deferred), instances: 1, key_intensity: 42.0,
             features: &[], macros: &[], model: None, sky: None, params: &[], material: None, motion: None, warmup: 0,

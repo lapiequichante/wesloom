@@ -116,7 +116,9 @@ pub fn structures() -> Vec<Structure> {
                 // A tube's radius; padding for every other kind.
                 field("radius", "radius", F32),
                 field("area_v", "area_v", Vector(3)),
-                field("_padding2", "_pad2", F32),
+                // A point or spot light's IES profile: a layer of the
+                // cookie array, `u32::MAX` for none (ADR 0097).
+                field("profile_layer", "profile_layer", U32),
                 field("spot_direction", "spot_direction", Vector(3)),
                 field("spot_outer_cos", "spot_outer_cos", F32),
                 field("spot_inner_cos", "spot_inner_cos", F32),

@@ -15,6 +15,7 @@
 pub mod effect;
 pub mod environment;
 pub mod graph;
+pub mod ies;
 pub mod light_grid;
 pub mod pass;
 pub mod pipeline;

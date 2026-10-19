@@ -133,6 +133,9 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
             if matches!(demo.name, "area-texture" | "neon") {
                 return Some((Vec3::splat(0.01), Vec3::splat(0.005)));
             }
+            if demo.name == "headlights" {
+                return Some((Vec3::new(0.006, 0.008, 0.014), Vec3::splat(0.002)));
+            }
             (matches!(demo.name, "area-shadow" | "spot-shadow" | "spot-cookie"))
                 .then_some((Vec3::splat(0.04), Vec3::splat(0.02)))
         })

@@ -648,6 +648,24 @@ fn sample_tube(setup: LightSetup, sample: u32) -> LightSample {
     return out;
 }
 
+// A point or spot light's IES profile towards `direction` (away from the
+// light), normalized to its brightest direction (ADR 0097). The layer
+// holds candela over u = C / 360°, v = γ / 180°: γ from the light's axis,
+// C from its right towards its up, the frame its cookie uses.
+fn light_profile(light: Light, direction: vec3f) -> f32 {
+    if light.profile_layer >= textureNumLayers(light_cookies) {
+        return 0.0;
+    }
+    let forward = normalize(light.spot_direction);
+    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
+    let right = normalize(cross(forward, up));
+    let vertical = cross(right, forward);
+    let gamma = acos(clamp(dot(direction, forward), -1.0, 1.0));
+    let around = atan2(dot(direction, vertical), dot(direction, right));
+    let uv = vec2f(fract(around * 0.15915494 + 1.0), gamma * 0.31830989);
+    return textureSampleLevel(light_cookies, environment_lut_sampler, uv, i32(light.profile_layer), 0.0).r;
+}
+
 // One light's sample at a point, from the light itself rather than its
 // slot: the uniform's lights and the clustered list's share this.
 fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> LightSample {
@@ -691,6 +709,9 @@ fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> Light
                 cookie = mask.rgb * mask.a;
             }
         }
+    }
+    if light.profile_layer != 0xffffffffu && (light.kind == LIGHT_KIND_SPOT || light.kind == LIGHT_KIND_POINT) {
+        weight = weight * light_profile(light, -out.direction);
     }
     // A ranged light's inverse square is windowed to reach exactly zero at
     // its range — the (1 - (d/r)^4)^2 window — which is what makes binning

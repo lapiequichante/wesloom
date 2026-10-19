@@ -1,9 +1,13 @@
 //! The `area-texture` and `neon` demos (ADR 0095): a rectangle emitting a
 //! texture drawn in WXSL, and tubes, neither casting a shadow, over a
-//! glossy floor that shows their reflections; plus the light textures
-//! (`light_textures.wxsl`) every textured light of the gallery reads.
+//! glossy floor that shows their reflections; the `headlights` demo, two
+//! spots shaped by an IES profile (ADR 0097); plus the light textures
+//! (`light_textures.wxsl`, `resources/ies/headlight.ies`) every textured light of the
+//! gallery reads.
 
 use std::borrow::Cow;
+
+use wxsl::render::environment::IesProfile;
 
 use super::*;
 
@@ -15,6 +19,20 @@ const COOKIE_LAYERS: [&str; 3] = ["window", "panel", "neon"];
 pub(crate) const WINDOW_LAYER: u32 = 0;
 const PANEL_LAYER: u32 = 1;
 const NEON_LAYER: u32 = 2;
+/// The layer after the drawn ones: `resources/ies/headlight.ies`, baked
+/// on the CPU.
+const HEADLIGHT_LAYER: u32 = 3;
+
+/// A non-negative value at most 1 as f16 bits, truncated; below f16's
+/// smallest normal it is zero.
+fn f16_bits(value: f32) -> u16 {
+    if value < 6.1e-5 {
+        return 0;
+    }
+    let bits = value.min(1.0).to_bits();
+    let exponent = ((bits >> 23) & 0xff) + 15 - 127;
+    ((exponent << 10) | ((bits >> 13) & 0x3ff)) as u16
+}
 
 /// The cookie array, and single-layer views of it for the materials that
 /// draw the emitters themselves.
@@ -46,13 +64,15 @@ pub(crate) fn light_textures(gpu: &GpuContext) -> Result<LightTextures, Box<dyn 
         size: wgpu::Extent3d {
             width: COOKIE_SIZE,
             height: COOKIE_SIZE,
-            depth_or_array_layers: COOKIE_LAYERS.len() as u32,
+            depth_or_array_layers: COOKIE_LAYERS.len() as u32 + 1,
         },
         mip_level_count: levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: COOKIE_FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let pipeline = |entry: &str| {
@@ -121,9 +141,44 @@ pub(crate) fn light_textures(gpu: &GpuContext) -> Result<LightTextures, Box<dyn 
         }
         pass.draw(0..3, 0..1);
     };
-    for (layer, entry) in COOKIE_LAYERS.iter().enumerate() {
-        let layer = layer as u32;
-        draw(&pipeline(entry), &level_view(layer, 0), None);
+    // The profile's first level is uploaded, white in every channel so
+    // that it also reads as a mask; its mips come from the same chain.
+    let profile = IesProfile::parse(include_str!("../../../../resources/ies/headlight.ies"))?;
+    let texels: Vec<u8> = profile
+        .texels(COOKIE_SIZE, COOKIE_SIZE)
+        .into_iter()
+        .flat_map(|value| {
+            let bits = f16_bits(value).to_le_bytes();
+            [bits, bits, bits, f16_bits(1.0).to_le_bytes()].concat()
+        })
+        .collect();
+    gpu.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: 0,
+                y: 0,
+                z: HEADLIGHT_LAYER,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        &texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(COOKIE_SIZE * 8),
+            rows_per_image: Some(COOKIE_SIZE),
+        },
+        wgpu::Extent3d {
+            width: COOKIE_SIZE,
+            height: COOKIE_SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    for layer in 0..=HEADLIGHT_LAYER {
+        if let Some(entry) = COOKIE_LAYERS.get(layer as usize) {
+            draw(&pipeline(entry), &level_view(layer, 0), None);
+        }
         for level in 1..levels {
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("gallery light texture level"),
@@ -246,8 +301,40 @@ pub(crate) fn lights(demo: &str) -> Option<Vec<Light>> {
                 })
                 .collect(),
         ),
+        "headlights" => Some(
+            headlights()
+                .into_iter()
+                .map(|position| {
+                    Light::spot(
+                        position,
+                        HEADLIGHT_AIM,
+                        40.0_f32.to_radians(),
+                        48.0_f32.to_radians(),
+                        Vec3::new(1.0, 0.95, 0.88),
+                        HEADLIGHT_INTENSITY,
+                    )
+                    .with_profile(HEADLIGHT_LAYER)
+                    .casting_shadow(8.0)
+                })
+                .collect(),
+        ),
         _ => None,
     }
+}
+
+/// Where the car's front sits, facing -z.
+const CAR_FRONT: f32 = 0.0;
+/// Straight ahead and a touch down, as headlights are aimed; the profile
+/// holds the beam's shape and its cutoff.
+const HEADLIGHT_AIM: Vec3 = Vec3::new(0.0, -0.012, -1.0);
+/// The profile's brightest direction, in the gallery's units.
+const HEADLIGHT_INTENSITY: f32 = 1500.0;
+/// How far ahead the end wall stands.
+const ROAD_END: f32 = -26.0;
+
+/// The two headlights, left then right.
+fn headlights() -> [Vec3; 2] {
+    [-0.62, 0.62].map(|x| Vec3::new(x, FLOOR + 0.68, CAR_FRONT - 0.04))
 }
 
 /// The camera of `demo`, if it is one of this module's.
@@ -255,6 +342,7 @@ pub(crate) fn camera(demo: &str, aspect: f32) -> Option<Camera> {
     let (eye, target) = match demo {
         "area-texture" => (Vec3::new(2.6, 1.0, 6.2), Vec3::new(-0.6, -0.6, -0.8)),
         "neon" => (Vec3::new(-1.4, 0.4, 6.6), Vec3::new(0.0, 0.0, -1.2)),
+        "headlights" => (Vec3::new(0.6, 2.4, 10.5), Vec3::new(0.0, FLOOR, -12.0)),
         _ => return None,
     };
     Some(Camera {
@@ -314,6 +402,16 @@ fn textured_emitter_graph(name: &str, scale: f32) -> Result<Graph, Box<dyn Error
             .map_err(|error| format!("the emitter graph does not wire: {error}"))?;
     }
     Ok(graph)
+}
+
+/// An unlit emitter of one radiance.
+fn emitter_graph(name: &str, radiance: [f32; 3]) -> Graph {
+    let mut graph = Graph::new(name);
+    let out = graph.add_node(abi::SURFACE_OUTPUT_ID);
+    graph.set_param(out, "base_color", Value::Vec3([0.0; 3]));
+    graph.set_param(out, "roughness", Value::F32(1.0));
+    graph.set_param(out, "emissive", Value::Vec3(radiance));
+    graph
 }
 
 /// An emitter whose radiance is its instance's tint.
@@ -388,6 +486,12 @@ pub(crate) struct LightStage {
     plaster: DemoMaterial,
     tube_mesh: Mesh,
     tints: Vec<InstanceAttributes>,
+    asphalt: DemoMaterial,
+    body: DemoMaterial,
+    lamp: DemoMaterial,
+    road: Mesh,
+    block: Mesh,
+    ball: Mesh,
 }
 
 impl LightStage {
@@ -434,12 +538,21 @@ impl LightStage {
                 .iter()
                 .map(|(_, _, color, _)| tint(*color))
                 .collect(),
+            asphalt: material(texture, &glossy_graph("asphalt", 0.09, 0.4, 0.0), &lit)?,
+            body: material(texture, &glossy_graph("car body", 0.05, 0.3, 0.0), &lit)?,
+            lamp: material(texture, &emitter_graph("headlamp", [9.0, 8.6, 8.0]), &unlit)?,
+            road: Mesh::plane(&gpu.device, 60.0),
+            block: Mesh::cube(&gpu.device, 1.0),
+            ball: Mesh::sphere(&gpu.device, 1.0),
         })
     }
 
     /// The draws of `demo`: floor, two objects, and the emitters' own
     /// geometry, which is where the lights are.
     pub(crate) fn draws<'a>(&'a self, stage: Shared<'a>, demo: &str, time: f32) -> DrawList<'a> {
+        if demo == "headlights" {
+            return self.headlight_draws();
+        }
         let floor = Mat4::from_translation(Vec3::new(0.0, FLOOR, 0.0));
         let (cube, sphere) = if demo == "area-texture" {
             (
@@ -501,6 +614,67 @@ impl LightStage {
                 );
             }
         }
+        draws
+    }
+
+    /// A road at night: the car's dark body with its lamps, posts down
+    /// both sides that throw long shadows, a sphere on the beam's hot
+    /// spot and a wall at the end where the cutoff line shows.
+    fn headlight_draws(&self) -> DrawList<'_> {
+        fn item<'a>(mesh: &'a Mesh, surface: &'a DemoMaterial, transform: Mat4) -> DrawItem<'a> {
+            DrawItem::new(mesh, &surface.material)
+                .with_bindings(&surface.bindings)
+                .with_transform(transform)
+        }
+        let block =
+            |centre: Vec3, size: Vec3| Mat4::from_translation(centre) * Mat4::from_scale(size);
+        let mut draws = DrawList::new();
+        draws.push(item(
+            &self.road,
+            &self.asphalt,
+            Mat4::from_translation(Vec3::new(0.0, FLOOR, ROAD_END + 22.0)),
+        ));
+        draws.push(item(
+            &self.block,
+            &self.body,
+            block(
+                Vec3::new(0.0, FLOOR + 0.75, CAR_FRONT + 2.1),
+                Vec3::new(1.8, 1.0, 4.2),
+            ),
+        ));
+        for light in headlights() {
+            draws.push(item(
+                &self.ball,
+                &self.lamp,
+                block(light, Vec3::new(0.16, 0.09, 0.03)),
+            ));
+        }
+        for step in 0..7 {
+            let z = CAR_FRONT - 5.0 - step as f32 * 3.4;
+            for x in [-2.7, 2.7] {
+                draws.push(item(
+                    &self.block,
+                    &self.plaster,
+                    block(Vec3::new(x, FLOOR + 0.55, z), Vec3::new(0.18, 1.1, 0.18)),
+                ));
+            }
+        }
+        draws.push(item(
+            &self.ball,
+            &self.chrome,
+            block(
+                Vec3::new(0.9, FLOOR + 0.5, CAR_FRONT - 9.0),
+                Vec3::splat(0.5),
+            ),
+        ));
+        draws.push(item(
+            &self.block,
+            &self.wall,
+            block(
+                Vec3::new(0.0, FLOOR + 3.0, ROAD_END),
+                Vec3::new(30.0, 6.0, 0.4),
+            ),
+        ));
         draws
     }
 }

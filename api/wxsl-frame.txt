@@ -535,6 +535,7 @@ pub wxsl_frame::environment::Light::cookie_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::intensity: f32
 pub wxsl_frame::environment::Light::kind: wxsl_frame::environment::LightKind
 pub wxsl_frame::environment::Light::position_or_direction: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::profile_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::radius: f32
 pub wxsl_frame::environment::Light::range: f32
 pub wxsl_frame::environment::Light::shadow_cascades: u32
@@ -558,6 +559,7 @@ pub fn wxsl_frame::environment::Light::tube(glam::f32::vec3::Vec3, glam::f32::ve
 pub fn wxsl_frame::environment::Light::with_cascades(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_profile(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
 impl core::clone::Clone for wxsl_frame::environment::Light
 pub fn wxsl_frame::environment::Light::clone(&self) -> Self
@@ -579,6 +581,7 @@ pub wxsl_frame::environment::LightUniform::cookie_layer: u32
 pub wxsl_frame::environment::LightUniform::intensity: f32
 pub wxsl_frame::environment::LightUniform::kind: f32
 pub wxsl_frame::environment::LightUniform::position_or_direction: [f32; 3]
+pub wxsl_frame::environment::LightUniform::profile_layer: u32
 pub wxsl_frame::environment::LightUniform::radius: f32
 pub wxsl_frame::environment::LightUniform::range: f32
 pub wxsl_frame::environment::LightUniform::shadow_normal_bias: f32
@@ -893,6 +896,46 @@ impl core::marker::Unpin for wxsl_frame::graph::SlotDesc
 impl core::marker::UnsafeUnpin for wxsl_frame::graph::SlotDesc
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::graph::SlotDesc
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::graph::SlotDesc
+pub mod wxsl_frame::ies
+pub struct wxsl_frame::ies::IesError(_)
+impl core::clone::Clone for wxsl_frame::ies::IesError
+pub fn wxsl_frame::ies::IesError::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::ies::IesError
+impl core::cmp::PartialEq for wxsl_frame::ies::IesError
+pub fn wxsl_frame::ies::IesError::eq(&self, &Self) -> bool
+impl core::error::Error for wxsl_frame::ies::IesError
+impl core::fmt::Debug for wxsl_frame::ies::IesError
+pub fn wxsl_frame::ies::IesError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for wxsl_frame::ies::IesError
+pub fn wxsl_frame::ies::IesError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::ies::IesError
+impl core::marker::Freeze for wxsl_frame::ies::IesError
+impl core::marker::Send for wxsl_frame::ies::IesError
+impl core::marker::Sync for wxsl_frame::ies::IesError
+impl core::marker::Unpin for wxsl_frame::ies::IesError
+impl core::marker::UnsafeUnpin for wxsl_frame::ies::IesError
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::ies::IesError
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::ies::IesError
+pub struct wxsl_frame::ies::IesProfile
+impl wxsl_frame::ies::IesProfile
+pub fn wxsl_frame::ies::IesProfile::candela(&self, f32, f32) -> f32
+pub fn wxsl_frame::ies::IesProfile::max_candela(&self) -> f32
+pub fn wxsl_frame::ies::IesProfile::parse(&str) -> core::result::Result<Self, wxsl_frame::ies::IesError>
+pub fn wxsl_frame::ies::IesProfile::texels(&self, u32, u32) -> alloc::vec::Vec<f32>
+impl core::clone::Clone for wxsl_frame::ies::IesProfile
+pub fn wxsl_frame::ies::IesProfile::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::ies::IesProfile
+pub fn wxsl_frame::ies::IesProfile::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::ies::IesProfile
+pub fn wxsl_frame::ies::IesProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::ies::IesProfile
+impl core::marker::Freeze for wxsl_frame::ies::IesProfile
+impl core::marker::Send for wxsl_frame::ies::IesProfile
+impl core::marker::Sync for wxsl_frame::ies::IesProfile
+impl core::marker::Unpin for wxsl_frame::ies::IesProfile
+impl core::marker::UnsafeUnpin for wxsl_frame::ies::IesProfile
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::ies::IesProfile
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::ies::IesProfile
 pub mod wxsl_frame::light_grid
 pub struct wxsl_frame::light_grid::GridMapping
 pub wxsl_frame::light_grid::GridMapping::far: f32

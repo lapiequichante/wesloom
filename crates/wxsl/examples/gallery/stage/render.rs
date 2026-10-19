@@ -361,7 +361,7 @@ impl Stage {
             )?;
             return Ok(());
         }
-        if matches!(demo.name, "area-texture" | "neon") {
+        if matches!(demo.name, "area-texture" | "neon" | "headlights") {
             let draws = self.lights.draws(
                 lights::Shared {
                     floor: &self.grid_floor_mesh,

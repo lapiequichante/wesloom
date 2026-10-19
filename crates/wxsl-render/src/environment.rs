@@ -6,6 +6,7 @@ use wxsl_core::abi;
 use wxsl_core::resources::{texel_rows, texels_per_row};
 
 pub use wxsl_frame::environment::*;
+pub use wxsl_frame::ies::{IesError, IesProfile};
 pub use wxsl_frame::light_grid::{GridMapping, LightGrid};
 
 // Capacity is backend allocation policy, not a frame-layout constraint.

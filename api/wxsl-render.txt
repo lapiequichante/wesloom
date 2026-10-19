@@ -171,6 +171,8 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_render::draw::InstanceAttribu
 pub mod wxsl_render::environment
 pub use wxsl_render::environment::<<wxsl_frame::environment::*>>
 pub use wxsl_render::environment::GridMapping
+pub use wxsl_render::environment::IesError
+pub use wxsl_render::environment::IesProfile
 pub use wxsl_render::environment::LightGrid
 pub enum wxsl_render::environment::ShadowMaps
 pub wxsl_render::environment::ShadowMaps::Bound

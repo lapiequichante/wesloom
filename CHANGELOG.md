@@ -60,6 +60,11 @@ an entry.
   and a material without `KHR_materials_volume` is thin-walled
   ([ADR 0093](docs/adr/0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)).
 
+- IES profiles on point and spot lights: `Light::with_profile` names a
+  cookie layer holding a profile baked by `IesProfile::texels`
+  (`wxsl_render::environment`). In the C header, the light row's
+  `_padding2` is now `profile_layer`, and `UINT32_MAX` means none
+  ([ADR 0097](docs/adr/0097-ies-profiles-are-baked-into-a-cookie-layer.md)).
 - Tube lights (`Light::tube`, `LightKind::Tube`) and textured area
   lights: `Light::with_cookie` also takes a rectangle or a tube, which
   then emits that cookie layer. An unshadowed rectangle and a tube place
