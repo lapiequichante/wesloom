@@ -62,7 +62,7 @@ impl Compiler<'_> {
     /// A `pass.bloom` node: the bloom pyramid, expanded (ADR 0065).
     ///
     /// The repetition a document should not have to author — one HDR
-    /// resource per level, a thresholding extract, a 2×2 box down per
+    /// resource per level, a thresholding extract, a 13-tap down per
     /// deeper level, a fold per shallower one, and the combine — is
     /// synthesized here into the same pass list the scheduler always saw:
     /// no new serialization, only scoped name allocation, exactly the
@@ -133,7 +133,7 @@ impl Compiler<'_> {
             );
         self.graph.pass(extract);
 
-        // The descent: one plain box down per deeper level.
+        // The descent: one 13-tap down per deeper level.
         for index in 1..levels {
             let (above, below) = (level[index as usize - 1], level[index as usize]);
             self.graph.pass(

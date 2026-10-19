@@ -51,12 +51,12 @@ fn bloom_combine_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let pixel = vec2i(position.xy);
     let base = textureLoad(color_image, pixel, 0).rgb;
 
-    // This pixel's centre, in glow texels: the glow covers half of each
-    // axis this pass writes, so the coordinate halves and then steps back
-    // half a texel to land between texels rather than on one.
+    // This pixel's centre, in glow texels: `position.xy` is already the
+    // centre (x.5), and the half-texel step back puts texel centres on
+    // whole numbers.
     let glow_size = vec2f(textureDimensions(glow_image));
     let size = vec2f(textureDimensions(color_image));
-    let source = (position.xy + vec2f(0.5)) * (glow_size / size) - vec2f(0.5);
+    let source = position.xy * (glow_size / size) - vec2f(0.5);
     let top = max(vec2i(glow_size) - vec2i(1, 1), vec2i(0, 0));
     // The 3×3 tent, as the average of four bilinear taps at ±½ texel.
     let tent = bilinear_glow(source + vec2f(-0.5, -0.5), top)

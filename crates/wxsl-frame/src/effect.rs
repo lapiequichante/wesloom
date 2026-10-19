@@ -816,7 +816,7 @@ pub const BLOOM_Y: Effect = Effect {
 // to synthesize.
 //
 // The extract thresholds once, at the pyramid's half-resolution head;
-// the down levels are a plain 2×2 box; each up level folds the gathered
+// the down levels are a 13-tap tent (Jimenez 2014); each up level folds the gathered
 // energy of everything below back onto its own level's signal; and the
 // combine adds the assembled glow onto the image. Between the ends the
 // chain carries no knobs — a pyramid is tuned at its extract and its
@@ -859,7 +859,7 @@ pub const BLOOM_EXTRACT: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
-/// One level of a bloom pyramid's descent: the plain 2×2 box mean that
+/// One level of a bloom pyramid's descent: the 13-tap filter that
 /// takes level *k* down to level *k + 1*. No threshold — the bright
 /// signal was cut once at the extract, and cutting again would discard
 /// the glow the deeper levels exist to widen.

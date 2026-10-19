@@ -117,7 +117,7 @@ pub const PASS_SCREEN: &str = "pass.screen";
 /// Expand a filtered environment bake and declare the frame's lighting cubes.
 pub const PASS_ENVIRONMENT: &str = "pass.environment";
 /// Expand a bloom pyramid: one HDR resource per level, a thresholding
-/// extract, a box down per deeper level, a fold per shallower one, and
+/// extract, a 13-tap down per deeper level, a fold per shallower one, and
 /// the combine that adds the assembled glow back onto the image. The
 /// passes the expansion generates — and their stable labels, which is
 /// what `set_pass_param` tunes through — are the compiler's business
@@ -200,7 +200,7 @@ pub fn node_defs() -> Vec<NodeDefinition> {
         NodeDefinition::builder(PASS_BLOOM, "bloom pyramid")
             .doc(
                 "A bloom pyramid over one HDR image: a thresholding extract into a \
-                 half-resolution first level, a 2x box down per deeper level, a fold \
+                 half-resolution first level, a 13-tap down per deeper level, a fold \
                  per shallower one, and the combine that adds the assembled glow back \
                  onto the image. Expands to the pyramid's level resources and passes \
                  (ADR 0065) with stable labels — `<label> extract`, `<label> down 1`, \

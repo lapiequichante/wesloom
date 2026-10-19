@@ -1780,7 +1780,7 @@ What reaches the frame's own target. Exactly one per document.
 
 #### `pass.bloom` · bloom pyramid
 
-A bloom pyramid over one HDR image: a thresholding extract into a half-resolution first level, a 2x box down per deeper level, a fold per shallower one, and the combine that adds the assembled glow back onto the image. Expands to the pyramid's level resources and passes (ADR 0065) with stable labels — `<label> extract`, `<label> down 1`, `<label> up 0`, `<label> combine` — which is what `set_pass_param` tunes through: `threshold` and `knee` on the extract, `strength` on the combine. The glow resources are HDR transients; thresholding is linear radiance, so an 8-bit intermediate would clamp the highlight the pyramid is for.
+A bloom pyramid over one HDR image: a thresholding extract into a half-resolution first level, a 13-tap down per deeper level, a fold per shallower one, and the combine that adds the assembled glow back onto the image. Expands to the pyramid's level resources and passes (ADR 0065) with stable labels — `<label> extract`, `<label> down 1`, `<label> up 0`, `<label> combine` — which is what `set_pass_param` tunes through: `threshold` and `knee` on the extract, `strength` on the combine. The glow resources are HDR transients; thresholding is linear radiance, so an 8-bit intermediate would clamp the highlight the pyramid is for.
 
 - in `image: color_target`: The image to glow from, as linear radiance.
 - in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.

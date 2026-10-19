@@ -1,12 +1,15 @@
 //! bloom_extract — the head of a bloom pyramid.
 //!
 //! Thresholds linear radiance with the same knee the separable bloom uses,
-//! and downsamples the bright signal 2×2 on the way into the pyramid's
+//! and downsamples the bright signal on the way into the pyramid's
 //! half-resolution first level — the bright part of the image is low
 //! frequency by definition, so thresholding at half resolution throws
 //! nothing away and the whole pyramid runs at half the cost of a
-//! full-res extract. The deeper levels take over with `bloom_down.wxsl`,
-//! which is this file without the threshold.
+//! full-res extract. The downsample is `bloom_down.wxsl`'s 13 taps, each
+//! of its five groups weighted by 1/(1 + luminance) (Karis's average,
+//! from the same talk): one very bright texel — a specular sparkle —
+//! cannot outweigh its neighbourhood, so it neither flickers nor blooms
+//! into a square.
 //!
 //! One fullscreen pass over what an earlier pass wrote; the input is
 //! *linear radiance*, read before the display transform, which is the
@@ -39,17 +42,54 @@ fn bloom_extract_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec
     return vec4f(x, y, 0.0, 1.0);
 }
 
+/// The thresholded mean of the 2×2 source texels from `corner`.
+fn box(corner: vec2i, top: vec2i) -> vec3f {
+    return (bright_pass(textureLoad(image, clamp(corner, vec2i(0, 0), top), 0).rgb)
+        + bright_pass(textureLoad(image, clamp(corner + vec2i(1, 0), vec2i(0, 0), top), 0).rgb)
+        + bright_pass(textureLoad(image, clamp(corner + vec2i(0, 1), vec2i(0, 0), top), 0).rgb)
+        + bright_pass(textureLoad(image, clamp(corner + vec2i(1, 1), vec2i(0, 0), top), 0).rgb)) * 0.25;
+}
+
+/// Karis's weight: one over one plus luminance.
+fn karis_weight(color: vec3f) -> f32 {
+    return 1.0 / (1.0 + dot(color, vec3f(0.2126, 0.7152, 0.0722)));
+}
+
+/// Four boxes' mean, each weighted by its Karis weight.
+fn karis(a: vec3f, b: vec3f, c: vec3f, d: vec3f) -> vec3f {
+    let wa = karis_weight(a);
+    let wb = karis_weight(b);
+    let wc = karis_weight(c);
+    let wd = karis_weight(d);
+    return (a * wa + b * wb + c * wc + d * wd) / (wa + wb + wc + wd);
+}
+
 @fragment
 fn bloom_extract_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
-    // This fragment is one half-resolution texel; the four texels it
-    // covers in the full-resolution input sit at twice its coordinates.
-    // Odd sizes clamp the last row and column onto the edge texel, which
-    // weights it — the same honest cheap answer `downsample2` gives.
-    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
-    let base = clamp(vec2i(position.xy) * 2, vec2i(0, 0), size);
-    let sum = bright_pass(textureLoad(image, base, 0).rgb)
-        + bright_pass(textureLoad(image, clamp(base + vec2i(1, 0), vec2i(0, 0), size), 0).rgb)
-        + bright_pass(textureLoad(image, clamp(base + vec2i(0, 1), vec2i(0, 0), size), 0).rgb)
-        + bright_pass(textureLoad(image, clamp(base + vec2i(1, 1), vec2i(0, 0), size), 0).rgb);
-    return vec4f(sum * 0.25, 1.0);
+    let top = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    // This fragment is one half-resolution texel; the 2×2 block it covers
+    // in the full-resolution input starts at twice its coordinates.
+    let base = vec2i(position.xy) * 2;
+    let c = box(base, top);
+    let tl = box(base + vec2i(-2, -2), top);
+    let tc = box(base + vec2i(0, -2), top);
+    let tr = box(base + vec2i(2, -2), top);
+    let ml = box(base + vec2i(-2, 0), top);
+    let mr = box(base + vec2i(2, 0), top);
+    let bl = box(base + vec2i(-2, 2), top);
+    let bc = box(base + vec2i(0, 2), top);
+    let br = box(base + vec2i(2, 2), top);
+    // The five groups of `bloom_down.wxsl` — the inner diagonal boxes
+    // (half the weight) and the four quadrants of the outer ring (an
+    // eighth each) — each a Karis average.
+    let inner = karis(
+        box(base + vec2i(-1, -1), top),
+        box(base + vec2i(1, -1), top),
+        box(base + vec2i(-1, 1), top),
+        box(base + vec2i(1, 1), top),
+    );
+    let outer = karis(tl, tc, ml, c) + karis(tc, tr, c, mr)
+        + karis(ml, c, bl, bc) + karis(c, mr, bc, br);
+    let sum = inner * 0.5 + outer * 0.125;
+    return vec4f(sum, 1.0);
 }

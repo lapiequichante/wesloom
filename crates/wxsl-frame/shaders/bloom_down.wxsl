@@ -1,15 +1,17 @@
 //! bloom_down — one level of a bloom pyramid's descent.
 //!
-//! The plain 2×2 box mean that takes level *k* of the pyramid down to
-//! level *k + 1*: the same step every mip chain repeats, half the texels
-//! each time. No threshold — the bright signal was cut once at the head
-//! of the pyramid (`bloom_extract.wxsl`), and cutting again would discard
-//! the glow the deeper levels exist to widen.
+//! Takes level *k* of the pyramid down to level *k + 1* with the 13-tap
+//! filter of Jimenez's "Next Generation Post Processing in Call of Duty:
+//! Advanced Warfare" (SIGGRAPH 2014): five overlapping 2×2 boxes — one
+//! centred, four diagonal — over a 6×6 footprint, weighted like a tent.
+//! A plain 2×2 box aliases: a thin bright line lands in one texel or the
+//! next depending on its parity, so the glow comes out blocky and
+//! flickers as things move. No threshold — the bright signal was cut once
+//! at the head of the pyramid (`bloom_extract.wxsl`).
 //!
-//! At odd sizes the last row and column clamp onto the edge texel, which
-//! weights it; the pyramid's targets round up for exactly this, the same
-//! [`Extent`] rule every viewport-scaled resource follows. The pass group
-//! binds textures and no sampler, so the loads are whole texels.
+//! The pass group binds textures and no sampler, so each box is four
+//! whole-texel loads (what one bilinear tap at a texel corner would
+//! return); off-edge loads clamp.
 
 @group(3) @binding(0) var image: texture_2d<f32>;
 
@@ -22,13 +24,28 @@ fn bloom_down_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f 
     return vec4f(x, y, 0.0, 1.0);
 }
 
+/// The mean of the 2×2 source texels from `corner`.
+fn box(corner: vec2i, top: vec2i) -> vec3f {
+    return (textureLoad(image, clamp(corner, vec2i(0, 0), top), 0).rgb
+        + textureLoad(image, clamp(corner + vec2i(1, 0), vec2i(0, 0), top), 0).rgb
+        + textureLoad(image, clamp(corner + vec2i(0, 1), vec2i(0, 0), top), 0).rgb
+        + textureLoad(image, clamp(corner + vec2i(1, 1), vec2i(0, 0), top), 0).rgb) * 0.25;
+}
+
 @fragment
 fn bloom_down_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
-    let size = vec2i(textureDimensions(image)) - vec2i(1, 1);
-    let base = clamp(vec2i(position.xy) * 2, vec2i(0, 0), size);
-    let sum = textureLoad(image, base, 0).rgb
-        + textureLoad(image, clamp(base + vec2i(1, 0), vec2i(0, 0), size), 0).rgb
-        + textureLoad(image, clamp(base + vec2i(0, 1), vec2i(0, 0), size), 0).rgb
-        + textureLoad(image, clamp(base + vec2i(1, 1), vec2i(0, 0), size), 0).rgb;
-    return vec4f(sum * 0.25, 1.0);
+    let top = vec2i(textureDimensions(image)) - vec2i(1, 1);
+    // The 2×2 block this pixel covers starts at twice its coordinates.
+    let base = vec2i(position.xy) * 2;
+    // The centre box, the four inner diagonal ones, then the outer ring:
+    // weights 1/8, 4 × 1/8, 4 × 1/32 (corners) and 4 × 1/16 (edges).
+    let centre = box(base, top);
+    let inner = box(base + vec2i(-1, -1), top) + box(base + vec2i(1, -1), top)
+        + box(base + vec2i(-1, 1), top) + box(base + vec2i(1, 1), top);
+    let corners = box(base + vec2i(-2, -2), top) + box(base + vec2i(2, -2), top)
+        + box(base + vec2i(-2, 2), top) + box(base + vec2i(2, 2), top);
+    let edges = box(base + vec2i(0, -2), top) + box(base + vec2i(-2, 0), top)
+        + box(base + vec2i(2, 0), top) + box(base + vec2i(0, 2), top);
+    let sum = centre * 0.125 + inner * 0.125 + corners * 0.03125 + edges * 0.0625;
+    return vec4f(sum, 1.0);
 }

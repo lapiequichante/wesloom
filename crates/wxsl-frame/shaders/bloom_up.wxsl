@@ -52,10 +52,10 @@ fn bilinear_low(at: vec2f, top: vec2i) -> vec3f {
 @fragment
 fn bloom_up_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let top = max(vec2i(textureDimensions(low_image)) - vec2i(1, 1), vec2i(0, 0));
-    // This pixel's centre, in `low` texels: two of these pixels span one
-    // of the level below, so the source coordinate halves and then steps
-    // back half a texel to land between texels rather than on one.
-    let source = (position.xy + vec2f(0.5)) * 0.5 - vec2f(0.5);
+    // This pixel's centre, in `low` texels: `position.xy` is already the
+    // centre (x.5), two of these pixels span one of the level below, and
+    // the half-texel step back puts texel centres on whole numbers.
+    let source = position.xy * 0.5 - vec2f(0.5);
     // The 3×3 tent, as the average of four bilinear taps at ±½ texel.
     let tent = bilinear_low(source + vec2f(-0.5, -0.5), top)
         + bilinear_low(source + vec2f(0.5, -0.5), top)
