@@ -17,11 +17,11 @@
 @compute
 @workgroup_size(8, 8)
 fn bake_lut(@builtin(global_invocation_id) id: vec3u) {
-    if (id.x >= LUT_SIZE || id.y >= LUT_SIZE) {
+    // The target's own size: the frame's LUT is the four quadrants, a
+    // document's 64-texel target only the first.
+    let side = textureDimensions(lut);
+    if (id.x >= side.x || id.y >= side.y) {
         return;
     }
-    // Texel centres, so the LUT's edges are reachable rather than half a
-    // texel outside the sampled range.
-    let uv = (vec2f(id.xy) + vec2f(0.5, 0.5)) / f32(LUT_SIZE);
-    textureStore(lut, vec2i(id.xy), lut_texel(uv));
+    textureStore(lut, vec2i(id.xy), lut_quadrant_texel(id.xy));
 }

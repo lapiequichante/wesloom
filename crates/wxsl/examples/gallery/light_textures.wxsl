@@ -1,0 +1,69 @@
+// The gallery's light textures, one layer of the cookie array each, drawn
+// once at startup: the spotlight's window, the area light's panel and the
+// neon tube's gradient. The lights read them prefiltered to their sample
+// spacing (ADR 0095), so every level below the first is a 2x2 box of the
+// one above (`downsample`).
+
+import package::sdf::circle::sdf_circle;
+import package::sdf::rounded_box::sdf_rounded_box;
+
+struct Varyings {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> Varyings {
+    let corner = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+    var out: Varyings;
+    out.position = vec4f(corner * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+    out.uv = corner;
+    return out;
+}
+
+// Layer 0: a three-by-three window, mullions dark.
+@fragment
+fn window(in: Varyings) -> @location(0) vec4f {
+    let cell = fract(in.uv * 3.0);
+    let inside = step(0.08, cell.x) * step(cell.x, 0.92) * step(0.08, cell.y) * step(cell.y, 0.92);
+    return vec4f(vec3f(inside), 1.0);
+}
+
+// Layer 1: the panel — a striped sun over a dusk gradient, in a dark
+// frame. Its aspect is the area light's, 2.0 by 1.2.
+@fragment
+fn panel(in: Varyings) -> @location(0) vec4f {
+    let p = (in.uv - vec2f(0.5)) * vec2f(2.0 / 1.2, 1.0);
+    let up = 1.0 - in.uv.y;
+    var color = mix(vec3f(1.0, 0.32, 0.08), vec3f(0.12, 0.04, 0.45), smoothstep(0.1, 0.95, up));
+    let sun = sdf_circle(p - vec2f(0.0, 0.06), 0.3);
+    let below = clamp((p.y - 0.02) / 0.3, 0.0, 1.0);
+    let band = step(below * 0.55, fract(p.y * 16.0));
+    let disc = (1.0 - smoothstep(-0.004, 0.004, sun)) * mix(1.0, band, step(0.0, p.y - 0.02));
+    color = mix(color, mix(vec3f(1.0, 0.95, 0.35), vec3f(1.0, 0.25, 0.55), saturate(up * -2.0 + 1.4)), disc);
+    let frame = sdf_rounded_box(p, vec2f(0.79, 0.47), 0.03);
+    color = color * (1.0 - smoothstep(-0.006, 0.0, frame));
+    return vec4f(color, 1.0);
+}
+
+// Layer 2: a neon gradient along u, magenta to violet to cyan.
+@fragment
+fn neon(in: Varyings) -> @location(0) vec4f {
+    let u = in.uv.x;
+    let color = mix(
+        mix(vec3f(1.0, 0.1, 0.55), vec3f(0.45, 0.15, 1.0), smoothstep(0.0, 0.5, u)),
+        vec3f(0.1, 0.85, 1.0),
+        smoothstep(0.5, 1.0, u),
+    );
+    return vec4f(color, 1.0);
+}
+
+@group(0) @binding(0) var above: texture_2d<f32>;
+@group(0) @binding(1) var filtering: sampler;
+
+// One level from the one above: a bilinear tap at the centre of each 2x2
+// block is their box average.
+@fragment
+fn downsample(in: Varyings) -> @location(0) vec4f {
+    return textureSampleLevel(above, filtering, in.uv, 0.0);
+}

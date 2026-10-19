@@ -10,6 +10,7 @@ const LIGHT_KIND_POINT: f32 = 0.0;
 const LIGHT_KIND_DIRECTIONAL: f32 = 1.0;
 const LIGHT_KIND_RECTANGLE: f32 = 2.0;
 const LIGHT_KIND_SPOT: f32 = 3.0;
+const LIGHT_KIND_TUBE: f32 = 4.0;
 
 @group(0) @binding(11) var light_cookies: texture_2d_array<f32>;
 // Nearest and non-filtering: every pass reads a depth texel by sampling its
@@ -180,6 +181,13 @@ fn environment_specular_radiance(mirror: vec3f, roughness: f32) -> vec3f {
     return textureSampleLevel(environment_specular, environment_lut_sampler, mirror, lod).rgb;
 }
 
+// Where (N·V, roughness) falls in the LUT's top-left quadrant (ADR 0096),
+// clamped to its texel centres so the bilinear never reads a neighbour.
+fn environment_lut_uv(n_dot_v: f32, roughness: f32) -> vec2f {
+    let at = vec2f(saturate(n_dot_v), saturate(roughness));
+    return clamp(at, vec2f(0.5 / 64.0), vec2f(63.5 / 64.0)) * 0.5;
+}
+
 // The environment BRDF for one surface point: multiply F0 by `x` and add
 // `y`, and a mirror-direction irradiance becomes a specular ambient term
 // that knows about roughness and grazing angles.
@@ -188,7 +196,7 @@ fn environment_specular_radiance(mirror: vec3f, roughness: f32) -> vec3f {
 // square and smooth, so the hardware's bilinear is the difference between
 // a roughness sweep and a roughness staircase.
 fn environment_brdf(n_dot_v: f32, roughness: f32) -> vec2f {
-    let uv = vec2f(saturate(n_dot_v), saturate(roughness));
+    let uv = environment_lut_uv(n_dot_v, roughness);
     return textureSampleLevel(environment_lut, environment_lut_sampler, uv, 0.0).xy;
 }
 
@@ -199,9 +207,28 @@ struct LightSample {
     radiance: vec3f,
 }
 
-// Number of direct BRDF/visibility evaluations for this light.
+// Number of direct BRDF/visibility evaluations for this light: sixteen
+// fixed points for a shadowed rectangle (ADR 0072), two grids of sixteen
+// for an unshadowed one and of eight for a tube (ADR 0095).
 fn light_sample_count(index: u32) -> u32 {
-    return select(1u, 16u, scene.lights[index].kind == LIGHT_KIND_RECTANGLE);
+    let light = scene.lights[index];
+    if light.kind == LIGHT_KIND_RECTANGLE {
+        return select(32u, 16u, light.tile_count > 0u);
+    }
+    return select(1u, 16u, light.kind == LIGHT_KIND_TUBE);
+}
+
+// What an unshadowed area light places its samples by: the mirror
+// direction, the GGX alpha, and the normal it reflects about.
+struct SpecularLobe {
+    mirror: vec3f,
+    alpha: f32,
+    normal: vec3f,
+}
+
+fn specular_lobe(normal: vec3f, view_direction: vec3f, roughness: f32) -> SpecularLobe {
+    let r = saturate(roughness);
+    return SpecularLobe(reflect(-normalize(view_direction), normal), r * r, normal);
 }
 
 // Keep these Gauss nodes in sync with Light::area_sample_positions.
@@ -230,9 +257,405 @@ fn sample_light_at(index: u32, sample: u32, world_position: vec3f) -> LightSampl
     return sample_light_value(scene.lights[index], sample, world_position);
 }
 
+// A Cauchy distribution truncated to [-1, 1], centred on `centre` with
+// scale `scale` (both in emitter parameters). Its tails are heavier than
+// both the inverse square's and GGX's, so either is safe to sample with
+// it.
+struct Cauchy {
+    centre: f32,
+    scale: f32,
+    first: f32, // the angle [-1, 1] starts at
+    span: f32,  // and how much of it the interval covers
+}
+
+fn cauchy(centre: f32, scale: f32) -> Cauchy {
+    let first = atan((-1.0 - centre) / scale);
+    return Cauchy(centre, scale, first, atan((1.0 - centre) / scale) - first);
+}
+
+// The point a fraction `xi` of the way through the distribution.
+fn cauchy_point(c: Cauchy, xi: f32) -> f32 {
+    return clamp(c.centre + c.scale * tan(c.first + xi * c.span), -1.0, 1.0);
+}
+
+fn cauchy_density(c: Cauchy, x: f32) -> f32 {
+    let t = (x - c.centre) / c.scale;
+    return 1.0 / (c.scale * c.span * (1.0 + t * t));
+}
+
+// The lobe as an ellipse of directions around the mirror ray: its axes
+// `p`, across the plane of incidence, and `q`, in it, and its angular
+// scale along each, 2 alpha cos(theta) and 2 alpha — a glancing
+// reflection narrows across.
+struct LobeFrame {
+    p: vec3f,
+    q: vec3f,
+    widths: vec2f,
+}
+
+fn lobe_frame(lobe: SpecularLobe) -> LobeFrame {
+    var p = cross(lobe.normal, lobe.mirror);
+    if dot(p, p) < 1e-8 {
+        p = cross(lobe.mirror, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(lobe.mirror.x) > 0.9));
+    }
+    p = normalize(p);
+    let cosine = saturate(dot(lobe.normal, lobe.mirror));
+    let widths = max(2.0 * lobe.alpha * vec2f(cosine, 1.0), vec2f(1e-3));
+    return LobeFrame(p, cross(lobe.mirror, p), widths);
+}
+
+// An area light's emission texture at `uv`, prefiltered to a cell of
+// `cell` (in the [0, 1] texture's units): the cookie layer, or white.
+fn area_emission(light: Light, uv: vec2f, cell: f32) -> vec3f {
+    if light.cookie_layer == 0xffffffffu {
+        return vec3f(1.0);
+    }
+    if light.cookie_layer >= textureNumLayers(light_cookies) {
+        return vec3f(0.0);
+    }
+    let size = f32(textureDimensions(light_cookies, 0).x);
+    let lod = max(log2(max(cell * size, 1e-6)), 0.0);
+    let texel = textureSampleLevel(light_cookies, environment_lut_sampler, uv, i32(light.cookie_layer), lod);
+    return texel.rgb * texel.a;
+}
+
+// An unshadowed rectangle or a tube, as an area lighting model integrates
+// it (ADR 0096): four corners from the shading point, `corner0` the
+// texture's (0, 0) and `corner1` its (1, 0), `corner3` its (0, 1); a tube
+// is the ribbon of its diameter that faces the point. `shape` is 0 for
+// any other light, which the light loop samples instead.
+struct AreaLight {
+    corner0: vec3f,
+    corner1: vec3f,
+    corner2: vec3f,
+    corner3: vec3f,
+    radiance: vec3f,
+    cookie_layer: u32,
+    shape: u32, // 0: not an area light; 1: a rectangle; 2: a tube
+}
+
+fn area_light(index: u32, world_position: vec3f) -> AreaLight {
+    let light = scene.lights[index];
+    var area: AreaLight;
+    let centre = light.position_or_direction - world_origin() - world_position;
+    area.radiance = light.color * light.intensity;
+    area.cookie_layer = light.cookie_layer;
+    var across = light.area_v;
+    if light.kind == LIGHT_KIND_TUBE {
+        area.shape = 2u;
+        var side = cross(light.area_u, centre);
+        if dot(side, side) < 1e-12 {
+            side = cross(light.area_u, vec3f(0.0, 1.0, 0.0));
+        }
+        across = normalize(side) * light.radius;
+    } else if light.kind == LIGHT_KIND_RECTANGLE && light.tile_count == 0u {
+        area.shape = 1u;
+        // One-sided: behind the emitting side, nothing.
+        if dot(centre, cross(light.area_u, light.area_v)) >= 0.0 {
+            area.radiance = vec3f(0.0);
+        }
+    } else {
+        return area;
+    }
+    area.corner0 = centre - light.area_u + across;
+    area.corner1 = centre + light.area_u + across;
+    area.corner2 = centre + light.area_u - across;
+    area.corner3 = centre - light.area_u - across;
+    return area;
+}
+
+// World space to the frame the LTC table is fitted in: z the normal, x the
+// view projected onto the surface.
+fn ltc_frame(normal: vec3f, view_direction: vec3f) -> mat3x3f {
+    var x = view_direction - normal * dot(view_direction, normal);
+    if dot(x, x) < 1e-8 {
+        x = cross(normal, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(normal.x) > 0.9));
+    }
+    x = normalize(x);
+    return transpose(mat3x3f(x, cross(normal, x), normal));
+}
+
+// The fitted inverse transform for GGX at (N·V, roughness), from the LUT's
+// top two quadrants.
+fn ltc_inverse(n_dot_v: f32, roughness: f32) -> mat3x3f {
+    let uv = environment_lut_uv(n_dot_v, roughness);
+    let first = textureSampleLevel(environment_lut, environment_lut_sampler, uv, 0.0).zw;
+    let second = textureSampleLevel(environment_lut, environment_lut_sampler, uv + vec2f(0.5, 0.0), 0.0).xy;
+    return mat3x3f(vec3f(first.x, 0.0, second.x), vec3f(0.0, 1.0, 0.0), vec3f(first.y, 0.0, second.y));
+}
+
+// One edge's share of a polygon's vector form factor, its two corners
+// unit length: a rational fit of θ / sin θ / 2π (Heitz et al.).
+fn ltc_edge(start: vec3f, end: vec3f) -> vec3f {
+    let x = dot(start, end);
+    let y = abs(x);
+    let fitted = (0.8543985 + (0.4965155 + 0.0145206 * y) * y) / (3.4175940 + (4.1616724 + y) * y);
+    let ratio = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - fitted, fitted, x > 0.0);
+    return cross(start, end) * ratio;
+}
+
+// `area` seen through `transform` (world to a clamped cosine's space): its
+// cosine-weighted solid angle over π, clipped to the horizon with the
+// sphere approximation, times its texture prefiltered by how far the
+// cosine's lobe spreads over it (Heitz et al.'s textured lights).
+fn area_integral(area: AreaLight, transform: mat3x3f) -> vec3f {
+    let p0 = transform * area.corner0;
+    let p1 = transform * area.corner1;
+    let p2 = transform * area.corner2;
+    let p3 = transform * area.corner3;
+    let a = normalize(p0);
+    let b = normalize(p1);
+    let c = normalize(p2);
+    let d = normalize(p3);
+    var form = ltc_edge(a, b) + ltc_edge(b, c) + ltc_edge(c, d) + ltc_edge(d, a);
+    // Whichever way the corners wind, the vector points at the polygon.
+    if dot(form, a + b + c + d) < 0.0 {
+        form = -form;
+    }
+    let l = length(form);
+    let factor = max((l * l + form.z) / (l + 1.0), 0.0);
+    return area.radiance * factor * area_texture(area, p0, p1, p3);
+}
+
+// The emission texture where the origin projects onto the polygon
+// `p0, p1, p3` spans, at the level its distance over the polygon's size
+// covers; white without one.
+fn area_texture(area: AreaLight, p0: vec3f, p1: vec3f, p3: vec3f) -> vec3f {
+    if area.cookie_layer == 0xffffffffu {
+        return vec3f(1.0);
+    }
+    if area.cookie_layer >= textureNumLayers(light_cookies) {
+        return vec3f(0.0);
+    }
+    let u = p1 - p0;
+    let v = p3 - p0;
+    let normal = cross(u, v);
+    let area_squared = max(dot(normal, normal), 1e-20);
+    let height = dot(normal, p0);
+    let foot = normal * (height / area_squared) - p0; // the projection, from p0
+    // The projection's coordinates along the two (not orthogonal) edges.
+    let uu = dot(u, u);
+    let uv_dot = dot(u, v);
+    let v_rest = v - u * (uv_dot / uu);
+    var at = vec2f(0.0);
+    at.y = dot(v_rest, foot) / max(dot(v_rest, v_rest), 1e-20);
+    at.x = dot(u, foot) / uu - uv_dot / uu * at.y;
+    if area.shape == 2u {
+        at.y = 0.5;
+    }
+    let distance = abs(height) / pow(area_squared, 0.75);
+    let size = f32(textureDimensions(light_cookies, 0).x);
+    let lod = max(log2(max(distance * size, 1e-6)), 0.0);
+    let texel = textureSampleLevel(light_cookies, environment_lut_sampler, saturate(at), i32(area.cookie_layer), lod);
+    return texel.rgb * texel.a;
+}
+
+// The light `area` sends towards a surface: its irradiance, ∫ L cos.
+fn area_irradiance(area: AreaLight, normal: vec3f, view_direction: vec3f) -> vec3f {
+    return 3.14159265 * area_integral(area, ltc_frame(normal, view_direction));
+}
+
+// The light `area` sends into GGX's lobe at `roughness`: multiply by the
+// environment BRDF's `F0 * x + y` (`environment_brdf`) for the specular
+// radiance.
+fn area_specular(area: AreaLight, normal: vec3f, view_direction: vec3f, roughness: f32) -> vec3f {
+    let inverse = ltc_inverse(dot(normal, view_direction), roughness);
+    return area_integral(area, inverse * ltc_frame(normal, view_direction));
+}
+
+// One light at one point, prepared once for all its samples. An
+// unshadowed rectangle and a tube (ADR 0095) place their samples with two
+// Cauchy distributions per axis: one centred on the point of the emitter
+// nearest the surface and as wide as it is far, which is the shape of
+// the inverse-square falloff (and uniform from afar); one centred where
+// the mirror ray meets the emitter and as wide as the lobe there. The
+// balance heuristic combines them, so each covers what it samples
+// densely, every weight is continuous, and neither a glossy reflection
+// nor the light close to the emitter shows the samples. A tube uses the
+// `u` distributions only.
+struct LightSetup {
+    light: Light,
+    count: u32,
+    shape: u32, // 0: the light's own samples; 1: a rectangle; 2: a tube
+    centre: vec3f, // the light's centre, from the surface
+    near_u: Cauchy,
+    near_v: Cauchy,
+    mirror_u: Cauchy,
+    mirror_v: Cauchy,
+}
+
+fn light_setup(index: u32, world_position: vec3f, lobe: SpecularLobe) -> LightSetup {
+    return light_value_setup(scene.lights[index], light_sample_count(index), world_position, lobe);
+}
+
+fn light_value_setup(light: Light, count: u32, world_position: vec3f, lobe: SpecularLobe) -> LightSetup {
+    var setup: LightSetup;
+    setup.light = light;
+    setup.count = count;
+    setup.centre = light.position_or_direction - world_origin() - world_position;
+    if light.kind == LIGHT_KIND_TUBE {
+        setup.shape = 2u;
+        setup = tube_setup(setup, lobe);
+    } else if light.kind == LIGHT_KIND_RECTANGLE && light.tile_count == 0u {
+        setup.shape = 1u;
+        setup = rectangle_setup(setup, lobe);
+    }
+    return setup;
+}
+
+// Sample `sample` of `setup.count`.
+fn sample_light_setup(setup: LightSetup, sample: u32, world_position: vec3f) -> LightSample {
+    if setup.shape == 1u {
+        return sample_rectangle(setup, sample);
+    }
+    if setup.shape == 2u {
+        return sample_tube(setup, sample);
+    }
+    return sample_light_value(setup.light, sample, world_position);
+}
+
+// A rectangle's distributions over its [-1, 1]² parameters; none when the
+// surface is behind its emitting side.
+fn rectangle_setup(prepared: LightSetup, lobe: SpecularLobe) -> LightSetup {
+    var setup = prepared;
+    let light = prepared.light;
+    let centre = prepared.centre;
+    let u_length = length(light.area_u);
+    let v_length = length(light.area_v);
+    let normal = cross(light.area_u, light.area_v) / (u_length * v_length);
+    if dot(centre, normal) >= 0.0 {
+        setup.count = 0u;
+        return setup;
+    }
+    // Where the mirror ray meets the plane, or, when it turns away, the
+    // point as far along it as the centre is.
+    let towards = dot(lobe.mirror, normal);
+    var along = length(centre);
+    if towards < -1e-4 {
+        along = min(dot(centre, normal) / towards, along * 4.0);
+    }
+    let mirror = lobe.mirror * along - centre;
+    let at = clamp(
+        vec2f(dot(mirror, light.area_u) / (u_length * u_length), dot(mirror, light.area_v) / (v_length * v_length)),
+        vec2f(-4.0),
+        vec2f(4.0),
+    );
+    let nearest = centre + light.area_u * clamp(at.x, -1.0, 1.0) + light.area_v * clamp(at.y, -1.0, 1.0);
+    // The lobe's ellipse on the plane, `distance` away: each axis's scale
+    // is its marginal, the ellipse's extent along that edge.
+    let frame = lobe_frame(lobe);
+    let on_u = vec2f(dot(light.area_u, frame.p), dot(light.area_u, frame.q)) / u_length;
+    let on_v = vec2f(dot(light.area_v, frame.p), dot(light.area_v, frame.q)) / v_length;
+    let facing = max(abs(on_u.x * on_v.y - on_u.y * on_v.x), 0.05);
+    let spread = frame.widths * frame.widths;
+    let distance = length(nearest);
+    setup.mirror_u = cauchy(at.x, distance * sqrt(dot(on_v.yx * on_v.yx, spread)) / (facing * u_length));
+    setup.mirror_v = cauchy(at.y, distance * sqrt(dot(on_u.yx * on_u.yx, spread)) / (facing * v_length));
+    let height = max(-dot(centre, normal), 1e-3);
+    setup.near_u = cauchy(clamp(-dot(centre, light.area_u) / (u_length * u_length), -4.0, 4.0), height / u_length);
+    setup.near_v = cauchy(clamp(-dot(centre, light.area_v) / (v_length * v_length), -4.0, 4.0), height / v_length);
+    return setup;
+}
+
+// Sample `sample` of 32 over a rectangle: a 4x4 Gauss grid through the
+// near distributions, then through the mirror ones.
+fn sample_rectangle(setup: LightSetup, sample: u32) -> LightSample {
+    let light = setup.light;
+    let i = sample % 4u;
+    let j = (sample / 4u) % 4u;
+    let xi = vec2f(AREA_NODES[i], AREA_NODES[j]) * 0.5 + vec2f(0.5);
+    var point: vec2f;
+    if sample < 16u {
+        point = vec2f(cauchy_point(setup.near_u, xi.x), cauchy_point(setup.near_v, xi.y));
+    } else {
+        point = vec2f(cauchy_point(setup.mirror_u, xi.x), cauchy_point(setup.mirror_v, xi.y));
+    }
+    // Both strategies' densities over [-1, 1]², sixteen samples each.
+    let density = cauchy_density(setup.near_u, point.x) * cauchy_density(setup.near_v, point.y)
+        + cauchy_density(setup.mirror_u, point.x) * cauchy_density(setup.mirror_v, point.y);
+    let weight = 0.25 * AREA_WEIGHTS[i] * AREA_WEIGHTS[j] / density;
+
+    var out: LightSample;
+    let offset = setup.centre + light.area_u * point.x + light.area_v * point.y;
+    let distance_squared = max(dot(offset, offset), 1e-4);
+    out.direction = offset * inverseSqrt(distance_squared);
+    // One sample's share of the emitter, in texture units.
+    let cell = 0.5 * inverseSqrt(16.0 * density);
+    let emitted = area_emission(light, vec2f(0.5 + 0.5 * point.x, 0.5 - 0.5 * point.y), cell);
+    let cosine = max(dot(cross(light.area_u, light.area_v), -out.direction), 0.0);
+    out.radiance = light.color * light.intensity * emitted * cosine * weight / distance_squared;
+    return out;
+}
+
+// A tube's distributions along its axis, in [-1, 1].
+fn tube_setup(prepared: LightSetup, lobe: SpecularLobe) -> LightSetup {
+    var setup = prepared;
+    let light = prepared.light;
+    let centre = prepared.centre;
+    let axis = light.area_u;
+    let axis_squared = max(dot(axis, axis), 1e-8);
+    let axis_length = sqrt(axis_squared);
+    // The parameter of the point on the line nearest the mirror ray; the
+    // point nearest the surface when the ray runs along the line or away.
+    let b = dot(axis, lobe.mirror);
+    let f = dot(axis, centre);
+    let foot = -f / axis_squared;
+    var at = foot;
+    let denominator = axis_squared - b * b;
+    if denominator > 1e-6 * axis_squared {
+        let candidate = (b * dot(lobe.mirror, centre) - f) / denominator;
+        if dot(lobe.mirror, centre + axis * candidate) > 0.0 {
+            at = candidate;
+        }
+    }
+    at = clamp(at, -4.0, 4.0);
+    let distance = length(centre + axis * clamp(at, -1.0, 1.0));
+    // The lobe's slice along the axis: its ellipse, seen along the
+    // axis's direction.
+    let frame = lobe_frame(lobe);
+    let lengthwise = vec2f(dot(axis, frame.p), dot(axis, frame.q)) / axis_length;
+    setup.mirror_u = cauchy(at, distance / (max(length(lengthwise / frame.widths), 1e-3) * axis_length));
+    let gap = max(length(centre + axis * foot), light.radius);
+    setup.near_u = cauchy(clamp(foot, -4.0, 4.0), gap / axis_length);
+    return setup;
+}
+
+// Sample `sample` of 16 along a tube: an 8-point Gauss grid through the
+// near distribution, then through the mirror one. A tube is a line of
+// `2 radius` apparent width, so each sample stands for
+// `2 radius |axis| sin` of its parameter length.
+fn sample_tube(setup: LightSetup, sample: u32) -> LightSample {
+    let light = setup.light;
+    let axis_length = length(light.area_u);
+    // Eight Gauss nodes over [0, 1], as two halves of four.
+    let k = sample % 4u;
+    let xi = (f32((sample / 4u) % 2u) + 0.5 + 0.5 * AREA_NODES[k]) * 0.5;
+    var point = cauchy_point(setup.near_u, xi);
+    if sample >= 8u {
+        point = cauchy_point(setup.mirror_u, xi);
+    }
+    let density = cauchy_density(setup.near_u, point) + cauchy_density(setup.mirror_u, point);
+    let weight = 0.25 * AREA_WEIGHTS[k] / density;
+
+    var out: LightSample;
+    let offset = setup.centre + light.area_u * point;
+    let distance_squared = max(dot(offset, offset), light.radius * light.radius + 1e-6);
+    out.direction = offset * inverseSqrt(max(dot(offset, offset), 1e-8));
+    let sine = length(cross(light.area_u / axis_length, out.direction));
+    let emitted = area_emission(light, vec2f(0.5 + 0.5 * point, 0.5), 0.5 / (8.0 * density));
+    out.radiance = light.color * light.intensity * emitted
+        * (weight * axis_length * 2.0 * light.radius * sine) / distance_squared;
+    return out;
+}
+
 // One light's sample at a point, from the light itself rather than its
 // slot: the uniform's lights and the clustered list's share this.
 fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> LightSample {
+    if light.kind == LIGHT_KIND_TUBE {
+        // No lobe to follow: the mirror half is as wide as the near one.
+        let lobe = SpecularLobe(vec3f(0.0, 1.0, 0.0), 1.0, vec3f(0.0, 1.0, 0.0));
+        return sample_tube(light_value_setup(light, 16u, world_position, lobe), sample);
+    }
     var out: LightSample;
     if light.kind == LIGHT_KIND_DIRECTIONAL {
         out.direction = normalize(light.position_or_direction);

@@ -353,6 +353,11 @@ pub struct LightingModel {
     /// `fn(surface: Surface, ctx: SurfaceContext, extra: vec4f) -> vec3f`.
     /// `None` retains the shared GGX ambient (ADR 0059).
     pub ambient: Option<&'static str>,
+    /// Optional model-owned response to an unshadowed rectangle or tube,
+    /// integrated analytically, of signature
+    /// `fn(surface: Surface, ctx: SurfaceContext, area: AreaLight, extra: vec4f) -> vec3f`.
+    /// `None` keeps the light loop's samples for this model (ADR 0096).
+    pub area: Option<&'static str>,
     /// The G-buffer target this model asks for, if any.
     pub extra: Option<ModelExtra>,
     /// The material feature whose channel this model consumes, if any —
@@ -372,6 +377,9 @@ impl LightingModel {
         let mut signature = format!("{}:{}", self.name, self.id);
         if let Some(ambient) = self.ambient {
             let _ = write!(signature, ":ambient={ambient}");
+        }
+        if let Some(area) = self.area {
+            let _ = write!(signature, ":area={area}");
         }
         signature
     }
@@ -740,6 +748,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::lambert",
         function: "lighting_lambert",
         ambient: None,
+        area: Some("lighting_lambert_area"),
         extra: None,
         feature: None,
         doc: "Diffuse-only Lambertian: radiance * albedo * max(dot(n, l), 0).",
@@ -750,6 +759,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::phong",
         function: "lighting_phong",
         ambient: None,
+        area: None,
         extra: None,
         feature: None,
         doc: "Lambertian diffuse plus a Phong specular lobe from the roughness.",
@@ -760,6 +770,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::pbr",
         function: "lighting_pbr",
         ambient: None,
+        area: Some("lighting_pbr_area"),
         extra: None,
         feature: None,
         doc: "The Cook-Torrance GGX model the library has always shaded with.",
@@ -770,6 +781,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::clearcoat",
         function: "lighting_clearcoat",
         ambient: None,
+        area: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
                 field: "clearcoat",
@@ -787,6 +799,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::cloth",
         function: "lighting_cloth",
         ambient: None,
+        area: None,
         extra: None,
         feature: None,
         doc: "Fabric: a roughness-wrapped diffuse with a Charlie sheen layer.",
@@ -797,6 +810,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::preshaded",
         function: "lighting_preshaded",
         ambient: None,
+        area: None,
         extra: None,
         feature: None,
         doc: "Passthrough: returns the radiance a forward-shaded material \
@@ -809,6 +823,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::iridescent",
         function: "lighting_iridescent",
         ambient: None,
+        area: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
                 field: "iridescence",
@@ -826,6 +841,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::sheen",
         function: "lighting_sheen",
         ambient: Some("ambient_sheen"),
+        area: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
                 field: "sheen",
@@ -843,6 +859,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::subsurface",
         function: "lighting_subsurface",
         ambient: None,
+        area: None,
         extra: None,
         feature: Some("subsurface"),
         doc: "PBR plus wrapped diffuse and transmission, fed by the subsurface \
@@ -855,6 +872,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         module: "package::lighting::models::gltf_clearcoat",
         function: "lighting_gltf_clearcoat",
         ambient: Some("ambient_gltf_clearcoat"),
+        area: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
                 field: "gltf_clearcoat",
@@ -1036,6 +1054,8 @@ const DISPATCH_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/dispa
 const SHADE_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/shade_surface.wxsl");
 const AMBIENT_DEFAULT_TEMPLATE: &str = include_str!("../templates/lighting/ambient_default.wxsl");
 const AMBIENT_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/ambient_switch.wxsl");
+const AREA_DIRECT_TEMPLATE: &str = include_str!("../templates/lighting/area_direct.wxsl");
+const AREA_SWITCH_TEMPLATE: &str = include_str!("../templates/lighting/area_switch.wxsl");
 const LIGHTING_PASS_TEMPLATE: &str = include_str!("../templates/lighting/lighting_pass.wxsl");
 const DEBUG_SURFACE_TEMPLATE: &str = include_str!("../templates/lighting/debug_surface.wxsl");
 
@@ -1069,8 +1089,11 @@ fn shade_surface_from(
     let mut imports = vec![
         (abi::SURFACE_MODULE, abi::SURFACE_STRUCT),
         (abi::SURFACE_MODULE, abi::CONTEXT_STRUCT),
-        ("package::wxsl::bindings", "sample_light_at"),
-        ("package::wxsl::bindings", "light_sample_count"),
+        ("package::wxsl::bindings", "AreaLight"),
+        ("package::wxsl::bindings", "area_light"),
+        ("package::wxsl::bindings", "light_setup"),
+        ("package::wxsl::bindings", "sample_light_setup"),
+        ("package::wxsl::bindings", "specular_lobe"),
         ("package::wxsl::bindings", "sample_light_value"),
         ("package::wxsl::bindings", "local_light"),
         ("package::wxsl::bindings", "local_light_span"),
@@ -1156,6 +1179,21 @@ fn shade_surface_from(
                     ("FUNCTION", model.function),
                 ],
             ));
+            let area_body = match model.area {
+                Some(area) => {
+                    imports.push((model.module, area));
+                    format!("    return vec4f({area}(surface, ctx, area, extra), 1.0);")
+                }
+                None => "    return vec4f(0.0);".to_string(),
+            };
+            out.push_str(&crate::template::fill(
+                AREA_DIRECT_TEMPLATE,
+                &[
+                    ("SURFACE", abi::SURFACE_STRUCT),
+                    ("CONTEXT", abi::CONTEXT_STRUCT),
+                    ("BODY", &area_body),
+                ],
+            ));
             let passes_extra = model.extra.is_some() || direct_consumed.is_some();
             (
                 if stored_extra && passes_extra {
@@ -1203,6 +1241,7 @@ fn shade_surface_from(
             // contract hands over.
             let mut arms = String::new();
             let mut ambient_arms = String::new();
+            let mut area_arms = String::new();
             let custom_ambient = set.models().iter().any(|model| model.ambient.is_some());
             for model in set.models() {
                 let extra = match model.extra {
@@ -1215,6 +1254,16 @@ fn shade_surface_from(
                 // it, and a material that has not pinned it reads zeros.
                 if let Some((feature, request)) = consumed_feature(model, features) {
                     imports.push((feature.module, feature.pack));
+                    if let Some(area) = model.area {
+                        imports.push((model.module, area));
+                        let _ = writeln!(
+                            area_arms,
+                            "        case {id}u: {{\n            var model_extra = vec4f(0.0);\n            @if({macro})\n            model_extra = {value};\n            return vec4f({area}(surface, ctx, area, model_extra), 1.0);\n        }}",
+                            id = model.id,
+                            macro = feature.macro_name,
+                            value = stored(request.target.precision.channels()),
+                        );
+                    }
                     let _ = writeln!(
                         arms,
                         "        case {id}u: {{\n            var model_extra = vec4f(0.0);\n            @if({macro})\n            model_extra = {value};\n            return {function}(surface, ctx, light, model_extra);\n        }}",
@@ -1231,6 +1280,14 @@ fn shade_surface_from(
                     id = model.id,
                     function = model.function,
                 );
+                if let Some(area) = model.area {
+                    imports.push((model.module, area));
+                    let _ = writeln!(
+                        area_arms,
+                        "        case {id}u: {{ return vec4f({area}(surface, ctx, area, {extra}), 1.0); }}",
+                        id = model.id,
+                    );
+                }
                 if custom_ambient {
                     let call = if let Some(ambient) = model.ambient {
                         imports.push((model.module, ambient));
@@ -1253,6 +1310,15 @@ fn shade_surface_from(
                     ("SURFACE", abi::SURFACE_STRUCT),
                     ("CONTEXT", abi::CONTEXT_STRUCT),
                     ("SWITCH_ARMS", &arms),
+                ],
+            ));
+            out.push_str(&crate::template::fill(
+                AREA_SWITCH_TEMPLATE,
+                &[
+                    ("EXTRAS_PARAM", &extras_param),
+                    ("SURFACE", abi::SURFACE_STRUCT),
+                    ("CONTEXT", abi::CONTEXT_STRUCT),
+                    ("SWITCH_ARMS", &area_arms),
                 ],
             ));
             let ambient_call = if custom_ambient {
@@ -2024,6 +2090,7 @@ mod tests {
             module: "package::test",
             function: "test_model",
             ambient: None,
+            area: None,
             extra: None,
             feature: None,
             doc: "",

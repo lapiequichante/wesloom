@@ -1,0 +1,7 @@
+// The model's analytic response to an unshadowed rectangle or tube, with
+// `w` 1; `w` 0 when the model has none, and the light loop samples the
+// light instead (ADR 0096).
+fn area_dispatch(surface: ${SURFACE}, ctx: ${CONTEXT}, area: AreaLight, extra: vec4f) -> vec4f {
+${BODY}
+}
+

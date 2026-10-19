@@ -11,8 +11,9 @@
 // `wxsl_core::lighting::DEFAULT_MODELS`, shaded through the lighting-model
 // registry rather than placed on a canvas.
 
+import package::lighting::diffuse_lambert::diffuse_lambert;
 import package::lighting::pbr_direct::pbr_direct;
-import package::wxsl::bindings::LightSample;
+import package::wxsl::bindings::{AreaLight, LightSample, area_irradiance, area_specular, environment_brdf};
 import package::wxsl::surface::{Surface, SurfaceContext};
 
 fn lighting_pbr(
@@ -30,4 +31,25 @@ fn lighting_pbr(
         surface.metallic,
         surface.roughness,
     );
+}
+
+// An unshadowed rectangle or tube, integrated whole with linearly
+// transformed cosines (ADR 0096): the GGX lobe's share of the light,
+// weighted by the same Fresnel moments the environment BRDF folds in, and
+// the Lambertian share of what is not reflected.
+fn lighting_pbr_area(
+    surface: Surface,
+    ctx: SurfaceContext,
+    area: AreaLight,
+    extra: vec4f, // unused: this model requests no G-buffer data
+) -> vec3f {
+    let normal = normalize(surface.normal);
+    let view_direction = normalize(ctx.view_direction);
+    let roughness = saturate(surface.roughness);
+    let f0 = mix(vec3f(0.04), surface.base_color, saturate(surface.metallic));
+    let moments = environment_brdf(dot(normal, view_direction), roughness);
+    let reflected = f0 * moments.x + vec3f(moments.y);
+    return area_specular(area, normal, view_direction, roughness) * reflected
+        + (vec3f(1.0) - reflected) * diffuse_lambert(surface.base_color, surface.metallic)
+            * area_irradiance(area, normal, view_direction);
 }

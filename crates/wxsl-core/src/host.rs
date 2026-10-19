@@ -113,7 +113,8 @@ pub fn structures() -> Vec<Structure> {
                 // light had before the field (ADR 0076).
                 field("range", "range", F32),
                 field("area_u", "area_u", Vector(3)),
-                field("_padding1", "_pad1", F32),
+                // A tube's radius; padding for every other kind.
+                field("radius", "radius", F32),
                 field("area_v", "area_v", Vector(3)),
                 field("_padding2", "_pad2", F32),
                 field("spot_direction", "spot_direction", Vector(3)),

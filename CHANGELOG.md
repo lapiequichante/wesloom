@@ -60,6 +60,20 @@ an entry.
   and a material without `KHR_materials_volume` is thin-walled
   ([ADR 0093](docs/adr/0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)).
 
+- Tube lights (`Light::tube`, `LightKind::Tube`) and textured area
+  lights: `Light::with_cookie` also takes a rectangle or a tube, which
+  then emits that cookie layer. An unshadowed rectangle and a tube place
+  their samples around the surface's falloff and specular lobe, so
+  glossy reflections are continuous and prefiltered by roughness. The
+  host layout's `LightUniform._padding1` is now `radius`
+  ([ADR 0095](docs/adr/0095-unshadowed-area-lights-sample-where-the-lobe-and-the-falloff-are.md)).
+- `LightingModel::area`: a model may integrate unshadowed rectangles and
+  tubes analytically with linearly transformed cosines. `wxsl.pbr` and
+  `wxsl.lambert` do. The environment LUT is now 128² in four quadrants,
+  the LTC table beside the split-sum pair, and
+  `abi::ENVIRONMENT_LUT_SIZE` follows
+  ([ADR 0096](docs/adr/0096-area-lights-are-integrated-with-ltc-by-the-models-that-can.md)).
+
 ### Changed
 
 - A material may declare six per-vertex attributes, up from four.

@@ -35,7 +35,7 @@ typedef struct WxslLightUniform {
     uint32_t tile_count;
     float range;
     float area_u[3];
-    float _padding1;
+    float radius;
     float area_v[3];
     float _padding2;
     float spot_direction[3];
@@ -54,7 +54,7 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_first) == 36, "LightUniform.t
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, tile_count) == 40, "LightUniform.tile_count offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, range) == 44, "LightUniform.range offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_u) == 48, "LightUniform.area_u offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding1) == 60, "LightUniform._padding1 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, radius) == 60, "LightUniform.radius offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, area_v) == 64, "LightUniform.area_v offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding2) == 76, "LightUniform._padding2 offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_direction) == 80, "LightUniform.spot_direction offset");
@@ -206,6 +206,6 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "5311037746504389822"
+#define WXSL_HOST_LAYOUT_ID "17170162031823706608"
 #undef WXSL_LAYOUT_ASSERT
 #endif

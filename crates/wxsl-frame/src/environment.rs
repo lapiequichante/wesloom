@@ -144,12 +144,17 @@ impl Camera {
 pub enum LightKind {
     /// Radiates from a point, with inverse-square falloff.
     Point,
-    /// One-sided rectangular emitter, integrated at sixteen surface points.
+    /// One-sided rectangular emitter: sixteen shadowed surface points
+    /// (ADR 0072), or, casting no shadow, samples that follow the specular
+    /// lobe (ADR 0095).
     Rectangle,
     /// Finite cone with smooth falloff and an optional projected cookie.
     Spot,
     /// Infinitely far away: one direction, no falloff.
     Directional,
+    /// A glowing cylinder, sampled along its axis around the specular lobe;
+    /// never shadowed (ADR 0095).
+    Tube,
 }
 
 /// Where a light renders one shadow tile from.
@@ -182,6 +187,8 @@ pub struct Light {
     pub area_u: Vec3,
     /// Second perpendicular half-edge of a rectangle; zero for other lights.
     pub area_v: Vec3,
+    /// A tube's radius; its half-axis is `area_u`.
+    pub radius: f32,
     /// Direction away from a spotlight, normalized by its constructor.
     pub spot_direction: Vec3,
     /// Inner cone half-angle in radians, fully illuminated.
@@ -248,6 +255,7 @@ impl Light {
         intensity: 1.0,
         area_u: Vec3::ZERO,
         area_v: Vec3::ZERO,
+        radius: 0.0,
         spot_direction: Vec3::NEG_Y,
         spot_inner_angle: 0.4,
         spot_outer_angle: 0.7,
@@ -286,6 +294,26 @@ impl Light {
             position_or_direction: centre,
             area_u: half_u,
             area_v: half_v,
+            color,
+            intensity: radiance,
+            ..Light::DEFAULTS
+        }
+    }
+
+    /// A tube from `centre - half_axis` to `centre + half_axis`, `radius`
+    /// thick, emitting `radiance` from its surface. It casts no shadow and
+    /// is never local (ADR 0095).
+    pub fn tube(centre: Vec3, half_axis: Vec3, radius: f32, color: Vec3, radiance: f32) -> Self {
+        assert!(centre.is_finite() && half_axis.is_finite() && radius.is_finite());
+        assert!(
+            half_axis.length_squared() > 1e-8 && radius > 0.0,
+            "a tube needs a nonzero axis and radius"
+        );
+        Light {
+            kind: LightKind::Tube,
+            position_or_direction: centre,
+            area_u: half_axis,
+            radius,
             color,
             intensity: radiance,
             ..Light::DEFAULTS
@@ -333,9 +361,18 @@ impl Light {
         }
     }
 
-    /// Project this layer of Renderer::set_light_cookies through a spot.
+    /// Project this layer of Renderer::set_light_cookies through a spot,
+    /// or emit it from a rectangle (u along `area_u`, v down `area_v`) or
+    /// along a tube (u along its axis, the middle row), prefiltered to the
+    /// samples' spacing (ADR 0095).
     pub fn with_cookie(mut self, layer: u32) -> Self {
-        assert!(self.kind == LightKind::Spot, "cookies require a spotlight");
+        assert!(
+            matches!(
+                self.kind,
+                LightKind::Spot | LightKind::Rectangle | LightKind::Tube
+            ),
+            "cookies require a spotlight, a rectangle or a tube"
+        );
         self.cookie_layer = Some(layer);
         self
     }
@@ -444,6 +481,7 @@ impl Light {
                     sample.face_views()
                 })
                 .collect(),
+            LightKind::Tube => Vec::new(),
             LightKind::Directional => {
                 if direction.length_squared() < 1e-6 {
                     return Vec::new();
@@ -627,6 +665,7 @@ impl Light {
                 LightKind::Rectangle => 2.0,
                 LightKind::Spot => 3.0,
                 LightKind::Directional => 1.0,
+                LightKind::Tube => 4.0,
             },
             color: self.color.to_array(),
             intensity: self.intensity,
@@ -635,7 +674,7 @@ impl Light {
             tile_count,
             range: self.range,
             area_u: self.area_u.to_array(),
-            _padding1: 0.0,
+            radius: self.radius,
             area_v: self.area_v.to_array(),
             _padding2: 0.0,
             spot_direction: self.spot_direction.to_array(),
@@ -1276,6 +1315,27 @@ mod tests {
         assert_eq!(env.shadow_tiles().len(), 96);
         assert_eq!(uniform.lights[0].area_u, Vec3::X.to_array());
         assert_eq!(uniform.lights[0].area_v, Vec3::Z.to_array());
+    }
+
+    #[test]
+    fn a_tube_carries_its_axis_and_radius_and_never_shadows_or_clusters() {
+        let tube = Light::tube(Vec3::Y, Vec3::new(2.0, 0.0, 0.0), 0.05, Vec3::ONE, 4.0)
+            .with_cookie(1)
+            .with_range(3.0)
+            .casting_shadow(4.0);
+        assert!(tube.shadow_views(&Camera::default()).is_empty());
+        assert!(!tube.is_local());
+        let uniform = tube.uniform(0, 0);
+        assert_eq!(uniform.kind, 4.0);
+        assert_eq!(uniform.area_u, [2.0, 0.0, 0.0]);
+        assert_eq!(uniform.radius, 0.05);
+        assert_eq!(uniform.cookie_layer, 1);
+        let env = Environment {
+            lights: vec![tube],
+            ..Environment::default()
+        };
+        assert!(env.shadow_tiles().is_empty());
+        assert_eq!(env.uniform().lights[0].tile_count, 0);
     }
 
     #[test]

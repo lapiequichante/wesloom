@@ -8,8 +8,8 @@
 //! environment-BRDF approximation reduces to, integrated over a
 //! Hammersley sample set.
 
-/// Side of the LUT, in texels. The compute arm's workgroup count divides
-/// this exactly: 8 × 8 workgroups of 8 × 8 invocations.
+/// Side of one LUT quadrant, in texels: the frame's LUT is two by two of
+/// them, 16 × 16 workgroups of 8 × 8 invocations (ADR 0096).
 const LUT_SIZE: u32 = 64u;
 /// Samples per texel. Once-only work, so it can afford to be thorough.
 const SAMPLE_COUNT: u32 = 1024u;
@@ -77,4 +77,23 @@ fn lut_texel(uv: vec2f) -> vec4f {
     let n = vec3f(0.0, 0.0, 1.0);
     let v = vec3f(sqrt(max(0.0, 1.0 - uv.x * uv.x)), 0.0, uv.x);
     return vec4f(integrate(n, v, uv.y), 0.0, 1.0);
+}
+
+/// The texel at `texel` of the quadrant layout (ADR 0096): the top left
+/// quadrant holds the split-sum pair and the LTC inverse's (00, 02)
+/// entries, the top right its (20, 22) entries, both at the same
+/// (N·V, roughness); the bottom half is empty. `ltc_table.wxsl` is
+/// prepended with this file.
+fn lut_quadrant_texel(texel: vec2u) -> vec4f {
+    let quadrant = texel / LUT_SIZE;
+    let local = texel % LUT_SIZE;
+    if quadrant.y > 0u {
+        return vec4f(0.0, 0.0, 0.0, 1.0);
+    }
+    let ltc = LTC_TABLE[local.y * LTC_SIZE + local.x];
+    if quadrant.x > 0u {
+        return vec4f(ltc.zw, 0.0, 1.0);
+    }
+    let uv = (vec2f(local) + vec2f(0.5, 0.5)) / f32(LUT_SIZE);
+    return vec4f(lut_texel(uv).xy, ltc.xy);
 }

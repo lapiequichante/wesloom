@@ -307,6 +307,40 @@ pub(crate) fn demos() -> Vec<Demo> {
             params: &[], material: None, motion: None, warmup: 0,
         },
         Demo {
+            name: "area-texture",
+            blurb: "a rectangle emitting a texture drawn in WXSL, no shadow: its samples \
+                    follow each point's specular lobe, so the glossy floor reflects the \
+                    panel prefiltered by roughness instead of sixteen dots (ADR 0095)",
+            pipeline: Pipeline::Document(deferred_pyramid_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
+            name: "neon",
+            blurb: "neon tube lights — glowing cylinders sampled along their axis around \
+                    the specular lobe, one with a WXSL gradient — streaking a glossy \
+                    floor, under bloom (ADR 0095)",
+            pipeline: Pipeline::Document(deferred_pyramid_document),
+            instances: 1,
+            key_intensity: 42.0,
+            features: &[],
+            macros: &[],
+            model: None,
+            sky: None,
+            params: &[],
+            material: None,
+            motion: None,
+            warmup: 0,
+        },
+        Demo {
             name: "spot-shadow", blurb: "a focused cone with soft angular falloff and one shadow tile (ADR 0073)",
             pipeline: Pipeline::Stock(StockPipeline::Deferred), instances: 1, key_intensity: 42.0,
             features: &[], macros: &[], model: None, sky: None, params: &[], material: None, motion: None, warmup: 0,

@@ -8,9 +8,22 @@ fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
     let normal = normalize(surface.normal);
 ${EXTRA_DECL}    var lit = vec3f(0.0);
     let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
+    let lobe = specular_lobe(normal, ctx.view_direction, surface.roughness);
     for (var index = 0u; index < light_count; index = index + 1u) {
-        for (var sample = 0u; sample < light_sample_count(index); sample = sample + 1u) {
-            let light = sample_light_at(index, sample, ctx.world_position);
+        // An unshadowed rectangle or tube, integrated whole when the model
+        // knows how (ADR 0096); otherwise sampled below.
+        let area = area_light(index, ctx.world_position);
+        if area.shape != 0u {
+            let answer = area_dispatch(surface, ctx, area${DISPATCH_ARGS});
+            if answer.w > 0.0 {
+                lit = lit + answer.xyz;
+                continue;
+            }
+        }
+        // What every sample of this light shares, worked out once.
+        let setup = light_setup(index, ctx.world_position, lobe);
+        for (var sample = 0u; sample < setup.count; sample = sample + 1u) {
+            let light = sample_light_setup(setup, sample, ctx.world_position);
             // Declared unconditionally and overwritten under the flag,
             // because a `let` inside an `@if` is removed along with it.
             var shadow = 1.0;

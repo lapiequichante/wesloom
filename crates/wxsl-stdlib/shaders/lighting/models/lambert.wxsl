@@ -10,7 +10,7 @@
 // this directory on purpose.
 
 import package::lighting::diffuse_lambert::diffuse_lambert;
-import package::wxsl::bindings::LightSample;
+import package::wxsl::bindings::{AreaLight, LightSample, area_irradiance};
 import package::wxsl::surface::{Surface, SurfaceContext};
 
 fn lighting_lambert(
@@ -23,4 +23,15 @@ fn lighting_lambert(
     return diffuse_lambert(surface.base_color, surface.metallic)
         * light.radiance
         * n_dot_l;
+}
+
+// An unshadowed rectangle or tube, integrated whole (ADR 0096).
+fn lighting_lambert_area(
+    surface: Surface,
+    ctx: SurfaceContext,
+    area: AreaLight,
+    extra: vec4f, // unused: this model requests no G-buffer data
+) -> vec3f {
+    return diffuse_lambert(surface.base_color, surface.metallic)
+        * area_irradiance(area, normalize(surface.normal), normalize(ctx.view_direction));
 }

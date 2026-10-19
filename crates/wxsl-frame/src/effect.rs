@@ -1157,18 +1157,20 @@ pub const BRDF_LUT: Effect = Effect {
     description: "Bake the split-sum environment-BRDF LUT, once.",
     kind: EffectKind::Compute {
         entry: "bake_lut",
-        workgroups: [8, 8, 1],
+        workgroups: [16, 16, 1],
     },
     inputs: &[],
     outputs: &[EffectOutput {
         name: "lut",
         shape: EffectOutputShape::StorageTexture,
-        description: "The LUT: a 64x64 storage texture of (scale, bias).",
+        description:
+            "The LUT: a 128x128 storage texture of (scale, bias) and the LTC table (ADR 0096).",
     }],
     parameters: &[],
     shader: EffectShader::Source {
         path: BRDF_LUT_MODULE,
         wxsl: concat!(
+            include_str!("../shaders/ltc_table.wxsl"),
             include_str!("../shaders/brdf_integrate.wxsl"),
             include_str!("../shaders/brdf_lut.wxsl")
         ),
@@ -1181,6 +1183,7 @@ pub const BRDF_LUT: Effect = Effect {
         shader: EffectShader::Source {
             path: BRDF_LUT_FRAGMENT_MODULE,
             wxsl: concat!(
+                include_str!("../shaders/ltc_table.wxsl"),
                 include_str!("../shaders/brdf_integrate.wxsl"),
                 include_str!("../shaders/brdf_lut_fragment.wxsl")
             ),
@@ -2034,13 +2037,13 @@ mod tests {
         assert!(wxsl.contains("fn bake_lut("), "the declared entry exists");
         assert!(
             wxsl.contains("@workgroup_size(8, 8)"),
-            "the workgroup size divides the declared 8x8x1 dispatch"
+            "the workgroup size divides the declared 16x16x1 dispatch of the 128² LUT"
         );
         assert!(!wxsl.contains("@binding(1)"), "one output, one binding");
         let EffectKind::Compute { workgroups, .. } = BRDF_LUT.kind else {
             panic!("the LUT bake is a compute effect");
         };
-        assert_eq!(workgroups, [8, 8, 1]);
+        assert_eq!(workgroups, [16, 16, 1]);
     }
 
     #[test]

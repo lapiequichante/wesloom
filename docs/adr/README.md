@@ -126,6 +126,8 @@ The ten decisions the rest of the log builds on:
 | [0092](0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md) | Precomputed radiance transfer is baked offline and applied as environment occlusion | Accepted |
 | [0093](0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md) | Thin-walled glass and the transmission factor are optical-layer data | Accepted |
 | [0094](0094-a-normal-maps-mips-keep-their-spread-and-widen-the-roughness.md) | A normal map's mips keep their spread, and it widens the roughness | Accepted |
+| [0095](0095-unshadowed-area-lights-sample-where-the-lobe-and-the-falloff-are.md) | Unshadowed area lights sample where the lobe and the falloff are | Accepted |
+| [0096](0096-area-lights-are-integrated-with-ltc-by-the-models-that-can.md) | Area lights are integrated with LTC by the models that can | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

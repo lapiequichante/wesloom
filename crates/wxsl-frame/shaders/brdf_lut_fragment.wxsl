@@ -17,5 +17,5 @@ fn bake_lut_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 
 @fragment
 fn bake_lut_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
-    return lut_texel(position.xy / f32(LUT_SIZE));
+    return lut_quadrant_texel(vec2u(position.xy));
 }

@@ -2,52 +2,6 @@
 
 use super::*;
 
-pub(crate) fn gallery_spot_cookie(gpu: &GpuContext) -> wgpu::TextureView {
-    let size = 256u32;
-    let pixels: Vec<u8> = (0..size * size)
-        .flat_map(|pixel| {
-            let u = (pixel % size) as f32 / size as f32;
-            let v = (pixel / size) as f32 / size as f32;
-            let cell_u = (u * 3.0).fract();
-            let cell_v = (v * 3.0).fract();
-            let mask = if (0.08..0.92).contains(&cell_u) && (0.08..0.92).contains(&cell_v) {
-                255
-            } else {
-                0
-            };
-            [mask, mask, mask, 255]
-        })
-        .collect();
-    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("gallery spotlight window cookie"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    gpu.queue.write_texture(
-        texture.as_image_copy(),
-        &pixels,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(size * 4),
-            rows_per_image: Some(size),
-        },
-        texture.size(),
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    })
-}
-
 pub(crate) fn gallery_area_light() -> Light {
     Light::rectangle(
         Vec3::new(0.0, 4.2, 0.0),
@@ -65,6 +19,9 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
     // response it gets out of the baked table is the whole picture.
     let lights = match demo.sky {
         Some(_) => Vec::new(),
+        None if lights::lights(demo.name).is_some() => {
+            lights::lights(demo.name).unwrap_or_default()
+        }
         None if demo.name == "shadow" => vec![
             // The sun: directional, casting into the atlas's key tile —
             // the 1024² one — over a 12 m box around the origin. Low
@@ -110,7 +67,7 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
             )
             .casting_shadow(8.0);
             if demo.name == "spot-cookie" {
-                spot = spot.with_cookie(0);
+                spot = spot.with_cookie(lights::WINDOW_LAYER);
             }
             vec![spot]
         }
@@ -173,12 +130,17 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
     let (ambient_sky, ambient_ground) = demo
         .sky
         .or_else(|| {
+            if matches!(demo.name, "area-texture" | "neon") {
+                return Some((Vec3::splat(0.01), Vec3::splat(0.005)));
+            }
             (matches!(demo.name, "area-shadow" | "spot-shadow" | "spot-cookie"))
                 .then_some((Vec3::splat(0.04), Vec3::splat(0.02)))
         })
         .unwrap_or((Vec3::new(0.14, 0.19, 0.28), Vec3::new(0.05, 0.04, 0.035)));
     Environment {
-        camera: if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
+        camera: if let Some(camera) = lights::camera(demo.name, aspect) {
+            camera
+        } else if matches!(demo.name, "ibl-grid" | "ibl-grid-sky") {
             ibl_grid_camera(aspect)
         } else if demo.name == "glass-probes" {
             Camera {

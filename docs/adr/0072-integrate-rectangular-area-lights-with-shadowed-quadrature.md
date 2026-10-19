@@ -44,3 +44,7 @@ residual sample lobes, and low-resolution tiles limit detail. This is not LTC, s
 sampling or clustered lighting. A rectangle costs sixteen BRDF evaluations and
 96 shadow views, while occupying one light row. Regenerate the C header and
 rebake offline exports after the light stride and tile-table changes.
+
+A rectangle that casts no shadow no longer uses the fixed points. Its samples
+follow the surface's falloff and specular lobe, and it may emit a texture
+([ADR 0095](0095-unshadowed-area-lights-sample-where-the-lobe-and-the-falloff-are.md)).

@@ -66,6 +66,8 @@ pub(crate) struct Stage {
     pub(crate) grid_floor: DemoMaterial,
     pub(crate) shadow_floor: DemoMaterial,
     pub(crate) area_emitter: DemoMaterial,
+    /// The `area-texture` and `neon` demos' floor, wall and emitters.
+    pub(crate) lights: lights::LightStage,
     pub(crate) grid_floor_mesh: Mesh,
     pub(crate) camera_override: Option<(Camera, Option<Camera>)>,
     /// The bake demo's own material and the table its bake pass writes
@@ -447,8 +449,10 @@ impl Stage {
             &emitter_graph,
             &wxsl::render::material::MaterialConfig::default().with_shadows(false, false),
         )?;
-        let cookie = gallery_spot_cookie(&gpu);
-        renderer.set_light_cookies(&gpu.device, Some(&cookie));
+        let light_textures = lights::light_textures(&gpu)?;
+        renderer.set_light_cookies(&gpu.device, Some(&light_textures.array));
+        let lights =
+            lights::LightStage::new(&gpu, &mut renderer, &light_textures, &texture, &sampler)?;
         Ok(Stage {
             ibl_source,
             ibl_sky,
@@ -487,6 +491,7 @@ impl Stage {
             grid_floor,
             shadow_floor,
             area_emitter,
+            lights,
             grid_floor_mesh,
             camera_override: None,
             bake: Some(bake),

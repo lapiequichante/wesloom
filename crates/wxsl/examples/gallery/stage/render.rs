@@ -361,6 +361,28 @@ impl Stage {
             )?;
             return Ok(());
         }
+        if matches!(demo.name, "area-texture" | "neon") {
+            let draws = self.lights.draws(
+                lights::Shared {
+                    floor: &self.grid_floor_mesh,
+                    cube: &self.mesh,
+                    sphere: &self.sphere,
+                    plate: &self.plate,
+                },
+                demo.name,
+                time,
+            );
+            self.renderer.render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view,
+                    environment: &environment,
+                    draws: &draws,
+                },
+            )?;
+            return Ok(());
+        }
         if matches!(demo.name, "sixteen" | "clustered") {
             // The whole light budget: sixteen coloured lamps in a ring
             // around one cube. Every lamp's row reaches the shader, so the

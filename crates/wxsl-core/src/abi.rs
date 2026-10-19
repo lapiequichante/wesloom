@@ -569,9 +569,11 @@ pub const BINDING_PREVIOUS_INSTANCES: u32 = 8;
 
 /// Edge length in texels of the environment-BRDF LUT.
 ///
-/// Must match `LUT_SIZE` in `wxsl-render`'s `shaders/brdf_lut.wxsl`, whose
-/// dispatch covers exactly this many texels.
-pub const ENVIRONMENT_LUT_SIZE: u32 = 64;
+/// Four 64-texel quadrants (ADR 0096): the top left holds the split-sum
+/// (scale, bias) and two of the LTC inverse's entries, the top right the
+/// other two. `wxsl-frame`'s `shaders/brdf_lut.wxsl` dispatch covers
+/// exactly this many texels.
+pub const ENVIRONMENT_LUT_SIZE: u32 = 128;
 
 /// How many lights the scene uniform carries.
 ///

@@ -356,6 +356,7 @@ pub wxsl_frame::environment::LightKind::Directional
 pub wxsl_frame::environment::LightKind::Point
 pub wxsl_frame::environment::LightKind::Rectangle
 pub wxsl_frame::environment::LightKind::Spot
+pub wxsl_frame::environment::LightKind::Tube
 impl core::clone::Clone for wxsl_frame::environment::LightKind
 pub fn wxsl_frame::environment::LightKind::clone(&self) -> Self
 impl core::cmp::Eq for wxsl_frame::environment::LightKind
@@ -534,6 +535,7 @@ pub wxsl_frame::environment::Light::cookie_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::intensity: f32
 pub wxsl_frame::environment::Light::kind: wxsl_frame::environment::LightKind
 pub wxsl_frame::environment::Light::position_or_direction: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::Light::radius: f32
 pub wxsl_frame::environment::Light::range: f32
 pub wxsl_frame::environment::Light::shadow_cascades: u32
 pub wxsl_frame::environment::Light::shadow_distance: f32
@@ -552,6 +554,7 @@ pub fn wxsl_frame::environment::Light::point(glam::f32::vec3::Vec3, glam::f32::v
 pub fn wxsl_frame::environment::Light::rectangle(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
 pub fn wxsl_frame::environment::Light::shadow_views(&self, &wxsl_frame::environment::Camera) -> alloc::vec::Vec<wxsl_frame::environment::ShadowView>
 pub fn wxsl_frame::environment::Light::spot(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, f32, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::tube(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, glam::f32::vec3::Vec3, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_cascades(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
@@ -576,6 +579,7 @@ pub wxsl_frame::environment::LightUniform::cookie_layer: u32
 pub wxsl_frame::environment::LightUniform::intensity: f32
 pub wxsl_frame::environment::LightUniform::kind: f32
 pub wxsl_frame::environment::LightUniform::position_or_direction: [f32; 3]
+pub wxsl_frame::environment::LightUniform::radius: f32
 pub wxsl_frame::environment::LightUniform::range: f32
 pub wxsl_frame::environment::LightUniform::shadow_normal_bias: f32
 pub wxsl_frame::environment::LightUniform::spot_direction: [f32; 3]

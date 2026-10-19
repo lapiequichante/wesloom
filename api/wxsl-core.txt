@@ -1444,6 +1444,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_core::lighting::GeneratedL
 impl core::panic::unwind_safe::UnwindSafe for wxsl_core::lighting::GeneratedLighting
 pub struct wxsl_core::lighting::LightingModel
 pub wxsl_core::lighting::LightingModel::ambient: core::option::Option<&'static str>
+pub wxsl_core::lighting::LightingModel::area: core::option::Option<&'static str>
 pub wxsl_core::lighting::LightingModel::doc: &'static str
 pub wxsl_core::lighting::LightingModel::extra: core::option::Option<wxsl_core::lighting::ModelExtra>
 pub wxsl_core::lighting::LightingModel::feature: core::option::Option<&'static str>

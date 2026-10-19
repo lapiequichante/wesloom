@@ -90,6 +90,7 @@ mod demos;
 mod documents;
 mod environment;
 mod glass_probes;
+mod lights;
 mod materials;
 mod screenshots;
 mod stage;
