@@ -1,0 +1,112 @@
+// Motorway surface
+//
+// Asphalt for a dual carriageway in road coordinates: `road.x` is
+// metres across the deck from its centre line, `road.y` metres along it.
+// Each carriageway is one copy of a two-lane texture set (albedo, an
+// OpenGL normal map, roughness), laid at its true width so its solid
+// lines fall `inner_edge` from the centre and two `lane_width` lanes
+// beyond. The median and the hard shoulder read a band of its plain
+// asphalt, mirrored to and fro. Its centre dash is stretched
+// `dash_stretch` times along the road, to a motorway's dash, while the
+// asphalt keeps its true scale. Roughness and normals are the textures'.
+// The normal's frame comes from screen derivatives, so this is a
+// fragment-stage node.
+struct RoadSurface {
+    base_color: vec3f,
+    roughness: f32,
+    normal: vec3f,
+}
+
+fn road_surface(
+    albedo: texture_2d<f32>,
+    normal_map: texture_2d<f32>,
+    roughness_map: texture_2d<f32>,
+    samp: sampler,
+    road: vec2f,      // Metres across (x) and along (y) the deck. @default 0.0, 0.0
+    world: vec3f,     // World position, metres. @default 0.0, 0.0, 0.0
+    geometric_normal: vec3f, // The mesh's world normal. @default 0.0, 1.0, 0.0
+    half_width: f32,  // Half the deck's surface, metres. @default 11.0
+    inner_edge: f32,  // The inner edge line, from the centre line. @default 1.4
+    lane_width: f32,  // One lane, metres. @default 3.5
+    dash_stretch: f32, // How much longer the centre dash is than drawn. @default 5.0
+) -> RoadSurface {
+    let across = road.x;
+    let along = road.y;
+    // Across one carriageway, from its inner edge line.
+    let side = abs(across) - inner_edge;
+
+    // The texture's solid lines are centred at u = 0.039 and 0.961, two
+    // lanes apart; it is square, so a tile is as long as it is wide.
+    let line_u = 0.039;
+    let per_metre = (1.0 - 2.0 * line_u) / (2.0 * lane_width);
+    let u = line_u + side * per_metre;
+    let tile = vec2f(u, along * per_metre);
+    // Past either solid line, a band of plain asphalt between the lines
+    // is read instead, mirrored to and fro: folding at the texture's own
+    // edge would copy the line beside itself.
+    let outer = max(u - 0.985, 0.0);
+    let inner = max(0.015 - u, 0.0);
+    let past = outer + inner;
+    let swing = fract(past / 0.68) * 0.68;
+    let fold = select(swing, 0.68 - swing, swing > 0.34);
+    // Both bands run back against u on the way out, then with it.
+    let flip = select(1.0, -1.0, past > 0.0 && swing <= 0.34);
+    let mirrored = select(u, select(0.06 + fold, 0.94 - fold, outer > 0.0), past > 0.0);
+    let at = vec2f(mirrored, tile.y);
+    let dash_at = vec2f(mirrored, tile.y / dash_stretch);
+    // The mirror's fold must not pick a mip; the unfolded uv's
+    // derivatives do it.
+    let ddx = dpdx(tile);
+    let ddy = dpdy(tile);
+    // Around the centre dash the asphalt is read beside it, off the drawn
+    // dashes, and only the paint of the stretched read is laid over it:
+    // stretched asphalt would streak.
+    let band = 1.0 - smoothstep(0.02, 0.035, abs(mirrored - 0.5));
+    let beside = at + vec2f(0.08, 0.0);
+    let squeeze = vec2f(1.0, 1.0 / dash_stretch);
+    let dash_dx = ddx * squeeze;
+    let dash_dy = ddy * squeeze;
+    let dash_color = textureSampleGrad(albedo, samp, dash_at, dash_dx, dash_dy);
+    let paint = band * smoothstep(0.04, 0.15, dash_color.r - dash_color.b);
+    let color_texel = mix(
+        mix(textureSampleGrad(albedo, samp, at, ddx, ddy), textureSampleGrad(albedo, samp, beside, ddx, ddy), band),
+        dash_color,
+        paint,
+    );
+    let normal_texel = mix(
+        mix(textureSampleGrad(normal_map, samp, at, ddx, ddy), textureSampleGrad(normal_map, samp, beside, ddx, ddy), band),
+        textureSampleGrad(normal_map, samp, dash_at, dash_dx, dash_dy),
+        paint,
+    );
+    let rough_texel = mix(
+        mix(textureSampleGrad(roughness_map, samp, at, ddx, ddy), textureSampleGrad(roughness_map, samp, beside, ddx, ddy), band),
+        textureSampleGrad(roughness_map, samp, dash_at, dash_dx, dash_dy),
+        paint,
+    );
+
+    var color = color_texel.rgb;
+    // Grime along the parapets' feet.
+    color = color * (1.0 - 0.4 * smoothstep(half_width - 0.6, half_width, abs(across)));
+
+    // The normal map in the frame of the texture's own uv: +x along u
+    // (backwards on a mirrored tile), +y up the image, so against v. The
+    // directions come from the surface gradients of `tile`, the cotangent
+    // frame.
+    let n = normalize(geometric_normal);
+    let dp1 = dpdx(world);
+    let dp2 = dpdy(world);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let grad_u = dp2perp * ddx.x + dp1perp * ddy.x;
+    let grad_v = dp2perp * ddx.y + dp1perp * ddy.y;
+    let tangent = normalize(grad_u * flip + n * 1e-6);
+    let bitangent = -normalize(grad_v + n * 1e-6);
+    let mapped = normal_texel.xyz * 2.0 - 1.0;
+    let bend = mapped.xy;
+
+    var out: RoadSurface;
+    out.base_color = color;
+    out.roughness = rough_texel.r;
+    out.normal = normalize(n * max(mapped.z, 1e-4) + tangent * bend.x + bitangent * bend.y);
+    return out;
+}

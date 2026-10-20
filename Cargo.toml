@@ -12,6 +12,7 @@ members = [
     "crates/wxsl-mcp",
     "crates/wxsl-prt",
     "crates/wxsl",
+    "crates/wxsl-drive",
 ]
 
 [workspace.package]

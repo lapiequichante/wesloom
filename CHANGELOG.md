@@ -11,6 +11,14 @@ an entry.
 
 ### Added
 
+- Static shadows. `Light::with_static_shadow(frame)` draws a spot
+  light's shadow tile once and keeps it while the light holds still in
+  its casters' frame. `Light::with_shadow_casters` narrows any light's
+  shadow to the draws a tag expression matches.
+  `Renderer::invalidate_static_shadows` redraws them. `Light` is now
+  `Clone` and no longer `Copy`
+  ([ADR 0101](docs/adr/0101-a-static-shadow-is-drawn-once-in-its-casters-frame.md)).
+
 - GPU skinning. `output.vertex` takes optional object-space `normal` and
   `tangent` inputs, `input.object_tangent` reads the mesh's tangent, and
   `animation.skin` blends four joints from a bone texture. The glTF import
@@ -130,6 +138,12 @@ an entry.
 - The editor's shortcuts follow the keyboard layout, and its glyphs are
   always generated on the GPU (the toolbar's `msdf` button, the `G` key
   and the example's `--msdf` option are gone).
+
+### Fixed
+
+- `generative.simplex3` hashed its lattice without the cell's `y` and `x`
+  offsets, so its noise repeated along those axes in straight-edged
+  blocks.
 
 ## [0.1.0] - 2026-10-16
 

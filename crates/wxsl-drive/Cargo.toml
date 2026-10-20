@@ -1,0 +1,29 @@
+[package]
+name = "wxsl-drive"
+description = "A night drive: me_car on a procedural road past a procedural city, lit by the sky, street lamps and its own headlights."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+# A demo application, not a library (ADR 0100).
+publish = false
+
+[[bin]]
+name = "drive"
+path = "src/main.rs"
+
+[dependencies]
+wxsl = { path = "../wxsl", features = ["gltf", "stdlib"] }
+# The demo's own nodes are `.wxsl` files derived at start-up, the way the
+# editor derives `user.*` functions (ADR 0020).
+wxsl-lang = { workspace = true }
+# me_car's offline radiance transfer bake, read and wired in (ADR 0092).
+wxsl-prt = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+image = { workspace = true }

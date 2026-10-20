@@ -1,0 +1,47 @@
+//! drive motion blur: `wxsl.motion_blur`'s gather along each pixel's own
+//! velocity, which refuses light from what did not move with the pixel.
+//!
+//! The camera carries the car along, so the car's velocity is nearly zero
+//! while the road under it streams past. The plain gather has a road pixel
+//! just behind the car sample back along the road's motion, into the car,
+//! and smears the car's colour down the road as a trail. Here a tap whose
+//! own motion is much shorter than this pixel's is something that stayed
+//! put in front of it, whose light never crossed this pixel during the
+//! exposure, and it is left out of the average.
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var velocity_image: texture_2d<f32>;
+
+/// How many samples the smear averages, current pixel included.
+const TAPS: i32 = 12;
+
+@vertex
+fn drive_motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn drive_motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(color_image));
+    let uv = position.xy / size;
+    let pixel = vec2i(position.xy);
+    let own = textureLoad(velocity_image, pixel, 0).xy;
+    // Half the frame's motion each way of the sample point, as a shutter.
+    let motion = own * 0.5 * params.strength;
+    let reach = length(own);
+
+    var sum = textureLoad(color_image, pixel, 0).rgb;
+    var weight = 1.0;
+    for (var tap = 1; tap < TAPS; tap++) {
+        let fraction = f32(tap) / f32(TAPS - 1);
+        let sample_pixel = vec2i(clamp(uv - motion * fraction, vec2f(0.0), vec2f(1.0)) * size);
+        let moved = length(textureLoad(velocity_image, sample_pixel, 0).xy);
+        let accept = smoothstep(0.25, 0.6, moved / max(reach, 1e-6));
+        sum += textureLoad(color_image, sample_pixel, 0).rgb * accept;
+        weight += accept;
+    }
+    return vec4f(sum / weight, 1.0);
+}

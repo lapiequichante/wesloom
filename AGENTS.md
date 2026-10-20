@@ -38,6 +38,7 @@ truth.
 | `wxsl-editor`: node editor, draws itself | `core`, `render`, `lang` | yes (ADR 0013) |
 | `wxsl-mcp`: MCP server over editor commands | `core`, `editor`, `render` | yes (ADR 0083) |
 | `wxsl`: facade, behind features | all of the above | via `render`/`editor` |
+| `wxsl-drive`: the drive demo, unpublished (ADR 0100) | `wxsl`, `lang` | via `wxsl` |
 
 Boundaries that must hold (ADR 0002):
 
@@ -130,6 +131,7 @@ Each test file's header says what it covers.
 | WebGL2/GL fallback (ADR 0075) | `--test downlevel_corpus` (no device), `--test downlevel`, the wasm check, then `node dawn/tests/web_smoke.mjs` |
 | glTF import | `cargo test -p wxsl-gltf`, then `cargo test -p wxsl --features gltf --test gltf_import` |
 | the PRT bake or its nodes (ADR 0092) | `cargo test -p wxsl-prt`, then `cargo test -p wxsl --test prt` |
+| the drive demo (road, terrain, city, sky, sliders) | `cargo test -p wxsl-drive`, then `cargo run -p wxsl-drive --release -- --screenshot out.png` |
 | a picture | `cargo run -p wxsl --example pbr_cube -- --headless`, `gallery -- --screenshot`, or `viewer -- <demo> --screenshot out.png` |
 
 The wasm check is
@@ -245,6 +247,9 @@ The ADR named on each line holds the reasoning.
   - `editor --features mcp -- --mcp <PORT>` (or `--mcp-stdio --headless`)
     lets an agent drive the editor. `crates/wxsl/tests/transcripts/`
     holds recorded agent sessions, replayed by `--test mcp`.
+- `crates/wxsl-drive/` is the drive demo: me_car on a procedural motorway
+  viaduct past a procedural city, with sliders for speed and the hour
+  (`cargo run -p wxsl-drive --release`, `--help` for screenshots).
 - `resources/glb/`: Khronos sample models and their licenses.
 - `cargo run -p wxsl-prt --release -- <model.glb>` bakes the PRT sidecars
   (`<model>.gray.prt`, `<model>.color.prt`) the `viewer` picks up.

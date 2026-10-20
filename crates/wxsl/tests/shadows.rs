@@ -667,10 +667,10 @@ fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
     ];
     for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
         scene.renderer.set_pipeline(pipeline);
-        for (light, radius, edge, probe) in lights {
+        for (light, radius, edge, probe) in lights.clone() {
             let kind = format!("{} {:?}", pipeline.name(), light.kind);
             let mut env = lit(false);
-            env.lights = vec![light.with_source_radius(radius)];
+            env.lights = vec![light.clone().with_source_radius(radius)];
             let soft_empty = scene.render(&env, &ground, None);
             env.lights[0].casts_shadow = false;
             let open = scene.render(&env, &ground, None);
@@ -1211,4 +1211,104 @@ fn a_caster_outside_the_cameras_view_is_culled_from_it_and_still_casts() {
         "the reference frame has no shadow to compare"
     );
     assert_eq!(brightness(&culled, under), brightness(&reference, under));
+}
+
+/// A static spot shadow (ADR 0101) is drawn once from its casters only,
+/// kept while its light stays put in its frame, and redrawn when the
+/// light moves on it. The frame that keeps it clears the other light's
+/// tile by drawing, so a caster that left is gone from that tile.
+#[test]
+fn a_static_shadow_is_drawn_once_and_the_tiles_around_it_still_clear() {
+    use wxsl::core::scene::{TagExpr, Tags};
+    use wxsl::render::pass::PassView;
+
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "static receiver");
+    let ground = scene.material(&graph, &MaterialConfig::default());
+    let caster = scene.material(
+        &graph,
+        &MaterialConfig::default().with_tags(Tags::from_iter(["caster"])),
+    );
+    let spot = |x: f32, intensity: f32, at: Vec3| {
+        Light::spot(
+            Vec3::new(x, 2.5, 0.0),
+            at - Vec3::new(x, 2.5, 0.0),
+            20.0_f32.to_radians(),
+            40.0_f32.to_radians(),
+            Vec3::ONE,
+            intensity,
+        )
+        .casting_shadow(4.0)
+    };
+    // Straight over the caster, and off to its side: the second throws
+    // the caster's shadow out to `beside`, clear of the first's.
+    let beside = Vec3::new(-1.3, 0.0, 0.0);
+    let mut dynamic = lit(false);
+    dynamic.lights = vec![spot(0.0, 5.0, Vec3::ZERO), spot(2.0, 25.0, beside)];
+    let open = scene.render(&dynamic, &ground, None);
+
+    let shadow_label = |renderer: &Renderer, tile: u32| {
+        renderer
+            .render_graph()
+            .passes()
+            .iter()
+            .find(|pass| pass.view == PassView::Shadow { tile })
+            .map(|pass| pass.label.clone())
+            .expect("a pass per tile")
+    };
+    let first = shadow_label(&scene.renderer, 0);
+    let mut kept = dynamic.clone();
+    kept.lights[0] = spot(0.0, 5.0, Vec3::ZERO)
+        .with_shadow_casters(TagExpr::tag("caster"))
+        .with_static_shadow(Mat4::IDENTITY);
+
+    let drawn = scene.render(&kept, &ground, Some(&caster));
+    assert_eq!(
+        scene.renderer.pass_draw_count(&first),
+        Some(1),
+        "the casters only: the ground is not drawn into a static tile"
+    );
+    // Both lights shade both points, so a shadow is a step below the
+    // open picture rather than a fixed drop; the frames below are read
+    // against these two.
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    for point in [Vec3::ZERO, beside] {
+        assert!(
+            brightness(&drawn, point) + 8 < brightness(&open, point),
+            "{point}"
+        );
+    }
+
+    // The caster gone: the kept tile still holds it, the other tile was
+    // cleared and redrawn without it.
+    let kept_frame = scene.render(&kept, &ground, None);
+    assert_eq!(scene.renderer.pass_draw_count(&first), Some(0));
+    assert!(
+        near(
+            brightness(&kept_frame, Vec3::ZERO),
+            brightness(&drawn, Vec3::ZERO)
+        ),
+        "the static tile was kept: {} vs {}",
+        brightness(&kept_frame, Vec3::ZERO),
+        brightness(&drawn, Vec3::ZERO)
+    );
+    assert!(
+        near(brightness(&kept_frame, beside), brightness(&open, beside)),
+        "the dynamic tile was cleared: {} vs {}",
+        brightness(&kept_frame, beside),
+        brightness(&open, beside)
+    );
+
+    // The light moved in its frame: redrawn, now without the caster.
+    let mut moved = kept.clone();
+    moved.lights[0] = spot(0.05, 5.0, Vec3::new(0.05, 0.0, 0.0))
+        .with_shadow_casters(TagExpr::tag("caster"))
+        .with_static_shadow(Mat4::IDENTITY);
+    let redrawn = scene.render(&moved, &ground, None);
+    assert_eq!(scene.renderer.pass_draw_count(&first), Some(0));
+    assert!(
+        brightness(&redrawn, Vec3::ZERO) > brightness(&drawn, Vec3::ZERO) + 8,
+        "a static light that moved on its frame is redrawn"
+    );
 }

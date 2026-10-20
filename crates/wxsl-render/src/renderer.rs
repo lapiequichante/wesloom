@@ -56,6 +56,7 @@ use crate::pipeline::{MaterialGroups, PipelineCache, PipelineConfig, StockPipeli
 use crate::swap::{PipelineSwap, Request, SwapProgress};
 use crate::timing::PassTimer;
 use crate::variants::{CacheStats, EffectRequest, MaterialRequest, ShaderVariant, ShaderVariants};
+use wxsl_frame::shadow_cache::{ShadowCache, ShadowFrame};
 
 /// What to render, for [`Renderer::render`].
 ///
@@ -147,6 +148,14 @@ pub struct Renderer {
     /// [`Renderer::set_pass_timing`] on a device that can write
     /// timestamps (plan3 N9).
     timer: Option<PassTimer>,
+    /// What each shadow slot holds across frames, for the lights whose
+    /// shadow is static (ADR 0101), and the pool generation it was drawn
+    /// under: a reallocation lost the atlas.
+    shadow_cache: ShadowCache,
+    shadow_generation: u64,
+    /// The depth-only pipeline that clears each redrawn tile on a frame
+    /// that keeps one, built the first time a tile is kept.
+    shadow_clear: Option<wgpu::RenderPipeline>,
 }
 
 /// One pass's effect parameters: the layout the descriptor declared, the
@@ -209,6 +218,9 @@ impl Renderer {
             pass_params: HashMap::new(),
             imports: Vec::new(),
             timer: None,
+            shadow_cache: ShadowCache::new(),
+            shadow_generation: u64::MAX,
+            shadow_clear: None,
             config,
         };
         // The stock pass list's effects may declare parameters (the
@@ -508,7 +520,56 @@ impl Renderer {
         }
         self.runs = vec![0; self.graph.passes().len()];
         self.last_run = vec![(u64::MAX, (0, 0)); self.graph.passes().len()];
+        self.shadow_cache.clear();
         self.sync_pass_params();
+    }
+
+    /// Redraw every static shadow next frame (ADR 0101): for casters that
+    /// changed shape, which the cache cannot see.
+    pub fn invalidate_static_shadows(&mut self) {
+        self.shadow_cache.clear();
+    }
+
+    /// The pipeline that writes the far plane over one shadow tile.
+    fn shadow_clear_pipeline(
+        &self,
+        device: &wgpu::Device,
+    ) -> Result<wgpu::RenderPipeline, RenderError> {
+        let extra: [(&str, std::borrow::Cow<'_, str>); 0] = [];
+        let wgsl = crate::variants::compile(
+            &self.library,
+            &extra,
+            abi::SHADOW_CLEAR_MODULE,
+            &wxsl_core::macros::MacroSet::new(),
+        )?;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("wxsl shadow clear"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(wgsl)),
+        });
+        Ok(
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("wxsl shadow clear"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(abi::SHADOW_CLEAR_VERTEX_ENTRY),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::types::WgpuType::to_wgpu(crate::pass::DEPTH_FORMAT),
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            }),
+        )
     }
 
     /// One parameter block per pass whose effect declares parameters,
@@ -1302,7 +1363,25 @@ impl Renderer {
         self.drawn = vec![0; self.graph.passes().len()];
         self.triangles = vec![0; self.graph.passes().len()];
         self.calls = vec![0; self.graph.passes().len()];
-        let plan = self.compile_frame(device, request.environment, request.draws)?;
+        // Before the plan, because a reallocated pool lost the shadow
+        // atlas, and with it every tile the cache would keep.
+        self.pool
+            .configure(device, &self.schedule, self.config.target.into());
+        if self.shadow_generation != self.pool.generation() {
+            self.shadow_cache.clear();
+            self.shadow_generation = self.pool.generation();
+        }
+        // The static shadows this frame keeps (ADR 0101). A library
+        // without the clearing triangle keeps none and redraws them all.
+        let kept = if self.library.contains(abi::SHADOW_CLEAR_MODULE) {
+            self.shadow_cache.plan(request.environment)
+        } else {
+            ShadowFrame::default()
+        };
+        if kept.keeps_any() && self.shadow_clear.is_none() {
+            self.shadow_clear = Some(self.shadow_clear_pipeline(device)?);
+        }
+        let plan = self.compile_frame(device, request.environment, request.draws, &kept)?;
 
         // One row per draw, in every shape the frame's materials asked
         // for — and the place a draw that forgot a declared per-instance
@@ -1313,6 +1392,7 @@ impl Renderer {
                 .environment_maps()
                 .map(|_| self.graph.environment_scale()),
         );
+        self.bindings.keep_shadow_tiles(kept.clone());
         self.bindings.update(
             device,
             queue,
@@ -1341,8 +1421,6 @@ impl Renderer {
                 block.dirty = false;
             }
         }
-        self.pool
-            .configure(device, &self.schedule, self.config.target.into());
         if let Some(maps) = self.graph.environment_maps() {
             let slots = maps.map(|map| {
                 self.schedule
@@ -1378,6 +1456,12 @@ impl Renderer {
         let size = (self.config.target.width, self.config.target.height);
         let mut run = vec![false; self.graph.passes().len()];
         for (index, pass) in self.graph.passes().iter().enumerate() {
+            // A kept tile's pass is left out, its last drawing kept.
+            if let PassView::Shadow { tile } = pass.view {
+                if kept.keeps(tile as usize) {
+                    continue;
+                }
+            }
             let demanded = if pass.policy == Policy::OnDemand {
                 self.demanded.remove(&pass.label)
             } else {
@@ -1434,6 +1518,12 @@ impl Renderer {
         // what it writes.
         let shadow_maps = graph.shadow_maps();
         let environment_maps = graph.environment_maps();
+        // On a frame that keeps a tile, the atlas is never cleared whole:
+        // its clear becomes a load, and each claimed tile drawn clears its
+        // own rect first.
+        let shadow_clear = self.shadow_clear.as_ref().filter(|_| kept.keeps_any());
+        let claimed = request.environment.shadow_tiles().len();
+        let passes = graph.passes();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("wxsl frame"),
         });
@@ -1450,6 +1540,12 @@ impl Renderer {
             pool,
             &imports,
             &|index| run[index],
+            &|index| {
+                shadow_clear.is_some()
+                    && passes[index]
+                        .depth
+                        .is_some_and(|depth| Some(depth.resource) == shadow_maps)
+            },
             &|pass| {
                 pass_params.get(&pass.label).and_then(|block| {
                     block
@@ -1473,6 +1569,9 @@ impl Renderer {
                         _ => ShadowMaps::Bound,
                     }
                 };
+                let clear_tile = shadow_clear.filter(|_| {
+                    matches!(pass.desc.view, PassView::Shadow { tile } if (tile as usize) < claimed)
+                });
                 record_pass(
                     device,
                     bindings,
@@ -1485,6 +1584,7 @@ impl Renderer {
                     pass,
                     shadows,
                     wireframe,
+                    clear_tile,
                     encoder,
                 )
             },
@@ -1544,9 +1644,12 @@ impl Renderer {
         device: &wgpu::Device,
         environment: &Environment,
         draws: &DrawList<'_>,
+        kept: &ShadowFrame,
     ) -> Result<FramePlan, RenderError> {
         let mut plan = FramePlan::default();
         let views = environment.views();
+        let tiles = environment.shadow_tiles();
+        let lights = environment.uniform_lights();
         for (index, pass) in self.graph.passes().iter().enumerate() {
             if let PassKind::Screen { effect } | PassKind::Compute { effect } = &pass.kind {
                 if let Some(known) = self.effects.get_on(self.config.profile, effect) {
@@ -1567,16 +1670,29 @@ impl Renderer {
                     // the same answer as an empty shadow map, for the cost
                     // of a clear rather than of a pass list rebuilt every
                     // time the application moves a light.
+                    // A kept static tile (ADR 0101) draws nothing either,
+                    // and is not even cleared.
+                    let mut casters = None;
                     if let PassView::Shadow { tile } = pass.view {
-                        if !environment.tile_casts_shadow(tile) {
+                        let Some(owner) = tiles.get(tile as usize) else {
+                            plan.geometry.insert(index, Vec::new());
+                            continue;
+                        };
+                        if kept.keeps(tile as usize) {
                             plan.geometry.insert(index, Vec::new());
                             continue;
                         }
+                        casters = Some(&lights[owner.light as usize].shadow_casters);
                     }
                     let mut selected: Vec<u32> = match source {
-                        DrawSource::Scene(selector) => {
-                            draws.select(selector).map(|(index, _)| index).collect()
-                        }
+                        // A shadow pass draws its light's casters only.
+                        DrawSource::Scene(selector) => draws
+                            .select(selector)
+                            .filter(|(_, item)| {
+                                casters.is_none_or(|casters| casters.matches(item.tags))
+                            })
+                            .map(|(index, _)| index)
+                            .collect(),
                         DrawSource::Indirect { draw, .. } => vec![*draw as u32],
                     };
                     // The transparency tier (plan5 D5): a pass takes only
@@ -1832,11 +1948,18 @@ fn record_pass(
     pass: &RecordedPass<'_>,
     shadows: ShadowMaps,
     wireframe: bool,
+    clear_tile: Option<&wgpu::RenderPipeline>,
     encoder: PassEncoder<'_, '_>,
 ) -> Result<(), RenderError> {
     let index = pass.index;
     match (&pass.desc.kind, encoder) {
         (PassKind::Geometry { source, stage }, PassEncoder::Render(render)) => {
+            // The far plane over this tile, before its casters, on a frame
+            // whose atlas was loaded rather than cleared (ADR 0101).
+            if let Some(pipeline) = clear_tile {
+                render.set_pipeline(pipeline);
+                render.draw(0..3, 0..1);
+            }
             let Some(entries) = plan.geometry.get(&index) else {
                 return Ok(());
             };

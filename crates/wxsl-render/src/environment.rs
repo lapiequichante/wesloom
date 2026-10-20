@@ -4,6 +4,7 @@ use crate::pass::PassView;
 use std::collections::BTreeMap;
 use wxsl_core::abi;
 use wxsl_core::resources::{texel_rows, texels_per_row};
+use wxsl_frame::shadow_cache::ShadowFrame;
 
 pub use wxsl_frame::environment::*;
 pub use wxsl_frame::ies::{IesError, IesProfile};
@@ -104,6 +105,9 @@ pub struct FrameBindings {
     views: wgpu::Buffer,
     view_stride: u32,
     scene: wgpu::Buffer,
+    /// The static shadow tiles this frame keeps, read through their own
+    /// matrices (ADR 0101).
+    kept_shadows: ShadowFrame,
     /// Whether instance rows live in textures rather than storage
     /// buffers — the profile's call (ADR 0075).
     row_textures: bool,
@@ -452,6 +456,7 @@ impl FrameBindings {
             ],
         });
         let mut bindings = FrameBindings {
+            kept_shadows: ShadowFrame::default(),
             views,
             view_stride,
             scene,
@@ -603,6 +608,12 @@ impl FrameBindings {
             ],
         };
         self.rebuild_groups(device);
+    }
+
+    /// Read the tiles `kept` keeps through their own matrices at the next
+    /// [`FrameBindings::update`].
+    pub(crate) fn keep_shadow_tiles(&mut self, kept: ShadowFrame) {
+        self.kept_shadows = kept;
     }
 
     /// Set graph-owned radiance units; `None` selects the analytic fallback.
@@ -842,6 +853,7 @@ impl FrameBindings {
             );
         }
         let mut scene = environment.uniform();
+        self.kept_shadows.apply(&mut scene);
         scene.environment_enabled = if self.environment_scale.is_some() {
             1.0
         } else {

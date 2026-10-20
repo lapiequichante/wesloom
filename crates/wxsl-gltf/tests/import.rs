@@ -521,12 +521,18 @@ fn a_skinned_primitive_is_skinned_by_its_own_material() {
     for name in [wxsl_gltf::JOINTS_ATTRIBUTE, wxsl_gltf::WEIGHTS_ATTRIBUTE] {
         assert!(skinned.attribute(name).is_some(), "declares `{name}`");
     }
-    assert_eq!(param(skinned, wxsl_gltf::BONE_FRAME_PARAM), Some(Value::F32(0.0)));
+    assert_eq!(
+        param(skinned, wxsl_gltf::BONE_FRAME_PARAM),
+        Some(Value::F32(0.0))
+    );
     assert!(imported.scene.materials[1]
         .graph
         .attribute(wxsl_gltf::JOINTS_ATTRIBUTE)
         .is_none());
-    assert_eq!(imported.meshes[0].joints.as_deref(), Some(&[[0u16; 4]; 3][..]));
+    assert_eq!(
+        imported.meshes[0].joints.as_deref(),
+        Some(&[[0u16; 4]; 3][..])
+    );
     let skin = &imported.skins[0];
     assert_eq!(skin.joints, vec![0]);
     assert_eq!(imported.scene.nodes[skin.node].name, "skinned");

@@ -2943,6 +2943,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wxsl-drive"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "image",
+ "pollster",
+ "wgpu",
+ "winit",
+ "wxsl",
+ "wxsl-lang",
+ "wxsl-prt",
+]
+
+[[package]]
 name = "wxsl-editor"
 version = "0.1.0"
 dependencies = [

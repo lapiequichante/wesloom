@@ -1,0 +1,67 @@
+//! drive sky — the equirectangular sky the IBL is baked from.
+//!
+//! `lighting.sky_single_scattering` twice: for the sun, and for the moon
+//! as a much fainter sun, so a moonlit night is blue rather than black.
+//! Below the horizon is the horizon's light off a dark ground. At night a
+//! glow sits on the horizon, the city's light thrown back by the haze.
+//! `params.sun` and `params.moon` are a direction towards the body and its
+//! irradiance; `params.night` is 0 by day and 1 at night.
+
+import package::lighting::sky_single_scattering::sky_single_scattering;
+import package::space::equirect_to_direction::equirect_to_direction;
+
+/// The target's size: `sky::SKY_WIDTH` × `sky::SKY_HEIGHT`.
+const SKY_SIZE: vec2f = vec2f(1024.0, 512.0);
+/// The observer, planet-centred in kilometres: 200 m above the ground.
+const ORIGIN: vec3f = vec3f(0.0, 6360.2, 0.0);
+/// How much of the horizon's light the ground sends back up.
+const GROUND_ALBEDO: f32 = 0.12;
+
+fn scattered(direction: vec3f, body: vec4f) -> vec3f {
+    if body.w <= 0.0 {
+        return vec3f(0.0);
+    }
+    return sky_single_scattering(
+        ORIGIN,
+        direction,
+        body.xyz,
+        vec3f(body.w),
+        6360.0,
+        6460.0,
+        8.0,
+        1.2,
+        vec3f(0.0058, 0.0135, 0.0331),
+        0.0044,
+        0.00044,
+        0.8,
+    );
+}
+
+fn sky(direction: vec3f) -> vec3f {
+    let up = max(direction.y, 0.0);
+    var radiance = scattered(direction, params.sun) + scattered(direction, params.moon);
+    // The night: a dark blue vault, and the city's glow low on the horizon.
+    let vault = vec3f(0.0004, 0.0007, 0.0018) * (0.5 + 0.5 * up);
+    let glow = vec3f(0.018, 0.006, 0.014) * exp(-up * 14.0);
+    radiance += (vault + glow) * params.night;
+    return radiance;
+}
+
+@vertex
+fn drive_sky_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn drive_sky_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let direction = equirect_to_direction(position.xy / SKY_SIZE);
+    if direction.y >= 0.0 {
+        return vec4f(sky(direction), 1.0);
+    }
+    let horizon = normalize(vec3f(direction.x, 0.02, direction.z));
+    let below = sky(horizon) * GROUND_ALBEDO * (0.4 + 0.6 * (1.0 + direction.y));
+    return vec4f(below, 1.0);
+}

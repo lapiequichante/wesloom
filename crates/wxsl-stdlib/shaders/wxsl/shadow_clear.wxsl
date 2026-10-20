@@ -1,0 +1,15 @@
+// The far plane over one shadow tile.
+//
+// A frame that keeps a static shadow (ADR 0101) cannot clear the shadow
+// atlas whole, so each tile it redraws first writes depth 1.0 over its own
+// rect. That is this fullscreen triangle, clipped to the tile by the
+// viewport and scissor the pass already sets, with the depth test off. It
+// is depth only: there is no fragment stage.
+
+@vertex
+fn shadow_clear_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3), on the far plane.
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 1.0, 1.0);
+}

@@ -923,6 +923,13 @@ pub const UI_VERTEX_ENTRY: &str = "ui_vs";
 /// Fragment entry point of [`UI_MODULE`].
 pub const UI_FRAGMENT_ENTRY: &str = "ui_fs";
 
+/// The depth-only triangle a frame that keeps a static shadow clears each
+/// redrawn tile with (ADR 0101). It is part of the library the application
+/// supplies, like [`UI_MODULE`].
+pub const SHADOW_CLEAR_MODULE: &str = "package::wxsl::shadow_clear";
+/// Vertex entry point of [`SHADOW_CLEAR_MODULE`].
+pub const SHADOW_CLEAR_VERTEX_ENTRY: &str = "shadow_clear_vs";
+
 /// [`GROUP_PASS`] binding of the UI viewport uniform.
 ///
 /// The UI pass binds nothing but the pass group: it has no camera, no lights

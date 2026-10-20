@@ -22,6 +22,7 @@ pub mod pipeline;
 pub mod pipeline_doc;
 pub mod profile;
 pub mod setup;
+pub mod shadow_cache;
 pub mod types;
 
 /// Generated fixed host-shared C/C++ layouts (ADR 0050).

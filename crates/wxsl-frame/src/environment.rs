@@ -9,6 +9,7 @@ use bytemuck::Zeroable;
 use glam::{DMat4, DVec3, Mat4, Vec2, Vec3};
 use wxsl_core::abi;
 use wxsl_core::resources::BufferLayout;
+use wxsl_core::scene::TagExpr;
 
 use crate::light_grid::{GridMapping, LightGrid};
 use crate::pass::PassView;
@@ -172,7 +173,10 @@ pub struct ShadowView {
 }
 
 /// One light.
-#[derive(Clone, Copy, Debug)]
+///
+/// `Clone` and not `Copy`, since [`Light::shadow_casters`] is a tag
+/// expression (ADR 0101).
+#[derive(Clone, Debug)]
 pub struct Light {
     /// Point or directional.
     pub kind: LightKind,
@@ -247,6 +251,17 @@ pub struct Light {
     /// clustered list, which is how a frame carries thousands of them
     /// ([`crate::light_grid`], ADR 0076).
     pub range: f32,
+    /// Which draws this light's shadow passes draw, by their tags.
+    /// Every draw by default.
+    pub shadow_casters: TagExpr,
+    /// The frame a static shadow's casters move in, or `None` for a
+    /// shadow redrawn every frame (ADR 0101).
+    ///
+    /// A light that moves rigidly with everything it shadows (a car's
+    /// headlight, over the car's tags in [`Light::shadow_casters`]) has its
+    /// tile drawn once and kept while the light, seen in this frame,
+    /// stays where it was. Spot lights only: see [`Light::with_static_shadow`].
+    pub static_shadow: Option<Mat4>,
 }
 
 impl Light {
@@ -274,6 +289,8 @@ impl Light {
         shadow_normal_bias: 0.03,
         shadow_cascades: 1,
         range: 0.0,
+        shadow_casters: TagExpr::Always,
+        static_shadow: None,
     };
 
     /// A point light at `position`.
@@ -489,6 +506,28 @@ impl Light {
         self
     }
 
+    /// Draw this light's shadow from the draws `casters` matches only.
+    pub fn with_shadow_casters(mut self, casters: TagExpr) -> Self {
+        self.shadow_casters = casters;
+        self
+    }
+
+    /// Make this spot light's shadow static: drawn once, and kept while
+    /// it and its casters move together in `frame`, the transform of
+    /// everything [`Light::shadow_casters`] matches (ADR 0101).
+    ///
+    /// Spot lights only. A point light picks its cube face by world axis,
+    /// which a frame that turns would leave pointing at the wrong face.
+    pub fn with_static_shadow(mut self, frame: Mat4) -> Self {
+        assert!(
+            self.kind == LightKind::Spot,
+            "only a spot light's shadow can be static"
+        );
+        assert!(frame.is_finite() && frame.determinant().abs() > 1e-12);
+        self.static_shadow = Some(frame);
+        self
+    }
+
     /// Set the normal-offset bias, in world units.
     pub fn with_normal_bias(mut self, bias: f32) -> Self {
         self.shadow_normal_bias = bias;
@@ -518,7 +557,7 @@ impl Light {
                 .area_sample_positions()
                 .into_iter()
                 .flat_map(|position| {
-                    let mut sample = *self;
+                    let mut sample = self.clone();
                     sample.position_or_direction = position;
                     sample.face_views()
                 })
@@ -1348,7 +1387,7 @@ mod tests {
             }
         }
         let env = Environment {
-            lights: vec![area, area],
+            lights: vec![area.clone(), area],
             ..Environment::default()
         };
         let uniform = env.uniform();

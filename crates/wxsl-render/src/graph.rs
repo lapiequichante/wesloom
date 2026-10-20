@@ -344,7 +344,9 @@ impl RenderGraph {
     /// index), whether the pass runs this frame at all — the execution
     /// policies' hook (plan2 P10): a pass it returns `false` for is not
     /// recorded and leaves whatever its last run wrote behind, which the
-    /// scheduler's stable-storage rule makes safe. `params` hands over the
+    /// scheduler's stable-storage rule makes safe. `load_depth` turns a
+    /// pass's depth clear into a load this frame, for a shadow atlas that
+    /// keeps a static tile (ADR 0101). `params` hands over the
     /// pass's effect-parameter block — the uniform buffer and its size —
     /// for a pass whose effect declares parameters; the graph knows
     /// neither effects nor their buffers, so the caller resolves both.
@@ -362,6 +364,7 @@ impl RenderGraph {
         pool: &mut ResourcePool,
         imports: &[(ResourceId, &wgpu::TextureView)],
         run: &dyn Fn(usize) -> bool,
+        load_depth: &dyn Fn(usize) -> bool,
         // The buffer a pass's parameters live in borrows from the
         // *caller's* state, so its lifetime rides on this call's borrow of
         // `params`, not on the pass description's.
@@ -499,8 +502,10 @@ impl RenderGraph {
                                 view,
                                 depth_ops: Some(wgpu::Operations {
                                     load: match depth.clear {
-                                        Some(value) => wgpu::LoadOp::Clear(value),
-                                        None => wgpu::LoadOp::Load,
+                                        Some(value) if !load_depth(index) => {
+                                            wgpu::LoadOp::Clear(value)
+                                        }
+                                        _ => wgpu::LoadOp::Load,
                                     },
                                     store: store_op(depth.store),
                                 }),

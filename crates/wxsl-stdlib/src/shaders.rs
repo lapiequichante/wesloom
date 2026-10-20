@@ -51,6 +51,7 @@ modules! {
     "package::wxsl::velocity" => "wxsl/velocity.wxsl",
     "package::wxsl::screen" => "wxsl/screen.wxsl",
     "package::wxsl::shadow" => "wxsl/shadow.wxsl",
+    "package::wxsl::shadow_clear" => "wxsl/shadow_clear.wxsl",
     "package::wxsl::gbuffer" => "wxsl/gbuffer.wxsl",
     // The shading function and the lighting pass are *generated* now, from
     // the enabled lighting models (wxsl_core::lighting, ADR 0028), so
