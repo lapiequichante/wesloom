@@ -361,11 +361,14 @@ pub const wxsl_core::abi::SOCKET_SCREEN_ALPHA: &str
 pub const wxsl_core::abi::SOCKET_SCREEN_COLOR: &str
 pub const wxsl_core::abi::SOCKET_SHADED_COLOR: &str
 pub const wxsl_core::abi::SOCKET_VARYING: &str
+pub const wxsl_core::abi::SOCKET_VERTEX_NORMAL: &str
+pub const wxsl_core::abi::SOCKET_VERTEX_TANGENT: &str
 pub const wxsl_core::abi::SURFACE_CONTEXT_FN: &str
 pub const wxsl_core::abi::SURFACE_FIELDS: &[wxsl_core::abi::SurfaceField]
 pub const wxsl_core::abi::SURFACE_MODULE: &str
 pub const wxsl_core::abi::SURFACE_OUTPUT_ID: &str
 pub const wxsl_core::abi::SURFACE_STRUCT: &str
+pub const wxsl_core::abi::TRANSFORM_VERTEX_DISPLACED_FN: &str
 pub const wxsl_core::abi::TRANSFORM_VERTEX_FN: &str
 pub const wxsl_core::abi::TRANSFORM_VERTEX_OFFSET_FN: &str
 pub const wxsl_core::abi::TRANSFORM_VERTEX_VELOCITY_FN: &str
@@ -387,6 +390,7 @@ pub const wxsl_core::abi::VELOCITY_OUT_STRUCT: &str
 pub const wxsl_core::abi::VERTEX_CONTEXT_FN: &str
 pub const wxsl_core::abi::VERTEX_CONTEXT_STRUCT: &str
 pub const wxsl_core::abi::VERTEX_CONTEXT_VAR: &str
+pub const wxsl_core::abi::VERTEX_DISPLACEMENT_STRUCT: &str
 pub const wxsl_core::abi::VERTEX_ENTRY: &str
 pub const wxsl_core::abi::VERTEX_FN: &str
 pub const wxsl_core::abi::VERTEX_IN_FIELDS: &[wxsl_core::abi::VertexField]

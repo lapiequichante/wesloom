@@ -40,8 +40,12 @@ import package::wxsl::vertex::{VertexContext, VertexIn, transform_vertex_offset}
 // so the current clip travels again as a plain varying beside the
 // previous one — two interpolated clips of the same surface point, whose
 // difference is the per-fragment motion.
+// Invariant: the depth prepass and the colour pass are separate
+// pipelines that must agree on depth to the bit, or `LessEqual` drops
+// fragments. A skinned vertex's longer arithmetic is otherwise fused
+// differently per pipeline (Metal), and its triangles flicker black.
 struct VelocityOut {
-    @builtin(position) clip_position: vec4f,
+    @invariant @builtin(position) clip_position: vec4f,
     @location(0) world_position: vec3f,
     @location(1) world_normal: vec3f,
     @location(2) world_tangent: vec3f,
@@ -86,6 +90,7 @@ fn previous_vertex_context(input: VertexIn) -> VertexContext {
     out.object_position = input.position;
     out.object_normal = input.normal;
     out.object_tangent = input.tangent.xyz;
+    out.normal_matrix = normal_matrix;
     out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;

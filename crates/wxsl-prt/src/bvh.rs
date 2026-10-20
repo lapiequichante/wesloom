@@ -5,6 +5,8 @@
 //! Built top-down with a binned surface-area heuristic; leaves hold up to
 //! four triangles. An occlusion query stops at the first hit; a closest
 //! one visits the nearer child first and skips boxes behind its best hit.
+//! Both ask the caller whether a crossing counts, so a surface cut out by
+//! its texture lets the ray go on.
 
 use glam::Vec3;
 
@@ -160,8 +162,16 @@ impl Bvh {
         }
     }
 
-    /// The first triangle the ray crosses between `near` and `far`.
-    pub fn closest(&self, origin: Vec3, direction: Vec3, near: f32, far: f32) -> Option<Hit> {
+    /// The first triangle the ray crosses between `near` and `far` that
+    /// `keep` accepts.
+    pub fn closest(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        near: f32,
+        far: f32,
+        keep: impl Fn(Hit) -> bool,
+    ) -> Option<Hit> {
         if self.triangles.is_empty() {
             return None;
         }
@@ -213,15 +223,25 @@ impl Bvh {
                         u,
                         v,
                     };
-                    best = Some((t, hit));
+                    if keep(hit) {
+                        best = Some((t, hit));
+                    }
                 }
             }
         }
         best.map(|(_, hit)| hit)
     }
 
-    /// Whether any triangle crosses the ray between `near` and `far`.
-    pub fn occluded(&self, origin: Vec3, direction: Vec3, near: f32, far: f32) -> bool {
+    /// Whether any triangle `keep` accepts crosses the ray between `near`
+    /// and `far`.
+    pub fn occluded(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        near: f32,
+        far: f32,
+        keep: impl Fn(Hit) -> bool,
+    ) -> bool {
         if self.triangles.is_empty() {
             return false;
         }
@@ -241,9 +261,15 @@ impl Bvh {
                 continue;
             }
             let first = node.first as usize;
-            for triangle in &self.triangles[first..first + node.count as usize] {
-                if hits_triangle(triangle, origin, direction, near, far) {
-                    return true;
+            for (offset, triangle) in self.triangles[first..first + node.count as usize]
+                .iter()
+                .enumerate()
+            {
+                if let Some((_, u, v)) = intersect(triangle, origin, direction, near, far) {
+                    let triangle = self.ids[first + offset];
+                    if keep(Hit { triangle, u, v }) {
+                        return true;
+                    }
                 }
             }
         }
@@ -312,10 +338,6 @@ fn box_entry(bounds: &Bounds, origin: Vec3, inverse: Vec3, near: f32, far: f32) 
     (enter <= exit).then_some(enter)
 }
 
-fn hits_triangle(triangle: &Triangle, origin: Vec3, direction: Vec3, near: f32, far: f32) -> bool {
-    intersect(triangle, origin, direction, near, far).is_some()
-}
-
 /// Möller–Trumbore: the distance and the barycentric (u, v) of a crossing
 /// strictly between `near` and `far`.
 fn intersect(
@@ -358,6 +380,10 @@ mod tests {
         ]
     }
 
+    fn all(_: Hit) -> bool {
+        true
+    }
+
     #[test]
     fn rays_find_what_is_in_their_way_and_only_that() {
         // A thousand small quads in a row, and one roof above them.
@@ -372,26 +398,32 @@ mod tests {
         }
         triangles.extend(quad(5.0, 2.0));
         let bvh = Bvh::new(&triangles);
-        assert!(bvh.occluded(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.0, f32::MAX));
-        assert!(!bvh.occluded(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.0, 3.0));
-        assert!(!bvh.occluded(Vec3::new(10.0, 1.0, 0.0), Vec3::Y, 0.0, f32::MAX));
-        assert!(bvh.occluded(Vec3::new(30.0, 1.0, 0.0), -Vec3::Y, 0.0, f32::MAX));
+        assert!(bvh.occluded(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.0, f32::MAX, all));
+        assert!(!bvh.occluded(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.0, 3.0, all));
+        assert!(!bvh.occluded(Vec3::new(10.0, 1.0, 0.0), Vec3::Y, 0.0, f32::MAX, all));
+        assert!(bvh.occluded(Vec3::new(30.0, 1.0, 0.0), -Vec3::Y, 0.0, f32::MAX, all));
         // Between two quads of the row.
-        assert!(!bvh.occluded(Vec3::new(30.15, 1.0, 0.0), -Vec3::Y, 0.0, f32::MAX));
+        assert!(!bvh.occluded(Vec3::new(30.15, 1.0, 0.0), -Vec3::Y, 0.0, f32::MAX, all));
 
         // Straight up from under the roof, the roof; down, the row's quad
         // 100, whose second triangle holds this point.
-        let up = bvh.closest(Vec3::new(0.5, 1.0, 0.3), Vec3::Y, 0.0, f32::MAX);
+        let up = bvh.closest(Vec3::new(0.5, 1.0, 0.3), Vec3::Y, 0.0, f32::MAX, all);
         assert_eq!(up.map(|hit| hit.triangle), Some(2000));
         let down = bvh
-            .closest(Vec3::new(30.0, 1.0, 0.05), -Vec3::Y, 0.0, f32::MAX)
+            .closest(Vec3::new(30.0, 1.0, 0.05), -Vec3::Y, 0.0, f32::MAX, all)
             .unwrap();
         assert_eq!(down.triangle / 2, 100);
         let [a, b, c] = triangles[down.triangle as usize];
         let point = a + (b - a) * down.u + (c - a) * down.v;
         assert!(point.distance(Vec3::new(30.0, 0.0, 0.05)) < 1e-4, "{point}");
         // From above the roof, looking down: the roof, not the row.
-        let above = bvh.closest(Vec3::new(0.5, 9.0, 0.3), -Vec3::Y, 0.0, f32::MAX);
+        let above = bvh.closest(Vec3::new(0.5, 9.0, 0.3), -Vec3::Y, 0.0, f32::MAX, all);
         assert!(above.unwrap().triangle >= 2000);
+
+        // A roof that refuses every hit is not there.
+        let open = |hit: Hit| hit.triangle < 2000;
+        assert!(!bvh.occluded(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.0, f32::MAX, open));
+        let through = bvh.closest(Vec3::new(30.0, 9.0, 0.05), -Vec3::Y, 0.0, f32::MAX, open);
+        assert_eq!(through.map(|hit| hit.triangle / 2), Some(100));
     }
 }

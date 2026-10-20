@@ -301,10 +301,12 @@ fn write_geometry_io(out: &mut String, geometry: &GeometryInterface, stage: abi:
     // cannot be split into "the ABI's half" and "the material's half". Its
     // base half is written from `abi::VERTEX_OUT_FIELDS`, which is also
     // what `vertex.wxsl` declares — the table is the agreement.
+    // Invariant, as in `vertex.wxsl`: the prepass and the colour pass must
+    // agree on depth to the bit.
     let _ = writeln!(out, "struct {} {{", abi::MATERIAL_VERTEX_OUT_STRUCT);
     let _ = writeln!(
         out,
-        "    @builtin(position) {}: vec4f,",
+        "    @invariant @builtin(position) {}: vec4f,",
         abi::CLIP_POSITION_FIELD
     );
     for (location, field) in abi::VERTEX_OUT_FIELDS.iter().enumerate() {
@@ -686,6 +688,9 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
         // Thin-walled glass (thickness 0, ADR 0093) has no entry or exit:
         // a red channel of -1 marks it, green carries its coverage, and
         // its IOR is stored facing the viewer whichever side was drawn.
+        // Its iridescent film rides in blue as `1 + thickness/10nm +
+        // 128 * (ior - 1)/0.1` (integers <= 2048, exact in f16) and its
+        // strength, in quarters, as `2 * k` added to the coverage.
         abi::StageOutput::RefractionSurface => format!(
             "-> WxslOpticalLayer {{\n{prologue}    \
              let s = {material}({ctx}{args});\n    \
@@ -696,7 +701,12 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
              let ior = clamp(s.ior, 1.0, 3.0);\n    \
              let surface = vec4f(base, clamp(s.transmission, 0.0, 1.0));\n    \
              if s.thickness <= 0.0 {{\n        \
-             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(-1.0, clamp(s.alpha, 0.0, 1.0), 0.0, ior), surface);\n    \
+             let film_strength = round(clamp(s.iridescence_strength, 0.0, 1.0) * 3.0);\n        \
+             let film = select(0.0, 1.0 + round(clamp(s.iridescence_thickness, 0.0, 1270.0) / 10.0) \
+             + 128.0 * round((clamp(s.iridescence_ior, 1.0, 2.5) - 1.0) * 10.0), \
+             film_strength > 0.0 && s.iridescence_thickness > 0.0);\n        \
+             let coverage = clamp(s.alpha, 0.0, 1.0) + 2.0 * select(0.0, film_strength, film > 0.0);\n        \
+             return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(-1.0, coverage, film, ior), surface);\n    \
              }}\n    \
              return WxslOpticalLayer(vec4f(n, vertex.clip_position.z), vec4f(transmission, sign * ior), surface);\n}}\n",
             material = options.material_fn,

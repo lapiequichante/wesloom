@@ -329,7 +329,9 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_render::error::RenderError
 pub mod wxsl_render::gltf
 pub use wxsl_render::gltf::COLOR_ATTRIBUTE
 pub use wxsl_render::gltf::Geometry
+pub use wxsl_render::gltf::JOINTS_ATTRIBUTE
 pub use wxsl_render::gltf::UV1_ATTRIBUTE
+pub use wxsl_render::gltf::WEIGHTS_ATTRIBUTE
 pub fn wxsl_render::gltf::load(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<alloc::vec::Vec<wxsl_render::mesh::MeshData>, wxsl_render::error::RenderError>
 pub fn wxsl_render::gltf::load_merged(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<wxsl_render::mesh::MeshData, wxsl_render::error::RenderError>
 pub fn wxsl_render::gltf::mesh_data(&wxsl_gltf::geometry::Geometry) -> wxsl_render::mesh::MeshData

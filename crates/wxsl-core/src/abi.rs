@@ -1585,6 +1585,15 @@ pub const VERTEX_ONLY_FIELDS: &[ContextField] = &[
         doc: "The vertex's tangent in object space, unit length.",
         domains: Domains::SURFACE,
     },
+    ContextField {
+        name: "normal_matrix",
+        ty: ValueType::Mat3,
+        label: "Normal matrix",
+        doc: "Object to world space for directions: the inverse transpose of the model \
+              matrix's linear part. It turns a normal the vertex output replaces into world \
+              space.",
+        domains: Domains::SURFACE,
+    },
 ];
 
 /// One field of [`SURFACE_STRUCT`], i.e. one input of the output node.

@@ -138,6 +138,7 @@ modules! {
     "package::lighting::prt_specular_occlusion" => "lighting/prt_specular_occlusion.wxsl",
     "package::lighting::prt_unpack" => "lighting/prt_unpack.wxsl",
     "package::lighting::prt_visibility" => "lighting/prt_visibility.wxsl",
+    "package::lighting::prt_window" => "lighting/prt_window.wxsl",
     "package::lighting::rayleigh_phase" => "lighting/rayleigh_phase.wxsl",
     "package::lighting::roughness_aa" => "lighting/roughness_aa.wxsl",
     "package::lighting::sheen_ibl_response" => "lighting/sheen_ibl_response.wxsl",

@@ -4,6 +4,7 @@
 // thin layer is one interface over whatever is behind it, tinted by its
 // base colour, and 1 - transmission of every layer is diffuse base colour.
 import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
+import package::lighting::iridescence::iridescence;
 
 @group(3) @binding(0) var background: texture_2d<f32>;
 @group(3) @binding(1) var background_depth: texture_2d<f32>;
@@ -110,16 +111,32 @@ fn optical_exit(uv: vec2f, front: vec4f, back: vec4f, internal: vec3f, incident:
 
 // One thin-walled interface over `behind`: reflection, then the
 // transmitted light tinted by the base colour, all over its coverage. The
-// normal is turned toward the viewer, so either side is a front.
+// normal is turned toward the viewer, so either side is a front. An
+// iridescent film (blue > 0, packed by the surface stage) turns the
+// reflectance spectral: the film's Fresnel at the view angle, over the
+// glass's own F0, weighed by its strength in quarters (green's `2 * k`).
 fn thin_over(behind: vec3f, uv: vec2f, nd: vec4f, material: vec4f, surface: vec4f) -> vec3f {
     let incident = normalize(unproject(uv, nd.w) - camera.position.xyz);
     var n = normalize(nd.xyz);
     if dot(n, incident) > 0.0 {
         n = -n;
     }
-    let f = fresnel(1.0, abs(material.w), -dot(incident, n));
-    let glass = sky(reflect(incident, n)) * f + body(behind * surface.rgb, surface, n) * (1.0 - f);
-    return mix(behind, glass, material.g);
+    let cosine = -dot(incident, n);
+    let ior = abs(material.w);
+    var f = vec3f(fresnel(1.0, ior, cosine));
+    let strength = floor(material.g * 0.5);
+    let coverage = material.g - 2.0 * strength;
+    if material.b > 0.5 && strength > 0.0 {
+        let code = round(material.b) - 1.0;
+        let ior_step = floor(code / 128.0);
+        let film_ior = 1.0 + ior_step * 0.1;
+        let thickness = (code - ior_step * 128.0) * 10.0;
+        let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+        let film = clamp(iridescence(vec3f(f0), max(cosine, 1e-4), thickness, film_ior), vec3f(0.0), vec3f(1.0));
+        f = mix(f, film, strength / 3.0);
+    }
+    let glass = sky(reflect(incident, n)) * f + body(behind * surface.rgb, surface, n) * (vec3f(1.0) - f);
+    return mix(behind, glass, coverage);
 }
 
 // Whether a layer is in front of the opaque scene at `pixel`.

@@ -21,7 +21,8 @@
 //! environment's own coefficients ([`sh::project_equirect`]).
 //!
 //! The lighting can change after the bake and the geometry cannot: the
-//! transfer belongs to the scene's static transforms. No device is
+//! transfer belongs to one pose, the first frame of the file's first clip
+//! by default ([`BakeOptions::clip`]), skinned on the CPU. No device is
 //! involved.
 
 mod albedo;
@@ -127,6 +128,10 @@ pub struct BakeOptions {
     /// Bounces of diffuse light after the direct, shadowed one; 0 bakes
     /// shadowing alone.
     pub bounces: u32,
+    /// The clip whose first frame poses the scene: its nodes, and the
+    /// skinned vertices their joints move. `None`, or a clip the file
+    /// does not have, bakes the pose the file was saved in.
+    pub clip: Option<usize>,
     /// The modes to produce, from the same rays.
     pub transfers: Vec<Transfer>,
     /// An infinite floor under the scene's lowest point that blocks the
@@ -140,7 +145,8 @@ impl Default for BakeOptions {
     fn default() -> Self {
         BakeOptions {
             rays: 256,
-            bounces: 1,
+            bounces: 3,
+            clip: Some(0),
             transfers: Transfer::ALL.to_vec(),
             floor: false,
             threads: 0,
@@ -150,10 +156,12 @@ impl Default for BakeOptions {
 
 /// Bake every mesh of `imported`, once per mode in `options.transfers`.
 ///
-/// Every instance is an occluder, except those whose material is
-/// transparent or refractive, which light passes through. Each mesh is
-/// baked where its first instance places it. `albedo` colours the
-/// bounces; [`Albedo::load`] reads it from the file `imported` came from.
+/// The scene is posed at the first frame of `options.clip`. Every
+/// instance is an occluder, except those whose material is transparent or
+/// refractive, which light passes through; an alpha-masked one blocks
+/// only where its texture is solid. Each mesh is baked where its first
+/// instance places it. `albedo` colours the bounces and holds the masks;
+/// [`Albedo::load`] reads it from the file `imported` came from.
 pub fn bake(
     imported: &ImportedScene,
     albedo: &Albedo,
@@ -320,7 +328,8 @@ fn word(cursor: &mut &[u8]) -> Result<u32, PrtError> {
 /// [`STRENGTH_PARAM`] (starting at 1). The PRT nodes then drive the
 /// surface's `diffuse_occlusion` and `specular_occlusion`, blended from 1
 /// by the strength. The streams are decoded in the vertex stage, so only
-/// the results are interpolated. The reflection reads the roughness the
+/// the results are interpolated. A graph whose vertex output replaces the
+/// normal (a skinned one) decodes against that normal, in world space. The reflection reads the roughness the
 /// surface already gets. A surface that already drives either field is
 /// refused.
 pub fn apply(
@@ -360,6 +369,7 @@ pub fn apply(
         })
         .collect();
     let normal = builder.add("input.world_normal");
+    let diffuse_normal = builder.vertex_normal()?.unwrap_or(normal);
     let view = builder.add("input.view_direction");
     let strength = builder.param(STRENGTH_PARAM, Value::F32(1.0));
 
@@ -371,7 +381,7 @@ pub fn apply(
     for (stream, socket) in streams.iter().zip(STREAMS) {
         builder.wire((*stream, "out"), (diffuse, socket))?;
     }
-    builder.wire((normal, "out"), (diffuse, "normal"))?;
+    builder.wire((diffuse_normal, "out"), (diffuse, "normal"))?;
     for (index, coefficient) in environment.iter().enumerate() {
         let param = builder.param(
             &format!("{SH_PARAM_PREFIX}{index}"),
@@ -437,6 +447,35 @@ impl Builder<'_, '_> {
         if let Err(error) = self.graph.set_generic(self.registry, node, param, ty) {
             panic!("prt generic {param} = {ty:?}: {error}");
         }
+    }
+
+    /// The world normal of a vertex output that replaces the mesh's, in
+    /// the vertex stage: `normalize(normal_matrix * normal)`.
+    fn vertex_normal(&mut self) -> Result<Option<NodeId>, PrtError> {
+        let replaced = self.graph.nodes().find_map(|(id, node)| {
+            (node.def == wxsl_core::abi::VERTEX_OUTPUT_ID)
+                .then(|| {
+                    let socket = SocketRef::new(id, wxsl_core::abi::SOCKET_VERTEX_NORMAL);
+                    self.graph.edge_into(&socket).map(|edge| edge.from.clone())
+                })
+                .flatten()
+        });
+        let Some(from) = replaced else {
+            return Ok(None);
+        };
+        let matrix = self.add("input.normal_matrix");
+        let turn = self.add("math.multiply");
+        self.generic(turn, "A", ValueType::Mat3);
+        self.generic(turn, "B", ValueType::Vec3);
+        self.wire((matrix, "out"), (turn, "a"))?;
+        self.wire((from.node, &from.socket), (turn, "b"))?;
+        let unit = self.add("math.safe_normalize");
+        self.generic(unit, "T", ValueType::Vec3);
+        self.wire((turn, "out"), (unit, "v"))?;
+        for node in [turn, unit] {
+            self.graph.set_stage(node, StageConstraint::Vertex);
+        }
+        Ok(Some(unit))
     }
 
     fn param(&mut self, name: &str, value: Value) -> NodeId {

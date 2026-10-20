@@ -52,8 +52,10 @@
 //! vertices from it, so a frame only moves the row the materials read.
 //! `A` cycles the clips and the imported pose; `--clip N` picks the first
 //! one and `--time T` where a screenshot is taken in it
-//! (`viewer -- me --clip 2 --time 1.2 --screenshot out.png`). PRT bakes are
-//! not used on a skinned model.
+//! (`viewer -- me --clip 2 --time 1.2 --screenshot out.png`). A PRT bake
+//! holds one pose, the first frame of the clip it was baked for (the first
+//! by default), so it is right at the start of that clip and drifts as
+//! the skin moves away from it.
 //!
 //! The lighting is image-based only, unless the file carries
 //! `KHR_lights_punctual` lights: the HDR is convolved into diffuse and GGX
@@ -92,9 +94,9 @@ const HDRS: &[&str] = &[
 
 /// The demos: a name, and the file under `resources/glb/`.
 const DEMOS: &[(&str, &str)] = &[
+    ("me", "me_car/me_car.glb"),
     ("wxsl-car", "WXSLCar/wxslCar.glb"),
     ("wxsl-garage", "WXSLGarage/wxslGarage.glb"),
-    ("me", "me_car/me_car.glb"),
     ("glam-velvet-sofa", "GlamVelvetSofa/GlamVelvetSofa.glb"),
     ("damaged-helmet", "DamagedHelmet/DamagedHelmet.glb"),
     ("car-concept", "CarConcept/CarConcept.glb"),
@@ -811,12 +813,6 @@ fn prt_bakes(
         // The bake is for the model where the file puts it, not for copies.
         if grid > 1 {
             println!("  {}: not used with --grid", file.display());
-            continue;
-        }
-        // Nor for a skinned model, whose surface moves away from the one
-        // the bake saw.
-        if !imported.skins.is_empty() {
-            println!("  {}: not used on a skinned model", file.display());
             continue;
         }
         let bake = wxsl_prt::Bake::read(std::io::BufReader::new(std::fs::File::open(&file)?))

@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (191)
+- [Shader nodes](#shader-nodes) (193)
 - [Pipeline nodes](#pipeline-nodes) (29)
 
 ## Shader nodes
@@ -550,6 +550,13 @@ The image this effect reads: whatever the pass before it wrote. Wire it into a s
 - out `out: texture_2d<f32>`: The pass's input image, at binding 0 of the pass group.
 - only in screen graphs
 
+#### `input.normal_matrix` · Normal matrix
+
+Object to world space for directions: the inverse transpose of the model matrix's linear part. It turns a normal the vertex output replaces into world space.
+
+- out `out: mat3x3f`: Object to world space for directions: the inverse transpose of the model matrix's linear part. It turns a normal the vertex output replaces into world space.
+- only in surface graphs
+
 #### `input.object_normal` · Object normal
 
 The vertex's normal in object space, unit length.
@@ -827,7 +834,7 @@ The share of the environment's diffuse light that reaches a point, per channel, 
 
 #### `lighting.prt_diffuse_occlusion_color` · PRT diffuse occlusion (colour)
 
-`lighting.prt_diffuse_occlusion` for a colour bake (ADR 0092): the transfer has one set of coefficients per channel, because the light a red panel bounces onto its neighbours is red. `wxsl-prt` packs it into four streams, `prt0` to `prt3`: red and green paired per coefficient first, then blue and the visibility as a grayscale bake lays them out.
+`lighting.prt_diffuse_occlusion` for a colour bake (ADR 0092): the transfer has one set of coefficients per channel, because the light a red panel bounces onto its neighbours is red. `wxsl-prt` packs it into four streams, `prt0` to `prt3`: red and green paired per coefficient first, then blue and the visibility as a grayscale bake lays them out. The environment is read as in the grayscale node, luminance windowed, so the only colour in the ratio is the bounces'.
 
 - in `prt0: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's first stream.
 - in `prt1: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The second stream.
@@ -867,6 +874,14 @@ The two values a precomputed radiance transfer bake packs into one float (ADR 00
 The visibility a precomputed radiance transfer bake stores beside the transfer (ADR 0092): the bent normal, the mean unblocked direction, scaled by the ambient occlusion. It is in the last stream's z and w in both modes, so this reads `prt1` of a grayscale bake and `prt3` of a colour one. Feed it to `lighting.prt_specular_occlusion`.
 
 - in `last: vec4f = vec4f(0.0, 0.0, 0.0, 0.0)`: The bake's last stream.
+- out `out: vec3f`
+
+#### `lighting.prt_window` · PRT window
+
+One environment coefficient as a precomputed radiance transfer reads it (ADR 0092): its luminance in every channel, times the band's window. Order-3 SH of a small opening (a car window) dotted with a low sun rings, often below zero in one channel and far above in another; the window (1, 0.6, 0.2 for bands 0, 1, 2) damps the high bands of both the transfer and the unshadowed lobe it is divided by. Taking luminance leaves the colour to the environment maps and the bounces.
+
+- in `sh: vec3f = vec3f(0.0, 0.0, 0.0)`: An environment coefficient.
+- in `band: f32 = 0.0f`: Its SH band: 0, 1 or 2.
 - out `out: vec3f`
 
 #### `lighting.rayleigh_phase` · Rayleigh phase

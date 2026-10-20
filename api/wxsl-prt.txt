@@ -80,6 +80,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::Bake
 impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::Bake
 pub struct wxsl_prt::BakeOptions
 pub wxsl_prt::BakeOptions::bounces: u32
+pub wxsl_prt::BakeOptions::clip: core::option::Option<usize>
 pub wxsl_prt::BakeOptions::floor: bool
 pub wxsl_prt::BakeOptions::rays: u32
 pub wxsl_prt::BakeOptions::threads: usize

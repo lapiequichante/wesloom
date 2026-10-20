@@ -71,3 +71,11 @@ the base colour's alpha (coverage) did not reach the glass.
   windows in an asset look tinted.
 * A pass that draws `refraction_surface` outside `pass.refraction` must
   attach three targets. The gallery's glass probes do.
+* **Drift: a thin layer carries an iridescent film.** Its optics blue,
+  free until then, holds `1 + thickness/10 nm + 128 * (ior - 1)/0.1`
+  (thickness up to 1270 nm, film IOR 1..2.5; integers up to 2048, exact
+  in RGBA16F), and green adds `2 * k` to the coverage for the strength in
+  quarters `k`. The layered composition replaces the thin layer's scalar
+  Fresnel by the film's RGB reflectance (`lighting.iridescence`, over the
+  glass's F0) at the view angle. Solid layers and the precise solver
+  ignore the film. No target was added.

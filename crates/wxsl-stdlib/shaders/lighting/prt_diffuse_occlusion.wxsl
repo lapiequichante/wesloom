@@ -12,11 +12,15 @@
 // `wxsl_prt::sh::project_equirect` computes them. The answer is the
 // transferred irradiance over the unshadowed one at `normal`, so the
 // environment's scale cancels and the cube keeps its own resolution.
-// Shadowing alone keeps it under 1; bounced light can lift it above.
+// Both are taken on the environment's luminance, windowed
+// (`lighting.prt_window`), so the ratio is one value and SH ringing does
+// not tint it. Shadowing alone keeps it under 1; bounced light can lift
+// it above.
 //
 // Original implementation.
 
 import package::lighting::prt_unpack::prt_unpack;
+import package::lighting::prt_window::prt_window;
 import package::lighting::sh_irradiance::sh_irradiance;
 
 fn prt_diffuse_occlusion(
@@ -33,14 +37,24 @@ fn prt_diffuse_occlusion(
     sh7: vec3f,    // Band 2, m = 1 (xz). @default 0.0
     sh8: vec3f,    // Band 2, m = 2 (x² - y²). @default 0.0
 ) -> vec3f {
+    // The environment as the transfer reads it: luminance, windowed.
+    let w0 = prt_window(sh0, 0.0);
+    let w1 = prt_window(sh1, 1.0);
+    let w2 = prt_window(sh2, 1.0);
+    let w3 = prt_window(sh3, 1.0);
+    let w4 = prt_window(sh4, 2.0);
+    let w5 = prt_window(sh5, 2.0);
+    let w6 = prt_window(sh6, 2.0);
+    let w7 = prt_window(sh7, 2.0);
+    let w8 = prt_window(sh8, 2.0);
     let t01 = prt_unpack(prt0.z);
     let t23 = prt_unpack(prt0.w);
     let t45 = prt_unpack(prt1.x);
     let t67 = prt_unpack(prt1.y);
     let t8 = prt_unpack(prt1.z);
-    let transferred = sh0 * t01.x + sh1 * t01.y + sh2 * t23.x + sh3 * t23.y
-        + sh4 * t45.x + sh5 * t45.y + sh6 * t67.x + sh7 * t67.y + sh8 * t8.x;
-    let open = sh_irradiance(normal, sh0, sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8);
+    let transferred = w0 * t01.x + w1 * t01.y + w2 * t23.x + w3 * t23.y
+        + w4 * t45.x + w5 * t45.y + w6 * t67.x + w7 * t67.y + w8 * t8.x;
+    let open = sh_irradiance(normal, w0, w1, w2, w3, w4, w5, w6, w7, w8);
     // A channel the environment barely lights has no ratio to speak of.
     return select(
         clamp(transferred / max(open, vec3f(1e-6)), vec3f(0.0), vec3f(4.0)),

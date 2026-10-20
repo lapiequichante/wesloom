@@ -14,10 +14,21 @@
 //!
 //! Both modes come out of the same rays: grayscale weighs each bounce by
 //! the albedo's luminance, colour by each channel.
+//!
+//! The geometry is posed first, on the CPU: the scene's nodes at the
+//! first frame of the chosen clip, and each skinned vertex blended by its
+//! joints as `animation.skin` does on the GPU. The hierarchy is built
+//! over the posed triangles.
+//!
+//! A double-sided material is lit from behind too, so its vertices are
+//! traced a second time about the flipped normal. That transfer is never
+//! written out: it is what a bounce off the back of the surface reads.
+
+use std::borrow::Cow;
 
 use glam::{Mat3, Mat4, Vec3};
 use wxsl_core::scene::{MeshSource, TAG_TRANSPARENT};
-use wxsl_gltf::{ImportedScene, TAG_REFRACTIVE};
+use wxsl_gltf::{Geometry, ImportedScene, TAG_REFRACTIVE};
 
 use crate::albedo::Albedo;
 use crate::{bvh, sh, Bake, BakeOptions, PrtError, Transfer};
@@ -35,7 +46,14 @@ struct Owner {
     first: usize,
     /// The world-space side it faces, from its corners' normals.
     front: Vec3,
+    /// Whether its material is alpha-masked, so a hit must check the
+    /// texture.
+    masked: bool,
 }
+
+/// A mesh's first instance: its posed vertices, position and normal, and
+/// whether it is lit from behind.
+type Placed = (Vec<(Vec3, Vec3)>, bool);
 
 struct Scene<'a> {
     imported: &'a ImportedScene,
@@ -48,7 +66,10 @@ struct Scene<'a> {
     samples: Vec<Vec3>,
     /// Per imported mesh, its first vertex in the job list, if placed.
     starts: Vec<Option<usize>>,
-    /// Every placed vertex: world position and normal.
+    /// Per imported mesh, its first back-facing vertex, if double-sided.
+    backs: Vec<Option<usize>>,
+    /// Every placed vertex, then the back sides: world position and
+    /// normal.
     jobs: Vec<(Vec3, Vec3)>,
     threads: usize,
 }
@@ -131,7 +152,16 @@ pub(crate) fn bake(
 impl<'a> Scene<'a> {
     fn new(imported: &'a ImportedScene, albedo: &'a Albedo, options: &BakeOptions) -> Self {
         let scene = &imported.scene;
-        let mut placement: Vec<Option<Mat4>> = vec![None; imported.meshes.len()];
+        // The nodes where the clip's first frame puts them.
+        let posed = match options.clip.and_then(|clip| imported.animations.get(clip)) {
+            Some(animation) => {
+                let mut posed = scene.clone();
+                animation.pose(0.0, &scene.nodes, &mut posed.nodes);
+                Cow::Owned(posed)
+            }
+            None => Cow::Borrowed(scene),
+        };
+        let mut placement: Vec<Option<Placed>> = vec![None; imported.meshes.len()];
         let mut triangles = Vec::new();
         let mut owners = Vec::new();
         let mut lowest = f32::MAX;
@@ -144,38 +174,52 @@ impl<'a> Scene<'a> {
             let Some(geometry) = imported.meshes.get(*index) else {
                 continue;
             };
-            let world = Mat4::from_cols_array(&scene.instance_world(instance));
-            placement[*index].get_or_insert(world);
-            let points: Vec<Vec3> = geometry
-                .vertices
-                .iter()
-                .map(|vertex| world.transform_point3(Vec3::from_array(vertex.position)))
-                .collect();
-            lowest = points.iter().fold(lowest, |low, point| low.min(point.y));
-            let clear = scene
-                .materials
+            let skin = imported
+                .material_skins
                 .get(instance.material)
-                .is_some_and(|material| {
-                    let tags = instance.tags.as_ref().unwrap_or(&material.config.tags);
-                    tags.contains(TAG_TRANSPARENT) || tags.contains(TAG_REFRACTIVE)
-                });
-            if clear {
-                continue;
+                .copied()
+                .flatten()
+                .and_then(|skin| imported.skins.get(skin));
+            let (world, joints) = match skin {
+                // The joints carry the motion, relative to the skin's node
+                // as imported, and the instance stays where it was: what
+                // the bone texture and the draw do.
+                Some(skin) => (
+                    scene.instance_world(instance),
+                    skin.joint_matrices(&posed, &scene.node_world(skin.node))
+                        .iter()
+                        .map(Mat4::from_cols_array)
+                        .collect(),
+                ),
+                None => (posed.instance_world(instance), Vec::new()),
+            };
+            let vertices = pose(geometry, Mat4::from_cols_array(&world), &joints);
+            lowest = vertices
+                .iter()
+                .fold(lowest, |low, (point, _)| low.min(point.y));
+            let material = scene.materials.get(instance.material);
+            let clear = material.is_some_and(|material| {
+                let tags = instance.tags.as_ref().unwrap_or(&material.config.tags);
+                tags.contains(TAG_TRANSPARENT) || tags.contains(TAG_REFRACTIVE)
+            });
+            if !clear {
+                let masked = albedo.masked(instance.material);
+                for (triangle, corners) in geometry.indices.chunks_exact(3).enumerate() {
+                    let corner = |at: usize| vertices[corners[at] as usize];
+                    triangles.push([0, 1, 2].map(|at| corner(at).0));
+                    let front = (0..3).map(|at| corner(at).1).sum::<Vec3>();
+                    owners.push(Owner {
+                        mesh: *index,
+                        material: instance.material,
+                        first: triangle * 3,
+                        front: front.normalize_or_zero(),
+                        masked,
+                    });
+                }
             }
-            let normals = Mat3::from_mat4(world).inverse().transpose();
-            for (triangle, corners) in geometry.indices.chunks_exact(3).enumerate() {
-                triangles.push([0, 1, 2].map(|corner| points[corners[corner] as usize]));
-                let front = corners
-                    .iter()
-                    .map(|&corner| Vec3::from_array(geometry.vertices[corner as usize].normal))
-                    .sum::<Vec3>();
-                owners.push(Owner {
-                    mesh: *index,
-                    material: instance.material,
-                    first: triangle * 3,
-                    front: (normals * front).normalize_or_zero(),
-                });
-            }
+            // Light passes a clear surface, so nothing bounces off its back.
+            let two_sided = !clear && material.is_some_and(|material| material.config.double_sided);
+            placement[*index].get_or_insert((vertices, two_sided));
         }
 
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -193,17 +237,17 @@ impl<'a> Scene<'a> {
 
         let mut starts = vec![None; imported.meshes.len()];
         let mut jobs = Vec::new();
-        for (index, geometry) in imported.meshes.iter().enumerate() {
-            let Some(world) = placement[index] else {
-                continue;
-            };
-            starts[index] = Some(jobs.len());
-            let normals = Mat3::from_mat4(world).inverse().transpose();
-            for vertex in &geometry.vertices {
-                jobs.push((
-                    world.transform_point3(Vec3::from_array(vertex.position)),
-                    (normals * Vec3::from_array(vertex.normal)).normalize_or_zero(),
-                ));
+        for (index, placed) in placement.iter().enumerate() {
+            if let Some((vertices, _)) = placed {
+                starts[index] = Some(jobs.len());
+                jobs.extend_from_slice(vertices);
+            }
+        }
+        let mut backs = vec![None; imported.meshes.len()];
+        for (index, placed) in placement.iter().enumerate() {
+            if let Some((vertices, true)) = placed {
+                backs[index] = Some(jobs.len());
+                jobs.extend(vertices.iter().map(|&(point, normal)| (point, -normal)));
             }
         }
         Scene {
@@ -215,6 +259,7 @@ impl<'a> Scene<'a> {
             offset,
             samples: hemisphere(options.rays),
             starts,
+            backs,
             jobs,
             threads: match options.threads {
                 0 => std::thread::available_parallelism().map_or(1, usize::from),
@@ -270,6 +315,41 @@ impl<'a> Scene<'a> {
         Some((position + normal * self.offset, directions))
     }
 
+    /// Whether a hit is on the surface rather than a cut-out texel of it.
+    fn solid(&self, hit: bvh::Hit) -> bool {
+        let owner = &self.owners[hit.triangle as usize];
+        !owner.masked || self.albedo.covers(owner.material, self.uv(owner, hit))
+    }
+
+    /// The corners of the triangle `owner` names, and `hit`'s weights on
+    /// them.
+    fn corners(&self, owner: &Owner, hit: bvh::Hit) -> (&[u32], [f32; 3]) {
+        let geometry = &self.imported.meshes[owner.mesh];
+        (
+            &geometry.indices[owner.first..owner.first + 3],
+            [1.0 - hit.u - hit.v, hit.u, hit.v],
+        )
+    }
+
+    /// Both UV sets at `hit`.
+    fn uv(&self, owner: &Owner, hit: bvh::Hit) -> [[f32; 2]; 2] {
+        let geometry = &self.imported.meshes[owner.mesh];
+        let (corners, weights) = self.corners(owner, hit);
+        let mut uv = [[0.0f32; 2]; 2];
+        for (&corner, weight) in corners.iter().zip(weights) {
+            let vertex = &geometry.vertices[corner as usize];
+            let second = geometry
+                .uv1
+                .as_ref()
+                .map_or(vertex.uv, |uv1| uv1[corner as usize]);
+            for axis in 0..2 {
+                uv[0][axis] += vertex.uv[axis] * weight;
+                uv[1][axis] += second[axis] * weight;
+            }
+        }
+        uv
+    }
+
     fn floored(&self, origin: Vec3, direction: Vec3) -> bool {
         self.floor
             .is_some_and(|floor| direction.y < 0.0 && origin.y > floor)
@@ -285,7 +365,11 @@ impl<'a> Scene<'a> {
         let mut open = 0u32;
         for direction in directions {
             if self.floored(origin, direction)
-                || self.bvh.occluded(origin, direction, self.offset, f32::MAX)
+                || self
+                    .bvh
+                    .occluded(origin, direction, self.offset, f32::MAX, |hit| {
+                        self.solid(hit)
+                    })
             {
                 continue;
             }
@@ -314,33 +398,26 @@ impl<'a> Scene<'a> {
             if self.floored(origin, direction) {
                 continue;
             }
-            let Some(hit) = self.bvh.closest(origin, direction, self.offset, f32::MAX) else {
+            let Some(hit) = self
+                .bvh
+                .closest(origin, direction, self.offset, f32::MAX, |hit| {
+                    self.solid(hit)
+                })
+            else {
                 continue;
             };
             let owner = &self.owners[hit.triangle as usize];
-            // The back of a surface was never baked: it sends nothing.
-            if direction.dot(owner.front) >= 0.0 {
-                continue;
-            }
-            let Some(start) = self.starts[owner.mesh] else {
+            // The back of a single-sided surface was never baked: it sends
+            // nothing.
+            let start = match direction.dot(owner.front) < 0.0 {
+                true => self.starts[owner.mesh],
+                false => self.backs[owner.mesh],
+            };
+            let Some(start) = start else {
                 continue;
             };
-            let geometry = &self.imported.meshes[owner.mesh];
-            let corners = &geometry.indices[owner.first..owner.first + 3];
-            let weights = [1.0 - hit.u - hit.v, hit.u, hit.v];
-            let mut uv = [[0.0f32; 2]; 2];
-            for (&corner, weight) in corners.iter().zip(weights) {
-                let vertex = &geometry.vertices[corner as usize];
-                let second = geometry
-                    .uv1
-                    .as_ref()
-                    .map_or(vertex.uv, |uv1| uv1[corner as usize]);
-                for axis in 0..2 {
-                    uv[0][axis] += vertex.uv[axis] * weight;
-                    uv[1][axis] += second[axis] * weight;
-                }
-            }
-            let albedo = self.albedo.sample(owner.material, uv);
+            let (corners, weights) = self.corners(owner, hit);
+            let albedo = self.albedo.sample(owner.material, self.uv(owner, hit));
             let luminance: f32 = albedo.iter().zip(LUMINANCE).map(|(c, w)| c * w).sum();
             for (&corner, weight) in corners.iter().zip(weights) {
                 let vertex = start + corner as usize;
@@ -363,6 +440,44 @@ impl<'a> Scene<'a> {
             *value /= count;
         }
     }
+}
+
+/// Every vertex of `geometry` in world space, position and unit normal:
+/// blended by `joints` (none for a rigid mesh) as `animation.skin` does,
+/// then placed by `world`.
+fn pose(geometry: &Geometry, world: Mat4, joints: &[Mat4]) -> Vec<(Vec3, Vec3)> {
+    let normals = Mat3::from_mat4(world).inverse().transpose();
+    let skin = match (joints.is_empty(), &geometry.joints, &geometry.weights) {
+        (false, Some(indices), Some(weights)) => Some((indices, weights)),
+        _ => None,
+    };
+    geometry
+        .vertices
+        .iter()
+        .enumerate()
+        .map(|(at, vertex)| {
+            let mut point = Vec3::from_array(vertex.position);
+            let mut normal = Vec3::from_array(vertex.normal);
+            if let Some((indices, weights)) = skin {
+                let blend = indices[at]
+                    .iter()
+                    .zip(weights[at])
+                    .filter(|(_, weight)| *weight != 0.0)
+                    .filter_map(|(&joint, weight)| Some(*joints.get(joint as usize)? * weight))
+                    .fold(Mat4::ZERO, |sum, matrix| sum + matrix);
+                // No weight at all: the vertex stays where the mesh put it.
+                if blend != Mat4::ZERO {
+                    point = blend.transform_point3(point);
+                    // The linear part, as the shader turns the normal.
+                    normal = blend.transform_vector3(normal);
+                }
+            }
+            (
+                world.transform_point3(point),
+                (normals * normal).normalize_or_zero(),
+            )
+        })
+        .collect()
 }
 
 /// `count` cosine-weighted directions about +z, from a Hammersley set.
@@ -392,6 +507,37 @@ fn random(seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skinned_vertices_blend_their_joints_and_unweighted_ones_stay() {
+        let vertex = |x: f32| wxsl_gltf::Vertex {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let geometry = Geometry {
+            vertices: vec![vertex(1.0), vertex(2.0)],
+            joints: Some(vec![[0, 1, 0, 0], [0; 4]]),
+            weights: Some(vec![[0.5, 0.5, 0.0, 0.0], [0.0; 4]]),
+            ..Default::default()
+        };
+        // Joint 0 lifts by 2, joint 1 turns a quarter about z; then the
+        // instance moves everything 10 along x.
+        let joints = [
+            Mat4::from_translation(Vec3::Y * 2.0),
+            Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        ];
+        let world = Mat4::from_translation(Vec3::X * 10.0);
+        let posed = pose(&geometry, world, &joints);
+        // Half of (1, 2, 0) and half of (0, 1, 0), moved.
+        assert!(
+            posed[0].0.distance(Vec3::new(10.5, 1.5, 0.0)) < 1e-5,
+            "{}",
+            posed[0].0
+        );
+        assert!(posed[0].1.distance(Vec3::new(-1.0, 1.0, 0.0).normalize()) < 1e-5);
+        assert_eq!(posed[1], (Vec3::new(12.0, 0.0, 0.0), Vec3::Y));
+    }
 
     #[test]
     fn the_hemisphere_is_cosine_weighted() {

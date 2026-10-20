@@ -1,6 +1,12 @@
-//! The diffuse colour a bounced ray picks up where it lands: glTF's
-//! base colour, factor times texture sampled at the hit's UV, times
-//! `1 - metallic`, since a metal reflects nothing diffusely.
+//! The colour a bounced ray picks up where it lands, from glTF's base
+//! colour (factor times texture, sampled at the hit's UV) and metallic.
+//! The diffuse part is the base colour times `1 - metallic`. The specular
+//! part is the reflectance at normal incidence, `mix(0.04, base,
+//! metallic)`, spread as if it were diffuse: low-order SH cannot carry
+//! the lobe, but leaving it out makes a metal send nothing back.
+//!
+//! The same file says where a surface is cut out: an alpha-masked
+//! material lets a ray through where its alpha is under the cutoff.
 
 use std::path::Path;
 
@@ -15,11 +21,17 @@ pub struct Albedo {
     images: Vec<Option<Image>>,
     /// When no material is known: every surface this colour.
     fallback: [f32; 3],
+    /// Whether the specular reflectance is added to the diffuse colour.
+    specular: bool,
 }
 
 #[derive(Clone, Debug)]
 struct Surface {
     base: [f32; 3],
+    /// The base colour factor's alpha.
+    alpha: f32,
+    /// `alphaMode: MASK`'s cutoff.
+    cutoff: Option<f32>,
     metallic: f32,
     base_texture: Option<TextureRef>,
     /// Metallic in the blue channel, as glTF lays it out.
@@ -90,6 +102,8 @@ impl Albedo {
                     // The spec's default material: white, metallic 1.
                     None => Surface {
                         base: [1.0; 3],
+                        alpha: 1.0,
+                        cutoff: None,
                         metallic: 1.0,
                         base_texture: None,
                         metallic_texture: None,
@@ -101,20 +115,46 @@ impl Albedo {
             materials,
             images,
             fallback: [1.0; 3],
+            specular: true,
         })
     }
 
-    /// Drop the metallic weighting: each surface bounces its base colour,
-    /// factor times texture, metals included.
+    /// Drop the metallic weighting and the specular part: each surface
+    /// bounces its base colour, factor times texture, metals included.
     pub fn base_color_only(mut self) -> Self {
         for surface in &mut self.materials {
             surface.metallic = 0.0;
             surface.metallic_texture = None;
         }
+        self.specular = false;
         self
     }
 
-    /// The diffuse colour of `material` at the two UV sets.
+    /// Whether `material` is alpha-masked, so a hit on it must ask
+    /// [`Albedo::covers`].
+    pub(crate) fn masked(&self, material: usize) -> bool {
+        self.materials
+            .get(material)
+            .is_some_and(|surface| surface.cutoff.is_some())
+    }
+
+    /// Whether `material` is there at the two UV sets: its alpha, factor
+    /// times texture, reaches the mask's cutoff.
+    pub(crate) fn covers(&self, material: usize, uv: [[f32; 2]; 2]) -> bool {
+        let Some(surface) = self.materials.get(material) else {
+            return true;
+        };
+        let Some(cutoff) = surface.cutoff else {
+            return true;
+        };
+        let texture = self
+            .texel(surface.base_texture, uv)
+            .map_or(1.0, |texel| f32::from(texel[3]) / 255.0);
+        surface.alpha * texture >= cutoff
+    }
+
+    /// The colour `material` sends back at the two UV sets: diffuse plus
+    /// specular, as the module says.
     pub fn sample(&self, material: usize, uv: [[f32; 2]; 2]) -> [f32; 3] {
         let Some(surface) = self.materials.get(material) else {
             return self.fallback;
@@ -129,7 +169,11 @@ impl Albedo {
         if let Some(texel) = self.texel(surface.metallic_texture, uv) {
             metallic *= f32::from(texel[2]) / 255.0;
         }
-        color.map(|channel| channel * (1.0 - metallic.clamp(0.0, 1.0)))
+        let metallic = metallic.clamp(0.0, 1.0);
+        let specular = f32::from(u8::from(self.specular));
+        color.map(|channel| {
+            channel * (1.0 - metallic) + specular * (0.04 + (channel - 0.04) * metallic)
+        })
     }
 
     /// The nearest texel `texture` shows at `uv`.
@@ -150,9 +194,12 @@ impl Albedo {
 
 fn surface(material: &gltf::Material<'_>) -> Surface {
     let pbr = material.pbr_metallic_roughness();
-    let [r, g, b, _] = pbr.base_color_factor();
+    let [r, g, b, a] = pbr.base_color_factor();
     Surface {
         base: [r, g, b],
+        alpha: a,
+        cutoff: (material.alpha_mode() == gltf::material::AlphaMode::Mask)
+            .then(|| material.alpha_cutoff().unwrap_or(0.5)),
         metallic: pbr.metallic_factor(),
         base_texture: pbr.base_color_texture().map(|info| texture_ref(&info)),
         metallic_texture: pbr
@@ -262,6 +309,8 @@ mod tests {
         Albedo {
             materials: vec![Surface {
                 base: [1.0, 1.0, 0.5],
+                alpha: 1.0,
+                cutoff: None,
                 metallic: 0.0,
                 base_texture: Some(TextureRef {
                     image: 0,
@@ -275,9 +324,10 @@ mod tests {
             images: vec![Some(Image {
                 width: 2,
                 height: 1,
-                texels: vec![[255, 0, 0, 255], [0, 0, 255, 255]],
+                texels: vec![[255, 0, 0, 255], [0, 0, 255, 0]],
             })],
             fallback: [0.0; 3],
+            specular: false,
         }
     }
 
@@ -304,5 +354,26 @@ mod tests {
         assert_eq!(wrap(-0.25, 4, Wrap::Mirror), 0);
         assert_eq!(wrap(1.1, 4, Wrap::Mirror), 3);
         assert_eq!(wrap(-3.0, 4, Wrap::Clamp), 0);
+    }
+
+    #[test]
+    fn a_metal_bounces_its_reflectance_and_a_mask_cuts_where_alpha_is_low() {
+        let mut albedo = checker();
+        albedo.specular = true;
+        albedo.materials[0].metallic = 1.0;
+        assert_eq!(albedo.sample(0, [[0.0; 2], [0.1, 0.5]]), [1.0, 0.0, 0.0]);
+        albedo.materials[0].metallic = 0.0;
+        let dielectric = albedo.sample(0, [[0.0; 2], [0.1, 0.5]]);
+        assert!(dielectric
+            .iter()
+            .zip([1.04, 0.04, 0.04])
+            .all(|(a, b)| (a - b).abs() < 1e-6));
+
+        // Red is opaque, blue's alpha is 0.
+        assert!(!albedo.masked(0) && albedo.covers(0, [[0.0; 2], [0.3, 0.5]]));
+        albedo.materials[0].cutoff = Some(0.5);
+        assert!(albedo.masked(0));
+        assert!(albedo.covers(0, [[0.0; 2], [0.1, 0.5]]));
+        assert!(!albedo.covers(0, [[0.0; 2], [0.3, 0.5]]));
     }
 }

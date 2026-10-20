@@ -119,17 +119,39 @@ Three things had to be decided:
 * **The bake is tied to the import.** The sidecars are keyed by the
   imported mesh order and vertex counts, so they must be re-baked when
   the model changes; a mismatch is a load error. The transfer is in
-  world space for the scene's static transforms. A mesh drawn by
-  several instances is baked for its first instance.
-* **Diffuse bounces only.** A metal has no diffuse albedo, so a mostly
-  metallic model (the sample car) gains almost nothing from bounces;
-  its interreflections are specular, which this transfer cannot carry.
-  `--albedo` (`Albedo::base_color_only`) bakes the bounces from the base
-  colour alone, as if every surface were a dielectric: not physical for
-  a metal, but it gives a painted car coloured bounces.
-* **Back faces.** A bounce off the unbaked back of a surface sends
-  nothing, and a double-sided material's back faces read the front
-  side's transfer.
+  world space for one pose: the first frame of the file's first clip
+  (`BakeOptions::clip`, `--clip N`, `--rest` for the saved pose). The
+  nodes are posed and skinned vertices blended by their joints on the
+  CPU, as `animation.skin` does, before the BVH is built. A skinned
+  material decodes the diffuse transfer against its skinned normal,
+  turned to world space by the vertex context's `normal_matrix`; it is
+  right at the start of that clip and drifts as the skin moves. A mesh
+  drawn by several instances is baked for its first instance.
+* **Specular reflectance bounces as if diffuse.** A first version took
+  `base × (1 − metallic)` alone, so a metal sent nothing back and a
+  mostly metallic model (the sample cars) gained almost nothing from
+  bounces. A bounce now adds the reflectance at normal incidence,
+  `mix(0.04, base, metallic)`, spread over the hemisphere: SH cannot
+  carry the lobe, but the energy is the surface's. `--albedo`
+  (`Albedo::base_color_only`) still bakes the base colour alone. The
+  default is three bounces, so a closed cabin fills up.
+* **Back faces.** A double-sided material's vertices are traced a
+  second time about the flipped normal, for bounces only: a ray that
+  hits its back reads that transfer. The back of a single-sided surface
+  sends nothing, and a double-sided material's drawn back faces still
+  read the front side's transfer.
+* **Masks.** An alpha-masked material occludes and bounces only where
+  its base colour's alpha (factor times texture) reaches the cutoff;
+  transparent and refractive materials still let all light through.
+* **The ratio is taken on the environment's luminance, windowed.** Per
+  channel, the order-3 transfer of a small opening (a car's cabin)
+  dotted with a low coloured sun rang below zero in one channel and far
+  above in another: green and purple fringes, in both modes alike. The
+  nodes now read each coefficient's luminance, damped by band (1, 0.6,
+  0.2, `lighting.prt_window`), in the transfer and in the unshadowed
+  lobe. Grayscale gives one value; colour keeps only its bounces'
+  colour. The tint of a shadow lit by part of the sky is lost; the
+  environment maps still colour the light.
 * **Precision.** Values beyond ±4 are clamped, and a code is
   4/2047 wide.
 * **The analytic hemisphere ambient ignores both fields**, which describe

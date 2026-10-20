@@ -5,11 +5,16 @@ pub use wxsl::mcp
 pub use wxsl::render
 pub use wxsl::stdlib
 pub mod wxsl::asset
+pub use wxsl::asset::Animation
+pub use wxsl::asset::BONE_FRAME_PARAM
+pub use wxsl::asset::BONE_TEXTURE_SLOT
+pub use wxsl::asset::BoneTexture
 pub use wxsl::asset::GLTF_PBR_GRAPH
 pub use wxsl::asset::ImportError
 pub use wxsl::asset::ImportWarning
 pub use wxsl::asset::ImportedScene
 pub use wxsl::asset::MAPPED_EXTENSIONS
+pub use wxsl::asset::Skin
 pub use wxsl::asset::TAG_DOUBLE_SIDED
 pub use wxsl::asset::TAG_REFRACTIVE
 pub fn wxsl::asset::import_gltf(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>

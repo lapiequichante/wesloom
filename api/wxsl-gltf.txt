@@ -1,10 +1,139 @@
 pub mod wxsl_gltf
+pub mod wxsl_gltf::animation
+pub enum wxsl_gltf::animation::Interpolation
+pub wxsl_gltf::animation::Interpolation::CubicSpline
+pub wxsl_gltf::animation::Interpolation::Linear
+pub wxsl_gltf::animation::Interpolation::Step
+impl core::clone::Clone for wxsl_gltf::animation::Interpolation
+pub fn wxsl_gltf::animation::Interpolation::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_gltf::animation::Interpolation
+impl core::cmp::PartialEq for wxsl_gltf::animation::Interpolation
+pub fn wxsl_gltf::animation::Interpolation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Interpolation
+pub fn wxsl_gltf::animation::Interpolation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_gltf::animation::Interpolation
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Interpolation
+impl core::marker::Freeze for wxsl_gltf::animation::Interpolation
+impl core::marker::Send for wxsl_gltf::animation::Interpolation
+impl core::marker::Sync for wxsl_gltf::animation::Interpolation
+impl core::marker::Unpin for wxsl_gltf::animation::Interpolation
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Interpolation
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Interpolation
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Interpolation
+pub enum wxsl_gltf::animation::Property
+pub wxsl_gltf::animation::Property::Rotation
+pub wxsl_gltf::animation::Property::Scale
+pub wxsl_gltf::animation::Property::Translation
+impl core::clone::Clone for wxsl_gltf::animation::Property
+pub fn wxsl_gltf::animation::Property::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_gltf::animation::Property
+impl core::cmp::PartialEq for wxsl_gltf::animation::Property
+pub fn wxsl_gltf::animation::Property::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Property
+pub fn wxsl_gltf::animation::Property::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_gltf::animation::Property
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Property
+impl core::marker::Freeze for wxsl_gltf::animation::Property
+impl core::marker::Send for wxsl_gltf::animation::Property
+impl core::marker::Sync for wxsl_gltf::animation::Property
+impl core::marker::Unpin for wxsl_gltf::animation::Property
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Property
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Property
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Property
+pub struct wxsl_gltf::animation::Animation
+pub wxsl_gltf::animation::Animation::channels: alloc::vec::Vec<wxsl_gltf::animation::Channel>
+pub wxsl_gltf::animation::Animation::duration: f32
+pub wxsl_gltf::animation::Animation::name: alloc::string::String
+impl wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::pose(&self, f32, &[wxsl_core::scene::SceneNode], &mut [wxsl_core::scene::SceneNode])
+impl core::clone::Clone for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Animation
+impl core::marker::Freeze for wxsl_gltf::animation::Animation
+impl core::marker::Send for wxsl_gltf::animation::Animation
+impl core::marker::Sync for wxsl_gltf::animation::Animation
+impl core::marker::Unpin for wxsl_gltf::animation::Animation
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Animation
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Animation
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Animation
+pub struct wxsl_gltf::animation::BoneTexture
+pub wxsl_gltf::animation::BoneTexture::clips: alloc::vec::Vec<(u32, u32)>
+pub wxsl_gltf::animation::BoneTexture::fps: f32
+pub wxsl_gltf::animation::BoneTexture::height: u32
+pub wxsl_gltf::animation::BoneTexture::texels: alloc::vec::Vec<[f32; 4]>
+pub wxsl_gltf::animation::BoneTexture::width: u32
+impl wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::bake(&wxsl_gltf::ImportedScene, usize, f32) -> Self
+pub fn wxsl_gltf::animation::BoneTexture::frame(&self, usize, f32) -> f32
+impl core::clone::Clone for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::BoneTexture
+impl core::marker::Freeze for wxsl_gltf::animation::BoneTexture
+impl core::marker::Send for wxsl_gltf::animation::BoneTexture
+impl core::marker::Sync for wxsl_gltf::animation::BoneTexture
+impl core::marker::Unpin for wxsl_gltf::animation::BoneTexture
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::BoneTexture
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::BoneTexture
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::BoneTexture
+pub struct wxsl_gltf::animation::Channel
+pub wxsl_gltf::animation::Channel::interpolation: wxsl_gltf::animation::Interpolation
+pub wxsl_gltf::animation::Channel::node: usize
+pub wxsl_gltf::animation::Channel::property: wxsl_gltf::animation::Property
+pub wxsl_gltf::animation::Channel::times: alloc::vec::Vec<f32>
+pub wxsl_gltf::animation::Channel::values: alloc::vec::Vec<[f32; 4]>
+impl wxsl_gltf::animation::Channel
+pub fn wxsl_gltf::animation::Channel::sample(&self, f32) -> glam::f32::neon::vec4::Vec4
+impl core::clone::Clone for wxsl_gltf::animation::Channel
+pub fn wxsl_gltf::animation::Channel::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::Channel
+pub fn wxsl_gltf::animation::Channel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Channel
+pub fn wxsl_gltf::animation::Channel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Channel
+impl core::marker::Freeze for wxsl_gltf::animation::Channel
+impl core::marker::Send for wxsl_gltf::animation::Channel
+impl core::marker::Sync for wxsl_gltf::animation::Channel
+impl core::marker::Unpin for wxsl_gltf::animation::Channel
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Channel
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Channel
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Channel
+pub struct wxsl_gltf::animation::Skin
+pub wxsl_gltf::animation::Skin::inverse_bind: alloc::vec::Vec<[f32; 16]>
+pub wxsl_gltf::animation::Skin::joints: alloc::vec::Vec<usize>
+pub wxsl_gltf::animation::Skin::name: alloc::string::String
+pub wxsl_gltf::animation::Skin::node: usize
+impl wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::joint_matrices(&self, &wxsl_core::scene::Scene, &[f32; 16]) -> alloc::vec::Vec<[f32; 16]>
+impl core::clone::Clone for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Skin
+impl core::marker::Freeze for wxsl_gltf::animation::Skin
+impl core::marker::Send for wxsl_gltf::animation::Skin
+impl core::marker::Sync for wxsl_gltf::animation::Skin
+impl core::marker::Unpin for wxsl_gltf::animation::Skin
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Skin
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Skin
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Skin
 pub mod wxsl_gltf::geometry
 pub struct wxsl_gltf::geometry::Geometry
 pub wxsl_gltf::geometry::Geometry::colors: core::option::Option<alloc::vec::Vec<[f32; 4]>>
 pub wxsl_gltf::geometry::Geometry::indices: alloc::vec::Vec<u32>
+pub wxsl_gltf::geometry::Geometry::joints: core::option::Option<alloc::vec::Vec<[u16; 4]>>
 pub wxsl_gltf::geometry::Geometry::uv1: core::option::Option<alloc::vec::Vec<[f32; 2]>>
 pub wxsl_gltf::geometry::Geometry::vertices: alloc::vec::Vec<wxsl_gltf::geometry::Vertex>
+pub wxsl_gltf::geometry::Geometry::weights: core::option::Option<alloc::vec::Vec<[f32; 4]>>
 impl core::clone::Clone for wxsl_gltf::geometry::Geometry
 pub fn wxsl_gltf::geometry::Geometry::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_gltf::geometry::Geometry
@@ -44,7 +173,9 @@ impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Vertex
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Vertex
 impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Vertex
 pub const wxsl_gltf::geometry::COLOR_ATTRIBUTE: &str
+pub const wxsl_gltf::geometry::JOINTS_ATTRIBUTE: &str
 pub const wxsl_gltf::geometry::UV1_ATTRIBUTE: &str
+pub const wxsl_gltf::geometry::WEIGHTS_ATTRIBUTE: &str
 pub fn wxsl_gltf::geometry::load_baked(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<alloc::vec::Vec<wxsl_gltf::geometry::Geometry>, wxsl_gltf::ImportError>
 #[non_exhaustive] pub enum wxsl_gltf::ImportWarning
 pub wxsl_gltf::ImportWarning::Image
@@ -77,11 +208,56 @@ impl core::marker::Unpin for wxsl_gltf::ImportWarning
 impl core::marker::UnsafeUnpin for wxsl_gltf::ImportWarning
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportWarning
 impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportWarning
+pub struct wxsl_gltf::Animation
+pub wxsl_gltf::Animation::channels: alloc::vec::Vec<wxsl_gltf::animation::Channel>
+pub wxsl_gltf::Animation::duration: f32
+pub wxsl_gltf::Animation::name: alloc::string::String
+impl wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::pose(&self, f32, &[wxsl_core::scene::SceneNode], &mut [wxsl_core::scene::SceneNode])
+impl core::clone::Clone for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Animation
+pub fn wxsl_gltf::animation::Animation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Animation
+impl core::marker::Freeze for wxsl_gltf::animation::Animation
+impl core::marker::Send for wxsl_gltf::animation::Animation
+impl core::marker::Sync for wxsl_gltf::animation::Animation
+impl core::marker::Unpin for wxsl_gltf::animation::Animation
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Animation
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Animation
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Animation
+pub struct wxsl_gltf::BoneTexture
+pub wxsl_gltf::BoneTexture::clips: alloc::vec::Vec<(u32, u32)>
+pub wxsl_gltf::BoneTexture::fps: f32
+pub wxsl_gltf::BoneTexture::height: u32
+pub wxsl_gltf::BoneTexture::texels: alloc::vec::Vec<[f32; 4]>
+pub wxsl_gltf::BoneTexture::width: u32
+impl wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::bake(&wxsl_gltf::ImportedScene, usize, f32) -> Self
+pub fn wxsl_gltf::animation::BoneTexture::frame(&self, usize, f32) -> f32
+impl core::clone::Clone for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::BoneTexture
+pub fn wxsl_gltf::animation::BoneTexture::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::BoneTexture
+impl core::marker::Freeze for wxsl_gltf::animation::BoneTexture
+impl core::marker::Send for wxsl_gltf::animation::BoneTexture
+impl core::marker::Sync for wxsl_gltf::animation::BoneTexture
+impl core::marker::Unpin for wxsl_gltf::animation::BoneTexture
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::BoneTexture
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::BoneTexture
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::BoneTexture
 pub struct wxsl_gltf::Geometry
 pub wxsl_gltf::Geometry::colors: core::option::Option<alloc::vec::Vec<[f32; 4]>>
 pub wxsl_gltf::Geometry::indices: alloc::vec::Vec<u32>
+pub wxsl_gltf::Geometry::joints: core::option::Option<alloc::vec::Vec<[u16; 4]>>
 pub wxsl_gltf::Geometry::uv1: core::option::Option<alloc::vec::Vec<[f32; 2]>>
 pub wxsl_gltf::Geometry::vertices: alloc::vec::Vec<wxsl_gltf::geometry::Vertex>
+pub wxsl_gltf::Geometry::weights: core::option::Option<alloc::vec::Vec<[f32; 4]>>
 impl core::clone::Clone for wxsl_gltf::geometry::Geometry
 pub fn wxsl_gltf::geometry::Geometry::clone(&self) -> Self
 impl core::cmp::PartialEq for wxsl_gltf::geometry::Geometry
@@ -119,11 +295,14 @@ impl core::marker::UnsafeUnpin for wxsl_gltf::ImportError
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportError
 impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportError
 pub struct wxsl_gltf::ImportedScene
+pub wxsl_gltf::ImportedScene::animations: alloc::vec::Vec<wxsl_gltf::animation::Animation>
 pub wxsl_gltf::ImportedScene::directory: core::option::Option<std::path::PathBuf>
 pub wxsl_gltf::ImportedScene::images: alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub wxsl_gltf::ImportedScene::material_skins: alloc::vec::Vec<core::option::Option<usize>>
 pub wxsl_gltf::ImportedScene::material_sources: alloc::vec::Vec<core::option::Option<usize>>
 pub wxsl_gltf::ImportedScene::meshes: alloc::vec::Vec<wxsl_gltf::geometry::Geometry>
 pub wxsl_gltf::ImportedScene::scene: wxsl_core::scene::Scene
+pub wxsl_gltf::ImportedScene::skins: alloc::vec::Vec<wxsl_gltf::animation::Skin>
 pub wxsl_gltf::ImportedScene::warnings: alloc::vec::Vec<wxsl_gltf::ImportWarning>
 impl wxsl_gltf::ImportedScene
 pub fn wxsl_gltf::ImportedScene::lighting(&self) -> core::result::Result<wxsl_core::lighting::LightingSet, wxsl_core::lighting::LightingError>
@@ -138,6 +317,27 @@ impl core::marker::Unpin for wxsl_gltf::ImportedScene
 impl core::marker::UnsafeUnpin for wxsl_gltf::ImportedScene
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::ImportedScene
 impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::ImportedScene
+pub struct wxsl_gltf::Skin
+pub wxsl_gltf::Skin::inverse_bind: alloc::vec::Vec<[f32; 16]>
+pub wxsl_gltf::Skin::joints: alloc::vec::Vec<usize>
+pub wxsl_gltf::Skin::name: alloc::string::String
+pub wxsl_gltf::Skin::node: usize
+impl wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::joint_matrices(&self, &wxsl_core::scene::Scene, &[f32; 16]) -> alloc::vec::Vec<[f32; 16]>
+impl core::clone::Clone for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_gltf::animation::Skin
+pub fn wxsl_gltf::animation::Skin::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_gltf::animation::Skin
+impl core::marker::Freeze for wxsl_gltf::animation::Skin
+impl core::marker::Send for wxsl_gltf::animation::Skin
+impl core::marker::Sync for wxsl_gltf::animation::Skin
+impl core::marker::Unpin for wxsl_gltf::animation::Skin
+impl core::marker::UnsafeUnpin for wxsl_gltf::animation::Skin
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::animation::Skin
+impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::animation::Skin
 #[repr(C)] pub struct wxsl_gltf::Vertex
 pub wxsl_gltf::Vertex::normal: [f32; 3]
 pub wxsl_gltf::Vertex::position: [f32; 3]
@@ -160,11 +360,15 @@ impl core::marker::Unpin for wxsl_gltf::geometry::Vertex
 impl core::marker::UnsafeUnpin for wxsl_gltf::geometry::Vertex
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_gltf::geometry::Vertex
 impl core::panic::unwind_safe::UnwindSafe for wxsl_gltf::geometry::Vertex
+pub const wxsl_gltf::BONE_FRAME_PARAM: &str
+pub const wxsl_gltf::BONE_TEXTURE_SLOT: &str
 pub const wxsl_gltf::COLOR_ATTRIBUTE: &str
 pub const wxsl_gltf::GLTF_PBR_GRAPH: &str
+pub const wxsl_gltf::JOINTS_ATTRIBUTE: &str
 pub const wxsl_gltf::MAPPED_EXTENSIONS: &[&str]
 pub const wxsl_gltf::TAG_DOUBLE_SIDED: &str
 pub const wxsl_gltf::TAG_REFRACTIVE: &str
 pub const wxsl_gltf::UV1_ATTRIBUTE: &str
+pub const wxsl_gltf::WEIGHTS_ATTRIBUTE: &str
 pub fn wxsl_gltf::import(impl core::convert::AsRef<std::path::Path>, &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>
 pub fn wxsl_gltf::import_slice(&[u8], &wxsl_core::node::NodeRegistry) -> core::result::Result<wxsl_gltf::ImportedScene, wxsl_gltf::ImportError>

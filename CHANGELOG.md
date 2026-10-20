@@ -60,6 +60,11 @@ an entry.
   ([ADR 0092](docs/adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
 - `ImportedScene::material_sources`: the glTF material each imported
   material was built from.
+- `lighting.prt_window`: an environment coefficient's luminance, damped
+  by SH band, as the PRT diffuse nodes read it.
+- `input.normal_matrix`: the vertex stage's object-to-world matrix for
+  directions, so a graph can turn the normal its vertex output replaces
+  into world space.
 - `transmission` and `thickness` inputs on `output.surface`, both 1 by
   default. `pass.refraction` mixes `1 - transmission` of the glass's
   diffuse base colour into what it lets through, and composes a
@@ -95,6 +100,27 @@ an entry.
 
 ### Changed
 
+- Thin-walled glass (`pass.refraction`) reflects through an iridescent
+  film: `iridescence_strength`, `_thickness` and `_ior` on a thin optical
+  layer turn its Fresnel spectral, so `KHR_materials_iridescence` on a
+  transmissive glTF material shows. The film is quantised to 10 nm,
+  0.1 IOR and quarter strengths
+  ([ADR 0093](docs/adr/0093-thin-walled-glass-and-the-transmission-factor-are-optical-layer-data.md)).
+- `wxsl-prt` bakes the scene posed at the first frame of its first clip,
+  skinned on the CPU (`BakeOptions::clip`, `--clip N`, `--rest`), and
+  `apply` decodes a skinned material against its skinned normal. The
+  `viewer` uses bakes on skinned models.
+- `wxsl-prt` bounces are stronger: three by default, up from one; each
+  adds the surface's specular reflectance to its diffuse colour
+  (`Albedo::sample`); the back of a double-sided material bounces light;
+  and an alpha-masked material occludes only where it is solid
+  ([ADR 0092](docs/adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
+- The PRT diffuse nodes divide on the environment's windowed luminance,
+  which removes the green and purple fringes SH ringing caused under a
+  low sun (ADR 0092).
+- The clip position is `@invariant`, so a skinned mesh's depth prepass
+  and colour pass agree to the bit; on Metal its triangles flickered
+  black.
 - A material may declare six per-vertex attributes, up from four.
 - The G-buffer stores the normal octahedrally, with the lighting model's
   id beside it, and every model's data in one shared `model` target:

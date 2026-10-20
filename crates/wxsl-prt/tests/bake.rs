@@ -6,12 +6,15 @@
 //! a grey 2-wide roof half a unit above its centre, written as a `.gltf`
 //! with an external `.bin` in a temporary directory.
 
+const GREY_ROOF: &str =
+    r#"{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1], "metallicFactor": 0}}"#;
+
 use std::path::PathBuf;
 
 use glam::Vec3;
 use wxsl_prt::{sh, Albedo, Bake, BakeOptions, Transfer, STRENGTH_PARAM};
 
-fn scene_file() -> PathBuf {
+fn scene_file(roof_material: &str) -> PathBuf {
     let floor: Vec<[f32; 3]> = (0..9)
         .map(|index| {
             [
@@ -94,7 +97,7 @@ fn scene_file() -> PathBuf {
   ],
   "materials": [
     {{"pbrMetallicRoughness": {{"baseColorFactor": [1, 0, 0, 1], "metallicFactor": 0}}}},
-    {{"pbrMetallicRoughness": {{"baseColorFactor": [0.5, 0.5, 0.5, 1], "metallicFactor": 0}}}}
+    {roof_material}
   ],
   "buffers": [{{"uri": "scene.bin", "byteLength": {}}}],
   "bufferViews": [{}],
@@ -143,7 +146,7 @@ fn bake(path: &PathBuf, options: BakeOptions) -> Vec<Bake> {
 
 #[test]
 fn the_roof_shadows_the_floor_beneath_it_and_not_beyond() {
-    let path = scene_file();
+    let path = scene_file(GREY_ROOF);
     let shadows = BakeOptions {
         bounces: 0,
         transfers: vec![Transfer::Gray],
@@ -205,7 +208,7 @@ fn the_roof_shadows_the_floor_beneath_it_and_not_beyond() {
 
 #[test]
 fn a_bounce_off_the_red_floor_lights_the_roof_red_and_grayscale_by_its_luminance() {
-    let path = scene_file();
+    let path = scene_file(GREY_ROOF);
     let none = bake(
         &path,
         BakeOptions {
@@ -213,7 +216,13 @@ fn a_bounce_off_the_red_floor_lights_the_roof_red_and_grayscale_by_its_luminance
             ..BakeOptions::default()
         },
     );
-    let one = bake(&path, BakeOptions::default());
+    let one = bake(
+        &path,
+        BakeOptions {
+            bounces: 1,
+            ..BakeOptions::default()
+        },
+    );
     assert_eq!(
         one.iter().map(|bake| bake.transfer).collect::<Vec<_>>(),
         Transfer::ALL
@@ -233,25 +242,51 @@ fn a_bounce_off_the_red_floor_lights_the_roof_red_and_grayscale_by_its_luminance
     // The visibility does not bounce.
     assert_eq!(gray_after[..3], gray_before[..3]);
 
-    // Band 0 is the transfer's average: the red floor adds red only.
+    // Band 0 is the transfer's average. The red floor bounces its red,
+    // plus a dielectric's 4% specular reflectance in every channel.
     let band0 = |values: &[f32], channel: usize| values[3 + channel * 9];
-    let red = band0(&color_after, 0) - band0(&color_before, 0);
+    let gain = |channel: usize| band0(&color_after, channel) - band0(&color_before, channel);
+    let red = gain(0);
     assert!(red > 0.05, "the floor bounces red: {red}");
     for channel in [1, 2] {
-        assert_eq!(band0(&color_after, channel), band0(&color_before, channel));
+        let expected = red * 0.04 / 1.04;
+        assert!(
+            (gain(channel) - expected).abs() < 1e-5,
+            "{} vs {expected}",
+            gain(channel)
+        );
     }
     // One bounce off one colour: grayscale is the luminance of it.
     let gray = band0(&gray_after, 0) - band0(&gray_before, 0);
+    let luminance = (0.2126 * 1.04 + (0.7152 + 0.0722) * 0.04) / 1.04 * red;
+    assert!((gray - luminance).abs() < 1e-4, "{gray} vs {luminance}");
+}
+#[test]
+fn a_roof_cut_out_by_its_alpha_mask_lets_the_light_through() {
+    let shadows = BakeOptions {
+        bounces: 0,
+        transfers: vec![Transfer::Gray],
+        ..BakeOptions::default()
+    };
+    let roof = |alpha: f32| {
+        format!(
+            r#"{{"alphaMode": "MASK", "alphaCutoff": 0.5, "pbrMetallicRoughness": {{"baseColorFactor": [0.5, 0.5, 0.5, {alpha}], "metallicFactor": 0}}}}"#
+        )
+    };
+    let solid = &bake(&scene_file(&roof(0.8)), shadows.clone())[0];
+    assert!(occlusion(vertex(solid, 0, 4)) < 0.3);
+    let cut = &bake(&scene_file(&roof(0.2)), shadows)[0];
     assert!(
-        (gray - 0.2126 * red).abs() < 1e-4,
-        "{gray} vs {}",
-        0.2126 * red
+        occlusion(vertex(cut, 0, 4)) > 0.99,
+        "{}",
+        occlusion(vertex(cut, 0, 4))
     );
 }
+
 #[test]
 fn applying_wires_the_streams_and_parameters_into_every_imported_material() {
     let registry = wxsl_stdlib::registry();
-    let mut imported = wxsl_gltf::import(scene_file(), &registry).unwrap();
+    let mut imported = wxsl_gltf::import(scene_file(GREY_ROOF), &registry).unwrap();
     let sky = [[0.5; 3]; 9];
     for (material, transfer) in imported.scene.materials.iter_mut().zip(Transfer::ALL) {
         wxsl_prt::apply(&mut material.graph, &registry, &sky, transfer).unwrap();

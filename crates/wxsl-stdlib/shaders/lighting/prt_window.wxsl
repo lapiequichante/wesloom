@@ -1,0 +1,19 @@
+// PRT window
+//
+// One environment coefficient as a precomputed radiance transfer reads it
+// (ADR 0092): its luminance in every channel, times the band's window.
+// Order-3 SH of a small opening (a car window) dotted with a low sun
+// rings, often below zero in one channel and far above in another; the
+// window (1, 0.6, 0.2 for bands 0, 1, 2) damps the high bands of both the
+// transfer and the unshadowed lobe it is divided by. Taking luminance
+// leaves the colour to the environment maps and the bounces.
+//
+// Original implementation.
+
+fn prt_window(
+    sh: vec3f,   // An environment coefficient. @default 0.0
+    band: f32,   // Its SH band: 0, 1 or 2. @default 0.0
+) -> vec3f {
+    let weight = select(select(0.2, 0.6, band < 1.5), 1.0, band < 0.5);
+    return vec3f(dot(sh, vec3f(0.2126, 0.7152, 0.0722)) * weight);
+}

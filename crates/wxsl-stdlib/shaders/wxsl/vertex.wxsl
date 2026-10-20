@@ -16,8 +16,12 @@ import package::wxsl::surface::SurfaceContext;
 
 ${HOST_LAYOUTS}
 
+// Invariant: the depth prepass and the colour pass are separate
+// pipelines that must agree on depth to the bit, or `LessEqual` drops
+// fragments. A skinned vertex's longer arithmetic is otherwise fused
+// differently per pipeline (Metal), and its triangles flicker black.
 struct VertexOut {
-    @builtin(position) clip_position: vec4f,
+    @invariant @builtin(position) clip_position: vec4f,
     @location(0) world_position: vec3f,
     @location(1) world_normal: vec3f,
     @location(2) world_tangent: vec3f,
@@ -39,6 +43,7 @@ struct VertexContext {
     object_position: vec3f,
     object_normal: vec3f,
     object_tangent: vec3f,
+    normal_matrix: mat3x3f,
     world_position: vec3f,
     world_normal: vec3f,
     world_tangent: vec3f,
@@ -60,6 +65,7 @@ fn vertex_context(input: VertexIn) -> VertexContext {
     out.object_position = input.position;
     out.object_normal = input.normal;
     out.object_tangent = input.tangent.xyz;
+    out.normal_matrix = normal_matrix;
     out.world_position = world.xyz - world_origin();
     out.world_normal = normal;
     out.world_tangent = tangent;

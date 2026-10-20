@@ -5,6 +5,7 @@
 //! cargo run -p wxsl-prt --release -- model.glb --bounces 2 --rays 512 --floor
 //! cargo run -p wxsl-prt --release -- model.glb --transfer color
 //! cargo run -p wxsl-prt --release -- model.glb --albedo
+//! cargo run -p wxsl-prt --release -- model.glb --clip 1
 //! ```
 //!
 //! By default both modes are baked from the same rays and written beside
@@ -18,12 +19,14 @@ use std::time::Instant;
 use wxsl_prt::{Albedo, BakeOptions, Transfer};
 
 const USAGE: &str = "wxsl-prt <model.glb> [--transfer gray|color|both] [--bounces N] [--rays N]
-         [--floor] [--albedo] [--threads N] [--out-dir DIR]
+         [--clip N | --rest] [--floor] [--albedo] [--threads N] [--out-dir DIR]
   --transfer   which modes to write (default both): <model>.gray.prt, <model>.color.prt
-  --bounces N  diffuse bounces after the shadowed light (default 1, 0 = shadows only)
+  --bounces N  diffuse bounces after the shadowed light (default 3, 0 = shadows only)
+  --clip N     pose the model at the first frame of clip N (default 0, the first)
+  --rest       bake the pose the file was saved in, ignoring its clips
   --rays N     rays per vertex (default 256)
   --floor      an infinite floor under the model blocks the lower hemisphere
-  --albedo     bounces take the base colour alone, ignoring metallic
+  --albedo     bounces take the base colour alone, ignoring metallic and specular
   --threads N  worker threads (default: every core)
   --out-dir    where to write (default: beside the model)";
 
@@ -57,6 +60,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             "--rays" => options.rays = value()?.parse()?,
             "--bounces" => options.bounces = value()?.parse()?,
             "--threads" => options.threads = value()?.parse()?,
+            "--clip" => options.clip = Some(value()?.parse()?),
+            "--rest" => options.clip = None,
             "--floor" => options.floor = true,
             "--albedo" => base_color_only = true,
             "--transfer" => {
@@ -97,6 +102,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         imported.meshes.len(),
         started.elapsed()
     );
+    match options.clip.and_then(|clip| imported.animations.get(clip)) {
+        Some(animation) => println!("posed at the first frame of clip `{}`", animation.name),
+        None if !imported.animations.is_empty() => println!("posed as the file was saved"),
+        None => {}
+    }
     let baking = Instant::now();
     let bakes = wxsl_prt::bake(&imported, &albedo, &options)?;
     let seconds = baking.elapsed().as_secs_f64();

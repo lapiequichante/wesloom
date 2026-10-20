@@ -73,8 +73,10 @@ baked vertex animation does. Four joints per vertex.
 - Skinned draws are never culled (their material has a vertex stage, ADR
   0086), and the velocity stage sees no skinning motion: both frames read
   the same `bone_frame`.
-- A PRT bake (ADR 0092) does not follow a pose; the viewer ignores bakes
-  beside a skinned model.
+- A PRT bake (ADR 0092) holds one pose, the first frame of a clip,
+  skinned on the CPU. The vertex context's `normal_matrix`
+  (`input.normal_matrix`) turns the skinned normal to world space for
+  it. The viewer uses the bake, which drifts as the clip plays.
 - Not done: morph targets (warned about), and the bone texture through
   the C ABI and the editor, which bind nothing at `bone_texture` yet. A
   skin placed by two nodes at different places follows the first, with a

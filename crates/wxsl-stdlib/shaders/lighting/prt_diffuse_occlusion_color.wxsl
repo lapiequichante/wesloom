@@ -5,10 +5,13 @@
 // red panel bounces onto its neighbours is red. `wxsl-prt` packs it into
 // four streams, `prt0` to `prt3`: red and green paired per coefficient
 // first, then blue and the visibility as a grayscale bake lays them out.
+// The environment is read as in the grayscale node, luminance windowed,
+// so the only colour in the ratio is the bounces'.
 //
 // Original implementation.
 
 import package::lighting::prt_unpack::prt_unpack;
+import package::lighting::prt_window::prt_window;
 import package::lighting::sh_irradiance::sh_irradiance;
 
 fn prt_diffuse_occlusion_color(
@@ -27,6 +30,16 @@ fn prt_diffuse_occlusion_color(
     sh7: vec3f,    // Band 2, m = 1 (xz). @default 0.0
     sh8: vec3f,    // Band 2, m = 2 (x² - y²). @default 0.0
 ) -> vec3f {
+    // The environment as the transfer reads it: luminance, windowed.
+    let w0 = prt_window(sh0, 0.0);
+    let w1 = prt_window(sh1, 1.0);
+    let w2 = prt_window(sh2, 1.0);
+    let w3 = prt_window(sh3, 1.0);
+    let w4 = prt_window(sh4, 2.0);
+    let w5 = prt_window(sh5, 2.0);
+    let w6 = prt_window(sh6, 2.0);
+    let w7 = prt_window(sh7, 2.0);
+    let w8 = prt_window(sh8, 2.0);
     // Red and green of coefficient k.
     let c0 = prt_unpack(prt0.x);
     let c1 = prt_unpack(prt0.y);
@@ -43,12 +56,12 @@ fn prt_diffuse_occlusion_color(
     let b45 = prt_unpack(prt3.x);
     let b67 = prt_unpack(prt3.y);
     let b8 = prt_unpack(prt3.z);
-    let transferred = sh0 * vec3f(c0, b01.x) + sh1 * vec3f(c1, b01.y)
-        + sh2 * vec3f(c2, b23.x) + sh3 * vec3f(c3, b23.y)
-        + sh4 * vec3f(c4, b45.x) + sh5 * vec3f(c5, b45.y)
-        + sh6 * vec3f(c6, b67.x) + sh7 * vec3f(c7, b67.y)
-        + sh8 * vec3f(c8, b8.x);
-    let open = sh_irradiance(normal, sh0, sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8);
+    let transferred = w0 * vec3f(c0, b01.x) + w1 * vec3f(c1, b01.y)
+        + w2 * vec3f(c2, b23.x) + w3 * vec3f(c3, b23.y)
+        + w4 * vec3f(c4, b45.x) + w5 * vec3f(c5, b45.y)
+        + w6 * vec3f(c6, b67.x) + w7 * vec3f(c7, b67.y)
+        + w8 * vec3f(c8, b8.x);
+    let open = sh_irradiance(normal, w0, w1, w2, w3, w4, w5, w6, w7, w8);
     return select(
         clamp(transferred / max(open, vec3f(1e-6)), vec3f(0.0), vec3f(4.0)),
         vec3f(1.0),
