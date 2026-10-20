@@ -72,6 +72,10 @@ pub struct Material {
     /// buffers are grouped by — and, like [`Material::signature`], it
     /// cannot change while the material exists.
     instance_signature: String,
+    /// [`GeneratedShader::variant_key`] per stage, built once: the variant
+    /// cache is consulted per draw run per pass, and the key formats the
+    /// whole macro set.
+    variant_keys: Vec<u64>,
     /// What this material was compiled under, resolved: the macro set, the
     /// model and the set it was resolved against, the cast-shadow
     /// selection and the tags. One value, so a new knob is a field on
@@ -168,6 +172,7 @@ impl Material {
             name: graph.name().to_string(),
             signature: stages[0].interface.signature(),
             instance_signature: stages[0].interface.geometry.instance().signature(),
+            variant_keys: stages.iter().map(GeneratedShader::variant_key).collect(),
             stages,
             config: resolved,
         })
@@ -230,6 +235,11 @@ impl Material {
         // `MaterialStage::ALL` and a stage is an index into the same table,
         // so the two cannot drift apart.
         &self.stages[stage.index()]
+    }
+
+    /// [`GeneratedShader::variant_key`] of `stage`'s module.
+    pub(crate) fn variant_key(&self, stage: MaterialStage) -> u64 {
+        self.variant_keys[stage.index()]
     }
 
     /// What must be bound before this material can draw: its uniform

@@ -132,6 +132,13 @@ impl ShaderVariants {
         material: &Material,
         stage: MaterialStage,
     ) -> Result<Arc<ShaderVariant>, RenderError> {
+        // Looked up before the request is built: a request copies the
+        // module's whole source, and a frame asks once per draw run per
+        // pass.
+        let key = pinned_key(Self::material_key(material, stage), &self.pins);
+        if let Some(existing) = self.hit(&key) {
+            return Ok(existing);
+        }
         let request = MaterialRequest::new(material, stage).pinned(&self.pins);
         self.get_or_compile(device, request.key, || request.compile(library))
     }
@@ -141,7 +148,7 @@ impl ShaderVariants {
     pub fn material_key(material: &Material, stage: MaterialStage) -> VariantKey {
         VariantKey {
             kind: VariantKind::Material,
-            identity: material.shader(stage).variant_key(),
+            identity: material.variant_key(stage),
             stage: Some(stage),
         }
     }
@@ -195,6 +202,12 @@ impl ShaderVariants {
         set: &LightingSet,
         features: &[ChannelRequest],
     ) -> Result<Arc<ShaderVariant>, RenderError> {
+        // Before the request, which builds the module's text: the
+        // lighting pass's is generated.
+        let key = pinned_key(Self::effect_key(&effect, macros, set, features), &self.pins);
+        if let Some(existing) = self.hit(&key) {
+            return Ok(existing);
+        }
         let request = EffectRequest::new(effect, macros, set, features).pinned(&self.pins);
         self.get_or_compile(device, request.key, || request.compile(library))
     }
@@ -249,15 +262,21 @@ impl ShaderVariants {
         key: VariantKey,
         build: impl FnOnce() -> (String, Result<String, RenderError>),
     ) -> Result<Arc<ShaderVariant>, RenderError> {
-        if let Some(existing) = self.entries.get(&key) {
-            self.stats.hits += 1;
-            return Ok(Arc::clone(existing));
+        if let Some(existing) = self.hit(&key) {
+            return Ok(existing);
         }
         self.stats.misses += 1;
         let (label, wgsl) = build();
         let variant = Arc::new(build_module(device, key, label, wgsl?)?);
         self.entries.insert(key, Arc::clone(&variant));
         Ok(variant)
+    }
+
+    /// A cached variant, counted as a hit.
+    fn hit(&mut self, key: &VariantKey) -> Option<Arc<ShaderVariant>> {
+        let existing = Arc::clone(self.entries.get(key)?);
+        self.stats.hits += 1;
+        Some(existing)
     }
 
     /// A cached variant, without compiling.
@@ -306,14 +325,21 @@ pub struct MaterialRequest {
 /// `macros` with `pins` bound over them, and `key` with the pins folded in
 /// — unchanged when there are none, so a full-profile cache keys exactly
 /// as before.
-fn pin(mut key: VariantKey, macros: &MacroSet, pins: &MacroSet) -> (VariantKey, MacroSet) {
+fn pin(key: VariantKey, macros: &MacroSet, pins: &MacroSet) -> (VariantKey, MacroSet) {
     if pins.is_empty() {
         return (key, macros.clone());
     }
     let mut pinned = macros.clone();
     pinned.overlay(pins);
-    key.identity = stable_hash(format!("{}|{}", key.identity, pins.signature()).as_bytes());
-    (key, pinned)
+    (pinned_key(key, pins), pinned)
+}
+
+/// `key` with `pins` folded in, as [`pin`] folds them.
+fn pinned_key(mut key: VariantKey, pins: &MacroSet) -> VariantKey {
+    if !pins.is_empty() {
+        key.identity = stable_hash(format!("{}|{}", key.identity, pins.signature()).as_bytes());
+    }
+    key
 }
 
 impl MaterialRequest {
