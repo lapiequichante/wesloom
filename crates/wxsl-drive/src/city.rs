@@ -203,8 +203,8 @@ pub struct Building {
     pub bounds: (Vec3, Vec3),
     /// Its own value in 0..1, for the facade.
     pub seed: f32,
-    /// How far along the road it stands, which keeps the buildings a pass
-    /// draws close together in the draw list.
+    /// How far along the road it stands, for the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub s: f32,
 }
 
@@ -301,9 +301,11 @@ struct Lot {
     s: f32,
 }
 
-/// Every building, standing on `ground(x, z)`, by kind and then along the
-/// road, so that the draws of one kind a pass keeps are mostly adjacent
-/// and drawn as one instanced call (ADR 0086).
+/// Every building, standing on `ground(x, z)`, by kind and then in the
+/// order of a quadtree's leaves, so that the draws of one kind a view
+/// keeps are mostly adjacent and drawn as one instanced call (ADR 0086).
+/// Along the road, the two sides alternate, and a view of one side broke
+/// every run.
 pub fn buildings(road: &Road, ground: impl Fn(f32, f32) -> f32) -> Vec<Building> {
     let samples: Vec<Vec2> = road
         .samples(20.0)
@@ -406,8 +408,34 @@ pub fn buildings(road: &Road, ground: impl Fn(f32, f32) -> f32) -> Vec<Building>
             .push(lot.footprint);
         out.push(place(&lot, &ground));
     }
-    out.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.s.total_cmp(&b.s)));
+    let center = |building: &Building| {
+        let (min, max) = building.bounds;
+        Vec2::new(min.x + max.x, min.z + max.z) * 0.5
+    };
+    let (low, high) = out.iter().map(center).fold(
+        (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)),
+        |(low, high), point| (low.min(point), high.max(point)),
+    );
+    out.sort_by_key(|building| (building.kind, z_order(center(building), low, high)));
     out
+}
+
+/// Where `point` falls on the Z-order curve over `low..high`, 2¹⁶ cells a
+/// side: the order of a quadtree's leaves, in which any square of the
+/// plan is a few unbroken spans.
+fn z_order(point: Vec2, low: Vec2, high: Vec2) -> u32 {
+    let cell = ((point - low) / (high - low).max(Vec2::ONE) * 65535.0)
+        .clamp(Vec2::ZERO, Vec2::splat(65535.0))
+        .as_uvec2();
+    // Each coordinate's bits, one apart, then interleaved.
+    let spread = |value: u32| {
+        let mut bits = value & 0xffff;
+        bits = (bits | bits << 8) & 0x00ff_00ff;
+        bits = (bits | bits << 4) & 0x0f0f_0f0f;
+        bits = (bits | bits << 2) & 0x3333_3333;
+        (bits | bits << 1) & 0x5555_5555
+    };
+    spread(cell.x) | spread(cell.y) << 1
 }
 
 /// How paved the ground at a point is, 0..1: fully within a street of a
@@ -584,6 +612,24 @@ mod tests {
                 assert!(x.abs() <= 0.5 + 1e-5 && z.abs() <= 0.5 + 1e-5, "{kind:?}");
                 assert!((-1e-5..=1.0 + 1e-5).contains(&y), "{kind:?}");
             }
+        }
+    }
+
+    #[test]
+    fn the_z_order_keeps_each_quadrant_in_one_span() {
+        let (low, high) = (Vec2::ZERO, Vec2::splat(100.0));
+        let order = |x: f32, z: f32| z_order(Vec2::new(x, z), low, high);
+        // Every point of the lower-left quadrant before every point of
+        // the lower-right one, and so on.
+        let quadrant = |x: f32, z: f32| [order(x, z), order(x + 49.0, z + 49.0)];
+        let spans = [
+            quadrant(0.0, 0.0),
+            quadrant(51.0, 0.0),
+            quadrant(0.0, 51.0),
+            quadrant(51.0, 51.0),
+        ];
+        for pair in spans.windows(2) {
+            assert!(pair[0][1] < pair[1][0], "{spans:?}");
         }
     }
 

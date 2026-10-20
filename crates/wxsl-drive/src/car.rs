@@ -5,7 +5,8 @@
 //! each draw remembers last frame's transform so the velocity pass sees
 //! the spin. When the file has a grayscale PRT bake beside it
 //! (`me_car.gray.prt`, ADR 0092), its materials read it: the sky's light
-//! is shadowed by the car itself.
+//! is shadowed by the car itself. A decimated copy of the file, when there
+//! is one, casts the car's shadows in its place, posed and animated with it.
 
 use std::error::Error;
 use std::path::Path;
@@ -118,6 +119,9 @@ pub struct Car {
     /// Each draw's transform in the file's space last frame, in
     /// [`SceneResources::draw_list`] order.
     previous_locals: Vec<Mat4>,
+    /// The decimated stand-in the shadow passes draw instead of the car,
+    /// tagged [`crate::lights::CAR_SHADOW_TAG`].
+    shadow: Option<Box<Car>>,
 }
 
 /// A wheel: where its axle is, its radius, and the nodes that turn with
@@ -274,6 +278,16 @@ fn attach_prt(
     Ok(())
 }
 
+/// Whether `imported` has glass, which the frame draws in the refraction
+/// tier.
+fn refractive(imported: &ImportedScene) -> bool {
+    imported
+        .scene
+        .materials
+        .iter()
+        .any(|material| material.config.tags.contains(wxsl::asset::TAG_REFRACTIVE))
+}
+
 /// The wheel nodes' name prefix in me_car.
 const WHEEL_PREFIX: &str = "Tire";
 
@@ -344,28 +358,61 @@ fn wheels(imported: &ImportedScene) -> Vec<Wheel> {
 
 impl Car {
     /// Import `path` and load it against the frame `install` builds,
-    /// which is told whether the car has glass.
+    /// which is told whether the car has glass. With `shadow`, a decimated
+    /// copy of the same file in the same space, that copy casts the car's
+    /// shadows and the car casts none.
     pub fn open(
         gpu: &GpuContext,
         renderer: &mut Renderer,
         path: &Path,
+        shadow: Option<&Path>,
         install: impl FnOnce(&mut Renderer, bool) -> Result<(), Box<dyn Error>>,
     ) -> Result<Self, Box<dyn Error>> {
+        let mut imported = Self::import(path, &[])?;
+        if shadow.is_some() {
+            for material in &mut imported.scene.materials {
+                material.config.cast_shadow = false;
+            }
+        }
+        let refractive = refractive(&imported);
+        install(renderer, refractive)?;
+        let mut car = Self::load(gpu, renderer, imported, path)?;
+        if let Some(path) = shadow {
+            let imported = Self::import(path, &[crate::lights::CAR_SHADOW_TAG])?;
+            let mut stand_in = Self::load(gpu, renderer, imported, path)?;
+            // Where the car is, whatever the copy's own box.
+            stand_in.align = car.align;
+            car.shadow = Some(Box::new(stand_in));
+        }
+        Ok(car)
+    }
+
+    /// Import `path`, its lenses lit and casting no shadow, every material
+    /// tagged as the car's and with `tags`.
+    fn import(path: &Path, tags: &[&str]) -> Result<ImportedScene, Box<dyn Error>> {
         let mut imported = wxsl::asset::import_gltf(path)?;
-        let lenses = light_lenses(&mut imported)?;
         // What the headlights' static shadow draws (ADR 0101).
         for material in &mut imported.scene.materials {
             material.config.tags.insert(crate::lights::CAR_TAG);
+            for tag in tags {
+                material.config.tags.insert(*tag);
+            }
         }
         for warning in &imported.warnings {
             println!("  {}: {warning}", path.display());
         }
-        let refractive = imported
-            .scene
-            .materials
-            .iter()
-            .any(|material| material.config.tags.contains(wxsl::asset::TAG_REFRACTIVE));
-        install(renderer, refractive)?;
+        Ok(imported)
+    }
+
+    /// Load `imported`, read from `path`, onto the device.
+    fn load(
+        gpu: &GpuContext,
+        renderer: &mut Renderer,
+        mut imported: ImportedScene,
+        path: &Path,
+    ) -> Result<Self, Box<dyn Error>> {
+        let lenses = light_lenses(&mut imported)?;
+        let refractive = refractive(&imported);
         let mut meshes: Vec<MeshData> = imported
             .meshes
             .iter()
@@ -427,6 +474,7 @@ impl Car {
             refractive,
             wheels: wheels(&imported),
             previous_locals: Vec::new(),
+            shadow: None,
             imported,
             bones,
             clip,
@@ -543,6 +591,9 @@ impl Car {
             bindings.set(BONE_FRAME_PARAM, Value::F32(frame))?;
         }
         self.resources.upload(&gpu.device, &gpu.queue)?;
+        if let Some(shadow) = &mut self.shadow {
+            shadow.animate(gpu, time, distance)?;
+        }
         Ok(())
     }
 
@@ -577,10 +628,12 @@ impl Car {
         }
     }
 
-    /// Its draws at `transform`, last frame at `previous`.
+    /// Its draws at `transform`, last frame at `previous`, its stand-in's
+    /// after them.
     pub fn draws(&self, transform: Mat4, previous: Mat4) -> Vec<DrawItem<'_>> {
         let (now, then) = (transform * self.align, previous * self.align);
-        self.resources
+        let mut draws: Vec<DrawItem<'_>> = self
+            .resources
             .draw_list()
             .items()
             .iter()
@@ -594,7 +647,11 @@ impl Car {
                 item.bounds = item.bounds.map(|(min, max)| transform_box(now, min, max));
                 item
             })
-            .collect()
+            .collect();
+        if let Some(shadow) = &self.shadow {
+            draws.extend(shadow.draws(transform, previous));
+        }
+        draws
     }
 }
 

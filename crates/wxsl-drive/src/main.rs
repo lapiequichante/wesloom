@@ -12,7 +12,10 @@
 //! both shaped by IES profiles, light the road. The camera follows the
 //! car; depth of field focuses on it and the velocity buffer's motion blur
 //! smears the road. The car mirrors a probe rendered from its centre every
-//! frame, of everything but itself (ADR 0102).
+//! frame, of everything but itself (ADR 0102). Its shadows are cast by a
+//! decimated, welded copy without its glass,
+//! `resources/glb/me_car_opt/me_car_opt.glb` when it is there
+//! (`--shadow-car FILE`, or `none` for the car's own).
 //!
 //! In the window: the sliders set the speed, the hour, the motion blur and
 //! the aperture; drag elsewhere to look around the car, scroll to zoom,
@@ -67,7 +70,7 @@ use world::World;
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--at METRES]
       [--look RADIANS] [--pitch RADIANS] [--zoom Z] [--view NAME] [--deferred]
       [--soft-shadows] [--no-fxaa] [--screenshot out.png [--ui] [--frames N] [--profile]]
-      [--size WxH] [--car file.glb]
+      [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 window: the sliders set speed, hour, motion blur, aperture, the car's debug view,
         forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
         the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
@@ -127,6 +130,8 @@ struct Options {
     frames: u32,
     size: (u32, u32),
     car: PathBuf,
+    /// A decimated copy of the car that casts its shadows in its place.
+    shadow_car: Option<PathBuf>,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -149,6 +154,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         frames: 4,
         size: (1600, 900),
         car: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/glb/me_car/me_car.glb"),
+        shadow_car: Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../resources/glb/me_car_opt/me_car_opt.glb"),
+        )
+        .filter(|path| path.exists()),
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -184,6 +194,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--ui" => options.ui = true,
             "--frames" => options.frames = value()?.parse::<u32>()?.max(3),
             "--car" => options.car = PathBuf::from(value()?),
+            "--shadow-car" => {
+                options.shadow_car = Some(value()?)
+                    .filter(|name| name != "none")
+                    .map(PathBuf::from);
+            }
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -280,6 +295,7 @@ impl Drive {
         gpu: &GpuContext,
         target: TargetConfig,
         car: &Path,
+        shadow_car: Option<&Path>,
         at: f32,
     ) -> Result<Self, Box<dyn Error>> {
         let started = Instant::now();
@@ -287,9 +303,13 @@ impl Drive {
         let mut renderer = Renderer::new(&gpu.device, library.clone(), target)?;
         pipeline::add_effects(&mut renderer)?;
         renderer.set_lighting(LightingSet::new(DEFAULT_MODELS.iter().copied())?)?;
-        let car = Car::open(gpu, &mut renderer, car, |renderer, refractive| {
-            pipeline::install(renderer, refractive, false, true)
-        })?;
+        let car = Car::open(
+            gpu,
+            &mut renderer,
+            car,
+            shadow_car,
+            |renderer, refractive| pipeline::install(renderer, refractive, false, true),
+        )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
         renderer.set_light_cookies(&gpu.device, Some(&lights::cookies(gpu)?));
         println!(
@@ -525,6 +545,7 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
         &gpu,
         TargetConfig::new(width, height, target.format()),
         &options.car,
+        options.shadow_car.as_deref(),
         options.at,
     )?;
     drive.orbit = Vec2::new(options.look, options.pitch);
@@ -640,6 +661,7 @@ impl App {
             &gpu,
             TargetConfig::new(size.width.max(1), size.height.max(1), format),
             &self.options.car,
+            self.options.shadow_car.as_deref(),
             self.options.at,
         )?;
         let overlay = ui::Overlay::new(&gpu.device, &drive.library)?;

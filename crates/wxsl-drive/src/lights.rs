@@ -181,6 +181,9 @@ const SHADOWED_LAMPS: usize = 6;
 /// shadows draw, so the deck keeps their beams off the piers below.
 pub const CAR_TAG: &str = "car";
 pub const DECK_TAG: &str = "deck";
+/// The tag on the car's decimated stand-in, which casts its shadows in its
+/// place and is drawn by no other pass.
+pub const CAR_SHADOW_TAG: &str = "car_shadow";
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);

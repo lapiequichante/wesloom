@@ -15,7 +15,9 @@
 //! than the sky (ADR 0102): every frame, six forward passes of everything
 //! but the car, filtered like the sky's maps. The forward pass draws the
 //! rest of the world; a second one on the same targets draws the car with
-//! the probe's cubes, and the glass refracts the probe's radiance.
+//! the probe's cubes, and the glass refracts the probe's radiance. The
+//! shadow passes draw the car's decimated stand-in instead of the car, and
+//! no other pass draws it.
 //!
 //! Deferred, for comparison, starts from the stock deferred document
 //! instead: the G-buffer pass stands where the prepass was, and its depth
@@ -25,6 +27,7 @@
 
 use std::error::Error;
 
+use wxsl::core::abi::MaterialStage;
 use wxsl::core::graph::{Graph, Node, SocketRef};
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
@@ -39,7 +42,7 @@ use wxsl::render::pass::{
 use wxsl::render::types::{Color, TextureFormat};
 use wxsl::render::{Camera, Renderer, StockPipeline};
 
-use crate::lights::CAR_TAG;
+use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
 
 /// The pass the lens' numbers go to.
@@ -384,6 +387,19 @@ pub fn install(
                 .with_color(presented)
                 .with_reads([Read::current(encoded)]),
         );
+    }
+    // The car's stand-in is drawn by the shadow passes and by no other.
+    let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
+    for index in 0..graph.passes().len() {
+        if let Some(PassKind::Geometry {
+            source: DrawSource::Scene(selector),
+            stage,
+        }) = graph.pass_mut(index).map(|pass| &mut pass.kind)
+        {
+            if *stage != MaterialStage::SHADOW {
+                *selector = selector.clone().and(hidden.clone());
+            }
+        }
     }
     renderer.set_graph(graph)?;
     Ok(())
