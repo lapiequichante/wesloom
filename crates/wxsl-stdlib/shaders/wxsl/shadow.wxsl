@@ -91,6 +91,10 @@ fn shadow_factor_at(
     let absolute = world_position + world_origin();
     var tile_index = light.tile_first;
     var blend = 0.0;
+    // How far past the last cascade's reach a point is, over the same
+    // share of its slice the cascades blend over: the shadow fades out
+    // there rather than ending on a line.
+    var fade = 0.0;
     if light.tile_count > 1u {
         if light.kind != LIGHT_KIND_DIRECTIONAL {
             // Select the face after normal offset, just as the projection
@@ -115,6 +119,14 @@ fn shadow_factor_at(
                 }
                 previous_split = split;
             }
+            if tile_index == light.tile_first + light.tile_count - 1u {
+                let split = scene.shadow_tiles[tile_index].split;
+                let start = split - (split - previous_split) * WXSL_SHADOW_CASCADE_BLEND;
+                fade = smoothstep(start, split, reach);
+                if fade >= 1.0 {
+                    return 1.0;
+                }
+            }
         }
     }
     // A rectangle's softness is its own quadrature (ADR 0072); for the
@@ -128,7 +140,7 @@ fn shadow_factor_at(
             light.shadow_normal_bias, true, source_radius);
         return mix(shadow, next, blend);
     }
-    return shadow;
+    return mix(shadow, 1.0, fade);
 }
 
 fn sample_shadow_tile(

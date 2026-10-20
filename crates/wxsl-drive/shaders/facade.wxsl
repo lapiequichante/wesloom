@@ -33,8 +33,10 @@ fn facade(
         return out;
     }
     // Which wall, so different walls light different rooms, and the
-    // distance along it, whichever way it faces.
-    let wall = dot(n, vec3f(1.0, 0.0, 2.0));
+    // distance along it, whichever way it faces. Rounded: the interpolated
+    // normal wavers by an ulp from pixel to pixel and frame to frame, and
+    // the room hash turns an ulp into another room.
+    let wall = round(dot(n, vec3f(1.0, 0.0, 2.0)) * 16.0);
     let across = normalize(n.xz);
     let along = dot(world.xz, vec2f(-across.y, across.x));
     let storey = 3.3 + seed * 0.9;

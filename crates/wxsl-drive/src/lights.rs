@@ -196,7 +196,8 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// Shadow tiles go in list order, largest first (`abi::shadow_tile`):
 /// by day all to the sun's cascades; at night first to the headlights and
 /// the tail lights, whose static tiles keep their slots (ADR 0101), then
-/// to the lamps near the car, nearest first, the moon's faint shadow last.
+/// to the lamps near the car, nearest first. The sun casts its shadow
+/// while it is up; the moon casts none, which saves its four cascades.
 pub fn lights(
     day: &DayLight,
     lamps: &[Lamp],
@@ -204,13 +205,22 @@ pub fn lights(
     car_lamps: &CarLamps,
     eye: Vec3,
 ) -> Vec<Light> {
-    let (key, key_color) = day.key();
-    let mut key = Light::directional(key, key_color.normalize_or_zero(), key_color.length())
-        .casting_shadow(30.0)
-        .with_cascades(4)
-        .with_source_radius(0.0047);
-    key.shadow_distance = 140.0;
-    key.shadow_normal_bias = 0.05;
+    let (direction, key_color) = day.key();
+    let mut key = Light::directional(direction, key_color.normalize_or_zero(), key_color.length());
+    if day.sun_up() {
+        key = key
+            .casting_shadow(30.0)
+            .with_cascades(4)
+            // Far down the road, the split leaning logarithmic so the
+            // first cascade still holds the car in about 20 m.
+            .with_cascade_split(0.85)
+            // The towers' tops, kilometres up-sun of the long shadows
+            // they throw on the road under a low sun.
+            .with_caster_reach(3000.0)
+            .with_source_radius(0.0047);
+        key.shadow_distance = 500.0;
+        key.shadow_normal_bias = 0.05;
+    }
     if day.lights_on <= 0.0 {
         return vec![key];
     }
@@ -356,13 +366,14 @@ mod tests {
             .iter()
             .filter(|light| light.range > 0.0)
             .all(|light| light.profile_layer.is_some()));
-        // The headlights, the tail lights, the key and the lamp heads near
-        // the car cast shadows; everything else goes to the light grid.
+        // The headlights, the tail lights and the lamp heads near the car
+        // cast shadows, the moon none; everything else goes to the light
+        // grid.
         let shadowed = night.iter().filter(|light| light.casts_shadow).count();
-        assert!((5..=5 + SHADOWED_LAMPS).contains(&shadowed));
+        assert!((4..=4 + SHADOWED_LAMPS).contains(&shadowed));
         assert_eq!(
             night.iter().filter(|light| !light.is_local()).count(),
-            shadowed
+            shadowed + 1
         );
     }
 

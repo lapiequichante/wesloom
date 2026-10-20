@@ -93,10 +93,14 @@ impl DayLight {
         }
     }
 
-    /// The light that casts the shadows: the sun while it is up, the moon
-    /// otherwise.
+    /// Whether the sun is up, or close enough to light the road.
+    pub fn sun_up(&self) -> bool {
+        self.sun.y > -0.02
+    }
+
+    /// The key light: the sun while it is up, the moon otherwise.
     pub fn key(&self) -> (Vec3, Vec3) {
-        if self.sun.y > -0.02 {
+        if self.sun_up() {
             (self.sun, self.sun_color)
         } else {
             (self.moon, self.moon_color)

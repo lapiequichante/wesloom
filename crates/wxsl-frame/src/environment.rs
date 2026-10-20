@@ -242,6 +242,16 @@ pub struct Light {
     /// [`MAX_SHADOW_CASCADES`]; meaningless for a point or area light, whose
     /// faces are not negotiable.
     pub shadow_cascades: u32,
+    /// How the cascades split the camera's depth: 0 evenly, 1 by the same
+    /// ratio each, which keeps the near ones sharp however far the last
+    /// reaches. 0.5 — the default — is halfway between.
+    pub shadow_cascade_split: f32,
+    /// How far towards a cascaded light, past the nearest point a cascade
+    /// receives on, its casters are still drawn, in world units. A tall
+    /// caster up-light shadows a slice from much further away than the
+    /// slice is deep: a 300 m tower under a sun 20° up reaches from 900 m.
+    /// Zero — the default — is [`Light::shadow_distance`].
+    pub shadow_caster_reach: f32,
     /// Where a point or spot light's falloff reaches zero, in world units.
     ///
     /// Zero — the default — is the unbounded inverse square every light
@@ -288,6 +298,8 @@ impl Light {
         shadow_distance: 32.0,
         shadow_normal_bias: 0.03,
         shadow_cascades: 1,
+        shadow_cascade_split: 0.5,
+        shadow_caster_reach: 0.0,
         range: 0.0,
         shadow_casters: TagExpr::Always,
         static_shadow: None,
@@ -467,6 +479,20 @@ impl Light {
     /// single box.
     pub fn with_cascades(mut self, count: u32) -> Self {
         self.shadow_cascades = count.clamp(1, MAX_SHADOW_CASCADES);
+        self
+    }
+
+    /// Split the cascades' depth `ratio` of the way from even (0) to
+    /// logarithmic (1); see [`Light::shadow_cascade_split`].
+    pub fn with_cascade_split(mut self, ratio: f32) -> Self {
+        self.shadow_cascade_split = ratio.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Draw a cascaded light's casters up to `reach` towards it; see
+    /// [`Light::shadow_caster_reach`].
+    pub fn with_caster_reach(mut self, reach: f32) -> Self {
+        self.shadow_caster_reach = reach.max(0.0);
         self
     }
 
@@ -650,6 +676,11 @@ impl Light {
     /// of the camera would swim the shadow across the surface.
     fn cascade_views(&self, camera: &Camera, direction: &Vec3, first_tile: u32) -> Vec<ShadowView> {
         let depth = self.shadow_distance.max(1e-3);
+        let reach = if self.shadow_caster_reach > 0.0 {
+            self.shadow_caster_reach
+        } else {
+            depth
+        };
         let eye = *direction * depth;
         let up = if direction.y.abs() > 0.99 {
             Vec3::Z
@@ -666,15 +697,23 @@ impl Light {
         let range = camera.far.min(depth).max(near * 2.0);
         let count = self.shadow_cascades;
         let mut out = Vec::with_capacity(count as usize);
-        let mut d_near = near;
-        let mut slice_near = near;
+        // The splits and the slices' spheres depend on the range and the
+        // lens only, never on the near plane: a chase camera's moves it a
+        // little every frame, and every new sphere was a new texel size
+        // that shifted a cascade's whole snapped grid, so its shadows
+        // popped. The logarithmic splits start from a thousandth of the
+        // range, the first slice from the eye.
+        let reference = range * 1e-3;
+        let mut d_near = 0.0;
+        let mut slice_near = 0.0;
         for index in 0..count {
-            // Every logarithmic split uses the camera near plane, not the
+            // Every logarithmic split uses the same reference, not the
             // previous split, so the final split ends exactly at range.
             let t = (index + 1) as f32 / count as f32;
-            let log = near * (range / near).powf(t);
-            let lin = near + (range - near) * t;
-            let d_far = log * 0.5 + lin * 0.5;
+            let log = reference * (range / reference).powf(t);
+            let lin = range * t;
+            let ratio = self.shadow_cascade_split.clamp(0.0, 1.0);
+            let d_far = log * ratio + lin * (1.0 - ratio);
             let centre = camera.eye + forward * ((slice_near + d_far) * 0.5);
             let corners: Vec<Vec3> = [slice_near, d_far]
                 .into_iter()
@@ -722,7 +761,7 @@ impl Light {
                 cx + half,
                 cy - half,
                 cy + half,
-                -z_max - depth,
+                -z_max - reach,
                 -z_min + texel * 2.0,
             );
             out.push(ShadowView {
