@@ -133,6 +133,7 @@ The ten decisions the rest of the log builds on:
 | [0099](0099-skins-and-animations-are-baked-into-a-bone-texture-and-skinned-in-the-vertex-stage.md) | Skins and animations are baked into a bone texture and skinned in the vertex stage | Accepted |
 | [0100](0100-demo-applications-are-unpublished-crates-over-the-facade.md) | Demo applications are unpublished crates over the facade | Accepted |
 | [0101](0101-a-static-shadow-is-drawn-once-in-its-casters-frame.md) | A static shadow is drawn once, in its casters' frame | Accepted |
+| [0102](0102-a-local-probe-is-captured-in-the-frame-and-lit-per-pass.md) | A local probe is captured in the frame and read per pass | Accepted |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

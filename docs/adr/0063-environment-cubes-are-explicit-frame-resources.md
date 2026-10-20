@@ -76,3 +76,6 @@ direct lamps. The sky graph's extent input matches its equirectangular output;
 using the HDR view's size (or a 1×1 placeholder) would normalize its UVs wrongly.
 Frozen-frame tests pin bake persistence and source switching. This diagnostic
 does not claim temporal antialiasing for a rotating procedural material.
+
+ADR 0102 lets one pass bind a local probe's cubes in place of these, under
+the same rules and with the same specular mip count.

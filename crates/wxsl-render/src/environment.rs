@@ -1,6 +1,6 @@
 //! wgpu buffers and bindings for shared environment data (ADR 0048).
 
-use crate::pass::PassView;
+use crate::pass::{PassView, ResourceId};
 use std::collections::BTreeMap;
 use wxsl_core::abi;
 use wxsl_core::resources::{texel_rows, texels_per_row};
@@ -158,6 +158,11 @@ pub struct FrameBindings {
     environment_levels: u32,
     environment_maps: [wgpu::TextureView; 2],
     environment_placeholder: wgpu::TextureView,
+    /// The cubes passes bind in place of `environment_maps`, by the
+    /// resources they are (ADR 0102), and where those came from: the
+    /// pool's generation and their slots.
+    environment_overrides: Vec<([ResourceId; 2], [wgpu::TextureView; 2])>,
+    overrides_source: Option<(u64, Vec<[usize; 2]>)>,
     cookie_view: wgpu::TextureView,
     cookie_placeholder: wgpu::TextureView,
     /// One buffer and bind group per *declared attribute* row shape,
@@ -176,6 +181,9 @@ struct InstanceGroup {
     stride: usize,
     bound: wgpu::BindGroup,
     detached: wgpu::BindGroup,
+    /// [`ShadowMaps::Bound`] with each environment override in place of
+    /// the frame's maps, in `environment_overrides` order.
+    overridden: Vec<wgpu::BindGroup>,
 }
 
 /// Whether a frame bind group points at the real shadow maps.
@@ -489,6 +497,8 @@ impl FrameBindings {
                 environment_placeholder.clone(),
             ],
             environment_placeholder,
+            environment_overrides: Vec::new(),
+            overrides_source: None,
             groups: BTreeMap::new(),
             layout,
         };
@@ -578,11 +588,13 @@ impl FrameBindings {
         let keys: Vec<String> = self.groups.keys().cloned().collect();
         for key in keys {
             let attributes = self.groups[&key].buffer.clone();
-            let bound = self.build_group(device, &attributes, ShadowMaps::Bound);
-            let detached = self.build_group(device, &attributes, ShadowMaps::Detached);
+            let bound = self.build_group(device, &attributes, ShadowMaps::Bound, None);
+            let detached = self.build_group(device, &attributes, ShadowMaps::Detached, None);
+            let overridden = self.overridden_groups(device, &attributes);
             if let Some(group) = self.groups.get_mut(&key) {
                 group.bound = bound;
                 group.detached = detached;
+                group.overridden = overridden;
             }
         }
     }
@@ -610,6 +622,38 @@ impl FrameBindings {
         self.rebuild_groups(device);
     }
 
+    /// Bind `maps` for the passes that name them in place of the frame's
+    /// environment (ADR 0102). `source` is the pool's generation and the
+    /// slots behind them, so binding the same ones again is free.
+    pub fn set_environment_overrides(
+        &mut self,
+        device: &wgpu::Device,
+        source: (u64, Vec<[usize; 2]>),
+        maps: Vec<([ResourceId; 2], [&wgpu::TextureView; 2])>,
+    ) {
+        if self.overrides_source.as_ref() == Some(&source) {
+            return;
+        }
+        self.overrides_source = Some(source);
+        self.environment_overrides = maps
+            .into_iter()
+            .map(|(key, views)| (key, [views[0].clone(), views[1].clone()]))
+            .collect();
+        self.rebuild_groups(device);
+    }
+
+    /// One bound frame group over `attributes` per environment override.
+    fn overridden_groups(
+        &self,
+        device: &wgpu::Device,
+        attributes: &RowStore,
+    ) -> Vec<wgpu::BindGroup> {
+        self.environment_overrides
+            .iter()
+            .map(|(_, maps)| self.build_group(device, attributes, ShadowMaps::Bound, Some(maps)))
+            .collect()
+    }
+
     /// Read the tiles `kept` keeps through their own matrices at the next
     /// [`FrameBindings::update`].
     pub(crate) fn keep_shadow_tiles(&mut self, kept: ShadowFrame) {
@@ -621,16 +665,25 @@ impl FrameBindings {
         self.environment_scale = scale;
     }
 
-    /// One frame bind group over `attributes`.
+    /// One frame bind group over `attributes`, with `environment` in place
+    /// of the frame's environment maps if given.
     fn build_group(
         &self,
         device: &wgpu::Device,
         attributes: &RowStore,
         shadows: ShadowMaps,
+        environment: Option<&[wgpu::TextureView; 2]>,
     ) -> wgpu::BindGroup {
         let shadow_view = match shadows {
             ShadowMaps::Bound => &self.shadow_view,
             ShadowMaps::Detached => &self.shadow_placeholder,
+        };
+        let maps = match shadows {
+            ShadowMaps::Detached => [&self.environment_placeholder, &self.environment_placeholder],
+            ShadowMaps::Bound => {
+                let maps = environment.unwrap_or(&self.environment_maps);
+                [&maps[0], &maps[1]]
+            }
         };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("wxsl frame bindings"),
@@ -696,23 +749,11 @@ impl FrameBindings {
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_ENVIRONMENT_DIFFUSE,
-                    resource: wgpu::BindingResource::TextureView(
-                        if matches!(shadows, ShadowMaps::Detached) {
-                            &self.environment_placeholder
-                        } else {
-                            &self.environment_maps[0]
-                        },
-                    ),
+                    resource: wgpu::BindingResource::TextureView(maps[0]),
                 },
                 wgpu::BindGroupEntry {
                     binding: abi::BINDING_ENVIRONMENT_SPECULAR,
-                    resource: wgpu::BindingResource::TextureView(
-                        if matches!(shadows, ShadowMaps::Detached) {
-                            &self.environment_placeholder
-                        } else {
-                            &self.environment_maps[1]
-                        },
-                    ),
+                    resource: wgpu::BindingResource::TextureView(maps[1]),
                 },
             ],
         })
@@ -741,8 +782,9 @@ impl FrameBindings {
             grown,
             self.row_textures,
         );
-        let bound = self.build_group(device, &buffer, ShadowMaps::Bound);
-        let detached = self.build_group(device, &buffer, ShadowMaps::Detached);
+        let bound = self.build_group(device, &buffer, ShadowMaps::Bound, None);
+        let detached = self.build_group(device, &buffer, ShadowMaps::Detached, None);
+        let overridden = self.overridden_groups(device, &buffer);
         self.groups.insert(
             key.to_string(),
             InstanceGroup {
@@ -751,6 +793,7 @@ impl FrameBindings {
                 stride,
                 bound,
                 detached,
+                overridden,
             },
         );
     }
@@ -908,12 +951,30 @@ impl FrameBindings {
     /// material behind it and harmless for one whose rows were never
     /// uploaded — such a draw has nothing to read.
     pub fn instance_group(&self, signature: &str, shadows: ShadowMaps) -> &wgpu::BindGroup {
+        self.instance_group_in(signature, shadows, None)
+    }
+
+    /// [`FrameBindings::instance_group`] for a pass that binds
+    /// `environment` in place of the frame's maps (ADR 0102). A pass that
+    /// writes maps, or names cubes nothing set, gets the frame's group.
+    pub fn instance_group_in(
+        &self,
+        signature: &str,
+        shadows: ShadowMaps,
+        environment: Option<[ResourceId; 2]>,
+    ) -> &wgpu::BindGroup {
+        let overridden = environment.and_then(|environment| {
+            self.environment_overrides
+                .iter()
+                .position(|(key, _)| *key == environment)
+        });
         self.groups
             .get(signature)
             .or_else(|| self.groups.get(BASE_SHAPE))
-            .map(|group| match shadows {
-                ShadowMaps::Bound => &group.bound,
-                ShadowMaps::Detached => &group.detached,
+            .map(|group| match (shadows, overridden) {
+                (ShadowMaps::Bound, Some(index)) => &group.overridden[index],
+                (ShadowMaps::Bound, None) => &group.bound,
+                (ShadowMaps::Detached, _) => &group.detached,
             })
             .expect("the empty attribute shape is created up front")
     }
@@ -922,6 +983,15 @@ impl FrameBindings {
     /// attributes.
     pub fn bind_group(&self, shadows: ShadowMaps) -> &wgpu::BindGroup {
         self.instance_group(BASE_SHAPE, shadows)
+    }
+
+    /// [`FrameBindings::bind_group`] for a pass binding `environment`.
+    pub fn bind_group_in(
+        &self,
+        shadows: ShadowMaps,
+        environment: Option<[ResourceId; 2]>,
+    ) -> &wgpu::BindGroup {
+        self.instance_group_in(BASE_SHAPE, shadows, environment)
     }
 }
 

@@ -61,6 +61,7 @@ fn lit() -> Environment {
         previous_camera: None,
         origin: Default::default(),
         cluster_lights: true,
+        probe: None,
     }
 }
 

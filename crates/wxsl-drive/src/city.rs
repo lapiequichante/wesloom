@@ -388,11 +388,13 @@ pub fn buildings(road: &Road, ground: impl Fn(f32, f32) -> f32) -> Vec<Building>
         let cell = bucket(lot.footprint.center);
         let clashes = (-1..=1).any(|dx| {
             (-1..=1).any(|dz| {
-                taken.get(&(cell.x + dx, cell.y + dz)).is_some_and(|others| {
-                    others
-                        .iter()
-                        .any(|other| other.overlaps(&lot.footprint, STREET * 0.5))
-                })
+                taken
+                    .get(&(cell.x + dx, cell.y + dz))
+                    .is_some_and(|others| {
+                        others
+                            .iter()
+                            .any(|other| other.overlaps(&lot.footprint, STREET * 0.5))
+                    })
             })
         });
         if clashes {
@@ -418,7 +420,9 @@ pub fn paving(buildings: &[Building]) -> impl Fn(f32, f32) -> f32 + '_ {
         let center = Vec2::new(min.x + max.x, min.z + max.z) * 0.5;
         let radius = Vec2::new(max.x - min.x, max.z - min.z).length() * 0.5;
         let cell = (center / BUCKET).floor().as_ivec2();
-        near.entry((cell.x, cell.y)).or_default().push((center, radius));
+        near.entry((cell.x, cell.y))
+            .or_default()
+            .push((center, radius));
     }
     move |x, z| {
         let point = Vec2::new(x, z);
@@ -426,7 +430,8 @@ pub fn paving(buildings: &[Building]) -> impl Fn(f32, f32) -> f32 + '_ {
         let mut paved: f32 = 0.0;
         for dx in -1..=1 {
             for dz in -1..=1 {
-                for (center, radius) in near.get(&(cell.x + dx, cell.y + dz)).into_iter().flatten() {
+                for (center, radius) in near.get(&(cell.x + dx, cell.y + dz)).into_iter().flatten()
+                {
                     let outside = point.distance(*center) - radius;
                     paved = paved.max(1.0 - smoothstep(STREET, STREET + 25.0, outside));
                 }
@@ -569,7 +574,10 @@ mod tests {
                 };
                 let winding = (p(1) - p(0)).cross(p(2) - p(0)).normalize();
                 let stored = Vec3::from_array(mesh.vertices[triangle[0] as usize].normal);
-                assert!(winding.dot(stored) > 0.9, "{kind:?}: {winding} against {stored}");
+                assert!(
+                    winding.dot(stored) > 0.9,
+                    "{kind:?}: {winding} against {stored}"
+                );
             }
             for vertex in &mesh.vertices {
                 let [x, y, z] = vertex.position;

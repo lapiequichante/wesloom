@@ -11,10 +11,17 @@
 //! sky (once per hour) → IBL bake (once) ┘
 //! ```
 //!
+//! The car (body, glass and driver) mirrors a probe at its centre rather
+//! than the sky (ADR 0102): every frame, six forward passes of everything
+//! but the car, filtered like the sky's maps. The forward pass draws the
+//! rest of the world; a second one on the same targets draws the car with
+//! the probe's cubes, and the glass refracts the probe's radiance.
+//!
 //! Deferred, for comparison, starts from the stock deferred document
 //! instead: the G-buffer pass stands where the prepass was, and its depth
-//! feeds the velocity pass the same way. Without FXAA, the tonemap
-//! presents.
+//! feeds the velocity pass the same way, and the lighting pass lights the
+//! car's body with the sky, since it lights every pixel at once; only its
+//! glass reads the probe. Without FXAA, the tonemap presents.
 
 use std::error::Error;
 
@@ -27,11 +34,12 @@ use wxsl::render::effect::{
     EffectShader,
 };
 use wxsl::render::pass::{
-    Attachment, DrawSource, Extent, PassDesc, PassKind, Policy, Read, ResourceDesc,
+    Attachment, DrawSource, Extent, Load, PassDesc, PassKind, Policy, Read, ResourceDesc,
 };
 use wxsl::render::types::{Color, TextureFormat};
 use wxsl::render::{Camera, Renderer, StockPipeline};
 
+use crate::lights::CAR_TAG;
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
 
 /// The pass the lens' numbers go to.
@@ -40,6 +48,17 @@ const DOF_CIRCLES: &str = "drive dof circles";
 const MAX_COC: f32 = 20.0;
 /// The motion blur's pass label, which `strength` is set on.
 pub const MOTION_BLUR: &str = "motion blur";
+/// The sky's environment cubes: the edge of the radiance and specular
+/// cubes, the diffuse cube's, and the specular mips. The car's probe has
+/// the same, as a pass's own cubes must (ADR 0102).
+const CUBE_SIZE: u32 = 128;
+const DIFFUSE_SIZE: u32 = 16;
+const SPECULAR_MIPS: u32 = 8;
+/// The probe's label, and the importance samples of its sharp GGX lobes:
+/// few enough for every frame, the filtered source's mips doing the rest.
+const PROBE: &str = "drive probe";
+const PROBE_SAMPLES: u32 = 64;
+
 /// The bloom pyramid's settings: four levels for a faint, tight halo
 /// around the lamps and the headlights, from radiance well above a lit
 /// road's.
@@ -93,6 +112,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::DIFFUSE,
         ibl::SPECULAR,
         ibl::RESAMPLE,
+        ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
     ] {
@@ -243,7 +263,14 @@ pub fn install(
             .with_color(Attachment::clear(sky, Color::BLACK))
             .with_policy(Policy::Once),
     );
-    let maps = ibl::append_filtered_bake(&mut graph, sky, "drive IBL", 128, 16, 8);
+    let maps = ibl::append_filtered_bake(
+        &mut graph,
+        sky,
+        "drive IBL",
+        CUBE_SIZE,
+        DIFFUSE_SIZE,
+        SPECULAR_MIPS,
+    );
     graph.declare_environment_maps(maps.diffuse, maps.specular);
     graph.set_environment_scale(1.0);
 
@@ -263,6 +290,47 @@ pub fn install(
         .filter_map(|pass| pass.depth.as_ref().map(|attachment| attachment.resource))
         .next_back()
         .ok_or("the frame has no depth")?;
+
+    // The car's probe, after the lookups above: its faces have depth too.
+    let probe = ibl::append_probe(
+        &mut graph,
+        TagExpr::parse(&format!("!{CAR_TAG}"))?,
+        maps.radiance,
+        PROBE,
+        CUBE_SIZE,
+        DIFFUSE_SIZE,
+        SPECULAR_MIPS,
+        PROBE_SAMPLES,
+    );
+    if !deferred {
+        // The world, then the car on the same targets with the probe.
+        let forward = graph
+            .passes()
+            .iter()
+            .position(|pass| pass.label == "forward")
+            .ok_or("the frame has no forward pass")?;
+        let glass = if refractive { " && !refractive" } else { "" };
+        let draw = |pass: &mut PassDesc, expression: &str| -> Result<(), Box<dyn Error>> {
+            if let PassKind::Geometry { source, .. } = &mut pass.kind {
+                *source = DrawSource::Scene(TagExpr::parse(expression)?);
+            }
+            Ok(())
+        };
+        let mut car = graph.passes()[forward].clone();
+        draw(
+            graph.pass_mut(forward).ok_or("forward pass")?,
+            &format!("!{CAR_TAG}{glass}"),
+        )?;
+        car.label = "drive car".into();
+        draw(&mut car, &format!("{CAR_TAG}{glass}"))?;
+        for attachment in &mut car.color {
+            attachment.load = Load::Load;
+        }
+        if let Some(depth) = &mut car.depth {
+            depth.clear = None;
+        }
+        graph.pass(car.with_environment(probe.diffuse, probe.specular));
+    }
     let mut background =
         ibl::append_background(&mut graph, shaded, depth, maps.radiance, "drive background");
     if refractive {
@@ -270,7 +338,7 @@ pub fn install(
             &mut graph,
             background,
             depth,
-            maps.radiance,
+            probe.radiance,
             "drive glass",
             2,
         );

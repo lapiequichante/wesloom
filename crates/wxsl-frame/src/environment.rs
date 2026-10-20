@@ -781,6 +781,44 @@ pub const CUBE_FACE_DIRECTIONS: [Vec3; 6] = [
     Vec3::NEG_Z,
 ];
 
+/// A local probe's point of view (ADR 0102): six square 90° views from
+/// `center`, one per cube face, which `PassView::Probe` renders from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalProbe {
+    /// Where the cube is centred, relative to [`Environment::origin`].
+    pub center: Vec3,
+    /// Near plane distance.
+    pub near: f32,
+    /// Far plane distance.
+    pub far: f32,
+}
+
+impl LocalProbe {
+    /// The camera face `face` renders from, looking along
+    /// [`CUBE_FACE_DIRECTIONS`]`[face]`. Its up vector is the face's
+    /// downward texel axis, so that its image flipped in V is the WebGPU
+    /// cube face: the flip is the composite pass's (`wxsl.probe_face`),
+    /// which keeps the projection and the winding every other view has.
+    pub fn face_camera(&self, face: usize) -> Camera {
+        let direction = CUBE_FACE_DIRECTIONS[face % 6];
+        let up = match face % 6 {
+            2 => Vec3::Z,
+            3 => Vec3::NEG_Z,
+            _ => Vec3::NEG_Y,
+        };
+        Camera {
+            eye: self.center,
+            target: self.center + direction,
+            up,
+            fov_y: std::f32::consts::FRAC_PI_2,
+            aspect: 1.0,
+            near: self.near,
+            far: self.far,
+            jitter: Vec2::ZERO,
+        }
+    }
+}
+
 /// What is lighting the frame and where it is seen from.
 ///
 /// Renamed from `Scene` in M1, which is what it always was: a scene is the
@@ -845,6 +883,9 @@ pub struct Environment {
     /// world, through the `f32` copy of this in the scene uniform, and
     /// pays that precision only in its shading, never in its geometry.
     pub origin: DVec3,
+    /// The local probe the frame captures, if any (ADR 0102). `None` —
+    /// the default — leaves its six view slots on the camera.
+    pub probe: Option<LocalProbe>,
 }
 
 impl Default for Environment {
@@ -860,6 +901,7 @@ impl Default for Environment {
             previous_time: 0.0,
             previous_camera: None,
             origin: DVec3::ZERO,
+            probe: None,
         }
     }
 }
@@ -1041,7 +1083,7 @@ impl Environment {
     }
 
     /// Every point of view this frame renders from, in [`PassView::slot`]
-    /// order: the camera, then one per shadow tile.
+    /// order: the camera, one per shadow tile, then the probe's faces.
     ///
     /// Always the full length, so a pass's view slot is a fixed offset
     /// rather than a lookup into whatever tiles happen to exist. A slot
@@ -1053,6 +1095,12 @@ impl Environment {
         for (slot, tile) in self.shadow_tiles().iter().enumerate() {
             views[PassView::Shadow { tile: slot as u32 }.slot()] =
                 CameraUniform::new(tile.view_proj, tile.eye);
+        }
+        if let Some(probe) = self.probe {
+            for face in 0..PassView::PROBE_FACES {
+                views[PassView::Probe { face: face as u32 }.slot()] =
+                    probe.face_camera(face).uniform();
+            }
         }
         views
     }
@@ -1264,6 +1312,56 @@ fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
 mod tests {
     use super::*;
     use wxsl_core::node::ValueType;
+
+    #[test]
+    fn a_probe_face_flipped_in_v_is_the_webgpu_cube_face() {
+        // WebGPU's face selection: each face's major axis, and the
+        // directions its texel u and v (downwards) run along.
+        let axes = [
+            (Vec3::X, Vec3::NEG_Z, Vec3::NEG_Y),
+            (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y),
+            (Vec3::Y, Vec3::X, Vec3::Z),
+            (Vec3::NEG_Y, Vec3::X, Vec3::NEG_Z),
+            (Vec3::Z, Vec3::X, Vec3::NEG_Y),
+            (Vec3::NEG_Z, Vec3::NEG_X, Vec3::NEG_Y),
+        ];
+        let probe = LocalProbe {
+            center: Vec3::new(3.0, -2.0, 7.0),
+            near: 0.1,
+            far: 100.0,
+        };
+        for (face, (major, u_axis, v_axis)) in axes.into_iter().enumerate() {
+            let inverse = probe.face_camera(face).view_proj().inverse();
+            for (u, v) in [(0.25, 0.25), (0.8, 0.3), (0.5, 0.9)] {
+                let expected =
+                    (major + u_axis * (2.0 * u - 1.0) + v_axis * (2.0 * v - 1.0)).normalize();
+                // Texel (u, v) of the face is the rendered image's
+                // (u, 1 - v), whose NDC y is 1 - 2 (1 - v).
+                let ndc = Vec2::new(2.0 * u - 1.0, 2.0 * v - 1.0);
+                let near = inverse.project_point3(ndc.extend(0.0));
+                let far = inverse.project_point3(ndc.extend(0.5));
+                let ray = (far - near).normalize();
+                assert!(
+                    ray.distance(expected) < 1e-4,
+                    "face {face} at ({u}, {v}): {ray} against {expected}"
+                );
+            }
+        }
+        // The views carry the faces in their slots, and the camera without
+        // a probe.
+        let mut environment = Environment {
+            probe: Some(probe),
+            ..Environment::default()
+        };
+        let slot = PassView::Probe { face: 4 }.slot();
+        assert_eq!(slot, PassView::COUNT - 2);
+        assert_eq!(environment.views()[slot].position, probe.center.to_array());
+        environment.probe = None;
+        assert_eq!(
+            environment.views()[slot].view_proj,
+            environment.views()[0].view_proj
+        );
+    }
     use wxsl_core::wxsl::WxslIdent;
 
     #[test]

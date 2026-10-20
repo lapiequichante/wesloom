@@ -59,6 +59,7 @@ fn environment(previous: Option<Camera>, time: f32) -> Environment {
         previous_camera: previous,
         origin: Default::default(),
         cluster_lights: true,
+        probe: None,
     };
     environment.advance(time + STEP);
     environment

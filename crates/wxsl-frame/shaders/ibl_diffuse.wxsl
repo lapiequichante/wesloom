@@ -1,7 +1,33 @@
-
 @group(3) @binding(0) var image: texture_cube<f32>;
+
+// Cosine-distributed samples of the hemisphere around `n`, each read at the
+// source level its solid angle covers. Their mean is E / PI.
+fn sample_cosine_lobe(n: vec3f, count: u32) -> vec3f {
+    let basis = tangent_frame(n);
+    let side = f32(textureDimensions(image, 0).x);
+    let texel_angle = 12.56637061436 / (6.0 * side * side);
+    let max_lod = f32(textureNumLevels(image) - 1u);
+    var sum = vec3f(0.0);
+    for (var i = 0u; i < count; i++) {
+        let xi = hammersley(i, count);
+        let phi = 6.28318530718 * xi.x;
+        let cosine = sqrt(1.0 - xi.y);
+        let sine = sqrt(xi.y);
+        let l = basis * vec3f(sine * cos(phi), sine * sin(phi), cosine);
+        let pdf = max(cosine, 1e-4) / 3.14159265359;
+        let lod = clamp(0.5 * log2(1.0 / (f32(count) * pdf * texel_angle)), 0.0, max_lod);
+        sum += textureSampleLevel(image, environment_lut_sampler, l, lod).rgb;
+    }
+    return sum / f32(max(count, 1u));
+}
+
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4f {
     let n = face_direction(input.uv, params.face);
-    return vec4f(integrate_cube_lobe(image, n, 1.0, false), 1.0);
+    // A bake (`samples` 0) integrates the source grid; a per-frame probe
+    // samples, for the reason `ibl_specular` gives.
+    if params.samples == 0u {
+        return vec4f(integrate_cube_lobe(image, n, 1.0, false), 1.0);
+    }
+    return vec4f(sample_cosine_lobe(n, params.samples), 1.0);
 }

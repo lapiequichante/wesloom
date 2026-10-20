@@ -686,6 +686,11 @@ pub struct PassDesc {
     /// pass per light, each to its own rect.
     #[serde(default)]
     pub viewport: Option<ViewportRect>,
+    /// The diffuse and specular cubes this pass binds in place of the
+    /// frame's environment maps, or `None` — the default — for the
+    /// frame's (ADR 0102). Left out of a serialized pass list when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<[ResourceId; 2]>,
 }
 
 /// A rasterization rect, in texels of the target.
@@ -834,6 +839,7 @@ impl PassDesc {
             sort: SortOrder::None,
             layers: LayerFilter::All,
             viewport: None,
+            environment: None,
         }
     }
 
@@ -855,6 +861,7 @@ impl PassDesc {
             sort: SortOrder::None,
             layers: LayerFilter::All,
             viewport: None,
+            environment: None,
         }
     }
 
@@ -876,6 +883,7 @@ impl PassDesc {
             sort: SortOrder::None,
             layers: LayerFilter::All,
             viewport: None,
+            environment: None,
         }
     }
 
@@ -922,6 +930,13 @@ impl PassDesc {
     /// Render from `view` instead of the camera.
     pub fn with_view(mut self, view: PassView) -> Self {
         self.view = view;
+        self
+    }
+
+    /// Bind `diffuse` and `specular` in place of the frame's environment
+    /// maps: a local probe's, for the draws this pass selects (ADR 0102).
+    pub fn with_environment(mut self, diffuse: ResourceId, specular: ResourceId) -> Self {
+        self.environment = Some([diffuse, specular]);
         self
     }
 
@@ -1311,6 +1326,13 @@ pub enum PassView {
         /// Atlas slot, below [`wxsl_core::abi::MAX_SHADOW_TILES`].
         tile: u32,
     },
+    /// Face `face` of the frame's local probe
+    /// (`Environment::probe`, ADR 0102), below [`PassView::PROBE_FACES`],
+    /// in `CUBE_FACE_DIRECTIONS` order.
+    Probe {
+        /// Cube face, +X, -X, +Y, -Y, +Z, -Z.
+        face: u32,
+    },
 }
 
 impl PassView {
@@ -1322,11 +1344,16 @@ impl PassView {
         match self {
             PassView::Camera => 0,
             PassView::Shadow { tile } => 1 + tile as usize,
+            PassView::Probe { face } => 1 + abi::MAX_SHADOW_TILES + face as usize,
         }
     }
 
-    /// How many view slots a frame needs: the camera plus every tile.
-    pub const COUNT: usize = 1 + abi::MAX_SHADOW_TILES;
+    /// How many faces a local probe has.
+    pub const PROBE_FACES: usize = 6;
+
+    /// How many view slots a frame needs: the camera, every tile and the
+    /// probe's faces.
+    pub const COUNT: usize = 1 + abi::MAX_SHADOW_TILES + Self::PROBE_FACES;
 }
 
 #[cfg(test)]

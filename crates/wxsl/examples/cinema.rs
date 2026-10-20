@@ -787,5 +787,6 @@ fn cinema_environment(aspect: f32, time: f32) -> Environment {
         previous_camera: None,
         origin: Default::default(),
         cluster_lights: true,
+        probe: None,
     }
 }

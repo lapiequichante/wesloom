@@ -11,7 +11,8 @@
 //! at night the moon does, and street lamps and the car's headlights,
 //! both shaped by IES profiles, light the road. The camera follows the
 //! car; depth of field focuses on it and the velocity buffer's motion blur
-//! smears the road.
+//! smears the road. The car mirrors a probe rendered from its centre every
+//! frame, of everything but itself (ADR 0102).
 //!
 //! In the window: the sliders set the speed, the hour, the motion blur and
 //! the aperture; drag elsewhere to look around the car, scroll to zoom,
@@ -50,6 +51,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::core::lighting::{DebugStage, DebugView, LightingSet, DEFAULT_MODELS, OVERDRAW_VIEW};
 use wxsl::core::Value;
+use wxsl::render::environment::LocalProbe;
 use wxsl::render::{
     Camera, DrawList, Environment, GpuContext, OffscreenTarget, RenderRequest, Renderer,
     ShaderLibrary, TargetConfig,
@@ -410,6 +412,12 @@ impl Drive {
             exposure: self.day.exposure,
             time: self.clip_time,
             previous_time: self.clip_time - dt,
+            // The car's reflections, from its own centre (ADR 0102).
+            probe: Some(LocalProbe {
+                center,
+                near: 0.05,
+                far: camera.far,
+            }),
             ..Environment::default()
         };
         pipeline::set_lens(

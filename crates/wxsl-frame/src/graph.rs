@@ -233,7 +233,12 @@ impl FrameGraph {
                     reason: "must be finite and positive".into(),
                 });
             }
-            for id in maps {
+            let overrides: Vec<[ResourceId; 2]> = self
+                .passes
+                .iter()
+                .filter_map(|pass| pass.environment)
+                .collect();
+            for id in maps.into_iter().chain(overrides.iter().copied().flatten()) {
                 let Some(desc) = self.resource_desc(id) else {
                     return Err(ScheduleError::InvalidTexture {
                         resource: format!("environment {}", id.index()),
@@ -257,6 +262,23 @@ impl FrameGraph {
                     });
                 }
             }
+            // The scene uniform carries one specular level count, so a
+            // pass's own cubes have the frame's (ADR 0102).
+            let levels = |id: ResourceId| match self.resource_desc(id).map(|desc| &desc.shape) {
+                Some(ResourceShape::Texture { mip_levels, .. }) => *mip_levels,
+                _ => 0,
+            };
+            for [_, specular] in &overrides {
+                if levels(*specular) != levels(maps[1]) {
+                    return Err(ScheduleError::InvalidTexture {
+                        resource: self.resources[specular.index()].label.clone(),
+                        reason: format!(
+                            "a pass's specular cube needs the frame's {} mip levels",
+                            levels(maps[1])
+                        ),
+                    });
+                }
+            }
             let mut expanded = self.clone();
             expanded.environment_maps = None;
             for pass in &mut expanded.passes {
@@ -266,8 +288,20 @@ impl FrameGraph {
                 if shades {
                     pass.reads.extend(maps.map(crate::pass::Read::current));
                 }
+                // A pass's own cubes order it after their writers.
+                if let Some(own) = pass.environment.take() {
+                    pass.reads.extend(own.map(crate::pass::Read::current));
+                }
             }
             return expanded.schedule();
+        }
+        if let Some(pass) = self.passes.iter().find(|pass| pass.environment.is_some()) {
+            return Err(ScheduleError::InvalidTextureUse {
+                pass: pass.label.clone(),
+                resource: "environment".into(),
+                reason: "a pass's own environment maps replace the frame's, which the graph                          does not declare"
+                    .into(),
+            });
         }
         self.validate()?;
         let order = self.topological_order()?;

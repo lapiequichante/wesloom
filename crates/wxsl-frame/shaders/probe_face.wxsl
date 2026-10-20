@@ -1,0 +1,42 @@
+//! One face of a local probe (ADR 0102): the forward capture from the
+//! pass's probe view, flipped in V into the WebGPU cube face, with the
+//! environment's radiance where nothing was drawn. The capture is divided
+//! by the exposure and the environment scale it was shaded with, so the
+//! face holds what the environment cube holds.
+import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var depth_image: texture_2d<f32>;
+@group(3) @binding(2) var radiance_image: texture_cube<f32>;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
+    let xy = vec2f(f32(i32(index & 1u) * 4 - 1), f32(i32(index >> 1u) * 4 - 1));
+    var out: VertexOutput;
+    out.position = vec4f(xy, 0.0, 1.0);
+    out.uv = vec2f(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5);
+    return out;
+}
+
+@fragment
+fn fragment(input: VertexOutput) -> @location(0) vec4f {
+    // The face's texel (u, v) is the captured image's (u, 1 - v).
+    let uv = vec2f(input.uv.x, 1.0 - input.uv.y);
+    let size = vec2f(textureDimensions(depth_image));
+    let depth = textureSampleLevel(depth_image, point_sampler, (floor(uv * size) + 0.5) / size, 0.0).x;
+    if depth < 1.0 {
+        let texel = vec2i(uv * vec2f(textureDimensions(color_image)));
+        let shaded = textureLoad(color_image, texel, 0).rgb;
+        return vec4f(shaded / max(scene.exposure * scene.environment_scale, 1e-6), 1.0);
+    }
+    let xy = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let near = camera.inverse_view_proj * vec4f(xy, 0.0, 1.0);
+    let far = camera.inverse_view_proj * vec4f(xy, 0.5, 1.0);
+    let ray = normalize(far.xyz / far.w - near.xyz / near.w);
+    return vec4f(textureSampleLevel(radiance_image, environment_lut_sampler, ray, 0.0).rgb, 1.0);
+}

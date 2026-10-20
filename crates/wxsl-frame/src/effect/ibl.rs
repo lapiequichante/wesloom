@@ -1,4 +1,5 @@
-//! Original environment bake effects and a neutral face-pass recipe (ADR 0062).
+//! Original environment bake effects and a neutral face-pass recipe
+//! (ADR 0062), and a local probe captured in the frame (ADR 0102).
 //!
 //! The prefilters are native-only under ADR 0075: they query
 //! `textureNumLevels`, which GLSL ES 3.00 cannot say. The background runs
@@ -8,13 +9,25 @@ use super::{
 };
 use crate::{
     graph::FrameGraph,
-    pass::{Attachment, Dimension, Extent, PassDesc, Policy, Read, ResourceDesc, ResourceId},
+    pass::{
+        Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassState, PassView,
+        Policy, Read, ResourceDesc, ResourceId, DEPTH_FORMAT,
+    },
     types::{Color, TextureFormat},
 };
+use wxsl_core::abi::MaterialStage;
 use wxsl_core::node::Value;
+use wxsl_core::scene::TagExpr;
 
 const FACE: EffectParameter = EffectParameter {
     name: "face",
+    default: Value::U32(0),
+};
+/// Importance samples per texel, or 0 — a bake's — for the quadrature
+/// below. A per-frame probe needs a few: one texel integrating the source
+/// grid is thousands of dependent reads (ADR 0102).
+const SAMPLES: EffectParameter = EffectParameter {
+    name: "samples",
     default: Value::U32(0),
 };
 const INPUT: EffectInput = EffectInput {
@@ -112,7 +125,7 @@ pub const DIFFUSE: Effect = Effect {
     kind: KIND,
     inputs: &[INPUT],
     outputs: &[],
-    parameters: &[FACE],
+    parameters: &[FACE, SAMPLES],
     shader: EffectShader::Source {
         path: "package::wxsl::ibl_diffuse",
         wxsl: concat!(
@@ -137,6 +150,7 @@ pub const SPECULAR: Effect = Effect {
             name: "roughness",
             default: Value::F32(0.0),
         },
+        SAMPLES,
     ],
     shader: EffectShader::Source {
         path: "package::wxsl::ibl_specular",
@@ -173,6 +187,43 @@ pub const RESAMPLE: Effect = Effect {
     downlevel: Downlevel::NativeOnly,
 };
 
+/// One face of a local probe: the forward capture from the pass's probe
+/// view flipped into the cube face, with the radiance cube behind it, in
+/// the environment cube's units (ADR 0102).
+pub const PROBE_FACE: Effect = Effect {
+    id: "wxsl.probe_face",
+    label: "Probe face",
+    description: "A probe view's capture, flipped into its cube face over the environment",
+    kind: KIND,
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The face's linear forward capture",
+            history: 0,
+        },
+        EffectInput {
+            name: "depth",
+            kind: EffectInputKind::DepthImage,
+            description: "The face's standard depth",
+            history: 0,
+        },
+        EffectInput {
+            name: "radiance",
+            kind: EffectInputKind::Image,
+            description: "The environment's radiance cube, behind what was drawn",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: "package::wxsl::probe_face",
+        wxsl: include_str!("../../shaders/probe_face.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
 /// Stable outputs from [`append_bake`]. Reads of these resources order consumers
 /// after every face writer; material bindings are not connected by this recipe.
 #[derive(Clone, Copy, Debug)]
@@ -199,12 +250,16 @@ pub fn append_bake(
 ) -> BakeOutputs {
     append_bake_inner(
         graph,
-        source,
+        Source::Equirect(source),
         label,
-        cube_size,
-        diffuse_size,
-        specular_mips,
-        false,
+        Bake {
+            cube_size,
+            diffuse_size,
+            specular_mips,
+            filtered: false,
+            policy: Policy::Once,
+            samples: None,
+        },
     )
 }
 
@@ -221,24 +276,89 @@ pub fn append_filtered_bake(
 ) -> BakeOutputs {
     append_bake_inner(
         graph,
-        source,
+        Source::Equirect(source),
         label,
-        cube_size,
-        diffuse_size,
-        specular_mips,
-        true,
+        Bake {
+            cube_size,
+            diffuse_size,
+            specular_mips,
+            filtered: true,
+            policy: Policy::Once,
+            samples: None,
+        },
     )
 }
 
-fn append_bake_inner(
+/// Capture a local probe every frame from `Environment::probe` (ADR 0102):
+/// six forward passes from its views drawing `draws`, each composited by
+/// [`PROBE_FACE`] over `environment` (a radiance cube in the frame
+/// environment's units) into its cube face, then filtered and convolved as
+/// [`append_filtered_bake`] does, each texel from `samples` importance
+/// samples rather than the bake's quadrature. Register [`PROBE_FACE`] beside that bake's effects.
+/// A pass binds the outputs with `PassDesc::with_environment`, which needs
+/// the specular cube to have the frame maps' mip count.
+#[allow(clippy::too_many_arguments)]
+pub fn append_probe(
     graph: &mut FrameGraph,
-    source: ResourceId,
+    draws: TagExpr,
+    environment: ResourceId,
     label: &str,
     cube_size: u32,
     diffuse_size: u32,
     specular_mips: u32,
-    filtered: bool,
+    samples: u32,
 ) -> BakeOutputs {
+    append_bake_inner(
+        graph,
+        Source::Probe { draws, environment },
+        label,
+        Bake {
+            cube_size,
+            diffuse_size,
+            specular_mips,
+            filtered: true,
+            policy: Policy::PerFrame,
+            samples: Some(samples),
+        },
+    )
+}
+
+/// What a bake's first level is made from.
+enum Source {
+    /// An equirectangular 2D linear-HDR resource.
+    Equirect(ResourceId),
+    /// The frame's local probe, drawing `draws` over `environment`.
+    Probe {
+        draws: TagExpr,
+        environment: ResourceId,
+    },
+}
+
+/// A bake's sizes, and how often it runs.
+struct Bake {
+    cube_size: u32,
+    diffuse_size: u32,
+    specular_mips: u32,
+    filtered: bool,
+    policy: Policy,
+    /// Importance samples per texel, or the bake's quadrature.
+    samples: Option<u32>,
+}
+
+fn append_bake_inner(
+    graph: &mut FrameGraph,
+    source: Source,
+    label: &str,
+    bake: Bake,
+) -> BakeOutputs {
+    let Bake {
+        cube_size,
+        diffuse_size,
+        specular_mips,
+        filtered,
+        policy,
+        samples,
+    } = bake;
     let source_mips = if filtered {
         u32::BITS - cube_size.max(1).leading_zeros()
     } else {
@@ -279,6 +399,7 @@ fn append_bake_inner(
                             stage,
                             face,
                             0,
+                            policy,
                         )
                         .with_parameter("box_filter", Value::U32(1)),
                     );
@@ -290,42 +411,60 @@ fn append_bake_inner(
                     radiance,
                     face,
                     mip as u32,
+                    policy,
                 ));
             }
         }
     }
+    let first = stages.first().copied().unwrap_or(radiance);
     for face in 0..6 {
-        graph.pass(face_pass(
-            format!("{label} radiance {face}"),
-            EQUIRECT_TO_CUBE.id,
-            source,
-            stages.first().copied().unwrap_or(radiance),
-            face,
-            0,
-        ));
-        graph.pass(face_pass(
+        match &source {
+            Source::Equirect(source) => {
+                graph.pass(face_pass(
+                    format!("{label} radiance {face}"),
+                    EQUIRECT_TO_CUBE.id,
+                    *source,
+                    first,
+                    face,
+                    0,
+                    policy,
+                ));
+            }
+            Source::Probe { draws, environment } => {
+                probe_face(graph, draws, *environment, first, label, cube_size, face);
+            }
+        }
+        let mut pass = face_pass(
             format!("{label} diffuse {face}"),
             DIFFUSE.id,
             radiance,
             diffuse,
             face,
             0,
-        ));
+            policy,
+        );
+        if let Some(samples) = samples {
+            pass = pass.with_parameter("samples", Value::U32(samples));
+        }
+        graph.pass(pass);
         for mip in 0..specular_mips {
-            graph.pass(
-                face_pass(
-                    format!("{label} specular {face}/{mip}"),
-                    SPECULAR.id,
-                    radiance,
-                    specular,
-                    face,
-                    mip,
-                )
-                .with_parameter(
-                    "roughness",
-                    Value::F32(mip as f32 / specular_mips.saturating_sub(1).max(1) as f32),
-                ),
+            let mut pass = face_pass(
+                format!("{label} specular {face}/{mip}"),
+                SPECULAR.id,
+                radiance,
+                specular,
+                face,
+                mip,
+                policy,
+            )
+            .with_parameter(
+                "roughness",
+                Value::F32(mip as f32 / specular_mips.saturating_sub(1).max(1) as f32),
             );
+            if let Some(samples) = samples {
+                pass = pass.with_parameter("samples", Value::U32(samples));
+            }
+            graph.pass(pass);
         }
     }
     BakeOutputs {
@@ -335,6 +474,52 @@ fn append_bake_inner(
     }
 }
 
+/// Face `face` of a local probe into layer `face` of `cube`: `draws`
+/// forward-lit from the probe view, then composited over `environment`.
+fn probe_face(
+    graph: &mut FrameGraph,
+    draws: &TagExpr,
+    environment: ResourceId,
+    cube: ResourceId,
+    label: &str,
+    size: u32,
+    face: u32,
+) {
+    let view = PassView::Probe { face };
+    let extent = Extent::Fixed {
+        width: size,
+        height: size,
+    };
+    let color = graph.resource(
+        ResourceDesc::color(format!("{label} face {face}"), TextureFormat::Rgba16Float)
+            .with_extent(extent),
+    );
+    let depth = graph.resource(
+        ResourceDesc::color(format!("{label} face depth {face}"), DEPTH_FORMAT).with_extent(extent),
+    );
+    graph.pass(
+        PassDesc::geometry(
+            format!("{label} face {face}"),
+            DrawSource::Scene(draws.clone()),
+            MaterialStage::FORWARD_LIT,
+        )
+        .with_view(view)
+        .with_color(Attachment::clear(color, Color::BLACK))
+        .with_depth(DepthAttachment::clear(depth, 1.0))
+        .with_state(PassState::OPAQUE),
+    );
+    graph.pass(
+        PassDesc::screen(format!("{label} capture {face}"), PROBE_FACE.id)
+            .with_view(view)
+            .with_reads([
+                Read::current(color),
+                Read::current(depth),
+                Read::current(environment),
+            ])
+            .with_color(Attachment::clear(cube, Color::BLACK).with_layer(face)),
+    );
+}
+
 fn face_pass(
     label: String,
     effect: &str,
@@ -342,6 +527,7 @@ fn face_pass(
     target: ResourceId,
     face: u32,
     mip: u32,
+    policy: Policy,
 ) -> PassDesc {
     PassDesc::screen(label, effect)
         .with_reads([Read::current(source)])
@@ -351,7 +537,7 @@ fn face_pass(
                 .with_mip(mip),
         )
         .with_parameter("face", Value::U32(face))
-        .with_policy(Policy::Once)
+        .with_policy(policy)
 }
 
 #[cfg(test)]
@@ -449,6 +635,72 @@ mod tests {
         }
         assert!(!schedule.slots().is_empty());
     }
+    #[test]
+    fn a_probe_is_captured_from_its_views_and_read_by_the_passes_that_ask() {
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
+        let hdr = graph.resource(ResourceDesc::imported("HDR", TextureFormat::Rgba32Float));
+        let sky = append_filtered_bake(&mut graph, hdr, "sky", 16, 4, 5);
+        graph.declare_environment_maps(sky.diffuse, sky.specular);
+        let draws = TagExpr::parse("!car").unwrap();
+        let probe = append_probe(&mut graph, draws, sky.radiance, "probe", 16, 4, 5, 64);
+        let car = |environment: Option<[ResourceId; 2]>| {
+            let mut pass = PassDesc::geometry(
+                "car",
+                DrawSource::Scene(TagExpr::parse("car").unwrap()),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(Attachment::clear(FrameGraph::TARGET, Color::BLACK))
+            .with_state(PassState::FULLSCREEN);
+            pass.environment = environment;
+            pass
+        };
+        graph.pass(car(Some([probe.diffuse, probe.specular])));
+        let schedule = graph.schedule().unwrap();
+        let position = |index: usize| schedule.order().iter().position(|i| *i == index).unwrap();
+        let passes = graph.passes();
+        let last = passes.len() - 1;
+        for (index, pass) in passes.iter().enumerate() {
+            if pass.label.starts_with("probe") {
+                // Every probe pass runs each frame, before the car.
+                assert_eq!(pass.policy, Policy::PerFrame, "{}", pass.label);
+                assert!(position(index) < position(last), "{}", pass.label);
+            }
+            if let Some(face) = pass.label.strip_prefix("probe face ") {
+                let face: u32 = face.parse().unwrap();
+                assert_eq!(pass.view, PassView::Probe { face });
+            }
+            if pass.label.starts_with("probe specular") || pass.label.starts_with("probe diffuse") {
+                assert_eq!(pass.parameters.get("samples"), Some(&Value::U32(64)));
+            }
+            if pass.label.starts_with("sky specular") || pass.label.starts_with("sky diffuse") {
+                assert_eq!(pass.policy, Policy::Once);
+                assert!(!pass.parameters.contains_key("samples"));
+            }
+        }
+        // The probe's specular cube has to have the frame's levels.
+        let mut graph_short = graph.clone();
+        let short = append_probe(
+            &mut graph_short,
+            TagExpr::Never,
+            sky.radiance,
+            "short",
+            16,
+            4,
+            3,
+            64,
+        );
+        graph_short.pass(car(Some([short.diffuse, short.specular])));
+        let error = graph_short.schedule().unwrap_err().to_string();
+        assert!(error.contains("5 mip levels"), "{error}");
+        // And it replaces the frame's maps, so those have to exist.
+        let mut bare = FrameGraph::new(TextureFormat::Rgba8Unorm);
+        let radiance = bare.resource(ResourceDesc::imported("sky", TextureFormat::Rgba16Float));
+        let probe = append_probe(&mut bare, TagExpr::Never, radiance, "probe", 16, 4, 5, 64);
+        bare.pass(car(Some([probe.diffuse, probe.specular])));
+        let error = bare.schedule().unwrap_err().to_string();
+        assert!(error.contains("does not declare"), "{error}");
+    }
+
     #[test]
     fn initial_parameters_reject_unknown_names_and_wrong_types() {
         assert!(DIFFUSE

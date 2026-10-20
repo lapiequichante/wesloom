@@ -1587,6 +1587,7 @@ impl EffectRegistry {
                 ibl::SPECULAR,
                 ibl::RESAMPLE,
                 ibl::BACKGROUND,
+                ibl::PROBE_FACE,
                 refraction::BOUNDS,
                 refraction::RESOLVE,
                 refraction::SCENE_DEPTH,
@@ -1865,7 +1866,7 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            29,
+            30,
             "lighting, tonemap, bloom, the separable bloom pair, the bloom \
              pyramid's four passes, the depth-of-field chain's three, the \
              TAA resolve, the motion blur, and the five peel passes \

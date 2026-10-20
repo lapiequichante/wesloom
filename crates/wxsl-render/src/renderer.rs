@@ -1436,6 +1436,44 @@ impl Renderer {
         } else {
             self.bindings.set_environment_maps(device, None, None);
         }
+        // The cubes some passes bind in place of those (ADR 0102).
+        let mut overrides: Vec<[crate::pass::ResourceId; 2]> = Vec::new();
+        for environment in self
+            .graph
+            .passes()
+            .iter()
+            .filter_map(|pass| pass.environment)
+        {
+            if !overrides.contains(&environment) {
+                overrides.push(environment);
+            }
+        }
+        let (schedule, pool) = (&self.schedule, &self.pool);
+        let slots: Vec<[usize; 2]> = overrides
+            .iter()
+            .map(|maps| {
+                maps.map(|map| {
+                    schedule
+                        .slot(map, pool.frame(), 0)
+                        .expect("scheduled environment override")
+                })
+            })
+            .collect();
+        let views = overrides
+            .iter()
+            .zip(&slots)
+            .map(|(maps, slots)| {
+                (
+                    *maps,
+                    slots.map(|slot| {
+                        pool.slot_view(slot)
+                            .expect("allocated environment override")
+                    }),
+                )
+            })
+            .collect();
+        self.bindings
+            .set_environment_overrides(device, (pool.generation(), slots), views);
         // After the pool, because this is the one resource read from
         // outside the pass list: the frame group binds it, so the renderer
         // is what carries the view across (`abi::BINDING_SHADOW_MAPS`).
@@ -1971,7 +2009,12 @@ fn record_pass(
             // everything but a shadow pass, so the mechanism is invisible
             // to a pipeline that has none.
             let view = &[bindings.view_offset(pass.desc.view)];
-            render.set_bind_group(abi::GROUP_FRAME, bindings.bind_group(shadows), view);
+            let environment = pass.desc.environment;
+            render.set_bind_group(
+                abi::GROUP_FRAME,
+                bindings.bind_group_in(shadows, environment),
+                view,
+            );
             if let Some(group) = pass.pass_bind_group.as_ref() {
                 render.set_bind_group(abi::GROUP_PASS, group, &[]);
             }
@@ -1986,7 +2029,7 @@ fn record_pass(
                 if bound_shape != Some(shape) {
                     render.set_bind_group(
                         abi::GROUP_FRAME,
-                        bindings.instance_group(shape, shadows),
+                        bindings.instance_group_in(shape, shadows, environment),
                         view,
                     );
                     bound_shape = Some(shape);
@@ -2101,7 +2144,7 @@ fn record_pass(
             render.set_pipeline(pipeline);
             render.set_bind_group(
                 abi::GROUP_FRAME,
-                bindings.bind_group(shadows),
+                bindings.bind_group_in(shadows, pass.desc.environment),
                 &[bindings.view_offset(pass.desc.view)],
             );
             if let Some(group) = pass.pass_bind_group.as_ref() {

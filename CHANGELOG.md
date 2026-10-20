@@ -11,6 +11,16 @@ an entry.
 
 ### Added
 
+- Local probes. `Environment::probe` (a `LocalProbe`) adds six cube-face
+  views, `PassView::Probe`. `ibl::append_probe` captures them every frame
+  through the new `wxsl.probe_face` effect, then filters and convolves
+  them. `PassDesc::with_environment` lets one pass bind those cubes in
+  place of the frame's. `wxsl.ibl_diffuse` and `wxsl.ibl_specular` take a
+  `samples` parameter; its default, 0, keeps a bake's quadrature.
+  `Environment` gains the `probe` field, so a literal one needs
+  `probe: None`
+  ([ADR 0102](docs/adr/0102-a-local-probe-is-captured-in-the-frame-and-lit-per-pass.md)).
+
 - Static shadows. `Light::with_static_shadow(frame)` draws a spot
   light's shadow tile once and keeps it while the light holds still in
   its casters' frame. `Light::with_shadow_casters` narrows any light's

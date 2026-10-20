@@ -220,6 +220,7 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
         previous_camera: None,
         origin: Default::default(),
         cluster_lights: true,
+        probe: None,
     }
 }
 
