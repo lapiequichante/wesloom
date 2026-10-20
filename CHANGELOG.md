@@ -11,6 +11,12 @@ an entry.
 
 ### Added
 
+- `Light::with_cascade_split` (`shadow_cascade_split`): how logarithmic a
+  cascaded light's splits are, 0.5 by default as before. And
+  `Light::with_caster_reach` (`shadow_caster_reach`): how far towards the
+  light its casters are drawn, `shadow_distance` by default
+  ([ADR 0071](docs/adr/0071-fit-cascades-and-pack-point-shadow-faces.md)).
+
 - Local probes. `Environment::probe` (a `LocalProbe`) adds six cube-face
   views, `PassView::Probe`. `ibl::append_probe` captures them every frame
   through the new `wxsl.probe_face` effect, then filters and convolves
@@ -118,6 +124,10 @@ an entry.
 
 ### Changed
 
+- Cascaded shadows are fitted without the camera's near plane, so their
+  texel size holds while it moves and their shadows no longer pop; the
+  splits move slightly. The last cascade fades out instead of ending on a
+  line (ADR 0071).
 - Thin-walled glass (`pass.refraction`) reflects through an iridescent
   film: `iridescence_strength`, `_thickness` and `_ior` on a thin optical
   layer turn its Fresnel spectral, so `KHR_materials_iridescence` on a
