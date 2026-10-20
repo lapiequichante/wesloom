@@ -26,7 +26,9 @@
 //! only. Shadows are hard by default; the `shadows` slider (or
 //! `--soft-shadows`) gives the lights their source size back, for
 //! contact-hardening penumbrae at a higher shading cost. The `fxaa` slider
-//! (or `--no-fxaa`) turns the anti-aliasing off, to compare.
+//! (or `--no-fxaa`) turns the anti-aliasing off, to compare. The
+//! `screenshot` button under the sliders saves the next frame, without
+//! them, as the first free `drive-NNN.png` in the working directory.
 
 mod car;
 mod city;
@@ -67,8 +69,9 @@ const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [-
       [--soft-shadows] [--no-fxaa] [--screenshot out.png [--ui] [--frames N] [--profile]]
       [--size WxH] [--car file.glb]
 window: the sliders set speed, hour, motion blur, aperture, the car's debug view,
-        forward or deferred, hard or soft shadows and FXAA; drag elsewhere looks around
-        the car, scroll zooms, R recentres, Space pauses, Esc quits";
+        forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
+        the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
+        R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
 const HOUR: &str = "time of day";
@@ -586,6 +589,8 @@ struct State {
     surface: wgpu::Surface<'static>,
     gpu: GpuContext,
     format: wgpu::TextureFormat,
+    /// Whether the surface can be copied from, for the screenshot button.
+    readable: bool,
     drive: Drive,
     overlay: ui::Overlay,
 }
@@ -602,6 +607,10 @@ struct App {
     last_frame: Instant,
     /// Frame times, for the status line.
     fps: f32,
+    /// The screenshot button was pressed: save the next frame.
+    capture: bool,
+    /// What the last capture did, and when, for the status line.
+    captured: Option<(String, Instant)>,
 }
 
 impl App {
@@ -625,6 +634,7 @@ impl App {
             .copied()
             .find(|format| !format.is_srgb())
             .unwrap_or(capabilities.formats[0]);
+        let readable = capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let size = window.inner_size();
         let drive = Drive::new(
             &gpu,
@@ -638,6 +648,7 @@ impl App {
             surface,
             gpu,
             format,
+            readable,
             drive,
             overlay,
         };
@@ -677,8 +688,25 @@ impl App {
         ) {
             eprintln!("cannot render: {error}");
         }
+        // Before the sliders are drawn over it.
+        if std::mem::take(&mut self.capture) {
+            let message = if state.readable {
+                match save_frame(&state.gpu, &frame.texture, state.format) {
+                    Ok(file) => format!("saved {}", file.display()),
+                    Err(error) => format!("cannot save the frame: {error}"),
+                }
+            } else {
+                "this surface cannot be read back".to_string()
+            };
+            println!("{message}");
+            self.captured = Some((message, Instant::now()));
+        }
+        let captured = match &self.captured {
+            Some((message, at)) if at.elapsed().as_secs_f32() < 4.0 => format!(" · {message}"),
+            _ => String::new(),
+        };
         let status = format!(
-            "{:.0} fps · {:.2} km into the loop{}",
+            "{:.0} fps · {:.2} km into the loop{}{captured}",
             self.fps,
             state.drive.s / 1000.0,
             if self.paused { " · paused" } else { "" }
@@ -707,12 +735,83 @@ impl App {
     }
 }
 
+/// Read `texture`, the window's frame, back and save it as the first free
+/// `drive-NNN.png` in the working directory.
+fn save_frame(
+    gpu: &GpuContext,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+) -> Result<PathBuf, Box<dyn Error>> {
+    let bgra = match format {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+        other => return Err(format!("a {other:?} frame is not 8-bit RGBA").into()),
+    };
+    let (width, height) = (texture.width(), texture.height());
+    let row = width * 4;
+    let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded = row.div_ceil(alignment) * alignment;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("drive screenshot"),
+        size: u64::from(padded) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("drive screenshot"),
+        });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
+    let mut pixels = Vec::with_capacity((row * height) as usize);
+    for line in buffer.slice(..).get_mapped_range()?.chunks(padded as usize) {
+        pixels.extend_from_slice(&line[..row as usize]);
+    }
+    buffer.unmap();
+    if bgra {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
+    let file = (1..)
+        .map(|index| PathBuf::from(format!("drive-{index:03}.png")))
+        .find(|file| !file.exists())
+        .expect("a free name");
+    image::save_buffer(
+        &file,
+        &pixels,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )?;
+    Ok(file)
+}
+
 fn configure_surface(state: &mut State, width: u32, height: u32) {
     let (width, height) = (width.max(1), height.max(1));
+    let usage = if state.readable {
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+    } else {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+    };
     state.surface.configure(
         &state.gpu.device,
         &wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: state.format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width,
@@ -762,6 +861,7 @@ impl ApplicationHandler for App {
             } => {
                 if state == ElementState::Pressed {
                     let layout = self.layout();
+                    self.capture |= layout.button.contains(self.cursor);
                     self.looking = !self.panel.press(self.cursor, &layout);
                 } else {
                     self.panel.release();
@@ -840,6 +940,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         cursor: Vec2::ZERO,
         last_frame: Instant::now(),
         fps: 60.0,
+        capture: false,
+        captured: None,
     };
     event_loop.run_app(&mut app)?;
     match app.error {

@@ -48,12 +48,15 @@ const PADDING: f32 = 14.0;
 const ROW: f32 = 44.0;
 const TITLE: f32 = 30.0;
 const TEXT: f32 = 14.0;
+const BUTTON: f32 = 32.0;
 
-/// Where the panel and each slider's track sit.
+/// Where the panel, each slider's track and the screenshot button sit.
 pub struct Layout {
     pub panel: Rect,
     /// Per slider: the row (what a press grabs) and the track.
     pub rows: Vec<(Rect, Rect)>,
+    /// Under the sliders: saves the next frame.
+    pub button: Rect,
 }
 
 pub fn layout(count: usize, scale: f32) -> Layout {
@@ -62,7 +65,13 @@ pub fn layout(count: usize, scale: f32) -> Layout {
         MARGIN * s,
         MARGIN * s,
         WIDTH * s,
-        (PADDING * 2.0 + TITLE + ROW * count as f32) * s,
+        (PADDING * 2.0 + TITLE + ROW * count as f32 + BUTTON) * s,
+    );
+    let button = Rect::new(
+        panel.min.x + PADDING * s,
+        panel.min.y + (PADDING + TITLE + ROW * count as f32) * s,
+        (WIDTH - 2.0 * PADDING) * s,
+        BUTTON * s,
     );
     let rows = (0..count)
         .map(|index| {
@@ -77,7 +86,11 @@ pub fn layout(count: usize, scale: f32) -> Layout {
             (row, track)
         })
         .collect();
-    Layout { panel, rows }
+    Layout {
+        panel,
+        rows,
+        button,
+    }
 }
 
 /// The sliders and the mouse.
@@ -187,10 +200,11 @@ impl Overlay {
             1.0 * s,
             Color::rgba(0.9, 0.3, 0.8, 0.35),
         );
-        let mut texts: Vec<(String, Vec2, f32, Color)> = vec![(
+        let mut texts: Vec<(String, Vec2, f32, f32, Color)> = vec![(
             "wxsl drive".to_string(),
             layout.panel.min + Vec2::new(PADDING, PADDING) * s,
             17.0,
+            0.0,
             Color::rgb(1.0, 0.45, 0.85),
         )];
         for ((row, track), slider) in layout.rows.iter().zip(&panel.sliders) {
@@ -198,13 +212,15 @@ impl Overlay {
                 slider.label.to_string(),
                 row.min,
                 TEXT,
+                0.0,
                 Color::rgb(0.82, 0.84, 0.9),
             ));
             let value = (slider.format)(slider.value);
             texts.push((
                 value,
                 Vec2::new(row.max.x, row.min.y),
-                -TEXT,
+                TEXT,
+                1.0,
                 Color::rgb(0.4, 0.9, 1.0),
             ));
             list.round_rect(*track, 2.0 * s, Color::rgba(1.0, 1.0, 1.0, 0.18));
@@ -218,24 +234,36 @@ impl Overlay {
             let knob = Vec2::new(filled.max.x, track.center().y);
             list.circle(knob, 7.0 * s, Color::rgb(0.95, 0.97, 1.0));
         }
+        list.round_rect(layout.button, 6.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.25));
+        list.round_rect_border(
+            layout.button,
+            6.0 * s,
+            1.0 * s,
+            Color::rgba(0.9, 0.3, 0.8, 0.6),
+        );
+        texts.push((
+            "screenshot".to_string(),
+            layout.button.center() - Vec2::new(0.0, TEXT * 0.6 * s),
+            TEXT,
+            0.5,
+            Color::rgb(1.0, 0.75, 0.95),
+        ));
         texts.push((
             status.to_string(),
             Vec2::new(layout.panel.min.x, layout.panel.max.y + 8.0 * s),
             12.0,
+            0.0,
             Color::rgba(0.85, 0.85, 0.9, 0.8),
         ));
-        for (text, at, size, color) in texts {
+        // Each text's `align` is where `at` falls along its width: 0 left,
+        // 1 right.
+        for (text, at, size, align, color) in texts {
             self.glyphs
                 .prepare(device, queue, &mut self.atlas, self.font, &text)?;
             let layout = self
                 .glyphs
-                .layout(self.font, &text, TextOptions::new(size.abs() * s));
-            // A negative size right-aligns at `at`.
-            let origin = if size < 0.0 {
-                at - Vec2::new(layout.width(), 0.0)
-            } else {
-                at
-            };
+                .layout(self.font, &text, TextOptions::new(size * s));
+            let origin = at - Vec2::new(layout.width() * align, 0.0);
             list.text(&layout, origin, color);
         }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -282,6 +310,16 @@ mod tests {
         panel.release();
         assert!(!panel.drag(Vec2::new(track.min.x, 0.0), &layout));
         assert_eq!(panel.value("speed"), 50.0);
+    }
+
+    #[test]
+    fn the_button_sits_under_the_last_slider_and_grabs_none() {
+        let mut panel = panel();
+        let layout = layout(2, 2.0);
+        assert!(layout.button.min.y >= layout.rows[1].0.max.y);
+        assert!(layout.button.max.y <= layout.panel.max.y);
+        assert!(panel.press(layout.button.center(), &layout));
+        assert!(!panel.dragging());
     }
 
     #[test]
