@@ -2,10 +2,11 @@
 //! blur and a bloom pyramid composed onto it as nodes, then, on the
 //! compiled pass list, the
 //! sky baked into the environment maps and drawn behind everything, the
-//! car's glass, depth of field focused on the car, the tonemap and FXAA.
+//! car's glass, depth of field focused on the car, a colour matrix, the
+//! tonemap and FXAA.
 //!
 //! ```text
-//! shadows → prepass → forward ─┬─ background (sky) ─ glass ─ motion blur ─ bloom ─ dof ─ tonemap ─ fxaa
+//! shadows → prepass → forward ─┬─ background (sky) ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ tonemap ─ fxaa
 //!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
@@ -62,11 +63,11 @@ const SPECULAR_MIPS: u32 = 8;
 const PROBE: &str = "drive probe";
 const PROBE_SAMPLES: u32 = 64;
 
-/// The bloom pyramid's settings: four levels for a faint, tight halo
-/// around the lamps and the headlights, from radiance well above a lit
-/// road's.
+/// The bloom pyramid's settings: three levels for a faint, tight halo
+/// around the lamps and the headlights (each level doubles its reach),
+/// from radiance well above a lit road's.
 const BLOOM: [(&str, &str); 4] = [
-    ("levels", "4"),
+    ("levels", "3"),
     ("threshold", "3"),
     ("knee", "2"),
     ("strength", "0.07"),
@@ -108,6 +109,63 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
+/// The grade's pass label, which its rows are set on.
+pub const GRADE: &str = "drive grade";
+/// The grade's saturation: 1 leaves the frame's colours as they are.
+const SATURATION: f32 = 1.2;
+
+/// The final colour matrix (`shaders/grade.wxsl`): a row per output
+/// channel, its w a lift.
+const GRADE_EFFECT: Effect = Effect {
+    id: "drive.grade",
+    label: "grade",
+    description: "A colour matrix over the linear frame, before the tonemap.",
+    kind: EffectKind::Screen {
+        vertex_entry: "drive_grade_vs",
+        fragment_entry: "drive_grade_fs",
+    },
+    inputs: &[EffectInput {
+        name: "color",
+        kind: EffectInputKind::Image,
+        description: "The frame, as linear radiance.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "red",
+            default: Value::Vec4([1.0, 0.0, 0.0, 0.0]),
+        },
+        EffectParameter {
+            name: "green",
+            default: Value::Vec4([0.0, 1.0, 0.0, 0.0]),
+        },
+        EffectParameter {
+            name: "blue",
+            default: Value::Vec4([0.0, 0.0, 1.0, 0.0]),
+        },
+    ],
+    shader: EffectShader::Source {
+        path: "package::drive::grade",
+        wxsl: include_str!("../shaders/grade.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// The grade's rows for `saturation`: each colour pushed from its
+/// luminance (Rec. 709) by that factor, 1 being the identity.
+pub fn grade_rows(saturation: f32) -> [[f32; 4]; 3] {
+    const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+    std::array::from_fn(|row| {
+        let mut out = [0.0; 4];
+        for (column, luma) in LUMA.iter().enumerate() {
+            let identity = if row == column { 1.0 } else { 0.0 };
+            out[column] = luma + (identity - luma) * saturation;
+        }
+        out
+    })
+}
+
 /// The effects the frame names beyond the shipped ones.
 pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     for effect in [
@@ -118,6 +176,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
+        GRADE_EFFECT,
     ] {
         renderer.add_effect(effect);
     }
@@ -376,7 +435,18 @@ pub fn install(
             ])
             .with_parameter("max_coc", Value::F32(MAX_COC)),
     );
-    graph.pass_mut(tonemap).ok_or("tonemap pass")?.reads[0] = Read::current(focused);
+    // The colour matrix, the last change to the radiance.
+    let graded = graph.resource(hdr("drive graded"));
+    let [red, green, blue] = grade_rows(SATURATION);
+    graph.pass(
+        PassDesc::screen(GRADE, GRADE_EFFECT.id)
+            .with_color(clear(graded))
+            .with_reads([Read::current(focused)])
+            .with_parameter("red", Value::Vec4(red))
+            .with_parameter("green", Value::Vec4(green))
+            .with_parameter("blue", Value::Vec4(blue)),
+    );
+    graph.pass_mut(tonemap).ok_or("tonemap pass")?.reads[0] = Read::current(graded);
     // FXAA after the tonemap, on display values.
     if fxaa {
         let encoded = graph.resource(hdr("drive encoded"));
@@ -423,4 +493,25 @@ pub fn set_lens(
         renderer.set_pass_param(DOF_CIRCLES, name, Value::F32(value))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_grade_keeps_greys_and_pushes_colours() {
+        let apply = |rows: [[f32; 4]; 3], color: [f32; 3]| {
+            rows.map(|row| row[0] * color[0] + row[1] * color[1] + row[2] * color[2] + row[3])
+        };
+        let grey = apply(grade_rows(1.5), [0.4; 3]);
+        assert!(grey.iter().all(|value| (value - 0.4).abs() < 1e-5));
+        let red = apply(grade_rows(1.5), [1.0, 0.5, 0.5]);
+        assert!(red[0] > 1.0 && red[1] < 0.5 && red[2] < 0.5);
+        let same = apply(grade_rows(1.0), [0.3, 0.6, 0.9]);
+        assert!(same
+            .iter()
+            .zip([0.3, 0.6, 0.9])
+            .all(|(a, b)| (a - b).abs() < 1e-6));
+    }
 }

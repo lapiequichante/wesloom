@@ -17,6 +17,10 @@ an entry.
   light its casters are drawn, `shadow_distance` by default
   ([ADR 0071](docs/adr/0071-fit-cascades-and-pack-point-shadow-faces.md)).
 
+- `Light::with_shadow_near` (`shadow_near`): where a point or spot light's
+  shadow views start, a thousandth of `shadow_distance` (at least 0.01) by
+  default as before.
+
 - Local probes. `Environment::probe` (a `LocalProbe`) adds six cube-face
   views, `PassView::Probe`. `ibl::append_probe` captures them every frame
   through the new `wxsl.probe_face` effect, then filters and convolves

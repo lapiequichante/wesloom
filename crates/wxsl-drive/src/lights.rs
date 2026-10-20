@@ -4,9 +4,10 @@
 //! baked into the cookie array (ADR 0097).
 //!
 //! The headlight profile is `resources/ies/headlight.ies`, the lamps'
-//! `resources/ies/street_lamp.ies`: a full-cutoff "bat wing" that throws
-//! its peak along the road at about 58° from straight down and nothing
-//! above 80°. Either file can be swapped for a measured one. The tail
+//! `resources/ies/street_lamp.ies`: an IES type II roadway distribution,
+//! two beams along the road at 66° from straight down, toed in towards
+//! the street side, and little past 80°. Either file can be swapped for a
+//! measured one. The tail
 //! lights' is written here, as an LM-63 file read back through the same
 //! parser.
 
@@ -30,21 +31,27 @@ const COOKIE_SIZE: u32 = 512;
 /// A lamp's peak intensity, its colour, and how far it reaches: past
 /// the deck halfway to the next lamp, short of the ground under it
 /// (`terrain::CLEARANCE`), which the deck would shade.
-const LAMP_INTENSITY: f32 = 450.0;
+const LAMP_INTENSITY: f32 = 1000.0;
 const LAMP_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.58);
 pub const LAMP_RANGE: f32 = 26.0;
+/// A lamp head's tilt from straight down towards its street side, as
+/// roadway luminaires are mounted. It also orients the profile: an axis
+/// this far from vertical puts C = 0 along the road and C = 90° across it,
+/// towards the street side (`light_profile` in `bindings.wxsl`), where a
+/// vertical one would fix C = 0 to world -x.
+const LAMP_TILT: f32 = 10.0 * std::f32::consts::PI / 180.0;
 /// A lamp's cone from straight down: wide enough that everything up to a
 /// car's roof within its range is inside, so it is a spot with one shadow
 /// tile rather than a point light's six. Its profile reaches 80°, but
 /// past this angle it only lights deck beyond its range.
 const LAMP_CONE: f32 = 72.0 * std::f32::consts::PI / 180.0;
 /// A headlight's peak intensity and reach.
-const HEADLIGHT_INTENSITY: f32 = 9000.0;
+const HEADLIGHT_INTENSITY: f32 = 3500.0;
 const HEADLIGHT_RANGE: f32 = 160.0;
-const HEADLIGHT_COLOR: Vec3 = Vec3::new(0.95, 0.97, 1.0);
+const HEADLIGHT_COLOR: Vec3 = Vec3::new(0.92, 0.97, 1.0);
 /// A tail light's peak intensity, its colour and its reach: barely a
 /// glow on the road behind.
-const TAIL_INTENSITY: f32 = 0.15;
+const TAIL_INTENSITY: f32 = 0.25;
 const TAIL_COLOR: Vec3 = Vec3::new(1.0, 0.04, 0.02);
 const TAIL_RANGE: f32 = 6.0;
 
@@ -190,6 +197,11 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// A lamp's heads, each with its street side: away from the median.
+fn heads(lamp: &Lamp) -> [(Vec3, Vec3); 2] {
+    [(lamp.heads[0], -lamp.across), (lamp.heads[1], lamp.across)]
+}
+
 /// The frame's lights: the key light, the car's, and the lamps near
 /// `eye`, the ones over the car casting shadows.
 ///
@@ -240,6 +252,9 @@ pub fn lights(
         .with_profile(HEADLIGHT_LAYER)
         .with_range(HEADLIGHT_RANGE)
         .casting_shadow(1.0)
+        // The shadow starts at the housing's back: the car's body around
+        // the bulb, behind it, does not shadow its own beam.
+        .with_shadow_near(crate::car::BULB_SETBACK * 2.)
         .with_source_radius(0.04)
         .with_normal_bias(0.04)
         // The car and the deck, drawn once in the car's frame (ADR 0101):
@@ -279,10 +294,10 @@ pub fn lights(
     // `shadow` of its intensity and a local one the rest, so a lamp's
     // shadow fades in and out instead of switching.
     let at = car.transform_point3(Vec3::ZERO);
-    let lamp = |head: Vec3, share: f32| {
+    let lamp = |(head, street): (Vec3, Vec3), share: f32| {
         Light::spot(
             head - Vec3::Y * 0.2,
-            Vec3::NEG_Y,
+            (Vec3::NEG_Y + street * LAMP_TILT.tan()).normalize(),
             LAMP_CONE - 2f32.to_radians(),
             LAMP_CONE,
             LAMP_COLOR,
@@ -291,19 +306,19 @@ pub fn lights(
         .with_profile(LAMP_LAYER)
         .with_range(LAMP_RANGE)
     };
-    let mut near: Vec<(Vec3, f32)> = lamps
+    let mut near: Vec<((Vec3, Vec3), f32)> = lamps
         .iter()
-        .flat_map(|lamp| lamp.heads)
+        .flat_map(heads)
         .map(|head| {
             (
                 head,
-                1.0 - smoothstep(LAMP_SHADOW_NEAR, LAMP_SHADOW_FAR, head.distance(at)),
+                1.0 - smoothstep(LAMP_SHADOW_NEAR, LAMP_SHADOW_FAR, head.0.distance(at)),
             )
         })
         .filter(|(_, shadow)| *shadow > 0.0)
         .collect();
     // Nearest first, so the lamps over the car get the larger tiles.
-    near.sort_by(|a, b| a.0.distance(at).total_cmp(&b.0.distance(at)));
+    near.sort_by(|a, b| a.0 .0.distance(at).total_cmp(&b.0 .0.distance(at)));
     near.truncate(SHADOWED_LAMPS);
     for &(head, shadow) in &near {
         let mut light = lamp(head, shadow)
@@ -321,7 +336,7 @@ pub fn lights(
         if lamp_at.foot.distance(eye) > 700.0 {
             continue;
         }
-        for head in lamp_at.heads {
+        for head in heads(lamp_at) {
             let shadowed = near
                 .iter()
                 .find(|(near, _)| *near == head)
@@ -339,12 +354,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_lamp_profile_parses_and_peaks_off_axis() {
+    fn the_lamp_profile_throws_along_the_road_and_to_the_street_side() {
         let profile = IesProfile::parse(LAMP_IES).expect("street_lamp.ies parses");
         let peak = profile.max_candela();
-        assert!((profile.candela(57.5, 0.0) - peak).abs() < peak * 0.02);
+        // Two beams along the road, toed in towards the street side.
+        assert!(profile.candela(65.0, 10.0) > peak * 0.9);
+        assert!(profile.candela(65.0, 170.0) > peak * 0.9);
         assert!(profile.candela(0.0, 0.0) < peak * 0.5);
-        // Full cutoff: nothing at or above the horizon.
+        // More light across the street side than the house side.
+        assert!(profile.candela(45.0, 90.0) > profile.candela(45.0, 270.0) * 1.5);
+        // IES cutoff: under 100 cd per 1000 lm at 80° (14 000 lm, a peak
+        // of about 8500 cd), nothing at or above the horizon.
+        assert!(profile.candela(80.0, 10.0) < 1400.0);
         assert_eq!(profile.candela(90.0, 45.0), 0.0);
         assert_eq!(profile.candela(120.0, 0.0), 0.0);
     }

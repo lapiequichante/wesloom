@@ -81,16 +81,31 @@ fn facade(
     let brightness = (0.12 + 0.9 * dim * dim) * mix(inside, 0.9, far);
 
     // Concrete and glass: dark, the glass glossy enough to mirror the sky.
-    let concrete = mix(vec3f(0.05, 0.05, 0.06), vec3f(0.14, 0.13, 0.12), tint);
+    let concrete = mix(vec3f(0.025, 0.025, 0.03), vec3f(0.05, 0.048, 0.046), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 0.7 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * 0.5 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others. Each is box-filtered over the pixel's footprint,
     // so that however coarse the view (a probe face is 128 texels for
     // 90°) it keeps its energy rather than widening at full brightness.
-    let neon_color = select(vec3f(1.0, 0.1, 0.6), vec3f(0.1, 0.85, 1.0), fract(seed * 5.0) > 0.5);
+    // The WXSL palette: a deep blue, a violet and an orange, one per
+    // tower, its corner stripes the next one along.
+    let blue = vec3f(0.02, 0.07, 1.0);
+    let violet = vec3f(0.7, 0.08, 1.0);
+    let orange = vec3f(1.0, 0.26, 0.0);
+    let neon_pick = fract(seed * 5.0);
+    var neon_color = blue;
+    var stripe_color = violet;
+    if neon_pick > 0.34 {
+        neon_color = violet;
+        stripe_color = orange;
+    }
+    if neon_pick > 0.67 {
+        neon_color = orange;
+        stripe_color = blue;
+    }
     let glow = 0.25 + 0.75 * lights_on;
     if fract(seed * 3.7) > 0.5 {
         let every = 5.0 + floor(fract(seed * 11.0) * 9.0);
@@ -100,14 +115,14 @@ fn facade(
         let half = min(0.5 * soft.y, 0.5);
         let offset = local.y - 0.05;
         let slab = max(min(0.05, offset + half) - max(-0.05, offset - half), 0.0) / (2.0 * half);
-        out.emissive += neon_color * (on_floor * slab * 7.0 * glow);
+        out.emissive += neon_color * (on_floor * slab * 5.5 * glow);
     }
     if fract(seed * 9.1) > 0.7 {
         // Half-width 0.025 of a six-bay period, about its middle.
         let column = abs(fract(along / (bay * 6.0)) - 0.5);
         let half = min(0.5 * soft.x / 6.0, 0.5);
         let stripe = max(min(0.025, column + half) - max(-0.025, column - half), 0.0) / (2.0 * half);
-        out.emissive += neon_color.zyx * (stripe * 5.0 * glow);
+        out.emissive += stripe_color * (stripe * 4.0 * glow);
     }
     return out;
 }

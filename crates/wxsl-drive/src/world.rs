@@ -493,7 +493,7 @@ fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
         steel,
         basis(
             lamp.foot.midpoint(top) + Vec3::Y * 0.1,
-            Vec3::new(0.25, top.y - lamp.foot.y + 0.2, 0.25),
+            Vec3::new(0.18, top.y - lamp.foot.y + 0.2, 0.18),
         ),
     );
     road::push_box(
@@ -506,7 +506,7 @@ fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
     for head in lamp.heads {
         road::push_box(
             glow,
-            basis(head + Vec3::Y * 0.12, Vec3::new(0.5, 0.16, 0.9)),
+            basis(head + Vec3::Y * 0.12, Vec3::new(0.32, 0.12, 0.6)),
         );
     }
 }

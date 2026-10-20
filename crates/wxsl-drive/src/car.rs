@@ -180,10 +180,11 @@ fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Erro
 }
 
 /// Where each lamp of `materials`' light leaves it, left then right, in
-/// the file's space: the middle of their box across and up. A headlight's
-/// is its bulb, at the back of its housing (`+z`), whose glass casts no
-/// shadow ([`light_lenses`]); a tail light's is just past its back face,
-/// so the housing never shadows its own beam.
+/// the file's space: the middle of their box across. A headlight's is its
+/// bulb, just behind its housing (`+z`) and high in it
+/// ([`BULB_HEIGHT`]), whose glass casts no shadow ([`light_lenses`]); a
+/// tail light's is just past its back face, halfway up, so the housing
+/// never shadows its own beam.
 fn lamp_centers(
     imported: &ImportedScene,
     materials: &[usize],
@@ -211,20 +212,25 @@ fn lamp_centers(
     (sides[0].0.x <= sides[0].1.x && sides[1].0.x <= sides[1].1.x).then(|| {
         sides.map(|(min, max)| {
             let middle = (min + max) * 0.5;
-            let z = if front {
-                max.z - BULB_INSET
+            let (y, z) = if front {
+                (min.y + (max.y - min.y) * BULB_HEIGHT, max.z + BULB_SETBACK)
             } else {
-                max.z + LAMP_CLEARANCE
+                (middle.y, max.z + LAMP_CLEARANCE)
             };
-            Vec3::new(middle.x, middle.y, z)
+            Vec3::new(middle.x, y, z)
         })
     })
 }
 
 /// How far past the tail lights' lenses their light starts.
 const LAMP_CLEARANCE: f32 = 0.03;
-/// How far in front of the back of a headlight's housing its bulb is.
-const BULB_INSET: f32 = 0.02;
+/// How far behind the back of a headlight's housing its bulb is: the
+/// housing casts no shadow, so its whole depth is lit from behind.
+pub const BULB_SETBACK: f32 = 0.08;
+/// How high in a headlight's housing its bulb is, from its bottom (0) to
+/// its top (1): high enough that the beam, aimed a touch down, lights the
+/// whole inside of the housing, not only its lower half.
+const BULB_HEIGHT: f32 = 0.75;
 /// The material of me_car's tail lights.
 const TAIL_MATERIAL: &str = "RearLights";
 

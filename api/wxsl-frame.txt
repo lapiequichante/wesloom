@@ -20,11 +20,13 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::ibl::BakeOutpu
 pub const wxsl_frame::effect::ibl::BACKGROUND: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::DIFFUSE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::EQUIRECT_TO_CUBE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ibl::PROBE_FACE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::RESAMPLE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::ibl::SPECULAR: wxsl_frame::effect::Effect
 pub fn wxsl_frame::effect::ibl::append_background(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str) -> wxsl_frame::pass::ResourceId
 pub fn wxsl_frame::effect::ibl::append_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
 pub fn wxsl_frame::effect::ibl::append_filtered_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::append_probe(&mut wxsl_frame::graph::FrameGraph, wxsl_core::scene::TagExpr, wxsl_frame::pass::ResourceId, &str, u32, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
 pub mod wxsl_frame::effect::refraction
 pub enum wxsl_frame::effect::refraction::Quality
 pub wxsl_frame::effect::refraction::Quality::Layered
@@ -438,6 +440,7 @@ pub wxsl_frame::environment::Environment::lights: alloc::vec::Vec<wxsl_frame::en
 pub wxsl_frame::environment::Environment::origin: glam::f64::dvec3::DVec3
 pub wxsl_frame::environment::Environment::previous_camera: core::option::Option<wxsl_frame::environment::Camera>
 pub wxsl_frame::environment::Environment::previous_time: f32
+pub wxsl_frame::environment::Environment::probe: core::option::Option<wxsl_frame::environment::LocalProbe>
 pub wxsl_frame::environment::Environment::time: f32
 impl wxsl_frame::environment::Environment
 pub fn wxsl_frame::environment::Environment::advance(&mut self, f32)
@@ -538,13 +541,18 @@ pub wxsl_frame::environment::Light::position_or_direction: glam::f32::vec3::Vec3
 pub wxsl_frame::environment::Light::profile_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::radius: f32
 pub wxsl_frame::environment::Light::range: f32
+pub wxsl_frame::environment::Light::shadow_cascade_split: f32
 pub wxsl_frame::environment::Light::shadow_cascades: u32
+pub wxsl_frame::environment::Light::shadow_caster_reach: f32
+pub wxsl_frame::environment::Light::shadow_casters: wxsl_core::scene::TagExpr
 pub wxsl_frame::environment::Light::shadow_distance: f32
 pub wxsl_frame::environment::Light::shadow_extent: f32
+pub wxsl_frame::environment::Light::shadow_near: f32
 pub wxsl_frame::environment::Light::shadow_normal_bias: f32
 pub wxsl_frame::environment::Light::spot_direction: glam::f32::vec3::Vec3
 pub wxsl_frame::environment::Light::spot_inner_angle: f32
 pub wxsl_frame::environment::Light::spot_outer_angle: f32
+pub wxsl_frame::environment::Light::static_shadow: core::option::Option<glam::f32::neon::mat4::Mat4>
 impl wxsl_frame::environment::Light
 pub const wxsl_frame::environment::Light::DEFAULTS: wxsl_frame::environment::Light
 pub fn wxsl_frame::environment::Light::area_sample_positions(&self) -> [glam::f32::vec3::Vec3; 16]
@@ -556,17 +564,21 @@ pub fn wxsl_frame::environment::Light::rectangle(glam::f32::vec3::Vec3, glam::f3
 pub fn wxsl_frame::environment::Light::shadow_views(&self, &wxsl_frame::environment::Camera) -> alloc::vec::Vec<wxsl_frame::environment::ShadowView>
 pub fn wxsl_frame::environment::Light::spot(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, f32, glam::f32::vec3::Vec3, f32) -> Self
 pub fn wxsl_frame::environment::Light::tube(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_cascade_split(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_cascades(self, u32) -> Self
+pub fn wxsl_frame::environment::Light::with_caster_reach(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_profile(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_shadow_casters(self, wxsl_core::scene::TagExpr) -> Self
+pub fn wxsl_frame::environment::Light::with_shadow_near(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_source_radius(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_static_shadow(self, glam::f32::neon::mat4::Mat4) -> Self
 impl core::clone::Clone for wxsl_frame::environment::Light
 pub fn wxsl_frame::environment::Light::clone(&self) -> Self
 impl core::fmt::Debug for wxsl_frame::environment::Light
 pub fn wxsl_frame::environment::Light::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for wxsl_frame::environment::Light
 impl core::marker::Freeze for wxsl_frame::environment::Light
 impl core::marker::Send for wxsl_frame::environment::Light
 impl core::marker::Sync for wxsl_frame::environment::Light
@@ -610,6 +622,27 @@ impl core::marker::Unpin for wxsl_frame::environment::LightUniform
 impl core::marker::UnsafeUnpin for wxsl_frame::environment::LightUniform
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::LightUniform
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::LightUniform
+pub struct wxsl_frame::environment::LocalProbe
+pub wxsl_frame::environment::LocalProbe::center: glam::f32::vec3::Vec3
+pub wxsl_frame::environment::LocalProbe::far: f32
+pub wxsl_frame::environment::LocalProbe::near: f32
+impl wxsl_frame::environment::LocalProbe
+pub fn wxsl_frame::environment::LocalProbe::face_camera(&self, usize) -> wxsl_frame::environment::Camera
+impl core::clone::Clone for wxsl_frame::environment::LocalProbe
+pub fn wxsl_frame::environment::LocalProbe::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::environment::LocalProbe
+pub fn wxsl_frame::environment::LocalProbe::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::environment::LocalProbe
+pub fn wxsl_frame::environment::LocalProbe::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::LocalProbe
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::LocalProbe
+impl core::marker::Freeze for wxsl_frame::environment::LocalProbe
+impl core::marker::Send for wxsl_frame::environment::LocalProbe
+impl core::marker::Sync for wxsl_frame::environment::LocalProbe
+impl core::marker::Unpin for wxsl_frame::environment::LocalProbe
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::LocalProbe
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::LocalProbe
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::LocalProbe
 #[repr(C)] pub struct wxsl_frame::environment::SceneUniform
 pub wxsl_frame::environment::SceneUniform::ambient_ground: [f32; 3]
 pub wxsl_frame::environment::SceneUniform::ambient_sky: [f32; 3]
@@ -1131,10 +1164,13 @@ impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::PassKind
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassKind
 pub enum wxsl_frame::pass::PassView
 pub wxsl_frame::pass::PassView::Camera
+pub wxsl_frame::pass::PassView::Probe
+pub wxsl_frame::pass::PassView::Probe::face: u32
 pub wxsl_frame::pass::PassView::Shadow
 pub wxsl_frame::pass::PassView::Shadow::tile: u32
 impl wxsl_frame::pass::PassView
 pub const wxsl_frame::pass::PassView::COUNT: usize
+pub const wxsl_frame::pass::PassView::PROBE_FACES: usize
 pub fn wxsl_frame::pass::PassView::slot(self) -> usize
 impl core::clone::Clone for wxsl_frame::pass::PassView
 pub fn wxsl_frame::pass::PassView::clone(&self) -> Self
@@ -1337,6 +1373,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::DepthAttachment
 pub struct wxsl_frame::pass::PassDesc
 pub wxsl_frame::pass::PassDesc::color: alloc::vec::Vec<wxsl_frame::pass::Attachment>
 pub wxsl_frame::pass::PassDesc::depth: core::option::Option<wxsl_frame::pass::DepthAttachment>
+pub wxsl_frame::pass::PassDesc::environment: core::option::Option<[wxsl_frame::pass::ResourceId; 2]>
 pub wxsl_frame::pass::PassDesc::kind: wxsl_frame::pass::PassKind
 pub wxsl_frame::pass::PassDesc::label: alloc::string::String
 pub wxsl_frame::pass::PassDesc::layers: wxsl_frame::pass::LayerFilter
@@ -1357,6 +1394,7 @@ pub fn wxsl_frame::pass::PassDesc::screen(impl core::convert::Into<alloc::string
 pub fn wxsl_frame::pass::PassDesc::with_color(self, wxsl_frame::pass::Attachment) -> Self
 pub fn wxsl_frame::pass::PassDesc::with_colors(self, impl core::iter::traits::collect::IntoIterator<Item = wxsl_frame::pass::Attachment>) -> Self
 pub fn wxsl_frame::pass::PassDesc::with_depth(self, wxsl_frame::pass::DepthAttachment) -> Self
+pub fn wxsl_frame::pass::PassDesc::with_environment(self, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId) -> Self
 pub fn wxsl_frame::pass::PassDesc::with_layers(self, wxsl_frame::pass::LayerFilter) -> Self
 pub fn wxsl_frame::pass::PassDesc::with_parameter(self, impl core::convert::Into<alloc::string::String>, wxsl_core::node::Value) -> Self
 pub fn wxsl_frame::pass::PassDesc::with_policy(self, wxsl_frame::pass::Policy) -> Self
@@ -1850,6 +1888,47 @@ impl core::marker::UnsafeUnpin for wxsl_frame::setup::RenderSetup
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::setup::RenderSetup
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::setup::RenderSetup
 pub fn wxsl_frame::setup::check_scene(&wxsl_core::scene::Scene, &wxsl_core::node::NodeRegistry, &wxsl_core::lighting::LightingSet, &[wxsl_core::lighting::ChannelRequest]) -> alloc::vec::Vec<wxsl_frame::setup::Incompatibility>
+pub mod wxsl_frame::shadow_cache
+pub struct wxsl_frame::shadow_cache::ShadowCache
+impl wxsl_frame::shadow_cache::ShadowCache
+pub fn wxsl_frame::shadow_cache::ShadowCache::clear(&mut self)
+pub fn wxsl_frame::shadow_cache::ShadowCache::new() -> Self
+pub fn wxsl_frame::shadow_cache::ShadowCache::plan(&mut self, &wxsl_frame::environment::Environment) -> wxsl_frame::shadow_cache::ShadowFrame
+impl core::clone::Clone for wxsl_frame::shadow_cache::ShadowCache
+pub fn wxsl_frame::shadow_cache::ShadowCache::clone(&self) -> Self
+impl core::default::Default for wxsl_frame::shadow_cache::ShadowCache
+pub fn wxsl_frame::shadow_cache::ShadowCache::default() -> Self
+impl core::fmt::Debug for wxsl_frame::shadow_cache::ShadowCache
+pub fn wxsl_frame::shadow_cache::ShadowCache::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for wxsl_frame::shadow_cache::ShadowCache
+impl core::marker::Send for wxsl_frame::shadow_cache::ShadowCache
+impl core::marker::Sync for wxsl_frame::shadow_cache::ShadowCache
+impl core::marker::Unpin for wxsl_frame::shadow_cache::ShadowCache
+impl core::marker::UnsafeUnpin for wxsl_frame::shadow_cache::ShadowCache
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::shadow_cache::ShadowCache
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::shadow_cache::ShadowCache
+pub struct wxsl_frame::shadow_cache::ShadowFrame
+impl wxsl_frame::shadow_cache::ShadowFrame
+pub fn wxsl_frame::shadow_cache::ShadowFrame::apply(&self, &mut wxsl_frame::environment::SceneUniform)
+pub fn wxsl_frame::shadow_cache::ShadowFrame::keeps(&self, usize) -> bool
+pub fn wxsl_frame::shadow_cache::ShadowFrame::keeps_any(&self) -> bool
+pub fn wxsl_frame::shadow_cache::ShadowFrame::kept(&self) -> &[(usize, glam::f32::neon::mat4::Mat4)]
+impl core::clone::Clone for wxsl_frame::shadow_cache::ShadowFrame
+pub fn wxsl_frame::shadow_cache::ShadowFrame::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::shadow_cache::ShadowFrame
+pub fn wxsl_frame::shadow_cache::ShadowFrame::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::shadow_cache::ShadowFrame
+pub fn wxsl_frame::shadow_cache::ShadowFrame::default() -> Self
+impl core::fmt::Debug for wxsl_frame::shadow_cache::ShadowFrame
+pub fn wxsl_frame::shadow_cache::ShadowFrame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for wxsl_frame::shadow_cache::ShadowFrame
+impl core::marker::Freeze for wxsl_frame::shadow_cache::ShadowFrame
+impl core::marker::Send for wxsl_frame::shadow_cache::ShadowFrame
+impl core::marker::Sync for wxsl_frame::shadow_cache::ShadowFrame
+impl core::marker::Unpin for wxsl_frame::shadow_cache::ShadowFrame
+impl core::marker::UnsafeUnpin for wxsl_frame::shadow_cache::ShadowFrame
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::shadow_cache::ShadowFrame
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::shadow_cache::ShadowFrame
 pub mod wxsl_frame::types
 pub enum wxsl_frame::types::AstcBlock
 pub wxsl_frame::types::AstcBlock::B10x10

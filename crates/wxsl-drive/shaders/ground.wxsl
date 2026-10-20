@@ -3,10 +3,9 @@
 // Grass on the flats, rock on the slopes and snow on the high peaks, from
 // the world position and normal alone, with a little noise so neither the
 // grass nor the boundaries read as flat colour. Where the city stands it
-// is paved, and at night the paving glows in pools under its street
-// lights. `lights_on` is 0 by day and 1 at night.
+// is paved, and at night the paving glows faintly with the city's light.
+// `lights_on` is 0 by day and 1 at night.
 import package::generative::value_noise3::value_noise3;
-import package::generative::hash13::hash13;
 
 struct Ground {
     base_color: vec3f,
@@ -35,13 +34,6 @@ fn ground(
     var out: Ground;
     out.base_color = mix(color, pavement, paved);
     out.roughness = mix(mix(0.92, 0.6, snowline), 0.8, paved);
-    // A street light every 30 m or so, some out, each a small warm pool
-    // of its own brightness.
-    let cell = floor(world.xz / 30.0);
-    let jitter = vec2f(hash13(vec3f(cell, 3.0)), hash13(vec3f(cell, 4.0))) - 0.5;
-    let apart = length(fract(world.xz / 30.0) - 0.5 - jitter * 0.6) * 30.0;
-    let on = step(0.45, hash13(vec3f(cell, 5.0))) * (0.3 + 0.7 * hash13(vec3f(cell, 6.0)));
-    let pool = exp(-apart * apart / 14.0) * on;
-    out.emissive = vec3f(1.0, 0.6, 0.3) * ((0.0015 + 0.025 * pool) * paved * lights_on);
+    out.emissive = vec3f(1.0, 0.6, 0.3) * (0.0015 * paved * lights_on);
     return out;
 }

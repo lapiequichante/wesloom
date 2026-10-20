@@ -352,6 +352,8 @@ pub const wxsl_core::abi::SCREEN_VERTEX_ENTRY: &str
 pub const wxsl_core::abi::SHADED_VAR: &str
 pub const wxsl_core::abi::SHADE_SURFACE_FN: &str
 pub const wxsl_core::abi::SHADOW_ATLAS_SIZE: u32
+pub const wxsl_core::abi::SHADOW_CLEAR_MODULE: &str
+pub const wxsl_core::abi::SHADOW_CLEAR_VERTEX_ENTRY: &str
 pub const wxsl_core::abi::SHADOW_FACTOR_FN: &str
 pub const wxsl_core::abi::SHADOW_MODULE: &str
 pub const wxsl_core::abi::SOCKET_DISCARD: &str

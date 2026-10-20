@@ -252,6 +252,12 @@ pub struct Light {
     /// slice is deep: a 300 m tower under a sun 20° up reaches from 900 m.
     /// Zero — the default — is [`Light::shadow_distance`].
     pub shadow_caster_reach: f32,
+    /// A point or spot light's shadow near plane, in world units: what is
+    /// nearer the light than this casts no shadow. Zero — the default — is
+    /// a thousandth of [`Light::shadow_distance`], at least 0.01. A light
+    /// inside a housing that should not shadow it (a bulb behind its
+    /// lens) sets it to the housing's depth.
+    pub shadow_near: f32,
     /// Where a point or spot light's falloff reaches zero, in world units.
     ///
     /// Zero — the default — is the unbounded inverse square every light
@@ -300,6 +306,7 @@ impl Light {
         shadow_cascades: 1,
         shadow_cascade_split: 0.5,
         shadow_caster_reach: 0.0,
+        shadow_near: 0.0,
         range: 0.0,
         shadow_casters: TagExpr::Always,
         static_shadow: None,
@@ -436,7 +443,7 @@ impl Light {
             Vec3::Y
         };
         let far = self.shadow_distance.max(0.1);
-        let near = (far * 1e-3).max(0.01);
+        let near = self.shadow_near_plane(far);
         let projection = glam::camera::rh::proj::directx::perspective(
             self.spot_outer_angle * 2.0,
             1.0,
@@ -494,6 +501,22 @@ impl Light {
     pub fn with_caster_reach(mut self, reach: f32) -> Self {
         self.shadow_caster_reach = reach.max(0.0);
         self
+    }
+
+    /// Start a point or spot light's shadow `near` world units from it;
+    /// see [`Light::shadow_near`].
+    pub fn with_shadow_near(mut self, near: f32) -> Self {
+        self.shadow_near = near.max(0.0);
+        self
+    }
+
+    /// The near plane of a point or spot light's shadow views.
+    fn shadow_near_plane(&self, far: f32) -> f32 {
+        if self.shadow_near > 0.0 {
+            self.shadow_near.min(far * 0.5)
+        } else {
+            (far * 1e-3).max(0.01)
+        }
     }
 
     /// Bound the light's reach at `range` world units (see
@@ -610,7 +633,7 @@ impl Light {
     fn face_views(&self) -> Vec<ShadowView> {
         let eye = self.position_or_direction;
         let far = self.shadow_distance.max(0.1);
-        let near = (far * 1e-3).max(0.01);
+        let near = self.shadow_near_plane(far);
         CUBE_FACE_DIRECTIONS
             .map(|face| {
                 // An up not parallel to the face: the ±y faces look straight
@@ -1607,6 +1630,29 @@ mod tests {
         let uniform = light.uniform(0, 1);
         assert_eq!(uniform.cookie_layer, 2);
         assert_eq!(uniform.spot_outer_cos, 0.6_f32.cos());
+    }
+
+    #[test]
+    fn a_spot_shadow_starts_at_its_near_plane() {
+        let spot = |near: f32| {
+            Light::spot(Vec3::ZERO, Vec3::NEG_Z, 0.2, 0.6, Vec3::ONE, 1.0)
+                .casting_shadow(1.0)
+                .with_shadow_near(near)
+        };
+        // DirectX depth: 0 on the near plane.
+        let depth_at = |light: &Light, distance: f32| {
+            let clip = light.shadow_views(&Camera::default())[0].view_proj
+                * Vec3::new(0.0, 0.0, -distance).extend(1.0);
+            clip.z / clip.w
+        };
+        let mut light = spot(0.02);
+        light.shadow_distance = 160.0;
+        assert!(depth_at(&light, 0.02).abs() < 1e-4);
+        assert!(depth_at(&light, 0.05) > 0.0);
+        // Unset, it is a thousandth of the distance.
+        let mut light = spot(0.0);
+        light.shadow_distance = 160.0;
+        assert!(depth_at(&light, 0.16).abs() < 1e-4);
     }
 
     #[test]
