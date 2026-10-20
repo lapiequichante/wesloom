@@ -1,6 +1,8 @@
 //! Everything but the car, on the device: the viaduct and its furniture,
 //! the terrain, the city and the lamps, with their materials. What does
-//! not move and shares a material is merged into one mesh.
+//! not move and shares a material is merged into one mesh, except the
+//! buildings: one mesh per kind, instanced, each building's seed in its
+//! instance row.
 //!
 //! The materials are graphs over the demo's own nodes, `drive.*`: each
 //! `.wxsl` file under `shaders/` is a node (ADR 0020), derived when the
@@ -13,17 +15,18 @@ use std::path::Path;
 
 use glam::{Mat4, Vec3};
 use wxsl::core::abi;
-use wxsl::core::graph::{Graph, Node, NodeId, StageConstraint};
+use wxsl::core::graph::{AttributeDecl, Graph, Node, NodeId, StageConstraint};
 use wxsl::core::material::MaterialConfig;
-use wxsl::core::node::NodeRegistry;
+use wxsl::core::node::{NodeRegistry, ValueType};
 use wxsl::core::scene::Tags;
 use wxsl::core::Value;
 use wxsl::render::MeshData;
 use wxsl::render::{
-    DrawItem, GpuContext, Material, MaterialBindings, Mesh, Renderer, ShaderLibrary,
+    DrawItem, GpuContext, InstanceAttributes, Material, MaterialBindings, Mesh, Renderer,
+    ShaderLibrary,
 };
 
-use crate::city::{self, Building};
+use crate::city::{self, Building, Kind};
 use crate::road::{self, Lamp, Road};
 use crate::terrain::Ground;
 
@@ -82,7 +85,8 @@ impl Surface {
 }
 
 /// One of the demo's nodes, fed from the fragment context, its own
-/// parameters and the named textures and samplers, wired into the surface
+/// parameters, the named textures and samplers and the per-instance
+/// attributes (each named after its socket), wired into the surface
 /// output.
 #[allow(clippy::too_many_arguments)]
 fn node_graph(
@@ -93,6 +97,7 @@ fn node_graph(
     resources: &[Resource],
     constants: &[(&str, Value)],
     parameters: &[(&str, Value)],
+    instanced: &[(&str, ValueType)],
     outputs: &[&str],
 ) -> Result<Graph, Box<dyn Error>> {
     let mut graph = Graph::new(name);
@@ -126,6 +131,14 @@ fn node_graph(
                 .with_param("value", *value),
         );
         wire(&mut graph, (parameter, "out"), (surface, socket))?;
+    }
+    for (socket, ty) in instanced {
+        graph.declare_attribute(AttributeDecl::instance(*socket, *ty));
+        let input = graph.add(Node::new("input.attribute").with_setting("name", *socket));
+        graph
+            .set_generic(registry, input, "T", *ty)
+            .map_err(|error| format!("{name}: {error}"))?;
+        wire(&mut graph, (input, "out"), (surface, socket))?;
     }
     for socket in outputs {
         wire(&mut graph, (surface, socket), (output, socket))?;
@@ -190,9 +203,12 @@ pub struct World {
     pub road: Road,
     pub lamps: Vec<Lamp>,
     buildings: Vec<Building>,
+    /// Each building's instance row: its seed.
+    seeds: Vec<InstanceAttributes>,
     /// (mesh, surface index into `surfaces`, its bounds).
     meshes: Vec<(Mesh, usize, (Vec3, Vec3))>,
-    cube: Mesh,
+    /// One per [`Kind`], in [`Kind::ALL`]'s order.
+    kinds: Vec<Mesh>,
     surfaces: Vec<Surface>,
 }
 
@@ -218,9 +234,10 @@ impl World {
         for lamp in &lamps {
             lamp_parts(lamp, &mut road_meshes.steel, &mut glow);
         }
-        let terrain = ground.mesh();
+        let buildings = city::buildings(&road, |x, z| ground.height(x, z));
+        let terrain = ground.mesh(city::paving(&buildings));
         let device = &gpu.device;
-        let ground_outputs = ["base_color", "roughness"];
+        let ground_outputs = ["base_color", "roughness", "emissive"];
         let graphs = [
             node_graph(
                 registry,
@@ -255,6 +272,7 @@ impl World {
                     ("lane_width", Value::F32(road::LANE_WIDTH)),
                 ],
                 &[],
+                &[],
                 &["base_color", "roughness", "normal"],
             )?,
             plain_graph("concrete", [0.22, 0.215, 0.2], 0.85, 0.0, None)?,
@@ -264,9 +282,14 @@ impl World {
                 registry,
                 "ground",
                 "drive.ground",
-                &[("world", "world_position"), ("normal", "world_normal")],
+                &[
+                    ("world", "world_position"),
+                    ("normal", "world_normal"),
+                    ("paving", "uv"),
+                ],
                 &[],
                 &[],
+                &[(LIGHTS_ON, Value::F32(1.0))],
                 &[],
                 &ground_outputs,
             )?,
@@ -276,8 +299,9 @@ impl World {
                 "drive.facade",
                 &[("world", "world_position"), ("normal", "world_normal")],
                 &[],
-                &[("cell", Value::F32(city::CELL))],
+                &[],
                 &[(LIGHTS_ON, Value::F32(1.0))],
+                &[(city::SEED, ValueType::F32)],
                 &["base_color", "metallic", "roughness", "emissive"],
             )?,
         ];
@@ -334,25 +358,41 @@ impl World {
                 .map(move |(piece, bounds)| (Mesh::upload(device, label, &piece), surface, bounds))
         })
         .collect();
+        let seeds = buildings
+            .iter()
+            .map(|building| InstanceAttributes::new().with(city::SEED, Value::F32(building.seed)))
+            .collect();
         Ok(World {
             meshes,
-            cube: Mesh::cube(device, 1.0),
+            kinds: Kind::ALL
+                .iter()
+                .map(|kind| Mesh::upload(device, kind.label(), &kind.mesh()))
+                .collect(),
             surfaces,
-            buildings: city::buildings(),
+            buildings,
+            seeds,
             lamps,
             road,
         })
     }
 
-    /// Light the windows, the neon and the lamp heads for `lights_on`.
+    /// How many buildings the city has.
+    pub fn building_count(&self) -> usize {
+        self.buildings.len()
+    }
+
+    /// Light the windows, the neon, the street lights and the lamp heads
+    /// for `lights_on`.
     pub fn set_lights_on(
         &mut self,
         gpu: &GpuContext,
         lights_on: f32,
     ) -> Result<(), Box<dyn Error>> {
-        let facade = &mut self.surfaces[FACADE].bindings;
-        facade.set(LIGHTS_ON, Value::F32(lights_on))?;
-        facade.upload(&gpu.device, &gpu.queue)?;
+        for surface in [FACADE, GROUND] {
+            let bindings = &mut self.surfaces[surface].bindings;
+            bindings.set(LIGHTS_ON, Value::F32(lights_on))?;
+            bindings.upload(&gpu.device, &gpu.queue)?;
+        }
         let glow = &mut self.surfaces[GLOW].bindings;
         glow.set(
             "glow",
@@ -363,7 +403,8 @@ impl World {
     }
 
     /// Everything to draw. Nothing here moves, so no draw needs a
-    /// previous transform.
+    /// previous transform. The buildings come by kind, so the ones a pass
+    /// keeps are drawn in a few instanced calls.
     pub fn draws(&self) -> Vec<DrawItem<'_>> {
         let mut draws: Vec<DrawItem<'_>> = self
             .meshes
@@ -372,12 +413,13 @@ impl World {
                 self.surfaces[*surface].item(mesh).with_bounds(*min, *max)
             })
             .collect();
-        for building in &self.buildings {
-            let (min, max) = building.bounds();
+        for (building, seed) in self.buildings.iter().zip(&self.seeds) {
+            let (min, max) = building.bounds;
             draws.push(
                 self.surfaces[FACADE]
-                    .item(&self.cube)
-                    .with_transform(building.transform())
+                    .item(&self.kinds[building.kind as usize])
+                    .with_transform(building.transform)
+                    .with_attributes(seed)
                     .with_bounds(min, max),
             );
         }

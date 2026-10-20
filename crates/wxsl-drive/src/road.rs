@@ -543,14 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn the_city_stands_clear_of_the_road() {
-        let road = Road::new();
-        let samples = road.samples(10.0);
-        let (_, distance) = Road::nearest(&samples, crate::city::CENTER);
-        assert!(distance > crate::city::RADIUS + 200.0, "{distance}");
-    }
-
-    #[test]
     fn every_face_is_wound_the_way_its_normal_points() {
         let meshes = Road::new().meshes(|_, _| 0.0);
         for mesh in [&meshes.asphalt, &meshes.concrete, &meshes.steel] {

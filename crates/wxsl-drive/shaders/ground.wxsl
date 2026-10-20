@@ -2,17 +2,23 @@
 //
 // Grass on the flats, rock on the slopes and snow on the high peaks, from
 // the world position and normal alone, with a little noise so neither the
-// grass nor the boundaries read as flat colour.
+// grass nor the boundaries read as flat colour. Where the city stands it
+// is paved, and at night the paving glows in pools under its street
+// lights. `lights_on` is 0 by day and 1 at night.
 import package::generative::value_noise3::value_noise3;
+import package::generative::hash13::hash13;
 
 struct Ground {
     base_color: vec3f,
     roughness: f32,
+    emissive: vec3f,
 }
 
 fn ground(
-    world: vec3f,  // World position, metres. @default 0.0, 0.0, 0.0
-    normal: vec3f, // World normal. @default 0.0, 1.0, 0.0
+    world: vec3f,    // World position, metres. @default 0.0, 0.0, 0.0
+    normal: vec3f,   // World normal. @default 0.0, 1.0, 0.0
+    paving: vec2f,   // x: how paved the ground is, 0..1. @default 0.0, 0.0
+    lights_on: f32,  // 0 by day, 1 at night. @default 1.0
 ) -> Ground {
     let n = normalize(normal);
     let coarse = value_noise3(world * 0.02);
@@ -24,8 +30,18 @@ fn ground(
     var color = mix(grass, rock, steep);
     let snowline = smoothstep(150.0, 190.0, world.y + 30.0 * coarse) * smoothstep(0.55, 0.75, n.y);
     color = mix(color, snow, snowline);
+    let paved = smoothstep(0.2, 0.6, paving.x + 0.2 * (coarse - 0.5));
+    let pavement = vec3f(0.045, 0.045, 0.05) * (0.8 + 0.4 * fine);
     var out: Ground;
-    out.base_color = color;
-    out.roughness = mix(0.92, 0.6, snowline);
+    out.base_color = mix(color, pavement, paved);
+    out.roughness = mix(mix(0.92, 0.6, snowline), 0.8, paved);
+    // A street light every 30 m or so, some out, each a small warm pool
+    // of its own brightness.
+    let cell = floor(world.xz / 30.0);
+    let jitter = vec2f(hash13(vec3f(cell, 3.0)), hash13(vec3f(cell, 4.0))) - 0.5;
+    let apart = length(fract(world.xz / 30.0) - 0.5 - jitter * 0.6) * 30.0;
+    let on = step(0.45, hash13(vec3f(cell, 5.0))) * (0.3 + 0.7 * hash13(vec3f(cell, 6.0)));
+    let pool = exp(-apart * apart / 14.0) * on;
+    out.emissive = vec3f(1.0, 0.6, 0.3) * ((0.0015 + 0.025 * pool) * paved * lights_on);
     return out;
 }

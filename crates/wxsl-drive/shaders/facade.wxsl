@@ -1,11 +1,12 @@
 // Tower facade
 //
-// A city block's facade from world space alone: floors and window columns
-// on every wall, a seed per building from the street-grid cell it stands
-// in (`cell` metres), lit rooms in warm, cool and neon tints, neon bands
-// on some towers, and dark roofs. `lights_on` is 0 by day and 1 at night.
-// Window edges are settled by the pixel's footprint, and fade to their
-// average far away, so this is a fragment-stage node.
+// A building's facade from world space and its own seed: floors and window
+// columns on every wall, whichever way it faces, curtain-wall glass on
+// some buildings and punched windows on the rest, lit rooms in warm, cool
+// and neon tints, neon bands on some towers, and dark roofs. `seed` is the
+// building's, in 0..1; `lights_on` is 0 by day and 1 at night. Window
+// edges are settled by the pixel's footprint, and fade to their average
+// far away, so this is a fragment-stage node.
 import package::generative::hash13::hash13;
 
 struct Facade {
@@ -18,13 +19,11 @@ struct Facade {
 fn facade(
     world: vec3f,     // World position, metres. @default 0.0, 0.0, 0.0
     normal: vec3f,    // World normal. @default 0.0, 0.0, 1.0
-    cell: f32,        // The street grid's pitch, metres. @default 46.0
+    seed: f32,        // The building's own value, 0..1. @default 0.5
     lights_on: f32,   // 0 by day, 1 at night. @default 1.0
 ) -> Facade {
     let n = normalize(normal);
-    let building = floor(world.xz / cell);
-    let seed = hash13(vec3f(building, 1.0));
-    let tint = hash13(vec3f(building, 2.0));
+    let tint = hash13(vec3f(seed * 97.0, 2.0, 5.0));
     var out: Facade;
     out.metallic = 0.0;
     if abs(n.y) > 0.5 {
@@ -33,9 +32,11 @@ fn facade(
         out.emissive = vec3f(0.0);
         return out;
     }
-    // Which wall, so opposite walls light different rooms.
+    // Which wall, so different walls light different rooms, and the
+    // distance along it, whichever way it faces.
     let wall = dot(n, vec3f(1.0, 0.0, 2.0));
-    let along = select(world.z, world.x, abs(n.z) > 0.5);
+    let across = normalize(n.xz);
+    let along = dot(world.xz, vec2f(-across.y, across.x));
     let storey = 3.3 + seed * 0.9;
     let bay = 2.2 + fract(seed * 7.0) * 1.8;
     let grid = vec2f(along / bay, (world.y + 100.0) / storey);
@@ -43,32 +44,45 @@ fn facade(
     let local = fract(grid);
     let pixel = fwidth(grid);
     let soft = max(pixel, vec2f(0.001));
-    let wx = smoothstep(0.14 - soft.x, 0.14 + soft.x, local.x) * (1.0 - smoothstep(0.86 - soft.x, 0.86 + soft.x, local.x));
-    let wy = smoothstep(0.24 - soft.y, 0.24 + soft.y, local.y) * (1.0 - smoothstep(0.88 - soft.y, 0.88 + soft.y, local.y));
+    // Curtain walls are nearly all glass; the rest have punched windows.
+    let glass = step(0.62, fract(seed * 23.0));
+    let edge = vec2f(mix(0.14, 0.04, glass), mix(0.24, 0.08, glass));
+    let top = mix(0.88, 0.97, glass);
+    // A curtain wall's bay is two panes, split by a mullion.
+    let mullion = glass * (1.0 - smoothstep(0.015 - soft.x, 0.015 + soft.x, abs(local.x - 0.5)));
+    let wx = smoothstep(edge.x - soft.x, edge.x + soft.x, local.x) * (1.0 - smoothstep(1.0 - edge.x - soft.x, 1.0 - edge.x + soft.x, local.x)) * (1.0 - mullion);
+    let wy = smoothstep(edge.y - soft.y, edge.y + soft.y, local.y) * (1.0 - smoothstep(top - soft.y, top + soft.y, local.y));
     let room = hash13(vec3f(index, seed * 97.0 + wall));
-    let lit_share = 0.1 + 0.4 * fract(seed * 13.0);
+    let lit_share = 0.08 + 0.3 * fract(seed * 13.0);
     var lit = step(room, lit_share);
     // Far away a window is under a pixel: its average, not its aliasing.
     let far = smoothstep(0.3, 0.8, max(pixel.x, pixel.y));
-    let window = mix(wx * wy, 0.3, far);
+    let window = mix(wx * wy, (1.0 - 2.0 * edge.x) * (top - edge.y), far);
     lit = mix(lit, lit_share, far);
 
     // Room colours: mostly warm and cool white, some neon-tinted.
     let pick = hash13(vec3f(index * 0.37, seed * 31.0));
-    var room_color = vec3f(1.0, 0.72, 0.42);
+    var room_color = vec3f(1.0, 0.6, 0.28);
     if pick > 0.55 {
         room_color = vec3f(0.75, 0.85, 1.0);
     }
     if pick > 0.86 {
         room_color = select(vec3f(1.0, 0.25, 0.75), vec3f(0.2, 0.9, 1.0), tint > 0.5);
     }
-    let brightness = 0.3 + 1.2 * fract(room * 17.0);
+    // Most rooms dim, a few bright; the ceiling's light brightest at the
+    // top, and a blind drawn part way down in half of them.
+    let dim = fract(room * 17.0);
+    let height = clamp((local.y - edge.y) / (top - edge.y), 0.0, 1.0);
+    let drawn = select(0.0, 0.7 * fract(room * 5.3), fract(room * 3.1) > 0.5);
+    let blind = smoothstep(1.0 - drawn - soft.y, 1.0 - drawn + soft.y, height);
+    let inside = (0.5 + 0.8 * height) * mix(1.0, 0.25, blind);
+    let brightness = (0.12 + 0.9 * dim * dim) * mix(inside, 0.9, far);
 
     // Concrete and glass: dark, the glass glossy enough to mirror the sky.
     let concrete = mix(vec3f(0.05, 0.05, 0.06), vec3f(0.14, 0.13, 0.12), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 1.2 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * 0.7 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others.

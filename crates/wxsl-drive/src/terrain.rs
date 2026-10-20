@@ -1,14 +1,12 @@
-//! The ground: rolling hills, a ring of mountains on the horizon, flat
-//! where the city stands, and kept well under the viaduct: where a hill
-//! would come too close to the deck, a valley is cut for it. Pure
-//! geometry, no device.
+//! The ground: rolling hills, a ring of mountains on the horizon, and
+//! kept well under the viaduct: where a hill would come too close to the
+//! deck, a valley is cut for it. Pure geometry, no device.
 
 use std::collections::HashMap;
 
 use glam::{Vec2, Vec3};
 use wxsl::render::{MeshData, Vertex};
 
-use crate::city;
 use crate::road::Road;
 
 /// Half the terrain's edge.
@@ -29,7 +27,7 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The hills, before the road and the city have their say.
+/// The hills, before the road has its say.
 fn hills(x: f32, z: f32) -> f32 {
     let rolling = 7.0 * (x * 0.0031 + 1.0).sin() * (z * 0.0027).cos()
         + 3.5 * (x * 0.0071 - z * 0.0053 + 2.0).sin()
@@ -41,12 +39,8 @@ fn hills(x: f32, z: f32) -> f32 {
         + 0.25 * (angle * 5.0 + 0.7).sin()
         + 0.15 * (angle * 13.0 + 2.1).sin()
         + 0.1 * (angle * 29.0).sin();
-    let to_city = Vec2::new(x, z).distance(city::CENTER);
-    // The valley the city stands in opens the ring towards it.
-    let valley = smoothstep(city::RADIUS + 200.0, city::RADIUS + 900.0, to_city);
-    let mountains = smoothstep(1700.0, 2900.0, r) * 260.0 * ridge * valley;
-    let city = smoothstep(city::RADIUS + 30.0, city::RADIUS + 180.0, to_city);
-    city::GROUND + (rolling + 2.0 - city::GROUND) * city + mountains
+    let mountains = smoothstep(1700.0, 2900.0, r) * 260.0 * ridge;
+    rolling + 2.0 + mountains
 }
 
 /// The road's samples bucketed by plan position, for nearest lookups that
@@ -130,8 +124,9 @@ impl Ground {
         height(&self.buckets, x, z)
     }
 
-    /// The terrain as one grid mesh; uv is world xz in metres.
-    pub fn mesh(&self) -> MeshData {
+    /// The terrain as one grid mesh; uv.x is how paved it is, from
+    /// `paving(x, z)`.
+    pub fn mesh(&self, paving: impl Fn(f32, f32) -> f32) -> MeshData {
         let side = (2.0 * EXTENT / SPACING) as usize + 1;
         let at = |column: usize, row: usize| {
             let x = -EXTENT + column as f32 * SPACING;
@@ -158,7 +153,7 @@ impl Ground {
                     position: [x, h(column, row), z],
                     normal: normal.to_array(),
                     tangent: [tangent.x, tangent.y, tangent.z, 1.0],
-                    uv: [x, z],
+                    uv: [paving(x, z), 0.0],
                 });
             }
         }
@@ -194,21 +189,8 @@ mod tests {
     }
 
     #[test]
-    fn the_city_stands_on_flat_ground() {
-        let ground = Ground::new(&Road::new());
-        for offset in [
-            Vec2::ZERO,
-            Vec2::new(200.0, -150.0),
-            Vec2::new(-300.0, 120.0),
-        ] {
-            let at = city::CENTER + offset;
-            assert!((ground.height(at.x, at.y) - city::GROUND).abs() < 1e-3);
-        }
-    }
-
-    #[test]
     fn the_grid_faces_up() {
-        let mesh = Ground::new(&Road::new()).mesh();
+        let mesh = Ground::new(&Road::new()).mesh(|_, _| 0.0);
         for triangle in mesh.indices.chunks(3).step_by(997) {
             let p =
                 |corner: usize| Vec3::from_array(mesh.vertices[triangle[corner] as usize].position);

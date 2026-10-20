@@ -288,9 +288,10 @@ impl Drive {
         let world = World::new(gpu, &mut renderer, &registry)?;
         renderer.set_light_cookies(&gpu.device, Some(&lights::cookies(gpu)?));
         println!(
-            "road {:.1} km, {} lamps, car {:.2} × {:.2} × {:.2} m, ready in {:.1?}",
+            "road {:.1} km, {} lamps, {} buildings, car {:.2} × {:.2} × {:.2} m, ready in {:.1?}",
             world.road.length() / 1000.0,
             world.lamps.len(),
+            world.building_count(),
             car.size.x,
             car.size.y,
             car.size.z,
