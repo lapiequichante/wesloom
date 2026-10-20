@@ -105,6 +105,8 @@ pub struct Car {
     align: Mat4,
     /// The car's box in its own space.
     pub size: Vec3,
+    /// Whether it has glass, which the frame draws in the refraction tier.
+    pub refractive: bool,
     wheels: Vec<Wheel>,
     /// The materials of the headlights' lenses, which glow at night.
     lenses: Vec<usize>,
@@ -422,6 +424,7 @@ impl Car {
             headlights,
             tail_lights,
             size: max - min,
+            refractive,
             wheels: wheels(&imported),
             previous_locals: Vec::new(),
             imported,
@@ -443,6 +446,59 @@ impl Car {
             }
         }
         self.resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+
+    /// Show the surface debug view `view` (ADR 0085) on every material,
+    /// or shade again for 0: each is recompiled under the view's macro, as
+    /// the editor's scene mode does, and its bone texture bound again. The
+    /// lenses' glow and the bone frame are parameters, which go back to
+    /// their defaults: set them again ([`Car::set_lights_on`],
+    /// [`Car::animate`]).
+    pub fn set_debug_view(
+        &mut self,
+        gpu: &GpuContext,
+        renderer: &mut Renderer,
+        view: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        use wxsl::core::lighting::{debug_views, DEBUG_MATERIAL_MACRO, DEBUG_VIEW_MACRO};
+        use wxsl::core::macros::MacroValue;
+        let registry = wxsl::stdlib::registry();
+        let lighting = renderer.lighting().clone();
+        let by_material = debug_views()
+            .iter()
+            .any(|known| known.id == view && known.label == "material id");
+        for (index, entry) in self.imported.scene.materials.iter().enumerate() {
+            let mut entry = entry.clone();
+            if view != 0 {
+                entry
+                    .config
+                    .macros
+                    .set(DEBUG_VIEW_MACRO, MacroValue::Int(view));
+                if by_material {
+                    entry
+                        .config
+                        .macros
+                        .set(DEBUG_MATERIAL_MACRO, MacroValue::Int(index as i32));
+                }
+            }
+            self.resources
+                .set_material(
+                    &gpu.device,
+                    renderer,
+                    index,
+                    &entry,
+                    &registry,
+                    &lighting,
+                    &[],
+                )
+                .map_err(|error| format!("{}: {error}", entry.name))?;
+        }
+        for (material, skin) in self.imported.material_skins.iter().enumerate() {
+            if let (Some(skin), Some(bindings)) = (skin, self.resources.bindings_mut(material)) {
+                bindings.set_texture(BONE_TEXTURE_SLOT, &self.bones[*skin].view)?;
+            }
+        }
         Ok(())
     }
 

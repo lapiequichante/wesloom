@@ -10,3 +10,8 @@ Photometric profiles (IESNA LM-63, type C) read by `wxsl_frame::ies`
   foreground fill. The cutoff sits 0.6° below the horizon and rises at
   15° to the right of the axis. It is released under the workspace's
   MIT/Apache-2.0 terms.
+- `street_lamp.ies`: a synthetic full-cutoff street lamp for the drive
+  demo, not measured. Its axis is straight down (γ = 0) and it is
+  rotationally symmetric: a "bat wing" peaking near 58° that throws the
+  light along the road, a floor of 30% of the peak under the lamp, and
+  nothing past 80°. The same terms apply.

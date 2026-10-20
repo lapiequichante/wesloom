@@ -1,0 +1,17 @@
+IESNA:LM-63-2002
+[TEST] synthetic, drawn for the wxsl drive demo
+[MANUFAC] wxsl
+[LUMINAIRE] full-cutoff street lamp, rotationally symmetric
+[OTHER] type C with the axis straight down: a bat wing peaking near 58 degrees, nothing past 80
+TILT=NONE
+1 -1 1 37 1 1 2 0.5 0.5 0.1
+1.0 1.0 150
+0 2.5 5 7.5 10 12.5 15 17.5 20 22.5
+25 27.5 30 32.5 35 37.5 40 42.5 45 47.5
+50 52.5 55 57.5 60 62.5 65 67.5 70 72.5
+75 77.5 80 82.5 85 87.5 90
+0
+1350 1350 1350 1350 1350 1350 1350 1350 1350 1350
+1350 1351 1355 1365 1390 1448 1566 1783 2129 2616
+3206 3803 4274 4493 4398 4015 3451 2844 2308 1785
+1024 464 0 0 0 0 0

@@ -10,6 +10,11 @@
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
 //! ```
+//!
+//! Deferred, for comparison, starts from the stock deferred document
+//! instead: the G-buffer pass stands where the prepass was, and its depth
+//! feeds the velocity pass the same way. Without FXAA, the tonemap
+//! presents.
 
 use std::error::Error;
 
@@ -25,7 +30,7 @@ use wxsl::render::pass::{
     Attachment, DrawSource, Extent, PassDesc, PassKind, Policy, Read, ResourceDesc,
 };
 use wxsl::render::types::{Color, TextureFormat};
-use wxsl::render::{Camera, PipelineConfig, Renderer, StockPipeline};
+use wxsl::render::{Camera, Renderer, StockPipeline};
 
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
 
@@ -97,19 +102,23 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The stock forward document with a velocity pass over the prepass'
-/// depth, then a motion blur and a bloom between the shaded colour and
-/// the tonemap.
-fn motion_blur_document(renderer: &Renderer) -> Result<Graph, Box<dyn Error>> {
+/// The stock forward (or deferred) document with a velocity pass over the
+/// prepass' (or the G-buffer's) depth, then a motion blur and a bloom
+/// between the shaded colour and the tonemap.
+fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Box<dyn Error>> {
     let registry = wxsl::render::document_registry(renderer.effects());
-    let mut document = StockPipeline::Forward.document();
+    let (stock, preset, depth_stage) = match deferred {
+        true => (StockPipeline::Deferred, "deferred", "gbuffer"),
+        false => (StockPipeline::Forward, "forward", "depth_only"),
+    };
+    let mut document = stock.document();
     document.set_name("drive");
     let find = |document: &Graph, test: &dyn Fn(&Node) -> bool, what: &str| {
         document
             .nodes()
             .find(|(_, node)| test(node))
             .map(|(id, _)| id)
-            .ok_or_else(|| format!("the forward preset has no {what}"))
+            .ok_or_else(|| format!("the {preset} preset has no {what}"))
     };
     let scene = find(&document, &|node| node.def == doc::SOURCE_SCENE, "scene")?;
     let prepass = find(
@@ -119,9 +128,9 @@ fn motion_blur_document(renderer: &Renderer) -> Result<Graph, Box<dyn Error>> {
                 && node
                     .settings
                     .get(doc::SETTING_STAGE)
-                    .is_some_and(|stage| stage.as_str() == "depth_only")
+                    .is_some_and(|stage| stage.as_str() == depth_stage)
         },
-        "depth prepass",
+        "depth pass",
     )?;
     let color = find(
         &document,
@@ -191,15 +200,22 @@ fn motion_blur_document(renderer: &Renderer) -> Result<Graph, Box<dyn Error>> {
     Ok(document)
 }
 
-/// Build the frame and give it to `renderer`. With `refractive`, the car's
-/// glass leaves the opaque passes for the refraction tier (ADR 0067).
-pub fn install(renderer: &mut Renderer, refractive: bool) -> Result<(), Box<dyn Error>> {
-    let document = motion_blur_document(renderer)?;
+/// Build the frame, forward or `deferred`, with or without `fxaa`, and give
+/// it to `renderer`. With `refractive`, the car's glass leaves the opaque
+/// passes for the refraction tier (ADR 0067).
+pub fn install(
+    renderer: &mut Renderer,
+    refractive: bool,
+    deferred: bool,
+    fxaa: bool,
+) -> Result<(), Box<dyn Error>> {
+    let document = motion_blur_document(renderer, deferred)?;
     let mut graph = wxsl::render::compile_pipeline(
         &document,
         &wxsl::render::document_registry(renderer.effects()),
         renderer.effects(),
-        &PipelineConfig::new(renderer.target()),
+        // The renderer's own: its lighting set shapes the G-buffer.
+        renderer.pipeline_config(),
     )
     .map_err(|error| format!("the drive document does not compile: {error}"))?;
     if refractive {
@@ -289,16 +305,18 @@ pub fn install(renderer: &mut Renderer, refractive: bool) -> Result<(), Box<dyn 
             ])
             .with_parameter("max_coc", Value::F32(MAX_COC)),
     );
+    graph.pass_mut(tonemap).ok_or("tonemap pass")?.reads[0] = Read::current(focused);
     // FXAA after the tonemap, on display values.
-    let encoded = graph.resource(hdr("drive encoded"));
-    let pass = graph.pass_mut(tonemap).ok_or("tonemap pass")?;
-    pass.reads[0] = Read::current(focused);
-    let presented = std::mem::replace(&mut pass.color[0], clear(encoded));
-    graph.pass(
-        PassDesc::screen("drive fxaa", "wxsl.fxaa")
-            .with_color(presented)
-            .with_reads([Read::current(encoded)]),
-    );
+    if fxaa {
+        let encoded = graph.resource(hdr("drive encoded"));
+        let pass = graph.pass_mut(tonemap).ok_or("tonemap pass")?;
+        let presented = std::mem::replace(&mut pass.color[0], clear(encoded));
+        graph.pass(
+            PassDesc::screen("drive fxaa", "wxsl.fxaa")
+                .with_color(presented)
+                .with_reads([Read::current(encoded)]),
+        );
+    }
     renderer.set_graph(graph)?;
     Ok(())
 }

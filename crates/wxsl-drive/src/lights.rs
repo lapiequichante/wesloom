@@ -3,10 +3,12 @@
 //! tail lights. The lamps and the headlights are shaped by IES profiles
 //! baked into the cookie array (ADR 0097).
 //!
-//! The headlight profile is `resources/ies/headlight.ies`. The lamps'
-//! is written here, as an LM-63 file, and read back through the same
-//! parser: a full-cutoff "bat wing" that throws its peak along the road
-//! at about 58° from straight down and nothing above 80°.
+//! The headlight profile is `resources/ies/headlight.ies`, the lamps'
+//! `resources/ies/street_lamp.ies`: a full-cutoff "bat wing" that throws
+//! its peak along the road at about 58° from straight down and nothing
+//! above 80°. Either file can be swapped for a measured one. The tail
+//! lights' is written here, as an LM-63 file read back through the same
+//! parser.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -31,6 +33,11 @@ const COOKIE_SIZE: u32 = 512;
 const LAMP_INTENSITY: f32 = 450.0;
 const LAMP_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.58);
 pub const LAMP_RANGE: f32 = 26.0;
+/// A lamp's cone from straight down: wide enough that everything up to a
+/// car's roof within its range is inside, so it is a spot with one shadow
+/// tile rather than a point light's six. Its profile reaches 80°, but
+/// past this angle it only lights deck beyond its range.
+const LAMP_CONE: f32 = 72.0 * std::f32::consts::PI / 180.0;
 /// A headlight's peak intensity and reach.
 const HEADLIGHT_INTENSITY: f32 = 9000.0;
 const HEADLIGHT_RANGE: f32 = 160.0;
@@ -41,20 +48,8 @@ const TAIL_INTENSITY: f32 = 0.15;
 const TAIL_COLOR: Vec3 = Vec3::new(1.0, 0.04, 0.02);
 const TAIL_RANGE: f32 = 6.0;
 
-/// The street lamp's profile as an LM-63 file: type C, symmetric about
-/// its axis, candela over γ from straight down.
-pub fn lamp_ies() -> String {
-    let gammas: Vec<f32> = (0..=36).map(|step| step as f32 * 2.5).collect();
-    let candela: Vec<f32> = gammas
-        .iter()
-        .map(|&gamma| {
-            let wing = (-((gamma - 58.0) / 11.0).powi(2)).exp();
-            let cutoff = ((80.0 - gamma) / 8.0).clamp(0.0, 1.0);
-            (4500.0 * (0.3 + 0.7 * wing) * cutoff).round()
-        })
-        .collect();
-    lm63("full-cutoff street lamp, symmetric", &gammas, &candela)
-}
+/// The street lamp's profile: type C, γ from straight down.
+const LAMP_IES: &str = include_str!("../../../resources/ies/street_lamp.ies");
 
 /// The tail light's profile: brightest along its axis, gone by 65°.
 pub fn tail_ies() -> String {
@@ -104,7 +99,7 @@ fn f16_bits(value: f32) -> u16 {
 /// Bake the profiles into a cookie array, one layer each.
 pub fn cookies(gpu: &GpuContext) -> Result<wgpu::TextureView, Box<dyn Error>> {
     let headlight = IesProfile::parse(include_str!("../../../resources/ies/headlight.ies"))?;
-    let lamp = IesProfile::parse(&lamp_ies())?;
+    let lamp = IesProfile::parse(LAMP_IES)?;
     let tail = IesProfile::parse(&tail_ies())?;
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("drive light profiles"),
@@ -172,14 +167,16 @@ pub struct CarLamps {
     pub tail: [Vec3; 2],
 }
 
-/// How near a head of the right-hand row must be to the car for its
-/// shadow: full inside the first distance, fading out by the second.
-/// Lamps stand [`crate::road::LAMP_SPACING`] apart, so at most two heads
-/// of the row are ever inside the second.
-const LAMP_SHADOW_NEAR: f32 = 14.0;
-const LAMP_SHADOW_FAR: f32 = 26.0;
-/// How many lamp heads cast shadows at once: six atlas tiles each.
-const SHADOWED_LAMPS: usize = 2;
+/// How near a lamp head, of either carriageway, must be to the car for its
+/// shadow: full while its light reaches the car at all, so nothing lights
+/// the car's insides through its gaps, then fading out by the second
+/// distance, where its light is only on the road. Lamps stand
+/// [`crate::road::LAMP_SPACING`] apart, so at most three posts, six
+/// heads, are ever inside it.
+const LAMP_SHADOW_NEAR: f32 = LAMP_RANGE;
+const LAMP_SHADOW_FAR: f32 = LAMP_RANGE + 12.0;
+/// How many lamp heads cast shadows at once: one atlas tile each.
+const SHADOWED_LAMPS: usize = 6;
 /// The tags on the car's draws and on the deck's: what the headlights'
 /// shadows draw, so the deck keeps their beams off the piers below.
 pub const CAR_TAG: &str = "car";
@@ -194,8 +191,9 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// `eye`, the ones over the car casting shadows.
 ///
 /// Shadow tiles go in list order, largest first (`abi::shadow_tile`):
-/// by day all to the sun's cascades; at night first to the headlights,
-/// then to the lamps over the car, the moon's faint shadow last.
+/// by day all to the sun's cascades; at night first to the headlights and
+/// the tail lights, whose static tiles keep their slots (ADR 0101), then
+/// to the lamps near the car, nearest first, the moon's faint shadow last.
 pub fn lights(
     day: &DayLight,
     lamps: &[Lamp],
@@ -231,21 +229,49 @@ pub fn lights(
         .casting_shadow(1.0)
         .with_source_radius(0.04)
         .with_normal_bias(0.04)
-        // The car and the deck: the deck streams past the light, so the
-        // shadow is redrawn every frame, of these two only.
-        .with_shadow_casters(TagExpr::tag(CAR_TAG).or(TagExpr::tag(DECK_TAG)));
+        // The car and the deck, drawn once in the car's frame (ADR 0101):
+        // the deck kept is the stretch under the car when it was drawn,
+        // which still keeps the beams off the piers below.
+        .with_shadow_casters(TagExpr::tag(CAR_TAG).or(TagExpr::tag(DECK_TAG)))
+        .with_static_shadow(car);
         headlight.shadow_distance = HEADLIGHT_RANGE;
         lights.push(headlight);
     }
 
-    // Each head of the right-hand row (the car's carriageway) near the
-    // car is two lights: a shadowed one carrying `shadow` of its intensity
-    // and a local one the rest, so a lamp's shadow fades in and out
-    // instead of switching.
+    // The tail lights: a faint red wash on the road just behind, from
+    // spots aimed back and down, so they never reach the middle of the
+    // road. The car shadows them, drawn once in its frame like the
+    // headlights, so they light nothing inside it.
+    let up = car.transform_vector3(Vec3::Y).normalize();
+    for position in car_lamps.tail {
+        let mut tail = Light::spot(
+            car.transform_point3(position),
+            (-forward - up * 0.45).normalize(),
+            25f32.to_radians(),
+            60f32.to_radians(),
+            TAIL_COLOR,
+            TAIL_INTENSITY * day.lights_on,
+        )
+        .with_profile(TAIL_LAYER)
+        .with_range(TAIL_RANGE)
+        .casting_shadow(1.0)
+        .with_normal_bias(0.02)
+        .with_shadow_casters(TagExpr::tag(CAR_TAG))
+        .with_static_shadow(car);
+        tail.shadow_distance = TAIL_RANGE;
+        lights.push(tail);
+    }
+
+    // Each lamp head near the car is two lights: a shadowed one carrying
+    // `shadow` of its intensity and a local one the rest, so a lamp's
+    // shadow fades in and out instead of switching.
     let at = car.transform_point3(Vec3::ZERO);
     let lamp = |head: Vec3, share: f32| {
-        Light::point(
+        Light::spot(
             head - Vec3::Y * 0.2,
+            Vec3::NEG_Y,
+            LAMP_CONE - 2f32.to_radians(),
+            LAMP_CONE,
             LAMP_COLOR,
             LAMP_INTENSITY * day.lights_on * share,
         )
@@ -254,7 +280,7 @@ pub fn lights(
     };
     let mut near: Vec<(Vec3, f32)> = lamps
         .iter()
-        .map(|lamp| lamp.heads[1])
+        .flat_map(|lamp| lamp.heads)
         .map(|head| {
             (
                 head,
@@ -263,7 +289,8 @@ pub fn lights(
         })
         .filter(|(_, shadow)| *shadow > 0.0)
         .collect();
-    near.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // Nearest first, so the lamps over the car get the larger tiles.
+    near.sort_by(|a, b| a.0.distance(at).total_cmp(&b.0.distance(at)));
     near.truncate(SHADOWED_LAMPS);
     for &(head, shadow) in &near {
         let mut light = lamp(head, shadow)
@@ -275,24 +302,6 @@ pub fn lights(
     }
     lights.push(key);
 
-    // The tail lights: a faint red wash on the road just behind, from
-    // spots aimed back and down, so they never reach the middle of the
-    // road.
-    let up = car.transform_vector3(Vec3::Y).normalize();
-    for position in car_lamps.tail {
-        lights.push(
-            Light::spot(
-                car.transform_point3(position),
-                (-forward - up * 0.45).normalize(),
-                25f32.to_radians(),
-                60f32.to_radians(),
-                TAIL_COLOR,
-                TAIL_INTENSITY * day.lights_on,
-            )
-            .with_profile(TAIL_LAYER)
-            .with_range(TAIL_RANGE),
-        );
-    }
     // The lamps within reach of what the camera sees well; the light grid
     // bins them (ADR 0076).
     for lamp_at in lamps {
@@ -318,7 +327,7 @@ mod tests {
 
     #[test]
     fn the_lamp_profile_parses_and_peaks_off_axis() {
-        let profile = IesProfile::parse(&lamp_ies()).expect("our own file reads back");
+        let profile = IesProfile::parse(LAMP_IES).expect("street_lamp.ies parses");
         let peak = profile.max_candela();
         assert!((profile.candela(57.5, 0.0) - peak).abs() < peak * 0.02);
         assert!(profile.candela(0.0, 0.0) < peak * 0.5);
@@ -344,10 +353,10 @@ mod tests {
             .iter()
             .filter(|light| light.range > 0.0)
             .all(|light| light.profile_layer.is_some()));
-        // The headlights, the key and the lamp heads over the car cast
-        // shadows; everything else goes to the light grid.
+        // The headlights, the tail lights, the key and the lamp heads near
+        // the car cast shadows; everything else goes to the light grid.
         let shadowed = night.iter().filter(|light| light.casts_shadow).count();
-        assert!((3..=3 + SHADOWED_LAMPS).contains(&shadowed));
+        assert!((5..=5 + SHADOWED_LAMPS).contains(&shadowed));
         assert_eq!(
             night.iter().filter(|light| !light.is_local()).count(),
             shadowed
@@ -362,6 +371,50 @@ mod tests {
         // Halfway along, at the far edge of its carriageway.
         let midway = Vec3::new(LAMP_SPACING * 0.5, height, 6.1).length();
         assert!(midway < LAMP_RANGE * 0.85, "{midway} m");
+    }
+
+    #[test]
+    fn a_lamp_cone_holds_everything_its_range_reaches_up_to_a_roof() {
+        // A point inside the range but outside the cone sits higher above
+        // the deck than a car's roof.
+        let roof = 1.5;
+        let below_head = crate::road::LAMP_HEIGHT - 0.2;
+        assert!(LAMP_RANGE * LAMP_CONE.cos() < below_head - roof);
+    }
+
+    #[test]
+    fn every_light_that_reaches_the_car_casts_its_shadow() {
+        let lamps = crate::road::Road::new().lamps();
+        let car_lamps = CarLamps {
+            head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
+            tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+        };
+        let night = DayLight::at(23.0);
+        let road = crate::road::Road::new();
+        for s in [0.0, 9.0, 18.0, 27.0, 400.0] {
+            let frame = road.frame(s);
+            let car = Mat4::from_translation(frame.at(crate::road::LANE, 0.0));
+            let at = car.transform_point3(Vec3::ZERO);
+            let all = lights(&night, &lamps, car, &car_lamps, at);
+            let unshadowed = all
+                .iter()
+                .filter(|light| !light.casts_shadow && light.intensity > 0.0)
+                .filter(|light| light.position_or_direction.distance(at) < light.range)
+                .count();
+            assert_eq!(unshadowed, 0, "{s} m: a light reaches the car unshadowed");
+            // And the atlas has room for every one of those shadows.
+            let environment = wxsl::render::Environment {
+                lights: all,
+                ..wxsl::render::Environment::default()
+            };
+            let tiles = environment.shadow_tiles();
+            for (index, light) in environment.uniform_lights().iter().enumerate() {
+                assert!(
+                    !light.casts_shadow || tiles.iter().any(|tile| tile.light == index as u32),
+                    "{s} m: light {index} got no shadow tile"
+                );
+            }
+        }
     }
 
     #[test]

@@ -16,7 +16,16 @@
 //! In the window: the sliders set the speed, the hour, the motion blur and
 //! the aperture; drag elsewhere to look around the car, scroll to zoom,
 //! `R` recentres,
-//! `Space` pauses, `Esc` quits.
+//! `Space` pauses, `Esc` quits. The last slider shows a surface debug view
+//! on the car instead of shading it (ADR 0085): albedo, normal, depth,
+//! metallic-roughness, mip level, and the rest a forward pass can show;
+//! `--view NAME` picks one for a screenshot. The `pipeline` slider swaps
+//! the forward frame for a deferred one, to compare their cost
+//! (`--deferred` for a timed screenshot); the debug views are forward
+//! only. Shadows are hard by default; the `shadows` slider (or
+//! `--soft-shadows`) gives the lights their source size back, for
+//! contact-hardening penumbrae at a higher shading cost. The `fxaa` slider
+//! (or `--no-fxaa`) turns the anti-aliasing off, to compare.
 
 mod car;
 mod city;
@@ -39,7 +48,7 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, Window
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
-use wxsl::core::lighting::{LightingSet, DEFAULT_MODELS};
+use wxsl::core::lighting::{DebugStage, DebugView, LightingSet, DEFAULT_MODELS, OVERDRAW_VIEW};
 use wxsl::core::Value;
 use wxsl::render::{
     Camera, DrawList, Environment, GpuContext, OffscreenTarget, RenderRequest, Renderer,
@@ -52,14 +61,37 @@ use ui::{Panel, Slider};
 use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--at METRES]
-      [--look RADIANS] [--pitch RADIANS] [--zoom Z] [--screenshot out.png [--ui] [--frames N]] [--size WxH] [--car file.glb]
-window: the sliders set speed, hour, motion blur and aperture; drag elsewhere looks
-        around the car, scroll zooms, R recentres, Space pauses, Esc quits";
+      [--look RADIANS] [--pitch RADIANS] [--zoom Z] [--view NAME] [--deferred]
+      [--soft-shadows] [--no-fxaa] [--screenshot out.png [--ui] [--frames N] [--profile]]
+      [--size WxH] [--car file.glb]
+window: the sliders set speed, hour, motion blur, aperture, the car's debug view,
+        forward or deferred, hard or soft shadows and FXAA; drag elsewhere looks around
+        the car, scroll zooms, R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 const APERTURE: &str = "aperture";
+const VIEW: &str = "view";
+const PIPELINE: &str = "pipeline";
+const SHADOWS: &str = "shadows";
+const FXAA: &str = "fxaa";
+
+/// The surface debug views a forward pass can show (ADR 0085). Overdraw is
+/// left out: it also needs the passes' blend and depth state rewritten.
+fn debug_views() -> Vec<DebugView> {
+    wxsl::core::lighting::debug_views()
+        .into_iter()
+        .filter(|view| view.stage != DebugStage::Deferred && view.label != OVERDRAW_VIEW)
+        .collect()
+}
+
+/// The debug view the `view` slider's `value` picks, or `None` to shade.
+fn debug_view(value: f32) -> Option<DebugView> {
+    (value.round() as usize)
+        .checked_sub(1)
+        .and_then(|index| debug_views().get(index).copied())
+}
 
 struct Options {
     hour: f32,
@@ -72,6 +104,17 @@ struct Options {
     /// How far it starts tilted down onto the car, radians.
     pitch: f32,
     zoom: f32,
+    /// The `view` slider's start: 0 shades, then one per [`debug_views`].
+    view: f32,
+    /// Start on the deferred frame rather than the forward one.
+    deferred: bool,
+    /// Print the screenshot's GPU time per pass.
+    profile: bool,
+    /// Start with the lights' soft, contact-hardening shadows rather than
+    /// hard ones.
+    soft_shadows: bool,
+    /// Start without FXAA.
+    no_fxaa: bool,
     screenshot: Option<PathBuf>,
     /// Draw the sliders into the screenshot too.
     ui: bool,
@@ -91,6 +134,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         look: 0.0,
         pitch: 0.0,
         zoom: 1.0,
+        view: 0.0,
+        deferred: false,
+        profile: false,
+        soft_shadows: false,
+        no_fxaa: false,
         screenshot: None,
         ui: false,
         frames: 4,
@@ -109,6 +157,24 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--look" => options.look = value()?.parse()?,
             "--pitch" => options.pitch = value()?.parse()?,
             "--zoom" => options.zoom = value()?.parse::<f32>()?.clamp(0.3, 40.0),
+            "--view" => {
+                let name = value()?;
+                let views = debug_views();
+                options.view = match views.iter().position(|view| view.label == name) {
+                    Some(index) => (index + 1) as f32,
+                    None if name == "shaded" => 0.0,
+                    None => {
+                        let names: Vec<&str> = views.iter().map(|view| view.label).collect();
+                        return Err(
+                            format!("--view is shaded or one of: {}", names.join(", ")).into()
+                        );
+                    }
+                };
+            }
+            "--deferred" => options.deferred = true,
+            "--profile" => options.profile = true,
+            "--soft-shadows" => options.soft_shadows = true,
+            "--no-fxaa" => options.no_fxaa = true,
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--ui" => options.ui = true,
             "--frames" => options.frames = value()?.parse::<u32>()?.max(3),
@@ -141,6 +207,38 @@ fn sliders(options: &Options) -> Panel {
         Slider::new(APERTURE, 1.4, 16.0, options.aperture, |value| {
             format!("f/{value:.1}")
         }),
+        Slider::new(
+            VIEW,
+            0.0,
+            debug_views().len() as f32,
+            options.view,
+            |value| {
+                debug_view(value)
+                    .map_or("shaded", |view| view.label)
+                    .to_string()
+            },
+        ),
+        Slider::new(
+            PIPELINE,
+            0.0,
+            1.0,
+            if options.deferred { 1.0 } else { 0.0 },
+            |value| if value >= 0.5 { "deferred" } else { "forward" }.to_string(),
+        ),
+        Slider::new(
+            SHADOWS,
+            0.0,
+            1.0,
+            if options.soft_shadows { 1.0 } else { 0.0 },
+            |value| if value >= 0.5 { "soft" } else { "hard" }.to_string(),
+        ),
+        Slider::new(
+            FXAA,
+            0.0,
+            1.0,
+            if options.no_fxaa { 0.0 } else { 1.0 },
+            |value| if value >= 0.5 { "on" } else { "off" }.to_string(),
+        ),
     ])
 }
 
@@ -164,6 +262,12 @@ struct Drive {
     orbit: Vec2,
     /// How far the camera is from the car, relative to the chase distance.
     zoom: f32,
+    /// The debug view the car's materials are compiled for, 0 shading.
+    shown_view: i32,
+    /// Whether the frame installed is the deferred one.
+    deferred: bool,
+    /// Whether the frame installed ends in FXAA.
+    fxaa: bool,
 }
 
 impl Drive {
@@ -178,7 +282,9 @@ impl Drive {
         let mut renderer = Renderer::new(&gpu.device, library.clone(), target)?;
         pipeline::add_effects(&mut renderer)?;
         renderer.set_lighting(LightingSet::new(DEFAULT_MODELS.iter().copied())?)?;
-        let car = Car::open(gpu, &mut renderer, car, pipeline::install)?;
+        let car = Car::open(gpu, &mut renderer, car, |renderer, refractive| {
+            pipeline::install(renderer, refractive, false, true)
+        })?;
         let world = World::new(gpu, &mut renderer, &registry)?;
         renderer.set_light_cookies(&gpu.device, Some(&lights::cookies(gpu)?));
         println!(
@@ -203,6 +309,9 @@ impl Drive {
             previous: None,
             orbit: Vec2::ZERO,
             zoom: 1.0,
+            shown_view: 0,
+            deferred: false,
+            fxaa: true,
         })
     }
 
@@ -220,6 +329,15 @@ impl Drive {
         self.s = (self.s + speed * dt).rem_euclid(self.world.road.length());
         self.odometer += speed * dt;
         self.clip_time += dt;
+        let deferred = panel.value(PIPELINE) >= 0.5;
+        let fxaa = panel.value(FXAA) >= 0.5;
+        if (deferred, fxaa) != (self.deferred, self.fxaa) {
+            pipeline::install(&mut self.renderer, self.car.refractive, deferred, fxaa)?;
+            self.deferred = deferred;
+            self.fxaa = fxaa;
+            // The new frame's sky and environment maps start unbaked.
+            self.baked_hour = None;
+        }
         let hour = panel.value(HOUR);
         if self.baked_hour != Some(hour) {
             self.day = DayLight::at(hour);
@@ -230,6 +348,12 @@ impl Drive {
             self.world.set_lights_on(gpu, self.day.lights_on)?;
             self.car.set_lights_on(gpu, self.day.lights_on)?;
             self.baked_hour = Some(hour);
+        }
+        let shown = debug_view(panel.value(VIEW)).map_or(0, |view| view.id);
+        if shown != self.shown_view {
+            self.car.set_debug_view(gpu, &mut self.renderer, shown)?;
+            self.car.set_lights_on(gpu, self.day.lights_on)?;
+            self.shown_view = shown;
         }
         self.car.animate(gpu, self.clip_time, self.odometer)?;
 
@@ -251,21 +375,35 @@ impl Drive {
             up: Vec3::Y,
             fov_y: 55f32.to_radians(),
             aspect,
-            near: 0.15,
+            // Depth resolution at the car goes as distance² / near: a near
+            // fixed at 0.15 m let the paint z-fight the trim just under it
+            // once the camera backs off. A tenth of the way to the car
+            // keeps it a hundredth of a millimetre at any zoom, and still
+            // draws the road under the camera.
+            near: (offset.length() * 0.1).max(0.15),
             far: 9000.0,
             ..Camera::default()
         };
         let (previous_transform, previous_camera) = self.previous.unwrap_or((transform, camera));
+        let mut lights = lights::lights(
+            &self.day,
+            &self.world.lamps,
+            transform,
+            &self.car.lamps(),
+            camera.eye,
+        );
+        if panel.value(SHADOWS) < 0.5 {
+            // Hard: no source size, so each shadow is one PCF lookup
+            // rather than a blocker search and a wide filter (ADR 0098).
+            // Only a tube shades with its radius, and the drive has none.
+            for light in &mut lights {
+                light.radius = 0.0;
+            }
+        }
         let environment = Environment {
             camera,
             previous_camera: Some(previous_camera),
-            lights: lights::lights(
-                &self.day,
-                &self.world.lamps,
-                transform,
-                &self.car.lamps(),
-                camera.eye,
-            ),
+            lights,
             ambient_sky: Vec3::splat(0.002),
             ambient_ground: Vec3::splat(0.001),
             exposure: self.day.exposure,
@@ -302,6 +440,71 @@ impl Drive {
     }
 }
 
+/// Per-pass GPU times summed over the timed frames, for `--profile`.
+#[derive(Default)]
+struct Profile {
+    on: bool,
+    /// Milliseconds and samples per pass label, in pass order.
+    passes: Vec<(String, f32, u32)>,
+}
+
+impl Profile {
+    /// Turn timestamp queries on; false when the device has none.
+    fn start(&mut self, gpu: &GpuContext, renderer: &mut Renderer) -> bool {
+        self.on = renderer.set_pass_timing(&gpu.device, &gpu.queue, true);
+        self.on
+    }
+
+    /// Add the last frame read back. Timings trail the picture by a frame
+    /// or two, which an average over many frames does not mind.
+    fn sample(&mut self, renderer: &Renderer) {
+        if !self.on {
+            return;
+        }
+        for pass in renderer.render_graph().passes() {
+            if self.passes.iter().any(|(label, ..)| *label == pass.label) {
+                continue;
+            }
+            self.passes.push((pass.label.clone(), 0.0, 0));
+        }
+        for (label, sum, samples) in &mut self.passes {
+            if let Some(time) = renderer.pass_time(label) {
+                *sum += time;
+                *samples += 1;
+            }
+        }
+    }
+
+    /// The passes by mean GPU time, with what they drew last frame.
+    fn print(&self, renderer: &Renderer) {
+        if !self.on {
+            return;
+        }
+        let mut rows: Vec<(&str, f32)> = self
+            .passes
+            .iter()
+            .filter(|(_, _, samples)| *samples > 0)
+            .map(|(label, sum, samples)| (label.as_str(), sum / *samples as f32))
+            .collect();
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let total: f32 = rows.iter().map(|(_, time)| time).sum();
+        println!("GPU {total:.2} ms a frame over {} passes:", rows.len());
+        println!(
+            "  {:>8} {:>6} {:>6} {:>6} {:>10}  pass",
+            "ms", "%", "draws", "calls", "triangles"
+        );
+        for (label, time) in rows.iter().filter(|(_, time)| *time >= 0.01) {
+            println!(
+                "  {time:>8.3} {:>5.1}% {:>6} {:>6} {:>10}  {label}",
+                100.0 * time / total.max(1e-6),
+                renderer.pass_draw_count(label).unwrap_or(0),
+                renderer.pass_call_count(label).unwrap_or(0),
+                renderer.pass_triangle_count(label).unwrap_or(0),
+            );
+        }
+    }
+}
+
 fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     let gpu = pollster::block_on(GpuContext::headless())?;
     let (width, height) = options.size;
@@ -318,7 +521,12 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     // Frames at 60 Hz: the first runs the bakes, and the velocity pass
     // needs a previous frame to measure against. The rest are timed.
     let mut timed = std::time::Duration::ZERO;
+    let mut profile = Profile::default();
     for frame in 0..options.frames {
+        // On after the first frame, which may swap in the deferred frame.
+        if frame == 1 && options.profile && !profile.start(&gpu, &mut drive.renderer) {
+            println!("this device has no timestamp queries: no pass timings");
+        }
         let started = Instant::now();
         drive.frame(
             &gpu,
@@ -330,12 +538,14 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
         gpu.wait();
         if frame >= 2 {
             timed += started.elapsed();
+            profile.sample(&drive.renderer);
         }
     }
     println!(
         "{:.2} ms a frame at {width}×{height}",
         timed.as_secs_f64() * 1000.0 / f64::from(options.frames - 2)
     );
+    profile.print(&drive.renderer);
     if options.ui {
         let mut overlay = ui::Overlay::new(&gpu.device, &drive.library)?;
         overlay.render(

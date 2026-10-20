@@ -83,8 +83,10 @@ it, Dawn included, redraws the tile every frame and gets the same picture.
 - A static shadow shows only its casters, and only casters that move with
   the light. The drive demo tried it on its headlights, then had to draw
   the deck into their shadows to keep the beams off the piers below, and
-  the deck streams past the car. So its headlights are dynamic, with
-  `shadow_casters` narrowed to the car and the deck.
+  the deck streams past the car. Its headlights stay static anyway, over
+  the car and the deck: the kept deck is the stretch under the car when
+  the tile was drawn, close enough on a gently curving viaduct to keep
+  the beams off the piers, though a sharp bend or crest would show it.
 - A caster that changes shape on the move (a door opening on the car)
   needs `Renderer::invalidate_static_shadows`. The cache cannot see a
   mesh change.
