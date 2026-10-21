@@ -1,0 +1,47 @@
+// Textured surface
+//
+// A tiling texture set (albedo, an OpenGL normal map, roughness,
+// metalness) laid at its true size: `uv` is in metres, and one copy of
+// the set covers `tile` metres square. The normal's frame comes from
+// screen derivatives, as on the asphalt, so this is a fragment-stage node.
+//
+// Original implementation.
+
+struct Textured {
+    base_color: vec3f,
+    roughness: f32,
+    metallic: f32,
+    normal: vec3f,
+}
+
+fn textured(
+    albedo: texture_2d<f32>,
+    normal_map: texture_2d<f32>,
+    roughness_map: texture_2d<f32>,
+    metal_map: texture_2d<f32>,
+    samp: sampler,
+    uv: vec2f,        // Metres across the surface. @default 0.0, 0.0
+    world: vec3f,     // World position, metres. @default 0.0, 0.0, 0.0
+    geometric_normal: vec3f, // The mesh's world normal. @default 0.0, 1.0, 0.0
+    tile: f32,        // Metres one copy of the set covers. @default 2.0
+) -> Textured {
+    let at = uv / tile;
+    let color = textureSample(albedo, samp, at).rgb;
+    let mapped = textureSample(normal_map, samp, at).xyz * 2.0 - 1.0;
+
+    // +x along u, +y up the image, so against v: the cotangent frame.
+    let n = normalize(geometric_normal);
+    let ddx = dpdx(at);
+    let ddy = dpdy(at);
+    let dp2perp = cross(dpdy(world), n);
+    let dp1perp = cross(n, dpdx(world));
+    let tangent = normalize(dp2perp * ddx.x + dp1perp * ddy.x + n * 1e-6);
+    let bitangent = -normalize(dp2perp * ddx.y + dp1perp * ddy.y + n * 1e-6);
+
+    var out: Textured;
+    out.base_color = color;
+    out.roughness = textureSample(roughness_map, samp, at).r;
+    out.metallic = textureSample(metal_map, samp, at).r;
+    out.normal = normalize(n * max(mapped.z, 1e-4) + tangent * mapped.x + bitangent * mapped.y);
+    return out;
+}
