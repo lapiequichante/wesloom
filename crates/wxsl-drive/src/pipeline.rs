@@ -1,12 +1,12 @@
 //! The frame: the stock forward document with a velocity pass, motion
 //! blur and a bloom pyramid composed onto it as nodes, then, on the
 //! compiled pass list, the
-//! sky baked into the environment maps and drawn behind everything, the
-//! car's glass, depth of field focused on the car, a colour matrix, the
+//! sky baked into the environment maps and drawn behind everything, a
+//! height fog lit by that sky, the car's glass, depth of field focused on the car, a colour matrix, the
 //! tonemap and FXAA.
 //!
 //! ```text
-//! shadows → prepass → forward ─┬─ background (sky) ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ tonemap ─ fxaa
+//! shadows → prepass → forward ─┬─ background (sky) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ tonemap ─ fxaa
 //!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
@@ -39,6 +39,7 @@ use wxsl::render::effect::{
 };
 use wxsl::render::pass::{
     Attachment, DrawSource, Extent, Load, PassDesc, PassKind, Policy, Read, ResourceDesc,
+    ResourceId,
 };
 use wxsl::render::types::{Color, TextureFormat};
 use wxsl::render::{Camera, Renderer, StockPipeline};
@@ -105,6 +106,63 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
     shader: EffectShader::Source {
         path: "package::drive::motion_blur",
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// The fog's pass label; each probe face's adds the face (`set_fog`).
+const FOG: &str = "drive fog";
+/// How many faces the probe has, each fogged from its own view.
+const PROBE_FACES: u32 = 6;
+
+/// The height fog (`shaders/fog.wxsl`): `density` per metre at `base`
+/// metres, thinning by `falloff` per metre above it, lit by the sky.
+const FOG_EFFECT: Effect = Effect {
+    id: "drive.fog",
+    label: "fog",
+    description: "Exponential height fog over the opaque frame, lit by the sky's radiance.",
+    kind: EffectKind::Screen {
+        vertex_entry: "drive_fog_vs",
+        fragment_entry: "drive_fog_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The frame, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "depth",
+            kind: EffectInputKind::DepthImage,
+            description: "The opaque depth.",
+            history: 0,
+        },
+        EffectInput {
+            name: "radiance",
+            kind: EffectInputKind::Image,
+            description: "The sky's radiance cube, with its mips.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[
+        EffectParameter {
+            name: "density",
+            default: Value::F32(0.0012),
+        },
+        EffectParameter {
+            name: "falloff",
+            default: Value::F32(1.0 / 120.0),
+        },
+        EffectParameter {
+            name: "base",
+            default: Value::F32(0.0),
+        },
+    ],
+    shader: EffectShader::Source {
+        path: "package::drive::fog",
+        wxsl: include_str!("../shaders/fog.wxsl"),
     },
     downlevel: Downlevel::Portable,
 };
@@ -176,6 +234,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
+        FOG_EFFECT,
         GRADE_EFFECT,
     ] {
         renderer.add_effect(effect);
@@ -343,6 +402,8 @@ pub fn install(
             .position(|pass| matches!(&pass.kind, PassKind::Screen { effect } if effect == id))
             .ok_or_else(|| format!("the frame has no {id}"))
     };
+    let hdr = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
+    let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
     let blur = effect_pass(&graph, MOTION_BLUR_EFFECT.id)?;
     let tonemap = effect_pass(&graph, "wxsl.tonemap")?;
     let shaded = graph.passes()[blur].reads[0].resource;
@@ -364,6 +425,30 @@ pub fn install(
         SPECULAR_MIPS,
         PROBE_SAMPLES,
     );
+    // The same fog over each face, from the face's view, before the
+    // capture folds it into the cube: the car reflects a fogged world.
+    for face in 0..PROBE_FACES {
+        let capture = graph
+            .passes()
+            .iter()
+            .position(|pass| pass.label == format!("{PROBE} capture {face}"))
+            .ok_or_else(|| format!("the probe has no face {face}"))?;
+        let (view, color, depth) = {
+            let pass = &graph.passes()[capture];
+            (pass.view, pass.reads[0].resource, pass.reads[1].resource)
+        };
+        let label = probe_fog(face);
+        let fogged = graph.resource(
+            ResourceDesc::color(label.clone(), TextureFormat::Rgba16Float).with_extent(
+                Extent::Fixed {
+                    width: CUBE_SIZE,
+                    height: CUBE_SIZE,
+                },
+            ),
+        );
+        graph.pass(fog_pass(&label, fogged, [color, depth, maps.radiance]).with_view(view));
+        graph.pass_mut(capture).ok_or("probe capture")?.reads[0] = Read::current(fogged);
+    }
     if !deferred {
         // The world, then the car on the same targets with the probe.
         let forward = graph
@@ -393,8 +478,15 @@ pub fn install(
         }
         graph.pass(car.with_environment(probe.diffuse, probe.specular));
     }
-    let mut background =
+    let sky_behind =
         ibl::append_background(&mut graph, shaded, depth, maps.radiance, "drive background");
+    // The fog over everything opaque, before the glass refracts it.
+    let mut background = graph.resource(hdr(FOG));
+    graph.pass(fog_pass(
+        FOG,
+        background,
+        [sky_behind, depth, maps.radiance],
+    ));
     if refractive {
         background = refraction::append(
             &mut graph,
@@ -408,12 +500,10 @@ pub fn install(
     graph.pass_mut(blur).ok_or("motion blur pass")?.reads[0] = Read::current(background);
 
     // Depth of field over the blurred, glowing image, before the tonemap.
-    let hdr = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
     let blurred = graph.passes()[tonemap].reads[0].resource;
     let coc = graph.resource(hdr("drive dof coc"));
     let far = graph.resource(hdr("drive dof far"));
     let focused = graph.resource(hdr("drive dof"));
-    let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
     graph.pass(
         PassDesc::screen(DOF_CIRCLES, "wxsl.dof_coc")
             .with_color(clear(coc))
@@ -472,6 +562,31 @@ pub fn install(
         }
     }
     renderer.set_graph(graph)?;
+    Ok(())
+}
+
+/// The fog pass of the probe's `face`.
+fn probe_fog(face: u32) -> String {
+    format!("{FOG} {PROBE} {face}")
+}
+
+/// A fog pass into `into`, over `[color, depth, radiance]`.
+fn fog_pass(label: &str, into: ResourceId, [color, depth, radiance]: [ResourceId; 3]) -> PassDesc {
+    PassDesc::screen(label, FOG_EFFECT.id)
+        .with_color(Attachment::clear(into, Color::TRANSPARENT))
+        .with_reads([
+            Read::current(color),
+            Read::current(depth),
+            Read::current(radiance),
+        ])
+}
+
+/// Set the fog's `density` per metre at the ground, on the frame and on
+/// each of the probe's faces.
+pub fn set_fog(renderer: &mut Renderer, density: f32) -> Result<(), Box<dyn Error>> {
+    for label in std::iter::once(FOG.to_string()).chain((0..PROBE_FACES).map(probe_fog)) {
+        renderer.set_pass_param(&label, "density", Value::F32(density))?;
+    }
     Ok(())
 }
 

@@ -67,12 +67,13 @@ use sky::DayLight;
 use ui::{Panel, Slider};
 use world::World;
 
-const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--at METRES]
-      [--look RADIANS] [--pitch RADIANS] [--zoom Z] [--view NAME] [--deferred]
-      [--soft-shadows] [--no-fxaa] [--screenshot out.png [--ui] [--frames N] [--profile]]
+const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
+      [--exposure EV] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
+      [--view NAME] [--deferred] [--soft-shadows] [--no-fxaa]
+      [--screenshot out.png [--ui] [--frames N] [--profile]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
-window: the sliders set speed, hour, motion blur, aperture, the car's debug view,
-        forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
+window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
+        debug view, forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
         the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
@@ -80,10 +81,15 @@ const SPEED: &str = "speed";
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 const APERTURE: &str = "aperture";
+const FOG: &str = "fog";
+const EXPOSURE: &str = "exposure";
 const VIEW: &str = "view";
 const PIPELINE: &str = "pipeline";
 const SHADOWS: &str = "shadows";
 const FXAA: &str = "fxaa";
+/// The fog's density per metre at the ground, at the `fog` slider's 1:
+/// about a third of the light survives a kilometre at ground level.
+const FOG_DENSITY: f32 = 0.0012;
 
 /// The surface debug views a forward pass can show (ADR 0085). Overdraw is
 /// left out: it also needs the passes' blend and depth state rewritten.
@@ -106,6 +112,10 @@ struct Options {
     speed: f32,
     blur: f32,
     aperture: f32,
+    /// The fog's density, relative to [`FOG_DENSITY`].
+    fog: f32,
+    /// Stops over the exposure the hour adapts to.
+    exposure: f32,
     at: f32,
     /// How far the view starts turned around the car, radians.
     look: f32,
@@ -140,6 +150,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         speed: 110.0,
         blur: 1.0,
         aperture: 8.0,
+        fog: 1.0,
+        exposure: 0.0,
         at: 0.0,
         look: 0.0,
         pitch: 0.0,
@@ -168,6 +180,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--speed" => options.speed = value()?.parse()?,
             "--blur" => options.blur = value()?.parse()?,
             "--aperture" => options.aperture = value()?.parse()?,
+            "--fog" => options.fog = value()?.parse()?,
+            "--exposure" => options.exposure = value()?.parse()?,
             "--at" => options.at = value()?.parse()?,
             "--look" => options.look = value()?.parse()?,
             "--pitch" => options.pitch = value()?.parse()?,
@@ -226,6 +240,10 @@ fn sliders(options: &Options) -> Panel {
         Slider::new(BLUR, 0.0, 2.0, options.blur, |value| format!("{value:.2}")),
         Slider::new(APERTURE, 1.4, 16.0, options.aperture, |value| {
             format!("f/{value:.1}")
+        }),
+        Slider::new(FOG, 0.0, 4.0, options.fog, |value| format!("{value:.2}")),
+        Slider::new(EXPOSURE, -4.0, 4.0, options.exposure, |value| {
+            format!("{value:+.1} EV")
         }),
         Slider::new(
             VIEW,
@@ -432,7 +450,7 @@ impl Drive {
             lights,
             ambient_sky: Vec3::splat(0.002),
             ambient_ground: Vec3::splat(0.001),
-            exposure: self.day.exposure,
+            exposure: self.day.exposure * panel.value(EXPOSURE).exp2(),
             time: self.clip_time,
             previous_time: self.clip_time - dt,
             // The car's reflections, from its own centre (ADR 0102).
@@ -449,6 +467,7 @@ impl Drive {
             camera.eye.distance(center),
             panel.value(APERTURE),
         )?;
+        pipeline::set_fog(&mut self.renderer, panel.value(FOG) * FOG_DENSITY)?;
         self.renderer.set_pass_param(
             pipeline::MOTION_BLUR,
             "strength",

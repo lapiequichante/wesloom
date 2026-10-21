@@ -1,0 +1,63 @@
+//! drive fog — exponential height fog lit by the sky, over the opaque
+//! frame after the background and before the glass.
+//!
+//! Each pixel's path from the eye is integrated analytically
+//! (`lighting.height_fog_depth`): `params.density` per metre at
+//! `params.base`, thinning by `params.falloff` per metre upward, so the
+//! valleys under the viaduct fill first. What the fog scatters in is the
+//! sky's own radiance along the ray, from a blurred mip of the radiance
+//! cube and never from below the horizon: far things fade into the sky
+//! behind them, warm towards a low sun, and dark blue at night. The sky
+//! itself is left as it is: its own scattering already holds the haze.
+
+import package::wxsl::bindings::{point_sampler, camera, scene, environment_lut_sampler};
+import package::lighting::height_fog_depth::height_fog_depth;
+import package::lighting::fog_composite::fog_composite;
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var depth_image: texture_2d<f32>;
+@group(3) @binding(2) var radiance_image: texture_cube<f32>;
+
+/// The radiance cube's mip the fog's light is read from: wide enough to
+/// lose the stars' and the sun's detail, narrow enough to keep the glow.
+const SKY_MIP: f32 = 4.0;
+/// The lowest the fog's light is looked up, as a direction's y: below the
+/// horizon the baked sky is the dark ground's.
+const HORIZON: f32 = 0.03;
+
+@vertex
+fn drive_fog_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn drive_fog_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let color = textureLoad(color_image, pixel, 0);
+    let size = vec2f(textureDimensions(depth_image));
+    let depth = textureSampleLevel(depth_image, point_sampler, (floor(position.xy) + 0.5) / size, 0.0).x;
+    if depth >= 1.0 {
+        return color;
+    }
+    let uv = position.xy / size;
+    let ndc = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    let world = camera.inverse_view_proj * ndc;
+    let path = world.xyz / world.w - camera.position;
+    let distance = length(path);
+    let ray = path / max(distance, 1e-4);
+
+    let optical = height_fog_depth(
+        camera.position.y - params.base,
+        path.y,
+        distance,
+        params.density,
+        params.falloff,
+    );
+    let lookup = normalize(vec3f(ray.x, max(ray.y, HORIZON), ray.z));
+    let sky = textureSampleLevel(radiance_image, environment_lut_sampler, lookup, SKY_MIP).rgb;
+    let light = sky * scene.environment_scale * scene.exposure;
+    return vec4f(fog_composite(color.rgb, light, exp(-optical)), color.a);
+}
