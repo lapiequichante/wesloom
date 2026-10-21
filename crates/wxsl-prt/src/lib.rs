@@ -20,6 +20,10 @@
 //! surface's `diffuse_occlusion` and `specular_occlusion`, lit by the
 //! environment's own coefficients ([`sh::project_equirect`]).
 //!
+//! A model can also shadow a surface it stands on: [`ground`] lays a grid
+//! under it ([`GroundGrid`]) and [`bake_receiver`] bakes that grid alone,
+//! against the model, for a material that darkens what is under it.
+//!
 //! The lighting can change after the bake and the geometry cannot: the
 //! transfer belongs to one pose, the first frame of the file's first clip
 //! by default ([`BakeOptions::clip`]), skinned on the CPU. No device is
@@ -27,6 +31,7 @@
 
 mod albedo;
 mod bvh;
+mod ground;
 pub mod sh;
 mod trace;
 
@@ -39,6 +44,7 @@ use wxsl_core::{Graph, NodeId, NodeRegistry, SocketRef};
 use wxsl_gltf::ImportedScene;
 
 pub use albedo::Albedo;
+pub use ground::GroundGrid;
 pub use sh::Sh9;
 
 /// The vertex streams a baked mesh carries and an applied graph declares;
@@ -167,7 +173,36 @@ pub fn bake(
     albedo: &Albedo,
     options: &BakeOptions,
 ) -> Result<Vec<Bake>, PrtError> {
-    trace::bake(imported, albedo, options)
+    trace::bake(imported, albedo, None, options)
+}
+
+/// Bake every mesh of `receiver`, a surface `imported` shadows but that
+/// shadows nothing itself (a [`ground`]), once per mode in
+/// `options.transfers`.
+///
+/// `imported` is posed and occludes as in [`bake`]; `receiver` is placed
+/// as saved, in the same space. With bounces, `imported` is traced too, for
+/// the light it sends onto the receiver, and only the receiver's transfer
+/// is returned, per mesh of `receiver`.
+pub fn bake_receiver(
+    imported: &ImportedScene,
+    albedo: &Albedo,
+    receiver: &ImportedScene,
+    options: &BakeOptions,
+) -> Result<Vec<Bake>, PrtError> {
+    trace::bake(imported, albedo, Some(receiver), options)
+}
+
+/// A flat grid under `imported`, posed for `options.clip`, as a binary
+/// glTF in the model's space: the receiver [`bake_receiver`] bakes.
+pub fn ground(
+    imported: &ImportedScene,
+    options: &BakeOptions,
+    grid: &GroundGrid,
+) -> Result<Vec<u8>, PrtError> {
+    let (min, max) = trace::bounds(imported, options.clip)
+        .ok_or_else(|| PrtError("the model has no geometry to stand a ground under".to_string()))?;
+    ground::glb(min, max, grid)
 }
 
 /// A scene's baked transfer in one mode, per imported mesh in

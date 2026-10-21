@@ -12,6 +12,10 @@
 //! sky (once per hour) → IBL bake (once) ┘
 //! ```
 //!
+//! Under the car, before the background, a pass multiplies the road by
+//! the car's occlusion: the ground grid's PRT bake lit by the car's probe
+//! (`car_ground`), drawn by no other pass.
+//!
 //! The car (body, glass and driver) mirrors a probe at its centre rather
 //! than the sky (ADR 0102): every frame, six forward passes of everything
 //! but the car, filtered like the sky's maps. The forward pass draws the
@@ -38,12 +42,15 @@ use wxsl::render::effect::{
     EffectShader,
 };
 use wxsl::render::pass::{
-    Attachment, DrawSource, Extent, Load, PassDesc, PassKind, Policy, Read, ResourceDesc,
-    ResourceId,
+    Attachment, DepthAttachment, DrawSource, Extent, Load, PassDesc, PassKind, PassState, Policy,
+    Read, ResourceDesc, ResourceId,
 };
-use wxsl::render::types::{Color, TextureFormat};
+use wxsl::render::types::{
+    BlendComponent, BlendFactor, BlendOperation, BlendState, Color, CompareFunction, TextureFormat,
+};
 use wxsl::render::{Camera, Renderer, StockPipeline};
 
+use crate::car_ground::GROUND_TAG;
 use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
 
@@ -108,6 +115,22 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
     },
     downlevel: Downlevel::Portable,
+};
+
+/// The pass that multiplies the road under the car by its occlusion.
+const GROUND: &str = "drive car ground";
+/// What is drawn times what the fragment writes, alpha kept.
+const MULTIPLY: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::Src,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
 };
 
 /// The fog's pass label; each probe face's adds the face (`set_fog`).
@@ -478,6 +501,23 @@ pub fn install(
         }
         graph.pass(car.with_environment(probe.diffuse, probe.specular));
     }
+    // The car's occlusion on the road, over the opaque frame and lit by
+    // the probe, before anything reads that frame.
+    graph.pass(
+        PassDesc::geometry(
+            GROUND,
+            DrawSource::Scene(TagExpr::tag(GROUND_TAG)),
+            MaterialStage::FORWARD_LIT,
+        )
+        .with_color(Attachment::load(shaded))
+        .with_depth(DepthAttachment::load(depth))
+        .with_state(
+            PassState::OPAQUE
+                .with_depth_test(CompareFunction::LessEqual, false)
+                .with_blend(MULTIPLY),
+        )
+        .with_environment(probe.diffuse, probe.specular),
+    );
     let sky_behind =
         ibl::append_background(&mut graph, shaded, depth, maps.radiance, "drive background");
     // The fog over everything opaque, before the glass refracts it.
@@ -548,14 +588,23 @@ pub fn install(
                 .with_reads([Read::current(encoded)]),
         );
     }
-    // The car's stand-in is drawn by the shadow passes and by no other.
+    // The car's stand-in is drawn by the shadow passes and by no other,
+    // the ground grid by its own pass alone.
     let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
+    let grid = TagExpr::tag(GROUND_TAG).not();
     for index in 0..graph.passes().len() {
-        if let Some(PassKind::Geometry {
+        let Some(pass) = graph.pass_mut(index) else {
+            continue;
+        };
+        if pass.label == GROUND {
+            continue;
+        }
+        if let PassKind::Geometry {
             source: DrawSource::Scene(selector),
             stage,
-        }) = graph.pass_mut(index).map(|pass| &mut pass.kind)
+        } = &mut pass.kind
         {
+            *selector = selector.clone().and(grid.clone());
             if *stage != MaterialStage::SHADOW {
                 *selector = selector.clone().and(hidden.clone());
             }

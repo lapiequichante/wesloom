@@ -670,9 +670,15 @@ impl FrameGraph {
                 writers.entry(id.index()).or_default().push(index);
             }
         }
-        // A reader runs after every writer of what it reads.
+        // A reader runs after every writer of what it reads. A pass that
+        // loads what it also writes is a link of that resource's write
+        // chain instead, ordered below: two passes drawing more into one
+        // target would otherwise each wait for the other.
         for (index, pass) in self.passes.iter().enumerate() {
             for id in pass.read_this_frame() {
+                if pass.written().any(|written| written == id) {
+                    continue;
+                }
                 for writer in writers.get(&id.index()).into_iter().flatten() {
                     connect(*writer, index, &mut edges);
                 }
@@ -1283,6 +1289,34 @@ mod tests {
             assert!(matches!(error, ScheduleError::InvalidTextureUse { .. }));
             assert!(error.to_string().contains("tile 1"));
         }
+    }
+    #[test]
+    fn passes_loading_one_colour_target_form_a_write_chain() {
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
+        let color = graph.resource(ResourceDesc::color("color", COLOR));
+        let after = graph.resource(ResourceDesc::color("after", COLOR));
+        let draw = |label: &str, attachment| {
+            PassDesc::geometry(
+                label,
+                DrawSource::Scene(TagExpr::Always),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_state(PassState::FULLSCREEN)
+            .with_color(attachment)
+        };
+        // The reader first: the edges, not the declaration, order it last.
+        graph.pass(
+            PassDesc::screen("reader", "wxsl.tonemap")
+                .with_reads([Read::current(color)])
+                .with_color(Attachment::clear(after, Color::BLACK)),
+        );
+        graph.pass(draw("clear", Attachment::clear(color, Color::BLACK)));
+        graph.pass(draw("more", Attachment::load(color)));
+        graph.pass(draw("more again", Attachment::load(color)));
+        let schedule = graph
+            .schedule()
+            .expect("loading writers are a chain, not a cycle");
+        assert_eq!(schedule.order(), &[1, 2, 3, 0]);
     }
     use crate::pass::{Attachment, DrawSource, PassState, Policy, Read, DEPTH_FORMAT};
     use wxsl_core::abi::{self, MaterialStage};

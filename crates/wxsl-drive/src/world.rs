@@ -35,6 +35,11 @@ const NODES: &[(&str, &str)] = &[
     ("road_surface", include_str!("../shaders/road_surface.wxsl")),
     ("facade", include_str!("../shaders/facade.wxsl")),
     ("ground", include_str!("../shaders/ground.wxsl")),
+    ("car_ground", include_str!("../shaders/car_ground.wxsl")),
+    (
+        "car_ground_transfer",
+        include_str!("../shaders/car_ground_transfer.wxsl"),
+    ),
 ];
 
 /// The parameter that says whether it is night, on every material that

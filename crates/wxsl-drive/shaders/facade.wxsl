@@ -84,7 +84,7 @@ fn facade(
     let concrete = mix(vec3f(0.025, 0.025, 0.03), vec3f(0.05, 0.048, 0.046), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 0.5 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * 0.2 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others. Each is box-filtered over the pixel's footprint,

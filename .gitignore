@@ -16,6 +16,7 @@
 
 # for the ressources that can easily be computed : 
 *.prt
+/screenshots
 
 # Editor/OS cruft
 .vscode/

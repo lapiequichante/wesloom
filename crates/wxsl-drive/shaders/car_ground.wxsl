@@ -1,0 +1,71 @@
+// Car ground occlusion
+//
+// The share of the probe's diffuse light the car leaves on the ground
+// under it, as a factor to multiply what is already drawn there by: the
+// ground grid's grayscale PRT bake (`wxsl-prt --ground`, ADR 0092),
+// decoded by `drive.car_ground_transfer`, dotted with the probe's light.
+// The probe's radiance over the ground's hemisphere is projected onto
+// order-3 SH here, through the car's axes (`right`, `up`, `back` in world
+// space), because the bake is in the car's space: a lamp on one side
+// pushes the shadow to the other. Below the ground is left out: the road
+// under the headlights, seen by the probe, would otherwise ring through
+// the low-order SH and leave nothing to divide by at dusk.
+// The ratio over the unshadowed light keeps only the occlusion, read on
+// luminance and windowed as `lighting.prt_diffuse_occlusion` does; it
+// fades out towards the grid's edges.
+//
+// Original implementation.
+
+import package::wxsl::bindings::environment_specular_radiance;
+import package::lighting::prt_window::prt_window;
+import package::lighting::sh_irradiance::sh_irradiance;
+
+fn car_ground(
+    low: vec4f,      // Transfer coefficients 0..3. @default 0.0
+    high: vec4f,     // Transfer coefficients 4..7. @default 0.0
+    last: f32,       // Transfer coefficient 8. @default 0.0
+    right: vec3f,    // The car's +x, in world space. @default 1.0, 0.0, 0.0
+    up: vec3f,       // The car's +y, in world space. @default 0.0, 1.0, 0.0
+    back: vec3f,     // The car's +z, in world space. @default 0.0, 0.0, 1.0
+    uv: vec2f,       // Across the grid, 0..1. @default 0.5, 0.5
+    strength: f32,   // 0 leaves the ground alone, 1 is the full occlusion. @default 1.0
+) -> vec4f {
+    // A Fibonacci set over the upper hemisphere, each sample the
+    // prefiltered radiance at a middling roughness: blurred enough for
+    // order-3 SH, and still a radiance. Scale cancels in the ratio.
+    let count = 48u;
+    var sh: array<vec3f, 9>;
+    for (var k = 0u; k < count; k++) {
+        let y = 1.0 - (f32(k) + 0.5) / f32(count);
+        let r = sqrt(max(1.0 - y * y, 0.0));
+        let phi = f32(k) * 2.399963;
+        let d = vec3f(r * cos(phi), y, r * sin(phi));
+        let l = environment_specular_radiance(normalize(right * d.x + up * d.y + back * d.z), 0.5);
+        sh[0] += l * 0.282095;
+        sh[1] += l * (0.488603 * d.y);
+        sh[2] += l * (0.488603 * d.z);
+        sh[3] += l * (0.488603 * d.x);
+        sh[4] += l * (1.092548 * d.x * d.y);
+        sh[5] += l * (1.092548 * d.y * d.z);
+        sh[6] += l * (0.315392 * (3.0 * d.z * d.z - 1.0));
+        sh[7] += l * (1.092548 * d.x * d.z);
+        sh[8] += l * (0.546274 * (d.x * d.x - d.y * d.y));
+    }
+    let w0 = prt_window(sh[0], 0.0);
+    let w1 = prt_window(sh[1], 1.0);
+    let w2 = prt_window(sh[2], 1.0);
+    let w3 = prt_window(sh[3], 1.0);
+    let w4 = prt_window(sh[4], 2.0);
+    let w5 = prt_window(sh[5], 2.0);
+    let w6 = prt_window(sh[6], 2.0);
+    let w7 = prt_window(sh[7], 2.0);
+    let w8 = prt_window(sh[8], 2.0);
+    let transferred = w0.x * low.x + w1.x * low.y + w2.x * low.z + w3.x * low.w
+        + w4.x * high.x + w5.x * high.y + w6.x * high.z + w7.x * high.w + w8.x * last;
+    let open = sh_irradiance(vec3f(0.0, 1.0, 0.0), w0, w1, w2, w3, w4, w5, w6, w7, w8).x;
+    let ratio = select(clamp(transferred / max(open, 1e-6), 0.0, 1.0), 1.0, open <= 1e-6);
+    let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    let fade = smoothstep(0.0, 0.12, edge);
+    let ao = mix(1.0, ratio, clamp(strength, 0.0, 1.0) * fade);
+    return vec4f(vec3f(ao), 1.0);
+}

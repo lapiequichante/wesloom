@@ -11,6 +11,12 @@ an entry.
 
 ### Added
 
+- `wxsl_prt::ground` and `GroundGrid`: a flat grid under a model, as a
+  `.glb` in its space, and `wxsl_prt::bake_receiver`, which bakes such a
+  surface against the model without it shadowing anything. The binary
+  gains `--ground`, writing `<model>_ground.glb` and its bakes
+  ([ADR 0092](docs/adr/0092-precomputed-radiance-transfer-is-baked-offline-and-applied-as-environment-occlusion.md)).
+
 - `Light::with_cascade_split` (`shadow_cascade_split`): how logarithmic a
   cascaded light's splits are, 0.5 by default as before. And
   `Light::with_caster_reach` (`shadow_caster_reach`): how far towards the

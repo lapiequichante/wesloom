@@ -34,6 +34,7 @@
 //! them, as the first free `drive-NNN.png` in the working directory.
 
 mod car;
+mod car_ground;
 mod city;
 mod lights;
 mod pipeline;
@@ -63,17 +64,18 @@ use wxsl::render::{
 };
 
 use car::Car;
+use car_ground::CarGround;
 use sky::DayLight;
 use ui::{Panel, Slider};
 use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
-      [--exposure EV] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
+      [--exposure EV] [--ground-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
       [--view NAME] [--deferred] [--soft-shadows] [--no-fxaa]
       [--screenshot out.png [--ui] [--frames N] [--profile]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
-        debug view, forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
+        occlusion on the road, its debug view, forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
         the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
@@ -83,6 +85,7 @@ const BLUR: &str = "motion blur";
 const APERTURE: &str = "aperture";
 const FOG: &str = "fog";
 const EXPOSURE: &str = "exposure";
+const GROUND_AO: &str = "ground AO";
 const VIEW: &str = "view";
 const PIPELINE: &str = "pipeline";
 const SHADOWS: &str = "shadows";
@@ -116,6 +119,8 @@ struct Options {
     fog: f32,
     /// Stops over the exposure the hour adapts to.
     exposure: f32,
+    /// How much the car darkens the road under it, 0 to 1.
+    ground_ao: f32,
     at: f32,
     /// How far the view starts turned around the car, radians.
     look: f32,
@@ -152,6 +157,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         aperture: 8.0,
         fog: 1.0,
         exposure: 0.0,
+        ground_ao: 1.0,
         at: 0.0,
         look: 0.0,
         pitch: 0.0,
@@ -182,6 +188,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--aperture" => options.aperture = value()?.parse()?,
             "--fog" => options.fog = value()?.parse()?,
             "--exposure" => options.exposure = value()?.parse()?,
+            "--ground-ao" => options.ground_ao = value()?.parse()?,
             "--at" => options.at = value()?.parse()?,
             "--look" => options.look = value()?.parse()?,
             "--pitch" => options.pitch = value()?.parse()?,
@@ -245,6 +252,9 @@ fn sliders(options: &Options) -> Panel {
         Slider::new(EXPOSURE, -4.0, 4.0, options.exposure, |value| {
             format!("{value:+.1} EV")
         }),
+        Slider::new(GROUND_AO, 0.0, 1.0, options.ground_ao, |value| {
+            format!("{value:.2}")
+        }),
         Slider::new(
             VIEW,
             0.0,
@@ -286,6 +296,9 @@ struct Drive {
     library: ShaderLibrary,
     world: World,
     car: Car,
+    /// The car's occlusion on the road, when the car has a baked ground,
+    /// and the strength last set on it.
+    ground: Option<(CarGround, Option<f32>)>,
     /// Arc length along the road, metres.
     s: f32,
     /// How far the car has driven, for its wheels.
@@ -321,6 +334,8 @@ impl Drive {
         let mut renderer = Renderer::new(&gpu.device, library.clone(), target)?;
         pipeline::add_effects(&mut renderer)?;
         renderer.set_lighting(LightingSet::new(DEFAULT_MODELS.iter().copied())?)?;
+        let ground =
+            CarGround::load(gpu, &mut renderer, &registry, car)?.map(|ground| (ground, None));
         let car = Car::open(
             gpu,
             &mut renderer,
@@ -345,6 +360,7 @@ impl Drive {
             library,
             world,
             car,
+            ground,
             s: at,
             odometer: 0.0,
             clip_time: 0.0,
@@ -468,6 +484,13 @@ impl Drive {
             panel.value(APERTURE),
         )?;
         pipeline::set_fog(&mut self.renderer, panel.value(FOG) * FOG_DENSITY)?;
+        if let Some((ground, shown)) = &mut self.ground {
+            let strength = panel.value(GROUND_AO);
+            if *shown != Some(strength) {
+                ground.set_strength(gpu, strength)?;
+                *shown = Some(strength);
+            }
+        }
         self.renderer.set_pass_param(
             pipeline::MOTION_BLUR,
             "strength",
@@ -476,6 +499,9 @@ impl Drive {
         let mut draws: DrawList = self.world.draws().into_iter().collect();
         for item in self.car.draws(transform, previous_transform) {
             draws.push(item);
+        }
+        if let Some((ground, _)) = &self.ground {
+            draws.push(ground.draw(transform * self.car.align()));
         }
         self.renderer.render(
             &gpu.device,

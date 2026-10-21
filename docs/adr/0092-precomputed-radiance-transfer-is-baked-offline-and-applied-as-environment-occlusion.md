@@ -135,6 +135,14 @@ Three things had to be decided:
   carry the lobe, but the energy is the surface's. `--albedo`
   (`Albedo::base_color_only`) still bakes the base colour alone. The
   default is three bounces, so a closed cabin fills up.
+* **Receivers.** A model can also shadow a surface it stands on.
+  `wxsl_prt::ground` writes a flat grid under its posed box (`--ground`),
+  and `bake_receiver` traces that grid against the model. The grid is
+  not in the hierarchy, so the model's own bake is unchanged. With
+  bounces the model's vertices are traced too, for the light they send
+  down, and only the grid's transfer is written. Its sidecar is keyed
+  to the grid's file like any other. The drive demo draws it as a
+  multiply over the road, lit by the car's probe (ADR 0102).
 * **Back faces.** A double-sided material's vertices are traced a
   second time about the flipped normal, for bounces only: a ray that
   hits its back reads that transfer. The back of a single-sided surface

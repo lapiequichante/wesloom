@@ -23,11 +23,17 @@
 //! A double-sided material is lit from behind too, so its vertices are
 //! traced a second time about the flipped normal. That transfer is never
 //! written out: it is what a bounce off the back of the surface reads.
+//!
+//! A receiver (a ground under the model) is traced against the model but
+//! is not in the hierarchy: it shadows nothing, so the model's own bake is
+//! the same with or without it. Only the receiver's transfer is written.
+//! The model's vertices are traced too only when there are bounces, for
+//! the light they send onto the receiver.
 
 use std::borrow::Cow;
 
 use glam::{Mat3, Mat4, Vec3};
-use wxsl_core::scene::{MeshSource, TAG_TRANSPARENT};
+use wxsl_core::scene::{Instance, MeshSource, TAG_TRANSPARENT};
 use wxsl_gltf::{Geometry, ImportedScene, TAG_REFRACTIVE};
 
 use crate::albedo::Albedo;
@@ -51,9 +57,12 @@ struct Owner {
     masked: bool,
 }
 
-/// A mesh's first instance: its posed vertices, position and normal, and
-/// whether it is lit from behind.
-type Placed = (Vec<(Vec3, Vec3)>, bool);
+/// Posed vertices in world space: position and unit normal.
+type Posed = Vec<(Vec3, Vec3)>;
+
+/// A mesh's first instance: its posed vertices, and whether it is lit from
+/// behind.
+type Placed = (Posed, bool);
 
 struct Scene<'a> {
     imported: &'a ImportedScene,
@@ -68,21 +77,25 @@ struct Scene<'a> {
     starts: Vec<Option<usize>>,
     /// Per imported mesh, its first back-facing vertex, if double-sided.
     backs: Vec<Option<usize>>,
+    /// Per receiver mesh, its first vertex in the job list, if placed.
+    receivers: Vec<Option<usize>>,
     /// Every placed vertex, then the back sides: world position and
     /// normal.
     jobs: Vec<(Vec3, Vec3)>,
     threads: usize,
 }
 
+/// Bake `imported`, or with a `receiver`, that receiver alone.
 pub(crate) fn bake(
     imported: &ImportedScene,
     albedo: &Albedo,
+    receiver: Option<&ImportedScene>,
     options: &BakeOptions,
 ) -> Result<Vec<Bake>, PrtError> {
     if options.rays == 0 {
         return Err(PrtError("a bake needs at least one ray".to_string()));
     }
-    let scene = Scene::new(imported, albedo, options);
+    let scene = Scene::new(imported, albedo, receiver, options);
     let count = scene.jobs.len();
 
     // The shadowed pass: the visibility, then nine coefficients.
@@ -124,10 +137,14 @@ pub(crate) fn bake(
                 Transfer::Gray => (&gray, 9),
                 Transfer::Color => (&color, 27),
             };
-            let meshes = imported
+            let (written, starts) = match receiver {
+                Some(receiver) => (receiver, &scene.receivers),
+                None => (imported, &scene.starts),
+            };
+            let meshes = written
                 .meshes
                 .iter()
-                .zip(&scene.starts)
+                .zip(starts)
                 .map(|(geometry, start)| {
                     let vertices = geometry.vertices.len();
                     match start {
@@ -149,51 +166,81 @@ pub(crate) fn bake(
         .collect())
 }
 
-impl<'a> Scene<'a> {
-    fn new(imported: &'a ImportedScene, albedo: &'a Albedo, options: &BakeOptions) -> Self {
-        let scene = &imported.scene;
-        // The nodes where the clip's first frame puts them.
-        let posed = match options.clip.and_then(|clip| imported.animations.get(clip)) {
-            Some(animation) => {
-                let mut posed = scene.clone();
-                animation.pose(0.0, &scene.nodes, &mut posed.nodes);
-                Cow::Owned(posed)
-            }
-            None => Cow::Borrowed(scene),
+/// Every embedded instance of `imported` posed at the first frame of
+/// `clip` (or as saved): its mesh, the instance, and its world vertices,
+/// position and unit normal.
+fn instances(imported: &ImportedScene, clip: Option<usize>) -> Vec<(usize, &Instance, Posed)> {
+    let scene = &imported.scene;
+    // The nodes where the clip's first frame puts them.
+    let posed = match clip.and_then(|clip| imported.animations.get(clip)) {
+        Some(animation) => {
+            let mut posed = scene.clone();
+            animation.pose(0.0, &scene.nodes, &mut posed.nodes);
+            Cow::Owned(posed)
+        }
+        None => Cow::Borrowed(scene),
+    };
+    let mut out = Vec::new();
+    for instance in &scene.instances {
+        let Some(MeshSource::Embedded { index }) =
+            scene.meshes.get(instance.mesh).map(|mesh| &mesh.source)
+        else {
+            continue;
         };
+        let Some(geometry) = imported.meshes.get(*index) else {
+            continue;
+        };
+        let skin = imported
+            .material_skins
+            .get(instance.material)
+            .copied()
+            .flatten()
+            .and_then(|skin| imported.skins.get(skin));
+        let (world, joints) = match skin {
+            // The joints carry the motion, relative to the skin's node as
+            // imported, and the instance stays where it was: what the bone
+            // texture and the draw do.
+            Some(skin) => (
+                scene.instance_world(instance),
+                skin.joint_matrices(&posed, &scene.node_world(skin.node))
+                    .iter()
+                    .map(Mat4::from_cols_array)
+                    .collect(),
+            ),
+            None => (posed.instance_world(instance), Vec::new()),
+        };
+        let vertices = pose(geometry, Mat4::from_cols_array(&world), &joints);
+        out.push((*index, instance, vertices));
+    }
+    out
+}
+
+/// The box around every posed vertex of `imported`, if it has any.
+pub(crate) fn bounds(imported: &ImportedScene, clip: Option<usize>) -> Option<(Vec3, Vec3)> {
+    let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for (_, _, vertices) in instances(imported, clip) {
+        for (point, _) in vertices {
+            min = min.min(point);
+            max = max.max(point);
+        }
+    }
+    (min.x <= max.x).then_some((min, max))
+}
+
+impl<'a> Scene<'a> {
+    fn new(
+        imported: &'a ImportedScene,
+        albedo: &'a Albedo,
+        receiver: Option<&ImportedScene>,
+        options: &BakeOptions,
+    ) -> Self {
+        let scene = &imported.scene;
         let mut placement: Vec<Option<Placed>> = vec![None; imported.meshes.len()];
         let mut triangles = Vec::new();
         let mut owners = Vec::new();
         let mut lowest = f32::MAX;
-        for instance in &scene.instances {
-            let Some(MeshSource::Embedded { index }) =
-                scene.meshes.get(instance.mesh).map(|mesh| &mesh.source)
-            else {
-                continue;
-            };
-            let Some(geometry) = imported.meshes.get(*index) else {
-                continue;
-            };
-            let skin = imported
-                .material_skins
-                .get(instance.material)
-                .copied()
-                .flatten()
-                .and_then(|skin| imported.skins.get(skin));
-            let (world, joints) = match skin {
-                // The joints carry the motion, relative to the skin's node
-                // as imported, and the instance stays where it was: what
-                // the bone texture and the draw do.
-                Some(skin) => (
-                    scene.instance_world(instance),
-                    skin.joint_matrices(&posed, &scene.node_world(skin.node))
-                        .iter()
-                        .map(Mat4::from_cols_array)
-                        .collect(),
-                ),
-                None => (posed.instance_world(instance), Vec::new()),
-            };
-            let vertices = pose(geometry, Mat4::from_cols_array(&world), &joints);
+        for (index, instance, vertices) in instances(imported, options.clip) {
+            let geometry = &imported.meshes[index];
             lowest = vertices
                 .iter()
                 .fold(lowest, |low, (point, _)| low.min(point.y));
@@ -209,7 +256,7 @@ impl<'a> Scene<'a> {
                     triangles.push([0, 1, 2].map(|at| corner(at).0));
                     let front = (0..3).map(|at| corner(at).1).sum::<Vec3>();
                     owners.push(Owner {
-                        mesh: *index,
+                        mesh: index,
                         material: instance.material,
                         first: triangle * 3,
                         front: front.normalize_or_zero(),
@@ -219,7 +266,7 @@ impl<'a> Scene<'a> {
             }
             // Light passes a clear surface, so nothing bounces off its back.
             let two_sided = !clear && material.is_some_and(|material| material.config.double_sided);
-            placement[*index].get_or_insert((vertices, two_sided));
+            placement[index].get_or_insert((vertices, two_sided));
         }
 
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -235,6 +282,10 @@ impl<'a> Scene<'a> {
             1e-4
         };
 
+        // A receiver reads the model's transfer only through its bounces.
+        if receiver.is_some() && options.bounces == 0 {
+            placement.fill(None);
+        }
         let mut starts = vec![None; imported.meshes.len()];
         let mut jobs = Vec::new();
         for (index, placed) in placement.iter().enumerate() {
@@ -250,6 +301,17 @@ impl<'a> Scene<'a> {
                 jobs.extend(vertices.iter().map(|&(point, normal)| (point, -normal)));
             }
         }
+        let mut receivers = Vec::new();
+        if let Some(receiver) = receiver {
+            receivers = vec![None; receiver.meshes.len()];
+            // Rigid, as saved: a receiver has no clip of its own.
+            for (index, _, vertices) in instances(receiver, None) {
+                if receivers[index].is_none() {
+                    receivers[index] = Some(jobs.len());
+                    jobs.extend(vertices);
+                }
+            }
+        }
         Scene {
             imported,
             albedo,
@@ -260,6 +322,7 @@ impl<'a> Scene<'a> {
             samples: hemisphere(options.rays),
             starts,
             backs,
+            receivers,
             jobs,
             threads: match options.threads {
                 0 => std::thread::available_parallelism().map_or(1, usize::from),
@@ -445,7 +508,7 @@ impl<'a> Scene<'a> {
 /// Every vertex of `geometry` in world space, position and unit normal:
 /// blended by `joints` (none for a rigid mesh) as `animation.skin` does,
 /// then placed by `world`.
-fn pose(geometry: &Geometry, world: Mat4, joints: &[Mat4]) -> Vec<(Vec3, Vec3)> {
+fn pose(geometry: &Geometry, world: Mat4, joints: &[Mat4]) -> Posed {
     let normals = Mat3::from_mat4(world).inverse().transpose();
     let skin = match (joints.is_empty(), &geometry.joints, &geometry.weights) {
         (false, Some(indices), Some(weights)) => Some((indices, weights)),

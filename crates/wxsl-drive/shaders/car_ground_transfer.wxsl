@@ -1,0 +1,31 @@
+// Car ground transfer
+//
+// The nine coefficients of the ground grid's grayscale PRT bake, unpacked
+// from its two streams (`lighting.prt_unpack`, ADR 0092). Packed codes do
+// not survive interpolation, so this runs in the vertex stage and hands
+// `drive.car_ground` the decoded values: coefficients 0..3, 4..7, then 8.
+//
+// Original implementation.
+
+import package::lighting::prt_unpack::prt_unpack;
+
+struct CarGroundTransfer {
+    low: vec4f,
+    high: vec4f,
+    last: f32,
+}
+
+fn car_ground_transfer(
+    prt0: vec4f, // The bake's first stream. @default 0.0
+    prt1: vec4f, // The bake's second stream. @default 0.0
+) -> CarGroundTransfer {
+    let t01 = prt_unpack(prt0.z);
+    let t23 = prt_unpack(prt0.w);
+    let t45 = prt_unpack(prt1.x);
+    let t67 = prt_unpack(prt1.y);
+    var out: CarGroundTransfer;
+    out.low = vec4f(t01, t23);
+    out.high = vec4f(t45, t67);
+    out.last = prt_unpack(prt1.z).x;
+    return out;
+}

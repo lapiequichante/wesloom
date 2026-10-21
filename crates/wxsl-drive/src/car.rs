@@ -603,6 +603,12 @@ impl Car {
         Ok(())
     }
 
+    /// From the file's space to the car's, which a drawing of something
+    /// baked in the file's space (the ground grid) goes through.
+    pub fn align(&self) -> Mat4 {
+        self.align
+    }
+
     /// The car's transform on the road: in the lane `lateral` metres right
     /// of the centre line, along `frame`.
     pub fn placement(&self, frame: &Frame, lateral: f32) -> Mat4 {

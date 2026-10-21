@@ -98,6 +98,27 @@ impl core::marker::Unpin for wxsl_prt::BakeOptions
 impl core::marker::UnsafeUnpin for wxsl_prt::BakeOptions
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::BakeOptions
 impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::BakeOptions
+pub struct wxsl_prt::GroundGrid
+pub wxsl_prt::GroundGrid::lift: f32
+pub wxsl_prt::GroundGrid::margin: f32
+pub wxsl_prt::GroundGrid::spacing: f32
+impl core::clone::Clone for wxsl_prt::GroundGrid
+pub fn wxsl_prt::GroundGrid::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_prt::GroundGrid
+pub fn wxsl_prt::GroundGrid::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_prt::GroundGrid
+pub fn wxsl_prt::GroundGrid::default() -> Self
+impl core::fmt::Debug for wxsl_prt::GroundGrid
+pub fn wxsl_prt::GroundGrid::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_prt::GroundGrid
+impl core::marker::StructuralPartialEq for wxsl_prt::GroundGrid
+impl core::marker::Freeze for wxsl_prt::GroundGrid
+impl core::marker::Send for wxsl_prt::GroundGrid
+impl core::marker::Sync for wxsl_prt::GroundGrid
+impl core::marker::Unpin for wxsl_prt::GroundGrid
+impl core::marker::UnsafeUnpin for wxsl_prt::GroundGrid
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_prt::GroundGrid
+impl core::panic::unwind_safe::UnwindSafe for wxsl_prt::GroundGrid
 pub struct wxsl_prt::PrtError(pub alloc::string::String)
 impl core::clone::Clone for wxsl_prt::PrtError
 pub fn wxsl_prt::PrtError::clone(&self) -> Self
@@ -124,4 +145,6 @@ pub const wxsl_prt::STREAMS: [&str; 4]
 pub const wxsl_prt::STRENGTH_PARAM: &str
 pub fn wxsl_prt::apply(&mut wxsl_core::graph::Graph, &wxsl_core::node::NodeRegistry, &wxsl_prt::sh::Sh9, wxsl_prt::Transfer) -> core::result::Result<(), wxsl_prt::PrtError>
 pub fn wxsl_prt::bake(&wxsl_gltf::ImportedScene, &wxsl_prt::Albedo, &wxsl_prt::BakeOptions) -> core::result::Result<alloc::vec::Vec<wxsl_prt::Bake>, wxsl_prt::PrtError>
+pub fn wxsl_prt::bake_receiver(&wxsl_gltf::ImportedScene, &wxsl_prt::Albedo, &wxsl_gltf::ImportedScene, &wxsl_prt::BakeOptions) -> core::result::Result<alloc::vec::Vec<wxsl_prt::Bake>, wxsl_prt::PrtError>
+pub fn wxsl_prt::ground(&wxsl_gltf::ImportedScene, &wxsl_prt::BakeOptions, &wxsl_prt::GroundGrid) -> core::result::Result<alloc::vec::Vec<u8>, wxsl_prt::PrtError>
 pub type wxsl_prt::Sh9 = [[f32; 3]; 9]

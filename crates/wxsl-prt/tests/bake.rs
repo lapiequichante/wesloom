@@ -4,7 +4,8 @@
 //!
 //! The scene is a red floor (a 3×3 vertex grid, 4 wide, facing up) under
 //! a grey 2-wide roof half a unit above its centre, written as a `.gltf`
-//! with an external `.bin` in a temporary directory.
+//! with an external `.bin` in a temporary directory. A ground grid laid
+//! under it is baked as a receiver.
 
 const GREY_ROOF: &str =
     r#"{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1], "metallicFactor": 0}}"#;
@@ -12,7 +13,7 @@ const GREY_ROOF: &str =
 use std::path::PathBuf;
 
 use glam::Vec3;
-use wxsl_prt::{sh, Albedo, Bake, BakeOptions, Transfer, STRENGTH_PARAM};
+use wxsl_prt::{sh, Albedo, Bake, BakeOptions, GroundGrid, Transfer, STRENGTH_PARAM};
 
 fn scene_file(roof_material: &str) -> PathBuf {
     let floor: Vec<[f32; 3]> = (0..9)
@@ -204,6 +205,69 @@ fn the_roof_shadows_the_floor_beneath_it_and_not_beyond() {
         .to_string()
         .contains("mesh 0"));
     assert!(Bake::default().check(&imported).is_err());
+}
+
+#[test]
+fn a_ground_under_the_scene_is_shadowed_by_it_and_shadows_nothing() {
+    let path = scene_file(GREY_ROOF);
+    let registry = wxsl_stdlib::registry();
+    let imported = wxsl_gltf::import(&path, &registry).unwrap();
+    let albedo = Albedo::load(&path, &imported).unwrap();
+    let shadows = BakeOptions {
+        bounces: 0,
+        transfers: vec![Transfer::Gray],
+        ..BakeOptions::default()
+    };
+    let grid = GroundGrid {
+        margin: 1.0,
+        spacing: 0.5,
+        lift: 0.01,
+    };
+    let ground = path.with_file_name("ground.glb");
+    std::fs::write(
+        &ground,
+        wxsl_prt::ground(&imported, &shadows, &grid).unwrap(),
+    )
+    .unwrap();
+    let receiver = wxsl_gltf::import(&ground, &registry).unwrap();
+    // The floor's 4 m and a metre either side, every half metre.
+    assert_eq!(receiver.meshes.len(), 1);
+    assert_eq!(receiver.meshes[0].vertices.len(), 13 * 13);
+    let centre = receiver.meshes[0].vertices[6 * 13 + 6].position;
+    assert!(Vec3::from(centre).distance(Vec3::new(0.0, 0.01, 0.0)) < 1e-5);
+
+    let gray = &wxsl_prt::bake_receiver(&imported, &albedo, &receiver, &shadows).unwrap()[0];
+    gray.check(&receiver).unwrap();
+    let floor = &bake(&path, shadows.clone())[0];
+    let (under, open) = (vertex(gray, 0, 6 * 13 + 6), vertex(gray, 0, 0));
+    // Under the roof as the floor itself is, and open past it.
+    assert!(
+        (occlusion(under) - occlusion(vertex(floor, 0, 4))).abs() < 0.05,
+        "{} vs the floor's {}",
+        occlusion(under),
+        occlusion(vertex(floor, 0, 4))
+    );
+    assert!(
+        occlusion(open) > 0.9,
+        "out in the open: {}",
+        occlusion(open)
+    );
+    // The ground shadows nothing: the scene's own bake is unchanged.
+    assert_eq!(bake(&path, shadows.clone())[0], *floor);
+
+    // Bounces trace the scene too, for the light it sends down.
+    let bounced = &wxsl_prt::bake_receiver(
+        &imported,
+        &albedo,
+        &receiver,
+        &BakeOptions {
+            bounces: 1,
+            ..shadows
+        },
+    )
+    .unwrap()[0];
+    bounced.check(&receiver).unwrap();
+    assert!(vertex(bounced, 0, 6 * 13 + 6)[3] > under[3]);
 }
 
 #[test]
