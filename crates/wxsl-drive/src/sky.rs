@@ -44,6 +44,9 @@ pub struct DayLight {
     pub lights_on: f32,
     /// The camera's exposure: more at night, the way an eye adapts.
     pub exposure: f32,
+    /// The sky's light from the sun at the ground, twilight included:
+    /// nothing at night, the sun's irradiance by day.
+    pub sky: f32,
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -90,6 +93,7 @@ impl DayLight {
             moon_color,
             lights_on: 1.0 - smoothstep(-0.02, 0.12, sun.y),
             exposure: 1.2 + (1.0 - 1.2) * day,
+            sky: SUN * day,
         }
     }
 
@@ -169,6 +173,9 @@ mod tests {
         assert!(midnight.lights_on > 0.999);
         assert!(midnight.moon.y > 0.3);
         assert!(midnight.exposure > noon.exposure);
+        assert_eq!(midnight.sky, 0.0);
+        assert!(noon.sky > 2.0);
+        assert!(DayLight::at(18.6).sky < noon.sky);
     }
 
     #[test]

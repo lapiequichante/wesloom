@@ -1,0 +1,34 @@
+// Neon streak stretch
+//
+// How much further than its rest an outer vertex of the neons' streak
+// moves, in object space. The glossy reflection of a strip on the road
+// stretches towards the viewer: the more the lower the view and the more
+// it looks along the strip's normal; seen from above, or along the strip,
+// it keeps its rest width. It moves partly along that normal and partly
+// towards the eye, on the road, by `toward`. `edge` (the uv's v) is 0 on
+// the strip, which stays put, and 1 on the outer edge. Every vertex also
+// moves `bias` metres along its view ray towards the eye, which leaves it
+// where it is on screen: a depth bias, so the road's bumps do not cut it.
+//
+// Original implementation.
+
+fn neon_streak(
+    normal_matrix: mat3x3f,
+    view: vec3f,       // Towards the eye, world space. @default 0.0, 1.0, 0.0
+    out_dir: vec3f,    // The strip's outward normal, object space, level. @default 1.0, 0.0, 0.0
+    uv: vec2f,         // Along the strip, then 0 on it and 1 on the outer edge. @default 0.0, 0.0
+    width: f32,        // The streak's rest width, metres. @default 0.12
+    stretch: f32,      // How many times its rest width it reaches, seen grazing along its normal. @default 8.0
+    toward: f32,       // How far it turns from the normal towards the eye: 0 not at all, 1 fully. @default 0.5
+    bias: f32,         // How far every vertex moves towards the eye, metres. @default 0.0
+) -> vec3f {
+    let eye = normalize(transpose(normal_matrix) * view);
+    let level = length(eye.xz);
+    let flat = select(out_dir.xz, eye.xz / max(level, 1e-4), level > 1e-4);
+    let along = max(dot(out_dir.xz, flat), 0.0);
+    // sin² of the view's angle from straight down: 0 above, 1 at the horizon.
+    let grazing = level * level;
+    let grow = (stretch - 1.0) * along * grazing * grazing;
+    let turned = normalize(mix(out_dir.xz, flat, clamp(toward, 0.0, 1.0)) + vec2f(1e-6, 0.0));
+    return vec3f(turned.x, 0.0, turned.y) * width * grow * uv.y + eye * bias;
+}

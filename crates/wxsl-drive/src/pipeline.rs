@@ -14,7 +14,8 @@
 //!
 //! Under the car, before the background, a pass multiplies the road by
 //! the car's occlusion: the ground grid's PRT bake lit by the car's probe
-//! (`car_ground`), drawn by no other pass.
+//! (`car_ground`), drawn by no other pass. Another then adds the neons'
+//! baked light (`neon`); the probe does not capture it.
 //!
 //! The car (body, glass and driver) mirrors a probe at its centre rather
 //! than the sky (ADR 0102): every frame, six forward passes of everything
@@ -52,6 +53,7 @@ use wxsl::render::{Camera, Renderer, StockPipeline};
 
 use crate::car_ground::GROUND_TAG;
 use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
+use crate::neon::NEON_TAG;
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
 
 /// The pass the lens' numbers go to.
@@ -133,6 +135,38 @@ const MULTIPLY: BlendState = BlendState {
         operation: BlendOperation::Add,
     },
 };
+
+/// The pass that adds the neons' light to the frame.
+const NEON: &str = "drive neon";
+/// What is drawn plus what the fragment writes, alpha kept.
+const ADD: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+};
+
+/// The neons' light added over `color`, depth-tested against `depth`.
+fn neon_pass(label: String, color: ResourceId, depth: ResourceId) -> PassDesc {
+    PassDesc::geometry(
+        label,
+        DrawSource::Scene(TagExpr::tag(NEON_TAG)),
+        MaterialStage::FORWARD_LIT,
+    )
+    .with_color(Attachment::load(color))
+    .with_depth(DepthAttachment::load(depth))
+    .with_state(
+        PassState::OPAQUE
+            .with_depth_test(CompareFunction::LessEqual, false)
+            .with_blend(ADD),
+    )
+}
 
 /// The fog's pass label; each probe face's adds the face (`set_fog`).
 const FOG: &str = "drive fog";
@@ -474,6 +508,26 @@ pub fn install(
             radiance: probe.radiance,
         }
     };
+    // The car's occlusion on the road, then the neons' light, over the
+    // world and lit by the probe, before the car: declared first, they
+    // write the frame first, and the car drawn after hides them where it
+    // stands in front of the road.
+    graph.pass(
+        PassDesc::geometry(
+            GROUND,
+            DrawSource::Scene(TagExpr::tag(GROUND_TAG)),
+            MaterialStage::FORWARD_LIT,
+        )
+        .with_color(Attachment::load(shaded))
+        .with_depth(DepthAttachment::load(depth))
+        .with_state(
+            PassState::OPAQUE
+                .with_depth_test(CompareFunction::LessEqual, false)
+                .with_blend(MULTIPLY),
+        )
+        .with_environment(probe.diffuse, probe.specular),
+    );
+    graph.pass(neon_pass(NEON.into(), shaded, depth));
     if !deferred {
         // The world, then the car on the same targets with the probe.
         let forward = graph
@@ -503,23 +557,6 @@ pub fn install(
         }
         graph.pass(car.with_environment(probe.diffuse, probe.specular));
     }
-    // The car's occlusion on the road, over the opaque frame and lit by
-    // the probe, before anything reads that frame.
-    graph.pass(
-        PassDesc::geometry(
-            GROUND,
-            DrawSource::Scene(TagExpr::tag(GROUND_TAG)),
-            MaterialStage::FORWARD_LIT,
-        )
-        .with_color(Attachment::load(shaded))
-        .with_depth(DepthAttachment::load(depth))
-        .with_state(
-            PassState::OPAQUE
-                .with_depth_test(CompareFunction::LessEqual, false)
-                .with_blend(MULTIPLY),
-        )
-        .with_environment(probe.diffuse, probe.specular),
-    );
     let sky_behind =
         ibl::append_background(&mut graph, shaded, depth, maps.radiance, "drive background");
     // The fog over everything opaque, before the glass refracts it.
@@ -591,14 +628,14 @@ pub fn install(
         );
     }
     // The car's stand-in is drawn by the shadow passes and by no other,
-    // the ground grid by its own pass alone.
+    // the ground grid and the neons by their own passes alone.
     let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
-    let grid = TagExpr::tag(GROUND_TAG).not();
+    let grid = TagExpr::tag(GROUND_TAG).or(TagExpr::tag(NEON_TAG)).not();
     for index in 0..graph.passes().len() {
         let Some(pass) = graph.pass_mut(index) else {
             continue;
         };
-        if pass.label == GROUND {
+        if pass.label == GROUND || pass.label == NEON {
             continue;
         }
         if let PassKind::Geometry {

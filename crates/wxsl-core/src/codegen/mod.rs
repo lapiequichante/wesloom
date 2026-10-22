@@ -365,6 +365,9 @@ pub fn generate(
         surface,
         discard,
         fragment,
+        unlit: graph
+            .edge_from(&SocketRef::new(outputs.surface, abi::SOCKET_SHADED_COLOR))
+            .is_none(),
         varyings,
     };
     // A stage with nothing to write has a fragment entry only when the
@@ -942,6 +945,9 @@ struct Partitions {
     /// The chain from the shaded surface to the fragment output, when the
     /// graph has one and this stage writes a colour (ADR 0089).
     fragment: Option<Partition>,
+    /// Whether that chain never reads the shaded surface: the stage then
+    /// skips the shading it would throw away (ADR 0089).
+    unlit: bool,
 }
 
 struct Emitter<'a> {

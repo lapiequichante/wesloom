@@ -1,0 +1,17 @@
+// Toward the eye
+//
+// An object-space offset moving a vertex `distance` metres along its view
+// ray towards the eye: where it lands on screen does not change, only how
+// deep it is. A decal laid flat on a road that is not quite flat then
+// still passes the depth test, while what stands clearly in front of the
+// road (a car, its tyres) still hides it: a depth bias in metres.
+//
+// Original implementation.
+
+fn toward_eye(
+    normal_matrix: mat3x3f,
+    view: vec3f,       // Towards the eye, world space. @default 0.0, 1.0, 0.0
+    distance: f32,     // How far towards the eye, metres. @default 0.25
+) -> vec3f {
+    return transpose(normal_matrix) * view * distance;
+}

@@ -669,14 +669,20 @@ fn {vertex}(input: {vertex_in}{extra_param}) -> {vertex_out} {{
     };
     write_peel_declarations(out, stage);
     // The shaded colour, through the graph's fragment chain when it has
-    // one (ADR 0089).
-    let lit = |shaded: String| match parts.fragment.is_some() {
-        true => format!(
+    // one (ADR 0089); a chain that never reads it is unlit, and the
+    // shading is not run at all.
+    let lit = |shaded: String| match (parts.fragment.is_some(), parts.unlit) {
+        (true, false) => format!(
             "{fragment}({ctx}{args}, {shaded})",
             fragment = abi::FRAGMENT_FN,
             ctx = abi::CONTEXT_VAR,
         ),
-        false => shaded,
+        (true, true) => format!(
+            "{fragment}({ctx}{args}, vec4f(0.0))",
+            fragment = abi::FRAGMENT_FN,
+            ctx = abi::CONTEXT_VAR,
+        ),
+        (false, _) => shaded,
     };
     let shaded = lit(format!(
         "{shade}({material}({ctx}{args}), {ctx})",

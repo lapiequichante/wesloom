@@ -54,3 +54,6 @@ apply to one material's lit colour has nowhere to go.
   pass.
 * The depth, shadow, velocity and refraction stages ignore the chain;
   they write no colour.
+* A chain that never reads the shaded colour is unlit: the colour stages
+  call it with `vec4f(0.0)` and skip `shade_surface` altogether, so a
+  decal or an overlay pays for its own nodes, not for the lights.

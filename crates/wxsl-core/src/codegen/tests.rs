@@ -1089,3 +1089,37 @@ fn a_fragment_chain_rewrites_the_shaded_colour() {
         "{packed}"
     );
 }
+
+/// A fragment chain that never reads the shaded colour is unlit: the
+/// colour stages run the chain alone, without shading the surface first
+/// (ADR 0089).
+#[test]
+fn a_fragment_chain_without_the_shaded_colour_skips_the_shading() {
+    let mut registry = registry();
+    registry.register(abi::fragment_output_def());
+    registry.register(
+        NodeDefinition::builder("test.glow", "Glow")
+            .output(Socket::new("out", ValueType::Vec4))
+            .expr("vec4f(1.0, 0.5, 0.0, 1.0)"),
+    );
+    let mut graph = Graph::new("unlit");
+    graph.add_node(abi::SURFACE_OUTPUT_ID);
+    let fragment = graph.add_node(abi::FRAGMENT_OUTPUT_ID);
+    let glow = graph.add_node("test.glow");
+    graph
+        .wire(
+            &registry,
+            (glow, "out"),
+            (fragment, abi::SOCKET_FRAGMENT_COLOR),
+        )
+        .expect("into the fragment output");
+    let forward = generate_default(&graph, &registry).source;
+    assert!(
+        forward.contains("return wxsl_fragment(ctx, vec4f(0.0));"),
+        "{forward}"
+    );
+    assert!(
+        !forward.contains("shade_surface(wxsl_material(ctx), ctx)"),
+        "{forward}"
+    );
+}

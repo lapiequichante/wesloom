@@ -1,0 +1,22 @@
+// Car underglow
+//
+// The car's neons on the road around it: their light, baked into `glow`
+// in the car's space as the road's diffuse response to a white strip
+// (`neon::bake` in the drive), tinted by `color`. Its pass adds it to
+// what is already drawn. Past `knee`, what the brightest channel holds
+// beyond it spills into all three, as an overexposed light's core goes
+// white whatever its colour.
+//
+// Original implementation.
+
+fn neon(
+    glow: texture_2d<f32>,
+    samp: sampler,
+    uv: vec2f,       // Across the baked area, 0..1. @default 0.5, 0.5
+    color: vec3f,    // The neons' linear colour. @default 1.0, 1.0, 1.0
+    knee: f32,       // The radiance past which the core turns white. @default 0.5
+) -> vec4f {
+    let lit = color * textureSample(glow, samp, uv).r;
+    let peak = max(lit.r, max(lit.g, lit.b));
+    return vec4f(lit + vec3f(max(peak - knee, 0.0)), 1.0);
+}

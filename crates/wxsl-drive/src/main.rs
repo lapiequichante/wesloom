@@ -23,6 +23,9 @@
 //! `Space` pauses, `Esc` quits. The `car color` slider (or `--paint NAME`)
 //! repaints the body: a flaked hornet yellow, a metallic red, a smooth
 //! clear-coated blue, white, matte black and an iridescent pearl. The
+//! `neons` slider (or `--neon NAME`) lights an underglow all around the car:
+//! off, yellow (the paint's orange), red, blue or white, its light on the
+//! road baked once, dimmer the brighter the sky. The
 //! `view` slider shows a surface debug view on the car instead of shading
 //! it (ADR 0085): albedo, normal, depth, metallic-roughness, mip level, and
 //! the rest a forward pass can show; `--view NAME` picks one for a
@@ -41,6 +44,7 @@ mod car;
 mod car_ground;
 mod city;
 mod lights;
+mod neon;
 mod pipeline;
 mod road;
 mod sky;
@@ -75,11 +79,11 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
       [--exposure EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
+      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
       [--screenshot out.png [--ui] [--frames N] [--profile]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
-        occlusion on the road and on itself, its paint, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
@@ -102,6 +106,7 @@ const EXPOSURE: &str = "exposure";
 const GROUND_AO: &str = "ground AO";
 const CAR_AO: &str = "car AO";
 const PAINT: &str = "car color";
+const NEON: &str = "neons";
 const VIEW: &str = "view";
 const SHADOWS: &str = "shadows";
 const FXAA: &str = "fxaa";
@@ -150,6 +155,8 @@ struct Options {
     zoom: f32,
     /// The body paint, an index into [`car::PAINTS`].
     paint: f32,
+    /// The underglow, an index into [`neon::NEONS`].
+    neon: f32,
     /// The `view` slider's start: 0 shades, then one per [`debug_views`].
     view: f32,
     /// Print the screenshot's GPU time per pass.
@@ -187,6 +194,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         pitch: 0.0,
         zoom: 1.0,
         paint: 0.0,
+        neon: 0.0,
         view: 0.0,
         profile: false,
         soft_shadows: false,
@@ -227,6 +235,16 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     .ok_or_else(|| {
                         let names: Vec<&str> = car::PAINTS.iter().map(|paint| paint.name).collect();
                         format!("--paint is one of: {}", names.join(", "))
+                    })? as f32;
+            }
+            "--neon" => {
+                let name = value()?;
+                options.neon = neon::NEONS
+                    .iter()
+                    .position(|neon| neon.name == name)
+                    .ok_or_else(|| {
+                        let names: Vec<&str> = neon::NEONS.iter().map(|neon| neon.name).collect();
+                        format!("--neon is one of: {}", names.join(", "))
                     })? as f32;
             }
             "--view" => {
@@ -309,6 +327,13 @@ fn sliders(options: &Options) -> Panel {
             |value| car::PAINTS[value.round() as usize].name.to_string(),
         ),
         Slider::new(
+            NEON,
+            0.0,
+            (neon::NEONS.len() - 1) as f32,
+            options.neon,
+            |value| neon::NEONS[value.round() as usize].name.to_string(),
+        ),
+        Slider::new(
             VIEW,
             0.0,
             debug_views().len() as f32,
@@ -352,6 +377,8 @@ struct Drive {
     /// The car's occlusion on the road, when the car has a baked ground,
     /// and the strength last set on it.
     ground: Option<(CarGround, Option<f32>)>,
+    /// The neons' light on the road.
+    underglow: neon::Underglow,
     /// The PRT strength last set on the car's materials.
     car_ao: Option<f32>,
     /// Arc length along the road, metres.
@@ -407,6 +434,7 @@ impl Drive {
             |renderer, refractive| pipeline::install(renderer, refractive, false, true, 1.0),
         )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
+        let underglow = neon::Underglow::new(gpu, &mut renderer, &registry, &car.neon_strips())?;
         renderer.set_light_cookies(&gpu.device, Some(&lights::cookies(gpu)?));
         println!(
             "road {:.1} km, {} lamps, {} buildings, car {:.2} × {:.2} × {:.2} m, ready in {:.1?}",
@@ -424,6 +452,7 @@ impl Drive {
             world,
             car,
             ground,
+            underglow,
             car_ao: None,
             s: at,
             odometer: 0.0,
@@ -614,6 +643,17 @@ impl Drive {
         }
         if let Some((ground, _)) = &self.ground {
             draws.push(ground.draw(transform * self.car.align()));
+        }
+        // Dimmer against a bright sky.
+        let glow = neon::against_sky(self.day.sky);
+        self.underglow.set_color(
+            gpu,
+            neon::NEONS[panel.value(NEON).round() as usize]
+                .color
+                .map(|color| color * glow),
+        )?;
+        for draw in self.underglow.draws(transform) {
+            draws.push(draw);
         }
         self.renderer.render(
             &gpu.device,

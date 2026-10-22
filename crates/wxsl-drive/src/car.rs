@@ -14,7 +14,7 @@
 use std::error::Error;
 use std::path::Path;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use wxsl::asset::{BoneTexture, ImportedScene, BONE_FRAME_PARAM, BONE_TEXTURE_SLOT};
 use wxsl::core::graph::{Graph, Node, NodeId};
 use wxsl::core::node::{NodeRegistry, ValueType};
@@ -26,6 +26,7 @@ use wxsl::render::{DrawItem, GpuContext, Renderer};
 use wxsl::scene::SceneResources;
 
 use crate::lights::CarLamps;
+use crate::neon::{self, Emitter};
 use crate::road::Frame;
 
 /// The rate the clips are baked into the bone textures at.
@@ -82,7 +83,7 @@ impl Bones {
 }
 
 /// `value` as IEEE half-float bits, rounded to nearest.
-fn f16_bits(value: f32) -> u16 {
+pub fn f16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
@@ -148,6 +149,8 @@ pub struct Car {
 struct Wheel {
     center: Vec3,
     radius: f32,
+    /// Half its width, across the car.
+    half_width: f32,
     /// Ahead of the car's middle: it steers.
     front: bool,
     /// Every node under it, which the body's pitch leaves alone.
@@ -256,6 +259,13 @@ pub const BULB_SETBACK: f32 = 0.08;
 /// its top (1): high enough that the beam, aimed a touch down, lights the
 /// whole inside of the housing, not only its lower half.
 const BULB_HEIGHT: f32 = 0.75;
+/// How many slices along the car the underglow's outline is measured in,
+/// and up to what height off the road the body counts for it.
+const NEON_BINS: usize = 96;
+const NEON_BODY_HEIGHT: f32 = 0.45;
+/// How high the underglow's strips are, in wheel radii off the road: just
+/// under the sills.
+const NEON_HEIGHT: f32 = 0.55;
 /// The material of me_car's tail lights.
 const TAIL_MATERIAL: &str = "RearLights";
 /// The emission parameter glTF import gives a material.
@@ -530,6 +540,7 @@ fn wheels(imported: &ImportedScene) -> Vec<Wheel> {
         wheels.push(Wheel {
             center: (min + max) * 0.5,
             radius: ((max.y - min.y) * 0.5).max(0.05),
+            half_width: ((max.x - min.x) * 0.5).max(0.05),
             front: false,
             nodes: under,
             parts,
@@ -954,7 +965,7 @@ impl Car {
         else {
             return false;
         };
-        self.wheels.iter().any(|wheel| wheel.nodes.contains(&node))
+        self.on_a_wheel(node)
     }
 
     /// From the rear axle to the front one, metres.
@@ -1010,6 +1021,79 @@ impl Car {
             ])),
             tail_glow: self.tail_emission() / TAIL_GLOW,
         }
+    }
+
+    /// The underglow's loop (`neon::strips`) inside the outline of the
+    /// body's lower part, seen from above, wheels left out.
+    pub fn neon_strips(&self) -> Vec<Emitter> {
+        let scene = &self.imported.scene;
+        let half = self.size * 0.5;
+        let mut widths = [0.0f32; NEON_BINS];
+        for instance in scene
+            .instances
+            .iter()
+            .filter(|instance| !instance.node.is_some_and(|node| self.on_a_wheel(node)))
+        {
+            let MeshSource::Embedded { index } = scene.meshes[instance.mesh].source else {
+                continue;
+            };
+            let world = self.align * Mat4::from_cols_array(&scene.instance_world(instance));
+            for vertex in &self.imported.meshes[index].vertices {
+                let point = world.transform_point3(Vec3::from_array(vertex.position));
+                if point.y > NEON_BODY_HEIGHT {
+                    continue;
+                }
+                let bin = ((point.z + half.z) / self.size.z * NEON_BINS as f32) as usize;
+                let width = &mut widths[bin.min(NEON_BINS - 1)];
+                *width = width.max(point.x.abs());
+            }
+        }
+        // Each width the mean of its neighbours', over the mesh's details.
+        let filled: Vec<(f32, f32)> = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, width)| **width > 0.0)
+            .map(|(bin, width)| {
+                (
+                    (bin as f32 + 0.5) / NEON_BINS as f32 * self.size.z - half.z,
+                    *width,
+                )
+            })
+            .collect();
+        let outline: Vec<(f32, f32)> = (0..filled.len())
+            .map(|index| {
+                let near = &filled[index.saturating_sub(2)..(index + 3).min(filled.len())];
+                let mean = near.iter().map(|(_, width)| width).sum::<f32>() / near.len() as f32;
+                (filled[index].0, mean)
+            })
+            .collect();
+        let height = self
+            .wheels
+            .iter()
+            .map(|wheel| wheel.radius * NEON_HEIGHT)
+            .reduce(f32::min)
+            .unwrap_or(0.12);
+        neon::strips(&outline, height, &self.wheel_footprints())
+    }
+
+    /// Each wheel's footprint on the road, in the car's space: its centre
+    /// (x, z) and its half extents across and along the car.
+    pub fn wheel_footprints(&self) -> Vec<(Vec2, Vec2)> {
+        self.wheels
+            .iter()
+            .map(|wheel| {
+                let at = self.align.transform_point3(wheel.center);
+                (
+                    Vec2::new(at.x, at.z),
+                    Vec2::new(wheel.half_width, wheel.radius),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether node `node` is part of a wheel.
+    fn on_a_wheel(&self, node: usize) -> bool {
+        self.wheels.iter().any(|wheel| wheel.nodes.contains(&node))
     }
 
     /// Its draws at `transform`, last frame at `previous`, the body

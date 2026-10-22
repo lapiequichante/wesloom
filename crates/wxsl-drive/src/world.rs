@@ -37,6 +37,9 @@ const NODES: &[(&str, &str)] = &[
     ("ground", include_str!("../shaders/ground.wxsl")),
     ("textured", include_str!("../shaders/textured.wxsl")),
     ("car_ground", include_str!("../shaders/car_ground.wxsl")),
+    ("neon", include_str!("../shaders/neon.wxsl")),
+    ("neon_streak", include_str!("../shaders/neon_streak.wxsl")),
+    ("toward_eye", include_str!("../shaders/toward_eye.wxsl")),
     (
         "car_ground_transfer",
         include_str!("../shaders/car_ground_transfer.wxsl"),

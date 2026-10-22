@@ -4,7 +4,8 @@
 //! that multiplies what is already there (`pipeline`). Its material is
 //! one node, `drive.car_ground` (`shaders/car_ground.wxsl`): the bake lit
 //! by the car's probe, through the car's axes, which the vertex stage
-//! turns into world space.
+//! turns into world space. Its vertices move towards the eye by
+//! `neon::DEPTH_BIAS`, so a road a little off flat does not cut it.
 
 use std::error::Error;
 use std::path::Path;
@@ -123,6 +124,19 @@ fn graph(registry: &NodeRegistry) -> Result<Graph, Box<dyn Error>> {
         wire(&mut graph, (input, "out"), (transfer, stream))?;
     }
     let matrix = graph.add_node(abi::context_node_id("normal_matrix"));
+    let lift = graph.add(
+        Node::new("drive.toward_eye").with_param("distance", Value::F32(crate::neon::DEPTH_BIAS)),
+    );
+    graph.set_stage(lift, StageConstraint::Vertex);
+    wire(&mut graph, (matrix, "out"), (lift, "normal_matrix"))?;
+    let view = graph.add_node(abi::context_node_id("view_direction"));
+    wire(&mut graph, (view, "out"), (lift, "view"))?;
+    let vertex = graph.add_node(abi::VERTEX_OUTPUT_ID);
+    wire(
+        &mut graph,
+        (lift, "out"),
+        (vertex, abi::SOCKET_POSITION_OFFSET),
+    )?;
     for (socket, axis) in [
         ("right", [1.0, 0.0, 0.0]),
         ("up", [0.0, 1.0, 0.0]),
