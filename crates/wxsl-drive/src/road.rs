@@ -128,9 +128,10 @@ pub struct RoadMeshes {
     /// and along (v).
     pub asphalt: MeshData,
     /// The deck's sides and underside, the parapets, the median barrier
-    /// and the piers.
+    /// and the piers; uv is metres, u along the road on the extruded
+    /// faces and level on the boxes' sides.
     pub concrete: MeshData,
-    /// The rails and their posts.
+    /// The rails and their posts, in uv like the concrete.
     pub steel: MeshData,
 }
 
@@ -373,8 +374,8 @@ pub struct Lamp {
 struct Face {
     from: (f32, f32),
     to: (f32, f32),
-    /// u is the lateral position (the carriageway's markings) rather than
-    /// the distance across the face.
+    /// uv is the lateral position (the carriageway's markings) and the
+    /// distance along, rather than the distance along and across the face.
     lateral_uv: bool,
 }
 
@@ -412,7 +413,11 @@ fn extrude_face(mesh: &mut MeshData, frames: &[(f32, Frame)], face: &Face) {
                 position: frame.at(point.0, point.1).to_array(),
                 normal: normal.to_array(),
                 tangent: [0.0, 0.0, 0.0, 1.0],
-                uv: [if face.lateral_uv { point.0 } else { u }, *s],
+                uv: if face.lateral_uv {
+                    [point.0, *s]
+                } else {
+                    [*s, u]
+                },
             });
         }
     }
@@ -440,13 +445,19 @@ fn oriented(frame: &Frame, center: Vec3, size: Vec3) -> Mat4 {
     ) * Mat4::from_scale(size)
 }
 
-/// Append the unit cube moved by `transform`.
+/// Append the unit cube moved by `transform`, its uv in the units the
+/// transform scales it to.
 pub fn push_box(mesh: &mut MeshData, transform: Mat4) {
     let (vertices, indices) = wxsl::render::mesh::cube_geometry(1.0);
     let linear = Mat3::from_mat4(transform);
     let normals = linear.inverse().transpose();
     let base = mesh.vertices.len() as u32;
     for vertex in vertices {
+        let local = Vec3::from_slice(&vertex.tangent[..3]);
+        let stretch = Vec2::new(
+            (linear * local).length(),
+            (linear * Vec3::from_array(vertex.normal).cross(local)).length(),
+        );
         let normal = (normals * Vec3::from_array(vertex.normal)).normalize();
         let tangent = (linear * Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]))
             .normalize();
@@ -456,7 +467,7 @@ pub fn push_box(mesh: &mut MeshData, transform: Mat4) {
                 .to_array(),
             normal: normal.to_array(),
             tangent: [tangent.x, tangent.y, tangent.z, vertex.tangent[3]],
-            uv: vertex.uv,
+            uv: (Vec2::from(vertex.uv) * stretch).to_array(),
         });
     }
     mesh.indices

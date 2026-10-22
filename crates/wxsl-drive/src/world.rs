@@ -35,6 +35,7 @@ const NODES: &[(&str, &str)] = &[
     ("road_surface", include_str!("../shaders/road_surface.wxsl")),
     ("facade", include_str!("../shaders/facade.wxsl")),
     ("ground", include_str!("../shaders/ground.wxsl")),
+    ("textured", include_str!("../shaders/textured.wxsl")),
     ("car_ground", include_str!("../shaders/car_ground.wxsl")),
     (
         "car_ground_transfer",
@@ -166,12 +167,87 @@ enum Resource {
 /// The asphalt's texture set, under `resources/textures/`: (slot, file,
 /// sRGB).
 const ROAD_TEXTURES: [(&str, &str, bool); 3] = [
-    ("road_albedo", "highway-lanes_albedo.png", true),
-    ("road_normal", "highway-lanes_normal-ogl.png", false),
-    ("road_roughness", "highway-lanes_roughness.png", false),
+    ("road_albedo", "highway/highway-lanes_albedo.png", true),
+    ("road_normal", "highway/highway-lanes_normal-ogl.png", false),
+    (
+        "road_roughness",
+        "highway/highway-lanes_roughness.png",
+        false,
+    ),
 ];
 /// The sampler the asphalt reads its textures through.
 const ROAD_SAMPLER: &str = "road_sampler";
+
+/// The concrete's texture set, as the asphalt's: albedo, normal,
+/// roughness and metalness, in `drive.textured`'s order. Concrete has no
+/// metal: its last slot is bound to a black texel.
+const CONCRETE_TEXTURES: [(&str, &str, bool); 3] = [
+    (
+        "concrete_albedo",
+        "concrete_wall/concrete_wall_007_diff_1k.jpg",
+        true,
+    ),
+    (
+        "concrete_normal",
+        "concrete_wall/concrete_wall_007_nor_gl_1k.png",
+        false,
+    ),
+    (
+        "concrete_roughness",
+        "concrete_wall/concrete_wall_007_rough_1k.png",
+        false,
+    ),
+];
+const CONCRETE_METAL: &str = "concrete_metal";
+const CONCRETE_SAMPLER: &str = "concrete_sampler";
+
+/// `drive.textured` over the mesh's metric uv, reading the four textures
+/// named by `slots` through `sampler`, a copy every `tile` metres.
+fn textured_graph(
+    registry: &NodeRegistry,
+    name: &str,
+    slots: [&'static str; 4],
+    sampler: &'static str,
+    tile: f32,
+) -> Result<Graph, Box<dyn Error>> {
+    let [albedo, normal_map, roughness_map, metal_map] = slots;
+    node_graph(
+        registry,
+        name,
+        "drive.textured",
+        &[
+            ("uv", "uv"),
+            ("world", "world_position"),
+            ("geometric_normal", "world_normal"),
+        ],
+        &[
+            Resource::Texture {
+                socket: "albedo",
+                slot: albedo,
+            },
+            Resource::Texture {
+                socket: "normal_map",
+                slot: normal_map,
+            },
+            Resource::Texture {
+                socket: "roughness_map",
+                slot: roughness_map,
+            },
+            Resource::Texture {
+                socket: "metal_map",
+                slot: metal_map,
+            },
+            Resource::Sampler {
+                socket: "samp",
+                slot: sampler,
+            },
+        ],
+        &[("tile", Value::F32(tile))],
+        &[],
+        &[],
+        &["base_color", "roughness", "metallic", "normal"],
+    )
+}
 
 /// A plain surface: a colour, a roughness, a metalness, and optionally an
 /// emission scaled by the `glow` parameter.
@@ -201,6 +277,8 @@ fn plain_graph(
     Ok(graph)
 }
 
+/// The lamps' paint, metallic grey: (colour, roughness, metalness).
+const LAMP_PAINT: ([f32; 3], f32, f32) = ([0.5, 0.51, 0.53], 0.4, 0.8);
 /// A lamp head's glow at full night.
 const LAMP_GLOW: [f32; 3] = [30.0, 22.0, 14.0];
 
@@ -224,6 +302,7 @@ const STEEL: usize = 2;
 const GLOW: usize = 3;
 const GROUND: usize = 4;
 const FACADE: usize = 5;
+const RAIL: usize = 6;
 
 impl World {
     pub fn new(
@@ -233,11 +312,12 @@ impl World {
     ) -> Result<Self, Box<dyn Error>> {
         let road = Road::new();
         let ground = Ground::new(&road);
-        let mut road_meshes = road.meshes(|x, z| ground.height(x, z));
+        let road_meshes = road.meshes(|x, z| ground.height(x, z));
         let lamps = road.lamps();
+        let mut poles = MeshData::new(Vec::new(), Vec::new());
         let mut glow = MeshData::new(Vec::new(), Vec::new());
         for lamp in &lamps {
-            lamp_parts(lamp, &mut road_meshes.steel, &mut glow);
+            lamp_parts(lamp, &mut poles, &mut glow);
         }
         let buildings = city::buildings(&road, |x, z| ground.height(x, z));
         let terrain = ground.mesh(city::paving(&buildings));
@@ -280,9 +360,26 @@ impl World {
                 &[],
                 &["base_color", "roughness", "normal"],
             )?,
-            plain_graph("concrete", [0.22, 0.215, 0.2], 0.85, 0.0, None)?,
-            plain_graph("steel", [0.55, 0.56, 0.58], 0.35, 1.0, None)?,
-            plain_graph("lamp head", [0.05, 0.05, 0.05], 0.4, 0.0, Some(LAMP_GLOW))?,
+            textured_graph(
+                registry,
+                "concrete",
+                [
+                    CONCRETE_TEXTURES[0].0,
+                    CONCRETE_TEXTURES[1].0,
+                    CONCRETE_TEXTURES[2].0,
+                    CONCRETE_METAL,
+                ],
+                CONCRETE_SAMPLER,
+                2.5,
+            )?,
+            plain_graph("lamp", LAMP_PAINT.0, LAMP_PAINT.1, LAMP_PAINT.2, None)?,
+            plain_graph(
+                "lamp head",
+                LAMP_PAINT.0,
+                LAMP_PAINT.1,
+                LAMP_PAINT.2,
+                Some(LAMP_GLOW),
+            )?,
             node_graph(
                 registry,
                 "ground",
@@ -309,6 +406,7 @@ impl World {
                 &[(city::SEED, ValueType::F32)],
                 &["base_color", "metallic", "roughness", "emissive"],
             )?,
+            plain_graph("rail", [0.3, 0.3, 0.3], 0.8, 0.9, None)?,
         ];
         let mut surfaces = graphs
             .iter()
@@ -323,31 +421,40 @@ impl World {
                 Surface::new(gpu, renderer, graph, registry, tags)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let asphalt = &mut surfaces[ASPHALT].bindings;
         let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/textures");
-        for (slot, file, srgb) in ROAD_TEXTURES {
-            asphalt.set_texture(slot, &load_texture(gpu, &folder.join(file), srgb)?)?;
+        for (surface, textures, sampler) in [
+            (ASPHALT, &ROAD_TEXTURES[..], ROAD_SAMPLER),
+            (CONCRETE, &CONCRETE_TEXTURES[..], CONCRETE_SAMPLER),
+        ] {
+            let bindings = &mut surfaces[surface].bindings;
+            for (slot, file, srgb) in textures {
+                bindings.set_texture(slot, &load_texture(gpu, &folder.join(file), *srgb)?)?;
+            }
+            bindings.set_sampler(
+                sampler,
+                &device.create_sampler(&wgpu::SamplerDescriptor {
+                    label: Some(sampler),
+                    address_mode_u: wgpu::AddressMode::Repeat,
+                    address_mode_v: wgpu::AddressMode::Repeat,
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                    anisotropy_clamp: 16,
+                    ..Default::default()
+                }),
+            )?;
         }
-        asphalt.set_sampler(
-            ROAD_SAMPLER,
-            &device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(ROAD_SAMPLER),
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                anisotropy_clamp: 16,
-                ..Default::default()
-            }),
-        )?;
+        surfaces[CONCRETE]
+            .bindings
+            .set_texture(CONCRETE_METAL, &black_texel(gpu))?;
         for surface in &mut surfaces {
             surface.bindings.upload(device, &gpu.queue)?;
         }
         let meshes = [
             ("drive asphalt", &road_meshes.asphalt, ASPHALT),
             ("drive concrete", &road_meshes.concrete, CONCRETE),
-            ("drive steel", &road_meshes.steel, STEEL),
+            ("drive rails", &road_meshes.steel, RAIL),
+            ("drive lamps", &poles, STEEL),
             ("drive lamp heads", &glow, GLOW),
             ("drive terrain", &terrain, GROUND),
         ]
@@ -480,8 +587,7 @@ fn chunks(mesh: &MeshData, size: f32) -> Vec<(MeshData, (Vec3, Vec3))> {
         .collect()
 }
 
-/// A median lamp as boxes: the pole and the arm in steel, the two heads
-/// glowing.
+/// A median lamp as boxes: the pole and the arm, the two heads glowing.
 fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
     let across = lamp.across;
     // x across the road, y up, z along it.
@@ -511,12 +617,42 @@ fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
     for head in lamp.heads {
         road::push_box(
             glow,
-            basis(head + Vec3::Y * 0.12, Vec3::new(0.32, 0.12, 0.6)),
+            basis(head + Vec3::Y * 0.12, Vec3::new(0.32, 0.12, 0.3)),
         );
     }
 }
 
-/// A PNG on the device with its whole mip chain, halved on the CPU (in
+/// One black texel, for a texture slot with nothing to read.
+fn black_texel(gpu: &GpuContext) -> wgpu::TextureView {
+    let size = wgpu::Extent3d {
+        width: 1,
+        height: 1,
+        depth_or_array_layers: 1,
+    };
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("drive black texel"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        &[0, 0, 0, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        size,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// A PNG or a JPEG on the device with its whole mip chain, halved on the CPU (in
 /// sRGB for a colour, which darkens the far mips a little).
 fn load_texture(
     gpu: &GpuContext,
