@@ -326,10 +326,10 @@ pub const PAINTS: [Paint; 6] = [
     },
     Paint {
         name: "matte black",
-        base_color: [0.001, 0.001, 0.001],
-        metallic: 0.0,
+        base_color: [0.01, 0.01, 0.01],
+        metallic: 0.9,
         roughness: 0.8,
-        flakes: 0.0,
+        flakes: 0.5,
         clearcoat: (0.0, 0.5),
         iridescence: None,
     },
