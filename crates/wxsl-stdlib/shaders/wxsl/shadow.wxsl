@@ -133,11 +133,10 @@ fn shadow_factor_at(
     // other kinds `radius` is the source's size (ADR 0098).
     let source_radius = select(light.radius, 0.0, light.kind == LIGHT_KIND_RECTANGLE);
     let shadow = sample_shadow_tile(tile_index, absolute, world_normal, n_dot_l,
-        light.shadow_normal_bias, (light.kind == LIGHT_KIND_DIRECTIONAL && light.tile_count > 1u) || light.kind == LIGHT_KIND_RECTANGLE,
-        source_radius);
+        light.shadow_normal_bias, source_radius);
     if blend > 0.0 {
         let next = sample_shadow_tile(tile_index + 1u, absolute, world_normal, n_dot_l,
-            light.shadow_normal_bias, true, source_radius);
+            light.shadow_normal_bias, source_radius);
         return mix(shadow, next, blend);
     }
     return mix(shadow, 1.0, fade);
@@ -149,7 +148,6 @@ fn sample_shadow_tile(
     world_normal: vec3f,
     n_dot_l: f32,
     normal_bias: f32,
-    receiver_plane: bool,
     source_radius: f32,
 ) -> f32 {
     let tile = scene.shadow_tiles[tile_index];
@@ -173,48 +171,58 @@ fn sample_shadow_tile(
 
     // Atlas UVs advance by one atlas texel, regardless of tile size.
     let texel = 1.0 / vec2f(textureDimensions(shadow_maps));
-    // The receiver plane gives the reference depth at each texel centre.
-    // Correct each bilinear comparison separately: one shared reference
-    // would still self-shadow the far cascades on a slanted surface.
+    // The receiver plane gives the reference depth at each texel centre:
+    // one shared reference self-shadows a slanted surface, the far
+    // cascades and a wall a lamp grazes.
     var depth_gradient = vec2f(0.0);
-    if receiver_plane || source_radius > 0.0 {
-        // Differentiate the projected receiver plane analytically; this
-        // works for both orthographic cascades and perspective area faces.
-        let axis = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(world_normal.y) > 0.9);
-        let tangent = normalize(cross(world_normal, axis));
-        let bitangent = cross(world_normal, tangent);
-        let a_clip = tile.view_proj * vec4f(tangent, 0.0);
-        let b_clip = tile.view_proj * vec4f(bitangent, 0.0);
-        let a = (a_clip.xyz - ndc * a_clip.w) / clip.w;
-        let b = (b_clip.xyz - ndc * b_clip.w) / clip.w;
-        let det = a.x * b.y - a.y * b.x;
-        if abs(det) > 1e-12 {
-            depth_gradient = vec2f(a.z * b.y - a.y * b.z, a.x * b.z - a.z * b.x)
-                / det * vec2f(2.0, -2.0) / rect.zw;
-        }
+    // Differentiate the projected receiver plane analytically; this
+    // works for both orthographic cascades and perspective area faces.
+    let axis = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(world_normal.y) > 0.9);
+    let tangent = normalize(cross(world_normal, axis));
+    let bitangent = cross(world_normal, tangent);
+    let a_clip = tile.view_proj * vec4f(tangent, 0.0);
+    let b_clip = tile.view_proj * vec4f(bitangent, 0.0);
+    let a = (a_clip.xyz - ndc * a_clip.w) / clip.w;
+    let b = (b_clip.xyz - ndc * b_clip.w) / clip.w;
+    let det = a.x * b.y - a.y * b.x;
+    if abs(det) > 1e-12 {
+        depth_gradient = vec2f(a.z * b.y - a.y * b.z, a.x * b.z - a.z * b.x)
+            / det * vec2f(2.0, -2.0) / rect.zw;
     }
     if source_radius > 0.0 {
         return soft_shadow(tile_index, uv, clip, ndc, depth_gradient, texel, source_radius);
     }
+    // The PCF kernel's bilinear taps, one texel apart, cover a block of
+    // texels one wider than the kernel; summed, each texel weighs 1 but
+    // the block's edges, which weigh the bilinear fraction. So each texel
+    // is compared once, with the receiver's depth at its own centre.
+    let pixel = uv / texel - vec2f(0.5);
+    let base = vec2i(floor(pixel));
+    let fraction = fract(pixel);
+    let low = vec2i(round(rect.xy / texel));
+    let high = vec2i(round((rect.xy + rect.zw) / texel)) - vec2i(1);
+    let last = WXSL_SHADOW_PCF_RADIUS + 1;
     var sum = 0.0;
-    var taps = 0.0;
-    for (var y = -WXSL_SHADOW_PCF_RADIUS; y <= WXSL_SHADOW_PCF_RADIUS; y = y + 1) {
-        for (var x = -WXSL_SHADOW_PCF_RADIUS; x <= WXSL_SHADOW_PCF_RADIUS; x = x + 1) {
-            let tap = clamp(uv + vec2f(f32(x), f32(y)) * texel,
-                rect.xy + texel * 0.5, rect.xy + rect.zw - texel * 0.5);
-            // `...Level` rather than `textureSampleCompare`, which needs
-            // uniform control flow: this is called from inside a light loop
-            // after an early return, and a shadow map has no mip chain to
-            // pick a level from anyway.
-            if receiver_plane {
-                sum = sum + compare_receiver_plane(tap, uv, ndc.z, depth_gradient, rect, texel);
-            } else {
-                sum = sum + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, ndc.z);
-            }
-            taps = taps + 1.0;
+    for (var y = -WXSL_SHADOW_PCF_RADIUS; y <= last; y = y + 1) {
+        let weight_y = select(select(1.0, fraction.y, y == last), 1.0 - fraction.y, y == -WXSL_SHADOW_PCF_RADIUS);
+        for (var x = -WXSL_SHADOW_PCF_RADIUS; x <= last; x = x + 1) {
+            let weight_x = select(select(1.0, fraction.x, x == last), 1.0 - fraction.x, x == -WXSL_SHADOW_PCF_RADIUS);
+            let coord = clamp(base + vec2i(x, y), low, high);
+            let centre = (vec2f(coord) + vec2f(0.5)) * texel;
+            let reference = min(ndc.z + dot(depth_gradient, centre - uv), 1.0);
+            // One texel's comparison: the filtering comparison sampler at
+            // the texel's exact centre weighs only that texel. A second,
+            // non-comparison sampler on the atlas has no GLSL spelling —
+            // a GL texture unit holds one sampler (ADR 0075). `...Level`
+            // rather than `textureSampleCompare`, which needs uniform
+            // control flow: this is called from inside a light loop after
+            // an early return, and a shadow map has no mip chain anyway.
+            sum = sum + weight_x * weight_y
+                * textureSampleCompareLevel(shadow_maps, shadow_sampler, centre, reference);
         }
     }
-    return sum / taps;
+    let width = f32(2 * WXSL_SHADOW_PCF_RADIUS + 1);
+    return sum / (width * width);
 }
 
 // One of `count` points of a Vogel disk of radius one, turned by `phase`:
@@ -315,35 +323,6 @@ fn soft_shadow(
         lit = lit + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, reference);
     }
     return lit / f32(WXSL_SHADOW_SOFT_TAPS);
-}
-
-// Bilinear depth comparison with the receiver's depth at each fetched
-// texel, retaining the comparison sampler's PCF weights and tile clamp.
-fn compare_receiver_plane(
-    tap: vec2f, uv: vec2f, depth: f32, gradient: vec2f, rect: vec4f, texel: vec2f,
-) -> f32 {
-    let pixel = tap / texel - vec2f(0.5);
-    let base = vec2i(floor(pixel));
-    let fraction = fract(pixel);
-    let low = vec2i(round(rect.xy / texel));
-    let high = vec2i(round((rect.xy + rect.zw) / texel)) - vec2i(1);
-    var result = 0.0;
-    for (var y = 0; y < 2; y = y + 1) {
-        for (var x = 0; x < 2; x = x + 1) {
-            let coord = clamp(base + vec2i(x, y), low, high);
-            let centre = (vec2f(coord) + vec2f(0.5)) * texel;
-            let reference = depth + dot(gradient, centre - uv);
-            // One texel's comparison: the filtering comparison sampler at
-            // the texel's exact centre weighs only that texel. A second,
-            // non-comparison sampler on the atlas has no GLSL spelling —
-            // a GL texture unit holds one sampler (ADR 0075).
-            let lit = textureSampleCompareLevel(shadow_maps, shadow_sampler, centre, reference);
-            let weight = select(1.0 - fraction.x, fraction.x, x == 1)
-                * select(1.0 - fraction.y, fraction.y, y == 1);
-            result = result + lit * weight;
-        }
-    }
-    return result;
 }
 
 fn shadow_normal_offset(normal: vec3f, bias: f32, n_dot_l: f32) -> vec3f {

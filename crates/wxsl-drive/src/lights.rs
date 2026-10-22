@@ -4,10 +4,9 @@
 //! baked into the cookie array (ADR 0097).
 //!
 //! The headlight profile is `resources/ies/headlight.ies`, the lamps'
-//! `resources/ies/street_lamp.ies`: an IES type II roadway distribution,
-//! two beams along the road at 66° from straight down, toed in towards
-//! the street side, and little past 80°. Either file can be swapped for a
-//! measured one. The tail
+//! `resources/ies/street_lamp.ies`: a wide batwing, drawn so the lamps,
+//! range window included, light the carriageway evenly, and nothing past
+//! 70°. Either file can be swapped for a measured one. The tail
 //! lights' is written here, as an LM-63 file read back through the same
 //! parser.
 
@@ -31,7 +30,7 @@ const COOKIE_SIZE: u32 = 512;
 /// A lamp's peak intensity, its colour, and how far it reaches: past
 /// the deck halfway to the next lamp, short of the ground under it
 /// (`terrain::CLEARANCE`), which the deck would shade.
-const LAMP_INTENSITY: f32 = 1000.0;
+const LAMP_INTENSITY: f32 = 2500.0;
 const LAMP_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.58);
 pub const LAMP_RANGE: f32 = 26.0;
 /// A lamp head's tilt from straight down towards its street side, as
@@ -356,18 +355,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_lamp_profile_throws_along_the_road_and_to_the_street_side() {
+    fn the_lamp_profile_throws_along_the_road_and_spares_the_ground_under_it() {
         let profile = IesProfile::parse(LAMP_IES).expect("street_lamp.ies parses");
         let peak = profile.max_candela();
-        // Two beams along the road, toed in towards the street side.
-        assert!(profile.candela(65.0, 10.0) > peak * 0.9);
-        assert!(profile.candela(65.0, 170.0) > peak * 0.9);
-        assert!(profile.candela(0.0, 0.0) < peak * 0.5);
-        // More light across the street side than the house side.
-        assert!(profile.candela(45.0, 90.0) > profile.candela(45.0, 270.0) * 1.5);
-        // IES cutoff: under 100 cd per 1000 lm at 80° (14 000 lm, a peak
-        // of about 8500 cd), nothing at or above the horizon.
-        assert!(profile.candela(80.0, 10.0) < 1400.0);
+        // A batwing along the road both ways, dim straight down.
+        assert!(profile.candela(60.0, 0.0) > peak * 0.8);
+        assert!(profile.candela(60.0, 180.0) > peak * 0.8);
+        assert!(profile.candela(0.0, 0.0) < peak * 0.15);
+        // Across, it stops at the parapet and hands over to the other
+        // head at the median.
+        assert_eq!(profile.candela(45.0, 90.0), 0.0);
+        assert!(profile.candela(40.0, 270.0) < profile.candela(20.0, 270.0) * 0.5);
+        // Full cutoff: nothing past 70°.
+        assert_eq!(profile.candela(72.5, 0.0), 0.0);
         assert_eq!(profile.candela(90.0, 45.0), 0.0);
         assert_eq!(profile.candela(120.0, 0.0), 0.0);
     }
