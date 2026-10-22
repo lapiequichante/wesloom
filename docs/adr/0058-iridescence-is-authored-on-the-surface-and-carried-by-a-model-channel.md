@@ -55,3 +55,7 @@ zero-film equivalence and per-fragment thickness across both render paths.
 * Amended by [ADR 0088](0088-one-shared-model-channel-and-the-id-in-the-normal-target.md):
   the film data rides in the shared `model` target, so iridescence now
   fits beside other models and is in `default_set()`.
+* Amended (2026-10-22): `wxsl.iridescent` has an ambient of its own,
+  `ambient_iridescent`: the shared split-sum GGX response with its Fresnel
+  blended toward the film's at the view angle, so the film colours the
+  environment's reflection too. Still no spectral IBL prefilter.

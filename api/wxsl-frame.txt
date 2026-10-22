@@ -441,6 +441,7 @@ pub wxsl_frame::environment::Environment::origin: glam::f64::dvec3::DVec3
 pub wxsl_frame::environment::Environment::previous_camera: core::option::Option<wxsl_frame::environment::Camera>
 pub wxsl_frame::environment::Environment::previous_time: f32
 pub wxsl_frame::environment::Environment::probe: core::option::Option<wxsl_frame::environment::LocalProbe>
+pub wxsl_frame::environment::Environment::shadow_atlas_size: u32
 pub wxsl_frame::environment::Environment::time: f32
 impl wxsl_frame::environment::Environment
 pub fn wxsl_frame::environment::Environment::advance(&mut self, f32)
@@ -1614,6 +1615,7 @@ pub wxsl_frame::pipeline::PipelineConfig::features: alloc::vec::Vec<wxsl_core::l
 pub wxsl_frame::pipeline::PipelineConfig::lighting: wxsl_core::lighting::LightingSet
 pub wxsl_frame::pipeline::PipelineConfig::macros: wxsl_core::macros::MacroSet
 pub wxsl_frame::pipeline::PipelineConfig::profile: wxsl_frame::profile::Profile
+pub wxsl_frame::pipeline::PipelineConfig::shadow_atlas_size: u32
 pub wxsl_frame::pipeline::PipelineConfig::target: wxsl_frame::pipeline::TargetDesc
 impl wxsl_frame::pipeline::PipelineConfig
 pub fn wxsl_frame::pipeline::PipelineConfig::gbuffer_layout(&self) -> alloc::vec::Vec<wxsl_core::abi::GBufferTarget>
@@ -1727,6 +1729,9 @@ pub wxsl_frame::pipeline_doc::PipelineError::PassWithoutDepth::node: alloc::stri
 pub wxsl_frame::pipeline_doc::PipelineError::Peel
 pub wxsl_frame::pipeline_doc::PipelineError::Peel::node: alloc::string::String
 pub wxsl_frame::pipeline_doc::PipelineError::Peel::reason: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ShadowAtlasSize
+pub wxsl_frame::pipeline_doc::PipelineError::ShadowAtlasSize::node: alloc::string::String
+pub wxsl_frame::pipeline_doc::PipelineError::ShadowAtlasSize::size: u32
 pub wxsl_frame::pipeline_doc::PipelineError::TwoPresents
 pub wxsl_frame::pipeline_doc::PipelineError::TwoPresents::nodes: alloc::vec::Vec<alloc::string::String>
 pub wxsl_frame::pipeline_doc::PipelineError::TwoShadowSources

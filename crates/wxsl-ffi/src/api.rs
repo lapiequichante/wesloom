@@ -224,6 +224,8 @@ impl Config {
             features,
             macros: self.macros,
             profile: self.profile,
+            // The C ABI's atlas is the header's `SHADOW_ATLAS_SIZE`.
+            shadow_atlas_size: abi::SHADOW_ATLAS_SIZE,
         };
         config.plan().map_err(invalid)?;
         Ok(config)

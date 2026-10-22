@@ -321,6 +321,15 @@ pub enum PipelineError {
         /// Both nodes' labels.
         nodes: Vec<String>,
     },
+    /// The config's `shadow_atlas_size` is not an atlas edge
+    /// (`abi::valid_shadow_atlas_size`), named by the node declaring the
+    /// atlas.
+    ShadowAtlasSize {
+        /// The `source.lights` node.
+        node: String,
+        /// The edge asked for.
+        size: u32,
+    },
     /// The config's channel requests collide — a feature and a model (or
     /// two features) claiming one G-buffer field. The pipeline compiler
     /// needs one plan to declare resources from, so the collision is
@@ -553,6 +562,13 @@ impl core::fmt::Display for PipelineError {
                 "the pipeline declares shadow maps twice ({}) — the frame group binds \
                  exactly one array",
                 nodes.join(", ")
+            ),
+            PipelineError::ShadowAtlasSize { node, size } => write!(
+                f,
+                "the shadow atlas of `{node}` cannot be {size}² texels: its edge is a power \
+                 of two from {} to {}",
+                wxsl_core::abi::MIN_SHADOW_ATLAS_SIZE,
+                wxsl_core::abi::MAX_SHADOW_ATLAS_SIZE
             ),
             PipelineError::ChannelCollision { node, error } => {
                 write!(f, "the G-buffer of `{node}` cannot be built: {error}")

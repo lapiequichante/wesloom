@@ -319,9 +319,11 @@ pub const wxsl_core::abi::MATERIAL_VERTEX_OUT_STRUCT: &str
 pub const wxsl_core::abi::MAX_LIGHTS: usize
 pub const wxsl_core::abi::MAX_LIGHTS_PER_CELL: usize
 pub const wxsl_core::abi::MAX_LOCAL_LIGHTS: usize
+pub const wxsl_core::abi::MAX_SHADOW_ATLAS_SIZE: u32
 pub const wxsl_core::abi::MAX_SHADOW_TILES: usize
 pub const wxsl_core::abi::MAX_VARYING_LOCATIONS: usize
 pub const wxsl_core::abi::MAX_VERTEX_ATTRIBUTES: usize
+pub const wxsl_core::abi::MIN_SHADOW_ATLAS_SIZE: u32
 pub const wxsl_core::abi::MSDF_EDGE_CUBIC: u32
 pub const wxsl_core::abi::MSDF_EDGE_LINE: u32
 pub const wxsl_core::abi::MSDF_EDGE_QUAD: u32
@@ -414,7 +416,9 @@ pub fn wxsl_core::abi::screen_context_node_defs() -> alloc::vec::Vec<wxsl_core::
 pub fn wxsl_core::abi::screen_image_def() -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::abi::screen_output_def() -> wxsl_core::node::NodeDefinition
 pub const fn wxsl_core::abi::shadow_tile(u32) -> wxsl_core::abi::ShadowTile
+pub const fn wxsl_core::abi::shadow_tile_in(u32, u32) -> wxsl_core::abi::ShadowTile
 pub fn wxsl_core::abi::surface_output_def() -> wxsl_core::node::NodeDefinition
+pub const fn wxsl_core::abi::valid_shadow_atlas_size(u32) -> bool
 pub fn wxsl_core::abi::varying_output_def() -> wxsl_core::node::NodeDefinition
 pub fn wxsl_core::abi::vertex_context_node_defs() -> alloc::vec::Vec<wxsl_core::node::NodeDefinition>
 pub fn wxsl_core::abi::vertex_output_def() -> wxsl_core::node::NodeDefinition

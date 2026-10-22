@@ -150,6 +150,7 @@ fn the_deferred_document_follows_the_lighting_set_like_the_hand_built_one() {
         features: Vec::new(),
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
+        shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
     };
     let document = stock_document(StockPipeline::Deferred);
     let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -170,6 +171,7 @@ fn a_feature_channel_joins_the_compiled_gbuffer() {
         features,
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
+        shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
     };
     let document = stock_document(StockPipeline::Deferred);
     let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -202,6 +204,7 @@ fn a_feature_channel_joins_the_compiled_gbuffer() {
         features: vec![clashing],
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
+        shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
     };
     match compile(
         &stock_document(StockPipeline::Deferred),
@@ -811,6 +814,50 @@ fn two_shadow_sources_are_reported() {
     assert!(matches!(
         errors_of(&graph, &config()),
         PipelineError::TwoShadowSources { .. }
+    ));
+}
+
+#[test]
+fn the_config_sizes_the_shadow_atlas_and_its_tiles() {
+    let larger = PipelineConfig {
+        shadow_atlas_size: 4096,
+        ..config()
+    };
+    let document = stock_document(StockPipeline::Forward);
+    let compiled = compile(&document, &make_registry(), &effects(), &larger).expect("compiles");
+    let maps = compiled
+        .shadow_maps()
+        .expect("the forward frame casts shadows");
+    assert!(matches!(
+        compiled.resource_desc(maps).expect("declared").shape,
+        crate::pass::ResourceShape::Texture {
+            extent: crate::pass::Extent::Fixed {
+                width: 4096,
+                height: 4096
+            },
+            ..
+        }
+    ));
+    for (slot, pass) in compiled
+        .passes()
+        .iter()
+        .filter(|pass| matches!(pass.view, PassView::Shadow { .. }))
+        .enumerate()
+    {
+        let tile = wxsl_core::abi::shadow_tile_in(slot as u32, 4096);
+        assert_eq!(
+            pass.viewport,
+            Some(crate::pass::ViewportRect::square(tile.x, tile.y, tile.edge))
+        );
+    }
+
+    let odd = PipelineConfig {
+        shadow_atlas_size: 3000,
+        ..config()
+    };
+    assert!(matches!(
+        errors_of(&document, &odd),
+        PipelineError::ShadowAtlasSize { size: 3000, .. }
     ));
 }
 

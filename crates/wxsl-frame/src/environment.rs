@@ -591,10 +591,12 @@ impl Light {
     /// convention [`Camera::view_proj`] uses, so a depth written by one
     /// and compared by the other means the same thing.
     pub fn shadow_views(&self, camera: &Camera) -> Vec<ShadowView> {
-        self.shadow_views_at(camera, 0)
+        self.shadow_views_at(camera, 0, abi::SHADOW_ATLAS_SIZE)
     }
 
-    fn shadow_views_at(&self, camera: &Camera, first_tile: u32) -> Vec<ShadowView> {
+    /// [`Light::shadow_views`] from tile `first_tile` of an atlas `atlas`
+    /// texels wide, whose tiles the cascades snap to.
+    fn shadow_views_at(&self, camera: &Camera, first_tile: u32, atlas: u32) -> Vec<ShadowView> {
         if !self.casts_shadow {
             return Vec::new();
         }
@@ -619,7 +621,7 @@ impl Light {
                 if self.shadow_cascades <= 1 {
                     vec![self.origin_box(&direction)]
                 } else {
-                    self.cascade_views(camera, &direction, first_tile)
+                    self.cascade_views(camera, &direction, first_tile, atlas)
                 }
             }
         }
@@ -697,7 +699,13 @@ impl Light {
     /// the light's axis — so the snapping is stable while the camera
     /// moves, which is the whole point: without it, every sub-texel step
     /// of the camera would swim the shadow across the surface.
-    fn cascade_views(&self, camera: &Camera, direction: &Vec3, first_tile: u32) -> Vec<ShadowView> {
+    fn cascade_views(
+        &self,
+        camera: &Camera,
+        direction: &Vec3,
+        first_tile: u32,
+        atlas: u32,
+    ) -> Vec<ShadowView> {
         let depth = self.shadow_distance.max(1e-3);
         let reach = if self.shadow_caster_reach > 0.0 {
             self.shadow_caster_reach
@@ -758,7 +766,7 @@ impl Light {
                 .map(|p| p.distance(centre))
                 .fold(0.0_f32, f32::max);
             let radius = (radius * 16.0).ceil().max(1.0) / 16.0;
-            let edge = abi::shadow_tile(first_tile + index).edge as f32;
+            let edge = abi::shadow_tile_in(first_tile + index, atlas).edge as f32;
             let half = radius / (1.0 - 4.0 / edge);
             let texel = half * 2.0 / edge;
             let centre_ls = light_view.transform_point3(centre);
@@ -948,6 +956,10 @@ pub struct Environment {
     /// The local probe the frame captures, if any (ADR 0102). `None` —
     /// the default — leaves its six view slots on the camera.
     pub probe: Option<LocalProbe>,
+    /// The edge of the pipeline's shadow atlas, which its cascades snap
+    /// to: the `shadow_atlas_size` of the `PipelineConfig` the frame was
+    /// compiled with, [`abi::SHADOW_ATLAS_SIZE`] by default.
+    pub shadow_atlas_size: u32,
 }
 
 impl Default for Environment {
@@ -964,6 +976,7 @@ impl Default for Environment {
             previous_camera: None,
             origin: DVec3::ZERO,
             probe: None,
+            shadow_atlas_size: abi::SHADOW_ATLAS_SIZE,
         }
     }
 }
@@ -1016,7 +1029,7 @@ impl Environment {
         let camera = self.camera;
         let mut tiles = Vec::new();
         for (index, light) in self.uniform_lights().into_iter().enumerate() {
-            let views = light.shadow_views_at(&camera, tiles.len() as u32);
+            let views = light.shadow_views_at(&camera, tiles.len() as u32, self.shadow_atlas_size);
             if tiles.len() + views.len() > abi::MAX_SHADOW_TILES {
                 break;
             }
@@ -1082,9 +1095,9 @@ impl Environment {
         let count = uniform_lights.len();
         let tiles = self.shadow_tiles();
         let mut shadow_tiles = [ShadowTileUniform::zeroed(); abi::MAX_SHADOW_TILES];
-        let atlas = abi::SHADOW_ATLAS_SIZE as f32;
+        let atlas = self.shadow_atlas_size as f32;
         for (slot, tile) in tiles.iter().enumerate() {
-            let t = abi::shadow_tile(slot as u32);
+            let t = abi::shadow_tile_in(slot as u32, self.shadow_atlas_size);
             shadow_tiles[slot] = ShadowTileUniform {
                 rect: [
                     t.x as f32 / atlas,
@@ -1690,7 +1703,7 @@ mod tests {
                 .with_cascades(4);
             // Also exercise cascades after other lights' atlas allocations.
             for first_tile in [0, 6] {
-                let views = light.shadow_views_at(&camera, first_tile);
+                let views = light.shadow_views_at(&camera, first_tile, abi::SHADOW_ATLAS_SIZE);
                 assert!(
                     (views.last().unwrap().split - light.shadow_distance.min(camera.far)).abs()
                         < 1e-5

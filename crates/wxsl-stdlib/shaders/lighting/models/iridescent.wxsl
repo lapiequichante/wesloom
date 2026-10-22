@@ -2,18 +2,27 @@
 //
 // GGX with a spectral thin-film Fresnel response at each light's half-vector
 // angle. The graph authors the film, and the model's HDR channel carries it
-// through the deferred path. Ambient still uses the shared GGX environment
-// approximation; this model does not claim a spectral IBL prefilter.
-// See ADR 0058. The spectral evaluation is the attributed existing node;
-// the packing and direct-light composition here are original.
+// through the deferred path. Ambient is the shared split-sum GGX response
+// with its Fresnel blended toward the film's at the view angle: the film
+// colours the environment's reflection too, without a spectral IBL
+// prefilter. See ADR 0058. The spectral evaluation is the attributed
+// existing node; the packing and the direct and ambient composition here
+// are original.
 
+import package::lighting::ambient_environment::ambient_environment;
 import package::lighting::iridescence::iridescence;
 import package::lighting::fresnel_schlick::fresnel_schlick;
 import package::lighting::distribution_ggx::distribution_ggx;
 import package::lighting::visibility_smith::visibility_smith;
 import package::lighting::diffuse_lambert::diffuse_lambert;
 import package::lighting::models::pbr::lighting_pbr;
-import package::wxsl::bindings::LightSample;
+import package::wxsl::bindings::{
+    LightSample,
+    scene,
+    environment_brdf,
+    environment_diffuse_radiance,
+    environment_specular_radiance,
+};
 import package::wxsl::surface::{Surface, SurfaceContext};
 
 fn pack_iridescence(surface: Surface) -> vec4f {
@@ -53,4 +62,35 @@ fn lighting_iridescent(
     let diffuse = (vec3f(1.0) - fresnel)
         * diffuse_lambert(surface.base_color, surface.metallic);
     return (diffuse + specular) * light.radiance * n_dot_l;
+}
+
+fn ambient_iridescent(surface: Surface, ctx: SurfaceContext, extra: vec4f) -> vec3f {
+    let normal = normalize(surface.normal);
+    let view = normalize(ctx.view_direction);
+    let n_dot_v = saturate(dot(normal, view));
+    let brdf = environment_brdf(n_dot_v, surface.roughness);
+    let metallic = saturate(surface.metallic);
+    let f0 = mix(vec3f(0.04), surface.base_color, metallic);
+    // The split sum's Fresnel scale and bias, the film's response in
+    // place of Schlick's where there is a film. Restated from the
+    // library's default ambient, which a model module cannot call.
+    var reflectance = f0 * brdf.x + vec3f(brdf.y);
+    if extra.x > 0.0 && extra.y > 0.0 {
+        let film = clamp(iridescence(f0, max(n_dot_v, 1e-4), extra.y, extra.z), vec3f(0.0), vec3f(1.0));
+        reflectance = mix(reflectance, film * (brdf.x + brdf.y), saturate(extra.x));
+    }
+    if scene.environment_enabled > 0.0 {
+        return (surface.base_color * (1.0 - metallic) * environment_diffuse_radiance(normal)
+                * surface.diffuse_occlusion
+            + environment_specular_radiance(reflect(-view, normal), surface.roughness)
+                * reflectance * surface.specular_occlusion)
+            * scene.environment_scale;
+    }
+    // The analytic hemisphere: its diffuse, and its mirror lookup weighted
+    // by the reflectance (a white metal's specular term is the lookup alone).
+    let diffuse = ambient_environment(normal, view, surface.base_color * (1.0 - metallic), 0.0,
+        surface.roughness, scene.ambient_sky, scene.ambient_ground, vec2f(0.0));
+    let mirror = ambient_environment(normal, view, vec3f(1.0), 1.0, surface.roughness,
+        scene.ambient_sky, scene.ambient_ground, vec2f(1.0, 0.0));
+    return diffuse + mirror * reflectance;
 }

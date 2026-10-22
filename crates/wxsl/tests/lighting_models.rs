@@ -62,6 +62,7 @@ fn lit() -> Environment {
         origin: Default::default(),
         cluster_lights: true,
         probe: None,
+        shadow_atlas_size: wxsl::core::abi::SHADOW_ATLAS_SIZE,
     }
 }
 

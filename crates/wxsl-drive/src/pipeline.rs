@@ -32,7 +32,7 @@
 
 use std::error::Error;
 
-use wxsl::core::abi::MaterialStage;
+use wxsl::core::abi::{self, MaterialStage};
 use wxsl::core::graph::{Graph, Node, SocketRef};
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
@@ -62,10 +62,11 @@ const MAX_COC: f32 = 20.0;
 pub const MOTION_BLUR: &str = "motion blur";
 /// The sky's environment cubes: the edge of the radiance and specular
 /// cubes, the diffuse cube's, and the specular mips. The car's probe has
-/// the same, as a pass's own cubes must (ADR 0102).
+/// the same mips, as a pass's own cubes must (ADR 0102), and its edge
+/// scaled by the quality: seven mips leave room for a 64² probe.
 const CUBE_SIZE: u32 = 128;
 const DIFFUSE_SIZE: u32 = 16;
-const SPECULAR_MIPS: u32 = 8;
+const SPECULAR_MIPS: u32 = 7;
 /// The probe's label, and the importance samples of its sharp GGX lobes:
 /// few enough for every frame, the filtered source's mips doing the rest.
 const PROBE: &str = "drive probe";
@@ -366,20 +367,28 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
 
 /// Build the frame, forward or `deferred`, with or without `fxaa`, and give
 /// it to `renderer`. With `refractive`, the car's glass leaves the opaque
-/// passes for the refraction tier (ADR 0067).
+/// passes for the refraction tier (ADR 0067). `quality` scales the car's
+/// probe and the shadow atlas from their defaults (0.5, 1 or 2); at 0 the
+/// car has no probe and reflects the sky's maps, and the caller turns the
+/// shadows off.
 pub fn install(
     renderer: &mut Renderer,
     refractive: bool,
     deferred: bool,
     fxaa: bool,
+    quality: f32,
 ) -> Result<(), Box<dyn Error>> {
     let document = motion_blur_document(renderer, deferred)?;
+    // The renderer's own: its lighting set shapes the G-buffer.
+    let mut config = renderer.pipeline_config().clone();
+    if quality > 0.0 {
+        config.shadow_atlas_size = (abi::SHADOW_ATLAS_SIZE as f32 * quality) as u32;
+    }
     let mut graph = wxsl::render::compile_pipeline(
         &document,
         &wxsl::render::document_registry(renderer.effects()),
         renderer.effects(),
-        // The renderer's own: its lighting set shapes the G-buffer.
-        renderer.pipeline_config(),
+        &config,
     )
     .map_err(|error| format!("the drive document does not compile: {error}"))?;
     if refractive {
@@ -438,40 +447,33 @@ pub fn install(
         .ok_or("the frame has no depth")?;
 
     // The car's probe, after the lookups above: its faces have depth too.
-    let probe = ibl::append_probe(
-        &mut graph,
-        TagExpr::parse(&format!("!{CAR_TAG}"))?,
-        maps.radiance,
-        PROBE,
-        CUBE_SIZE,
-        DIFFUSE_SIZE,
-        SPECULAR_MIPS,
-        PROBE_SAMPLES,
-    );
-    // The same fog over each face, from the face's view, before the
-    // capture folds it into the cube: the car reflects a fogged world.
-    for face in 0..PROBE_FACES {
-        let capture = graph
-            .passes()
-            .iter()
-            .position(|pass| pass.label == format!("{PROBE} capture {face}"))
-            .ok_or_else(|| format!("the probe has no face {face}"))?;
-        let (view, color, depth) = {
-            let pass = &graph.passes()[capture];
-            (pass.view, pass.reads[0].resource, pass.reads[1].resource)
-        };
-        let label = probe_fog(face);
-        let fogged = graph.resource(
-            ResourceDesc::color(label.clone(), TextureFormat::Rgba16Float).with_extent(
-                Extent::Fixed {
-                    width: CUBE_SIZE,
-                    height: CUBE_SIZE,
-                },
-            ),
+    // Without one, the car reflects the sky's maps: diffuse, specular and
+    // the radiance its glass refracts.
+    let probe_size = (CUBE_SIZE as f32 * quality) as u32;
+    let probe = if probe_size == 0 {
+        ProbeMaps {
+            diffuse: maps.diffuse,
+            specular: maps.specular,
+            radiance: maps.radiance,
+        }
+    } else {
+        let probe = ibl::append_probe(
+            &mut graph,
+            TagExpr::parse(&format!("!{CAR_TAG}"))?,
+            maps.radiance,
+            PROBE,
+            probe_size,
+            DIFFUSE_SIZE,
+            SPECULAR_MIPS,
+            PROBE_SAMPLES,
         );
-        graph.pass(fog_pass(&label, fogged, [color, depth, maps.radiance]).with_view(view));
-        graph.pass_mut(capture).ok_or("probe capture")?.reads[0] = Read::current(fogged);
-    }
+        fog_probe(&mut graph, probe_size, maps.radiance)?;
+        ProbeMaps {
+            diffuse: probe.diffuse,
+            specular: probe.specular,
+            radiance: probe.radiance,
+        }
+    };
     if !deferred {
         // The world, then the car on the same targets with the probe.
         let forward = graph
@@ -614,6 +616,46 @@ pub fn install(
     Ok(())
 }
 
+/// The cubes the car is lit by: its probe's, or the sky's.
+struct ProbeMaps {
+    diffuse: ResourceId,
+    specular: ResourceId,
+    radiance: ResourceId,
+}
+
+/// The same fog over each of the probe's faces, `size` texels square,
+/// from the face's view, before the capture folds it into the cube: the
+/// car reflects a fogged world.
+fn fog_probe(
+    graph: &mut wxsl::render::RenderGraph,
+    size: u32,
+    sky: ResourceId,
+) -> Result<(), Box<dyn Error>> {
+    for face in 0..PROBE_FACES {
+        let capture = graph
+            .passes()
+            .iter()
+            .position(|pass| pass.label == format!("{PROBE} capture {face}"))
+            .ok_or_else(|| format!("the probe has no face {face}"))?;
+        let (view, color, depth) = {
+            let pass = &graph.passes()[capture];
+            (pass.view, pass.reads[0].resource, pass.reads[1].resource)
+        };
+        let label = probe_fog(face);
+        let fogged = graph.resource(
+            ResourceDesc::color(label.clone(), TextureFormat::Rgba16Float).with_extent(
+                Extent::Fixed {
+                    width: size,
+                    height: size,
+                },
+            ),
+        );
+        graph.pass(fog_pass(&label, fogged, [color, depth, sky]).with_view(view));
+        graph.pass_mut(capture).ok_or("probe capture")?.reads[0] = Read::current(fogged);
+    }
+    Ok(())
+}
+
 /// The fog pass of the probe's `face`.
 fn probe_fog(face: u32) -> String {
     format!("{FOG} {PROBE} {face}")
@@ -634,7 +676,15 @@ fn fog_pass(label: &str, into: ResourceId, [color, depth, radiance]: [ResourceId
 /// each of the probe's faces.
 pub fn set_fog(renderer: &mut Renderer, density: f32) -> Result<(), Box<dyn Error>> {
     for label in std::iter::once(FOG.to_string()).chain((0..PROBE_FACES).map(probe_fog)) {
-        renderer.set_pass_param(&label, "density", Value::F32(density))?;
+        // The probe's faces only when the frame has the probe.
+        let present = renderer
+            .render_graph()
+            .passes()
+            .iter()
+            .any(|pass| pass.label == label);
+        if present {
+            renderer.set_pass_param(&label, "density", Value::F32(density))?;
+        }
     }
     Ok(())
 }

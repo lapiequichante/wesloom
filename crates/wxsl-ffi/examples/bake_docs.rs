@@ -103,6 +103,7 @@ fn environment(aspect: f32) -> Environment {
         origin: Default::default(),
         cluster_lights: true,
         probe: None,
+        shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
     }
 }
 

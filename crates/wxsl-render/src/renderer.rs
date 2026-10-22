@@ -1331,6 +1331,19 @@ impl Renderer {
         Ok(())
     }
 
+    /// The edge of the installed pass list's shadow atlas, if it has one:
+    /// what `Environment::shadow_atlas_size` must say.
+    pub fn shadow_atlas_size(&self) -> Option<u32> {
+        let desc = self.graph.resource_desc(self.graph.shadow_maps()?)?;
+        match desc.shape {
+            wxsl_frame::pass::ResourceShape::Texture {
+                extent: wxsl_frame::pass::Extent::Fixed { width, .. },
+                ..
+            } => Some(width),
+            _ => None,
+        }
+    }
+
     /// Render one frame.
     ///
     /// Advances any pipeline swap in flight, compiles whatever variants the
@@ -1345,6 +1358,14 @@ impl Renderer {
         request: &RenderRequest<'_>,
     ) -> Result<(), RenderError> {
         self.poll_swap(device)?;
+        if let Some(pipeline) = self.shadow_atlas_size() {
+            if pipeline != request.environment.shadow_atlas_size {
+                return Err(RenderError::ShadowAtlasSize {
+                    pipeline,
+                    environment: request.environment.shadow_atlas_size,
+                });
+            }
+        }
         self.bake_environment_lut(device, queue)?;
         // A pass list that outgrew the query set gets a bigger one.
         let passes = self.graph.passes().len();

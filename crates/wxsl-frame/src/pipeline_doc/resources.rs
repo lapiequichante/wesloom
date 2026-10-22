@@ -285,11 +285,18 @@ impl Compiler<'_> {
                 ],
             });
         }
+        let size = self.config.shadow_atlas_size;
+        if !abi::valid_shadow_atlas_size(size) {
+            return Err(PipelineError::ShadowAtlasSize {
+                node: self.label(node),
+                size,
+            });
+        }
         let maps = self.graph.declare_shadow_maps(
             ResourceDesc::color("shadow maps", DEPTH_FORMAT)
                 .with_extent(Extent::Fixed {
-                    width: abi::SHADOW_ATLAS_SIZE,
-                    height: abi::SHADOW_ATLAS_SIZE,
+                    width: self.config.shadow_atlas_size,
+                    height: self.config.shadow_atlas_size,
                 })
                 // Both because nothing in the pass list reads this resource:
                 // it is sampled through the frame group, so the graph infers

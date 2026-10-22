@@ -536,6 +536,7 @@ fn demo_environment(aspect: f32, time: f32) -> Environment {
         origin: Default::default(),
         cluster_lights: true,
         probe: None,
+        shadow_atlas_size: wxsl::core::abi::SHADOW_ATLAS_SIZE,
     }
 }
 

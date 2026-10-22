@@ -822,7 +822,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
         name: "wxsl.iridescent",
         module: "package::lighting::models::iridescent",
         function: "lighting_iridescent",
-        ambient: None,
+        ambient: Some("ambient_iridescent"),
         area: None,
         extra: Some(ModelExtra {
             target: GBufferTarget {
@@ -833,7 +833,7 @@ pub const DEFAULT_MODELS: &[LightingModel] = &[
             pack: "pack_iridescence",
         }),
         feature: None,
-        doc: "GGX with graph-authored spectral thin-film direct lighting.",
+        doc: "GGX with a graph-authored spectral thin film, on direct and ambient light.",
     },
     LightingModel {
         id: 7,

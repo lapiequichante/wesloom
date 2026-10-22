@@ -289,6 +289,9 @@ pub wxsl_render::error::RenderError::NotConfigured
 pub wxsl_render::error::RenderError::ShaderCompile
 pub wxsl_render::error::RenderError::ShaderCompile::diagnostic: alloc::string::String
 pub wxsl_render::error::RenderError::ShaderCompile::module: alloc::string::String
+pub wxsl_render::error::RenderError::ShadowAtlasSize
+pub wxsl_render::error::RenderError::ShadowAtlasSize::environment: u32
+pub wxsl_render::error::RenderError::ShadowAtlasSize::pipeline: u32
 pub wxsl_render::error::RenderError::SwapAbandoned
 pub wxsl_render::error::RenderError::UnboundMaterialResource
 pub wxsl_render::error::RenderError::UnboundMaterialResource::kind: alloc::string::String
@@ -897,6 +900,7 @@ pub fn wxsl_render::renderer::Renderer::set_pass_param(&mut self, &str, &str, wx
 pub fn wxsl_render::renderer::Renderer::set_pass_timing(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::set_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline)
 pub fn wxsl_render::renderer::Renderer::set_wireframe(&mut self, bool) -> bool
+pub fn wxsl_render::renderer::Renderer::shadow_atlas_size(&self) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::stages(&self) -> alloc::vec::Vec<wxsl_core::abi::MaterialStage>
 pub fn wxsl_render::renderer::Renderer::supports_wireframe(&self) -> bool
 pub fn wxsl_render::renderer::Renderer::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>
@@ -3252,6 +3256,9 @@ pub wxsl_render::RenderError::NotConfigured
 pub wxsl_render::RenderError::ShaderCompile
 pub wxsl_render::RenderError::ShaderCompile::diagnostic: alloc::string::String
 pub wxsl_render::RenderError::ShaderCompile::module: alloc::string::String
+pub wxsl_render::RenderError::ShadowAtlasSize
+pub wxsl_render::RenderError::ShadowAtlasSize::environment: u32
+pub wxsl_render::RenderError::ShadowAtlasSize::pipeline: u32
 pub wxsl_render::RenderError::SwapAbandoned
 pub wxsl_render::RenderError::UnboundMaterialResource
 pub wxsl_render::RenderError::UnboundMaterialResource::kind: alloc::string::String
@@ -3673,6 +3680,7 @@ pub fn wxsl_render::renderer::Renderer::set_pass_param(&mut self, &str, &str, wx
 pub fn wxsl_render::renderer::Renderer::set_pass_timing(&mut self, &wgpu::api::device::Device, &wgpu::api::queue::Queue, bool) -> bool
 pub fn wxsl_render::renderer::Renderer::set_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline)
 pub fn wxsl_render::renderer::Renderer::set_wireframe(&mut self, bool) -> bool
+pub fn wxsl_render::renderer::Renderer::shadow_atlas_size(&self) -> core::option::Option<u32>
 pub fn wxsl_render::renderer::Renderer::stages(&self) -> alloc::vec::Vec<wxsl_core::abi::MaterialStage>
 pub fn wxsl_render::renderer::Renderer::supports_wireframe(&self) -> bool
 pub fn wxsl_render::renderer::Renderer::swap_progress(&self) -> core::option::Option<wxsl_render::swap::SwapProgress>

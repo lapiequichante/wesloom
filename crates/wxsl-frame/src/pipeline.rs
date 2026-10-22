@@ -156,6 +156,12 @@ pub struct PipelineConfig {
     /// default — falls back on nothing; a downlevel one lowers compute
     /// effects to their fragment arms and refuses native-only ones by name.
     pub profile: crate::profile::Profile,
+    /// The edge of a document pipeline's shadow atlas, in texels: a power
+    /// of two from `abi::MIN_SHADOW_ATLAS_SIZE` to
+    /// `abi::MAX_SHADOW_ATLAS_SIZE`, `abi::SHADOW_ATLAS_SIZE` by default.
+    /// The tiles scale with it (`abi::shadow_tile_in`); the frame's
+    /// `Environment::shadow_atlas_size` must match.
+    pub shadow_atlas_size: u32,
 }
 
 impl PipelineConfig {
@@ -168,6 +174,7 @@ impl PipelineConfig {
             features: Vec::new(),
             macros: MacroSet::new(),
             profile: crate::profile::Profile::FULL,
+            shadow_atlas_size: abi::SHADOW_ATLAS_SIZE,
         }
     }
 
@@ -765,6 +772,7 @@ mod tests {
                         target,
                         macros: wxsl_core::macros::MacroSet::new(),
                         profile: Default::default(),
+                        shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
                     })
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));

@@ -20,16 +20,19 @@
 //! In the window: the sliders set the speed, the hour, the motion blur and
 //! the aperture; drag elsewhere to look around the car, scroll to zoom,
 //! `R` recentres,
-//! `Space` pauses, `Esc` quits. The last slider shows a surface debug view
-//! on the car instead of shading it (ADR 0085): albedo, normal, depth,
-//! metallic-roughness, mip level, and the rest a forward pass can show;
-//! `--view NAME` picks one for a screenshot. The `pipeline` slider swaps
-//! the forward frame for a deferred one, to compare their cost
-//! (`--deferred` for a timed screenshot); the debug views are forward
-//! only. Shadows are hard by default; the `shadows` slider (or
+//! `Space` pauses, `Esc` quits. The `car color` slider (or `--paint NAME`)
+//! repaints the body: a flaked hornet yellow, a metallic red, a smooth
+//! clear-coated blue, white, matte black and an iridescent pearl. The
+//! `view` slider shows a surface debug view on the car instead of shading
+//! it (ADR 0085): albedo, normal, depth, metallic-roughness, mip level, and
+//! the rest a forward pass can show; `--view NAME` picks one for a
+//! screenshot. The frame is forward. Shadows are hard by default; the `shadows` slider (or
 //! `--soft-shadows`) gives the lights their source size back, for
 //! contact-hardening penumbrae at a higher shading cost. The `fxaa` slider
 //! (or `--no-fxaa`) turns the anti-aliasing off, to compare. The
+//! `quality` slider (or `--quality x0|x0.5|x1|x2`) scales the car's probe
+//! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
+//! then reflecting the sky alone. The
 //! `screenshot` button under the sliders saves the next frame, without
 //! them, as the first free `drive-NNN.png` in the working directory.
 
@@ -70,12 +73,12 @@ use ui::{Panel, Slider};
 use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
-      [--exposure EV] [--ground-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--view NAME] [--deferred] [--soft-shadows] [--no-fxaa]
+      [--exposure EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
+      [--paint NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
       [--screenshot out.png [--ui] [--frames N] [--profile]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
-        occlusion on the road, its debug view, forward or deferred, hard or soft shadows and FXAA; the screenshot button saves
+        occlusion on the road and on itself, its paint, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
         the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
@@ -86,10 +89,15 @@ const APERTURE: &str = "aperture";
 const FOG: &str = "fog";
 const EXPOSURE: &str = "exposure";
 const GROUND_AO: &str = "ground AO";
+const CAR_AO: &str = "car AO";
+const PAINT: &str = "car color";
 const VIEW: &str = "view";
-const PIPELINE: &str = "pipeline";
 const SHADOWS: &str = "shadows";
 const FXAA: &str = "fxaa";
+const QUALITY: &str = "quality";
+/// The `quality` slider's steps: the probe's and the shadow atlas's
+/// scale, 0 turning both off.
+const QUALITIES: [f32; 4] = [0.0, 0.5, 1.0, 2.0];
 /// The fog's density per metre at the ground, at the `fog` slider's 1:
 /// about a third of the light survives a kilometre at ground level.
 const FOG_DENSITY: f32 = 0.0012;
@@ -121,16 +129,18 @@ struct Options {
     exposure: f32,
     /// How much the car darkens the road under it, 0 to 1.
     ground_ao: f32,
+    /// How much the car's PRT bake darkens the car itself, 0 to 1.
+    car_ao: f32,
     at: f32,
     /// How far the view starts turned around the car, radians.
     look: f32,
     /// How far it starts tilted down onto the car, radians.
     pitch: f32,
     zoom: f32,
+    /// The body paint, an index into [`car::PAINTS`].
+    paint: f32,
     /// The `view` slider's start: 0 shades, then one per [`debug_views`].
     view: f32,
-    /// Start on the deferred frame rather than the forward one.
-    deferred: bool,
     /// Print the screenshot's GPU time per pass.
     profile: bool,
     /// Start with the lights' soft, contact-hardening shadows rather than
@@ -138,6 +148,8 @@ struct Options {
     soft_shadows: bool,
     /// Start without FXAA.
     no_fxaa: bool,
+    /// The `quality` slider's start, an index into [`QUALITIES`].
+    quality: f32,
     screenshot: Option<PathBuf>,
     /// Draw the sliders into the screenshot too.
     ui: bool,
@@ -153,20 +165,22 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     let mut options = Options {
         hour: 21.0,
         speed: 110.0,
-        blur: 1.0,
+        blur: 0.3,
         aperture: 8.0,
-        fog: 1.0,
+        fog: 0.7,
         exposure: 0.0,
-        ground_ao: 1.0,
+        ground_ao: 0.7,
+        car_ao: 0.7,
         at: 0.0,
         look: 0.0,
         pitch: 0.0,
         zoom: 1.0,
+        paint: 0.0,
         view: 0.0,
-        deferred: false,
         profile: false,
         soft_shadows: false,
         no_fxaa: false,
+        quality: 2.0,
         screenshot: None,
         ui: false,
         frames: 4,
@@ -189,10 +203,21 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--fog" => options.fog = value()?.parse()?,
             "--exposure" => options.exposure = value()?.parse()?,
             "--ground-ao" => options.ground_ao = value()?.parse()?,
+            "--car-ao" => options.car_ao = value()?.parse()?,
             "--at" => options.at = value()?.parse()?,
             "--look" => options.look = value()?.parse()?,
             "--pitch" => options.pitch = value()?.parse()?,
             "--zoom" => options.zoom = value()?.parse::<f32>()?.clamp(0.3, 40.0),
+            "--paint" => {
+                let name = value()?;
+                options.paint = car::PAINTS
+                    .iter()
+                    .position(|paint| paint.name == name)
+                    .ok_or_else(|| {
+                        let names: Vec<&str> = car::PAINTS.iter().map(|paint| paint.name).collect();
+                        format!("--paint is one of: {}", names.join(", "))
+                    })? as f32;
+            }
             "--view" => {
                 let name = value()?;
                 let views = debug_views();
@@ -207,10 +232,17 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     }
                 };
             }
-            "--deferred" => options.deferred = true,
             "--profile" => options.profile = true,
             "--soft-shadows" => options.soft_shadows = true,
             "--no-fxaa" => options.no_fxaa = true,
+            "--quality" => {
+                let name = value()?;
+                options.quality = QUALITIES
+                    .iter()
+                    .position(|scale| format!("x{scale}") == name)
+                    .ok_or("--quality is one of x0, x0.5, x1, x2")?
+                    as f32;
+            }
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--ui" => options.ui = true,
             "--frames" => options.frames = value()?.parse::<u32>()?.max(3),
@@ -255,6 +287,16 @@ fn sliders(options: &Options) -> Panel {
         Slider::new(GROUND_AO, 0.0, 1.0, options.ground_ao, |value| {
             format!("{value:.2}")
         }),
+        Slider::new(CAR_AO, 0.0, 1.0, options.car_ao, |value| {
+            format!("{value:.2}")
+        }),
+        Slider::new(
+            PAINT,
+            0.0,
+            (car::PAINTS.len() - 1) as f32,
+            options.paint,
+            |value| car::PAINTS[value.round() as usize].name.to_string(),
+        ),
         Slider::new(
             VIEW,
             0.0,
@@ -265,13 +307,6 @@ fn sliders(options: &Options) -> Panel {
                     .map_or("shaded", |view| view.label)
                     .to_string()
             },
-        ),
-        Slider::new(
-            PIPELINE,
-            0.0,
-            1.0,
-            if options.deferred { 1.0 } else { 0.0 },
-            |value| if value >= 0.5 { "deferred" } else { "forward" }.to_string(),
         ),
         Slider::new(
             SHADOWS,
@@ -287,6 +322,13 @@ fn sliders(options: &Options) -> Panel {
             if options.no_fxaa { 0.0 } else { 1.0 },
             |value| if value >= 0.5 { "on" } else { "off" }.to_string(),
         ),
+        Slider::new(
+            QUALITY,
+            0.0,
+            (QUALITIES.len() - 1) as f32,
+            options.quality,
+            |value| format!("x{}", QUALITIES[value.round() as usize]),
+        ),
     ])
 }
 
@@ -299,6 +341,8 @@ struct Drive {
     /// The car's occlusion on the road, when the car has a baked ground,
     /// and the strength last set on it.
     ground: Option<(CarGround, Option<f32>)>,
+    /// The PRT strength last set on the car's materials.
+    car_ao: Option<f32>,
     /// Arc length along the road, metres.
     s: f32,
     /// How far the car has driven, for its wheels.
@@ -313,12 +357,14 @@ struct Drive {
     orbit: Vec2,
     /// How far the camera is from the car, relative to the chase distance.
     zoom: f32,
+    /// The paint last put on the car.
+    paint: Option<usize>,
     /// The debug view the car's materials are compiled for, 0 shading.
     shown_view: i32,
-    /// Whether the frame installed is the deferred one.
-    deferred: bool,
     /// Whether the frame installed ends in FXAA.
     fxaa: bool,
+    /// The probe and shadow scale the frame installed has.
+    quality: f32,
 }
 
 impl Drive {
@@ -341,7 +387,7 @@ impl Drive {
             &mut renderer,
             car,
             shadow_car,
-            |renderer, refractive| pipeline::install(renderer, refractive, false, true),
+            |renderer, refractive| pipeline::install(renderer, refractive, false, true, 1.0),
         )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
         renderer.set_light_cookies(&gpu.device, Some(&lights::cookies(gpu)?));
@@ -361,6 +407,7 @@ impl Drive {
             world,
             car,
             ground,
+            car_ao: None,
             s: at,
             odometer: 0.0,
             clip_time: 0.0,
@@ -369,9 +416,10 @@ impl Drive {
             previous: None,
             orbit: Vec2::ZERO,
             zoom: 1.0,
+            paint: None,
             shown_view: 0,
-            deferred: false,
             fxaa: true,
+            quality: 1.0,
         })
     }
 
@@ -389,12 +437,18 @@ impl Drive {
         self.s = (self.s + speed * dt).rem_euclid(self.world.road.length());
         self.odometer += speed * dt;
         self.clip_time += dt;
-        let deferred = panel.value(PIPELINE) >= 0.5;
         let fxaa = panel.value(FXAA) >= 0.5;
-        if (deferred, fxaa) != (self.deferred, self.fxaa) {
-            pipeline::install(&mut self.renderer, self.car.refractive, deferred, fxaa)?;
-            self.deferred = deferred;
+        let quality = QUALITIES[panel.value(QUALITY).round() as usize];
+        if (fxaa, quality) != (self.fxaa, self.quality) {
+            pipeline::install(
+                &mut self.renderer,
+                self.car.refractive,
+                false,
+                fxaa,
+                quality,
+            )?;
             self.fxaa = fxaa;
+            self.quality = quality;
             // The new frame's sky and environment maps start unbaked.
             self.baked_hour = None;
         }
@@ -413,7 +467,20 @@ impl Drive {
         if shown != self.shown_view {
             self.car.set_debug_view(gpu, &mut self.renderer, shown)?;
             self.car.set_lights_on(gpu, self.day.lights_on)?;
+            self.car_ao = None;
+            self.paint = None;
             self.shown_view = shown;
+        }
+        let paint = panel.value(PAINT).round() as usize;
+        if self.paint != Some(paint) {
+            self.car
+                .set_paint(gpu, &mut self.renderer, &car::PAINTS[paint])?;
+            self.paint = Some(paint);
+        }
+        let car_ao = panel.value(CAR_AO);
+        if self.car_ao != Some(car_ao) {
+            self.car.set_prt_strength(gpu, car_ao)?;
+            self.car_ao = Some(car_ao);
         }
         self.car.animate(gpu, self.clip_time, self.odometer)?;
 
@@ -452,6 +519,11 @@ impl Drive {
             &self.car.lamps(),
             camera.eye,
         );
+        if self.quality == 0.0 {
+            for light in &mut lights {
+                light.casts_shadow = false;
+            }
+        }
         if panel.value(SHADOWS) < 0.5 {
             // Hard: no source size, so each shadow is one PCF lookup
             // rather than a blocker search and a wide filter (ADR 0098).
@@ -470,11 +542,15 @@ impl Drive {
             time: self.clip_time,
             previous_time: self.clip_time - dt,
             // The car's reflections, from its own centre (ADR 0102).
-            probe: Some(LocalProbe {
+            probe: (self.quality > 0.0).then_some(LocalProbe {
                 center,
                 near: 0.05,
                 far: camera.far,
             }),
+            shadow_atlas_size: self
+                .renderer
+                .shadow_atlas_size()
+                .unwrap_or(wxsl::core::abi::SHADOW_ATLAS_SIZE),
             ..Environment::default()
         };
         pipeline::set_lens(
@@ -601,7 +677,7 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     let mut timed = std::time::Duration::ZERO;
     let mut profile = Profile::default();
     for frame in 0..options.frames {
-        // On after the first frame, which may swap in the deferred frame.
+        // On after the first frame, which runs the bakes.
         if frame == 1 && options.profile && !profile.start(&gpu, &mut drive.renderer) {
             println!("this device has no timestamp queries: no pass timings");
         }

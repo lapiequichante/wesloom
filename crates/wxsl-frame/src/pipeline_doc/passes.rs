@@ -461,7 +461,7 @@ impl Compiler<'_> {
         // whole atlas on its way in; the rest load, because the tile is
         // the only part of the shared target they may touch.
         for slot in 0..abi::MAX_SHADOW_TILES as u32 {
-            let tile = abi::shadow_tile(slot);
+            let tile = abi::shadow_tile_in(slot, self.config.shadow_atlas_size);
             let depth = if slot == 0 {
                 DepthAttachment::clear(maps, 1.0)
             } else {

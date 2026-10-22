@@ -646,6 +646,20 @@ pub const MAX_LIGHTS_PER_CELL: usize = 256;
 /// important its slice of the scene is.
 pub const SHADOW_ATLAS_SIZE: u32 = 2048;
 
+/// The smallest atlas edge a pipeline may ask for instead of
+/// [`SHADOW_ATLAS_SIZE`] (its 64² tiles become 16²).
+pub const MIN_SHADOW_ATLAS_SIZE: u32 = 512;
+
+/// The largest atlas edge a pipeline may ask for: wgpu's default 2D
+/// texture limit.
+pub const MAX_SHADOW_ATLAS_SIZE: u32 = 8192;
+
+/// Whether `atlas` is an edge a pipeline may give its shadow atlas: a
+/// power of two from [`MIN_SHADOW_ATLAS_SIZE`] to [`MAX_SHADOW_ATLAS_SIZE`].
+pub const fn valid_shadow_atlas_size(atlas: u32) -> bool {
+    atlas.is_power_of_two() && atlas >= MIN_SHADOW_ATLAS_SIZE && atlas <= MAX_SHADOW_ATLAS_SIZE
+}
+
 /// How many atlas slots the frame group's shadow-tile table carries.
 ///
 /// A light takes as many tiles as its shadow kind needs — one per cascade,
@@ -697,6 +711,30 @@ pub const fn shadow_tile(index: u32) -> ShadowTile {
         ),
     };
     ShadowTile { x, y, edge }
+}
+
+/// The atlas tile for shadow slot `index` in an atlas `atlas` texels wide
+/// ([`valid_shadow_atlas_size`]): [`shadow_tile`]'s packing scaled with the
+/// atlas, so a tile's rect relative to the atlas, which is what the scene
+/// uniform carries, does not change.
+pub const fn shadow_tile_in(index: u32, atlas: u32) -> ShadowTile {
+    let tile = shadow_tile(index);
+    // Both powers of two: a whole factor one way or the other.
+    if atlas >= SHADOW_ATLAS_SIZE {
+        let up = atlas / SHADOW_ATLAS_SIZE;
+        ShadowTile {
+            x: tile.x * up,
+            y: tile.y * up,
+            edge: tile.edge * up,
+        }
+    } else {
+        let down = SHADOW_ATLAS_SIZE / atlas;
+        ShadowTile {
+            x: tile.x / down,
+            y: tile.y / down,
+            edge: tile.edge / down,
+        }
+    }
 }
 
 /// How much precision a G-buffer target needs, and how many channels it
@@ -2355,6 +2393,28 @@ mod tests {
                     claimed[row + x as usize] = true;
                 }
             }
+        }
+    }
+    #[test]
+    fn a_scaled_atlas_keeps_every_tile_where_it_was() {
+        for atlas in [MIN_SHADOW_ATLAS_SIZE, 1024, 4096, MAX_SHADOW_ATLAS_SIZE] {
+            assert!(valid_shadow_atlas_size(atlas));
+            let ratio = atlas as f32 / SHADOW_ATLAS_SIZE as f32;
+            for index in 0..MAX_SHADOW_TILES as u32 {
+                let (tile, scaled) = (shadow_tile(index), shadow_tile_in(index, atlas));
+                assert!(scaled.edge > 0 && scaled.x + scaled.edge <= atlas);
+                assert_eq!(
+                    scaled.edge as f32,
+                    tile.edge as f32 * ratio,
+                    "{atlas}: {index}"
+                );
+                assert_eq!(scaled.x as f32, tile.x as f32 * ratio, "{atlas}: {index}");
+                assert_eq!(scaled.y as f32, tile.y as f32 * ratio, "{atlas}: {index}");
+            }
+        }
+        assert_eq!(shadow_tile_in(7, SHADOW_ATLAS_SIZE), shadow_tile(7));
+        for atlas in [0, 256, 1000, 16384] {
+            assert!(!valid_shadow_atlas_size(atlas), "{atlas}");
         }
     }
 }

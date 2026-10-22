@@ -232,6 +232,14 @@ pub enum RenderError {
         /// Height of the entry that did not fit.
         height: u32,
     },
+    /// The frame's `Environment::shadow_atlas_size` is not the installed
+    /// pipeline's: its cascades would snap to the wrong texel grid.
+    ShadowAtlasSize {
+        /// The installed pass list's atlas edge.
+        pipeline: u32,
+        /// The environment's.
+        environment: u32,
+    },
     /// A font's bytes could not be parsed.
     InvalidFont {
         /// What the parser objected to.
@@ -377,6 +385,15 @@ impl fmt::Display for RenderError {
             RenderError::AtlasFull { width, height } => write!(
                 f,
                 "the UI atlas has no room for a {width}x{height} entry; clear it, or                  build it larger (see `Atlas::new`)"
+            ),
+            RenderError::ShadowAtlasSize {
+                pipeline,
+                environment,
+            } => write!(
+                f,
+                "the pipeline's shadow atlas is {pipeline}² texels but the environment \
+                 says {environment}²: set `Environment::shadow_atlas_size` to the \
+                 `PipelineConfig`'s"
             ),
             RenderError::InvalidFont { reason } => {
                 write!(f, "cannot read the font: {reason}")

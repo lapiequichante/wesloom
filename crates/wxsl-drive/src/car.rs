@@ -13,7 +13,9 @@ use std::path::Path;
 
 use glam::{Mat4, Vec3};
 use wxsl::asset::{BoneTexture, ImportedScene, BONE_FRAME_PARAM, BONE_TEXTURE_SLOT};
-use wxsl::core::scene::MeshSource;
+use wxsl::core::graph::{Graph, Node, NodeId};
+use wxsl::core::node::{NodeRegistry, ValueType};
+use wxsl::core::scene::{MaterialEntry, MeshSource};
 use wxsl::core::Value;
 use wxsl::render::mesh::MeshData;
 use wxsl::render::scene::SceneImage;
@@ -122,6 +124,13 @@ pub struct Car {
     /// The decimated stand-in the shadow passes draw instead of the car,
     /// tagged [`crate::lights::CAR_SHADOW_TAG`].
     shadow: Option<Box<Car>>,
+    /// Whether its materials read a PRT bake.
+    prt: bool,
+    /// The PRT strength last set.
+    prt_strength: f32,
+    /// The body paint's material, when the file has it, and whether it is
+    /// compiled for an iridescent paint.
+    paint: Option<(usize, bool)>,
 }
 
 /// A wheel: where its axle is, its radius, and the nodes that turn with
@@ -234,8 +243,137 @@ const BULB_HEIGHT: f32 = 0.75;
 /// The material of me_car's tail lights.
 const TAIL_MATERIAL: &str = "RearLights";
 
+/// The material of me_car's body.
+const PAINT_MATERIAL: &str = "Paint 1 Carmine";
+
+/// A body paint, over the clear-coated, flaked paint me_car comes with.
+pub struct Paint {
+    pub name: &'static str,
+    pub base_color: [f32; 3],
+    pub metallic: f32,
+    pub roughness: f32,
+    /// The flakes' normal map strength, 0 for a smooth paint.
+    pub flakes: f32,
+    /// The clear coat's strength and roughness.
+    pub clearcoat: (f32, f32),
+    /// A thin film instead of the clear coat: its IOR, and its thickness
+    /// in nm on the sides and on the top, between which it follows the
+    /// normal: the colours band along the body's curves.
+    pub iridescence: Option<(f32, f32, f32)>,
+}
+
+/// The paints the `car color` slider steps through: first a hornet
+/// yellow, brighter than me_car's own fully metallic orange.
+pub const PAINTS: [Paint; 6] = [
+    Paint {
+        name: "yellow",
+        base_color: [1.0, 0.3, 0.0],
+        metallic: 0.35,
+        roughness: 0.3,
+        flakes: 0.5,
+        clearcoat: (1.0, 0.053),
+        iridescence: None,
+    },
+    Paint {
+        name: "metallic red",
+        base_color: [0.42, 0.012, 0.016],
+        metallic: 1.0,
+        roughness: 0.38,
+        flakes: 0.9,
+        clearcoat: (1.0, 0.03),
+        iridescence: None,
+    },
+    Paint {
+        name: "blue clear coat",
+        base_color: [0.01, 0.06, 0.32],
+        metallic: 0.0,
+        roughness: 0.45,
+        flakes: 0.0,
+        clearcoat: (1.0, 0.0),
+        iridescence: None,
+    },
+    Paint {
+        name: "white",
+        base_color: [0.85, 0.85, 0.83],
+        metallic: 0.0,
+        roughness: 0.35,
+        flakes: 0.15,
+        clearcoat: (1.0, 0.02),
+        iridescence: None,
+    },
+    Paint {
+        name: "matte black",
+        base_color: [0.005, 0.005, 0.005],
+        metallic: 0.0,
+        roughness: 0.8,
+        flakes: 0.0,
+        clearcoat: (0.0, 0.5),
+        iridescence: None,
+    },
+    Paint {
+        name: "pearl",
+        base_color: [0.8, 0.8, 0.82],
+        metallic: 1.0,
+        roughness: 0.12,
+        flakes: 0.3,
+        clearcoat: (0.0, 0.0),
+        iridescence: Some((2.0, 250.0, 800.0)),
+    },
+];
+
+/// Turn the clear-coated paint `entry` into a thin-film one: the
+/// iridescent model, its film fed by parameters, the thickness mixed from
+/// `iridescence_thickness_min` (sides) to `iridescence_thickness` (top) by
+/// the world normal's height. The clear coat's outputs stay wired; the
+/// model does not read them.
+fn iridescent_paint(
+    entry: &mut MaterialEntry,
+    registry: &NodeRegistry,
+) -> Result<(), Box<dyn Error>> {
+    let graph = &mut entry.graph;
+    let [surface] = graph.surface_outputs(registry)[..] else {
+        return Err(format!("{}: one surface output expected", entry.name).into());
+    };
+    let name = entry.name.clone();
+    let wire = |graph: &mut Graph, from: (NodeId, &str), to: (NodeId, &str)| {
+        graph
+            .wire(registry, from, to)
+            .map_err(|error| format!("{name}: {error}"))
+    };
+    let param = |graph: &mut Graph, name: &str, value: f32| {
+        graph.add(
+            Node::new("param.value")
+                .with_setting("name", name)
+                .with_param("value", Value::F32(value)),
+        )
+    };
+    for (field, name, value) in [
+        ("iridescence_strength", "iridescence_factor", 1.0),
+        ("iridescence_ior", "iridescence_ior", 1.3),
+    ] {
+        let node = param(graph, name, value);
+        wire(graph, (node, "out"), (surface, field))?;
+    }
+    let thin = param(graph, "iridescence_thickness_min", 250.0);
+    let thick = param(graph, "iridescence_thickness", 650.0);
+    let normal = graph.add(Node::new("input.world_normal"));
+    let axes = graph.add(Node::new("convert.split.vec3f"));
+    wire(graph, (normal, "out"), (axes, "v"))?;
+    let mix = graph.add(Node::new("math.mix"));
+    graph
+        .set_generic(registry, mix, "T", ValueType::F32)
+        .map_err(|error| format!("{}: {error}", entry.name))?;
+    wire(graph, (thin, "out"), (mix, "a"))?;
+    wire(graph, (thick, "out"), (mix, "b"))?;
+    wire(graph, (axes, "y"), (mix, "t"))?;
+    wire(graph, (mix, "out"), (surface, "iridescence_thickness"))?;
+    entry.config.model = Some("wxsl.iridescent".to_string());
+    Ok(())
+}
+
 /// Wire the grayscale PRT bake beside `path`, if there is one, into
-/// `imported`'s materials and its streams onto `meshes`.
+/// `imported`'s materials and its streams onto `meshes`; whether there
+/// was.
 ///
 /// The transfer is a ratio of shadowed to open irradiance, so the sky it
 /// is lit by only needs the right shape, not the hour's colour: bright
@@ -244,13 +382,13 @@ fn attach_prt(
     imported: &mut ImportedScene,
     meshes: &mut [MeshData],
     path: &Path,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<bool, Box<dyn Error>> {
     use wxsl::render::mesh::AttributeValues;
     use wxsl_prt::{Bake, Transfer};
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let file = path.with_file_name(format!("{stem}.{}.prt", Transfer::Gray.name()));
     if !file.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let bake = Bake::read(std::io::BufReader::new(std::fs::File::open(&file)?))
         .and_then(|bake| bake.check(imported).map(|()| bake))
@@ -281,7 +419,7 @@ fn attach_prt(
         wxsl_prt::apply(&mut material.graph, &registry, &environment, bake.transfer)?;
     }
     println!("  PRT: {}", file.display());
-    Ok(())
+    Ok(true)
 }
 
 /// Whether `imported` has glass, which the frame draws in the refraction
@@ -424,7 +562,13 @@ impl Car {
             .iter()
             .map(wxsl::render::gltf::mesh_data)
             .collect();
-        attach_prt(&mut imported, &mut meshes, path)?;
+        let prt = attach_prt(&mut imported, &mut meshes, path)?;
+        let paint = imported
+            .scene
+            .materials
+            .iter()
+            .position(|material| material.name == PAINT_MATERIAL)
+            .map(|material| (material, false));
         let bones: Vec<Bones> = (0..imported.skins.len())
             .map(|skin| Bones::upload(gpu, &imported, skin))
             .collect();
@@ -485,6 +629,9 @@ impl Car {
             bones,
             clip,
             resources,
+            prt,
+            prt_strength: 1.0,
+            paint,
         })
     }
 
@@ -503,12 +650,98 @@ impl Car {
         Ok(())
     }
 
+    /// Scale the PRT bake's occlusion by `strength`, 0 to 1, when there is
+    /// one.
+    pub fn set_prt_strength(
+        &mut self,
+        gpu: &GpuContext,
+        strength: f32,
+    ) -> Result<(), Box<dyn Error>> {
+        if !self.prt {
+            return Ok(());
+        }
+        for material in 0..self.imported.scene.materials.len() {
+            if let Some(bindings) = self.resources.bindings_mut(material) {
+                bindings.set(wxsl_prt::STRENGTH_PARAM, Value::F32(strength))?;
+            }
+        }
+        self.prt_strength = strength;
+        self.resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+
+    /// Paint the body with `paint`. The paint's parameters are set on
+    /// its bindings; going to or from an iridescent paint changes the
+    /// material's lighting model, so it is compiled again first, its
+    /// parameters back at their defaults (the PRT strength is set again).
+    pub fn set_paint(
+        &mut self,
+        gpu: &GpuContext,
+        renderer: &mut Renderer,
+        paint: &Paint,
+    ) -> Result<(), Box<dyn Error>> {
+        let Some((material, iridescent)) = self.paint else {
+            return Ok(());
+        };
+        let film = paint.iridescence.is_some();
+        if film != iridescent {
+            let mut entry = self.imported.scene.materials[material].clone();
+            if film {
+                iridescent_paint(&mut entry, &wxsl::stdlib::registry())?;
+            }
+            self.resources
+                .set_material(
+                    &gpu.device,
+                    renderer,
+                    material,
+                    &entry,
+                    &wxsl::stdlib::registry(),
+                    &renderer.lighting().clone(),
+                    &[],
+                )
+                .map_err(|error| format!("{}: {error}", entry.name))?;
+            if let Some(skin) = self.imported.material_skins[material] {
+                if let Some(bindings) = self.resources.bindings_mut(material) {
+                    bindings.set_texture(BONE_TEXTURE_SLOT, &self.bones[skin].view)?;
+                }
+            }
+            self.paint = Some((material, film));
+        }
+        let Some(bindings) = self.resources.bindings_mut(material) else {
+            return Ok(());
+        };
+        let [r, g, b] = paint.base_color;
+        bindings.set("base_color_factor", Value::Vec4([r, g, b, 1.0]))?;
+        bindings.set("metallic_factor", Value::F32(paint.metallic))?;
+        bindings.set("roughness_factor", Value::F32(paint.roughness))?;
+        bindings.set("normal_scale", Value::F32(paint.flakes))?;
+        match paint.iridescence {
+            Some((ior, thin, thick)) => {
+                bindings.set("iridescence_factor", Value::F32(1.0))?;
+                bindings.set("iridescence_ior", Value::F32(ior))?;
+                bindings.set("iridescence_thickness_min", Value::F32(thin))?;
+                bindings.set("iridescence_thickness", Value::F32(thick))?;
+            }
+            None => {
+                let (coat, coat_roughness) = paint.clearcoat;
+                bindings.set("clearcoat_factor", Value::F32(coat))?;
+                bindings.set("clearcoat_roughness_factor", Value::F32(coat_roughness))?;
+            }
+        }
+        if self.prt {
+            bindings.set(wxsl_prt::STRENGTH_PARAM, Value::F32(self.prt_strength))?;
+        }
+        self.resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+
     /// Show the surface debug view `view` (ADR 0085) on every material,
     /// or shade again for 0: each is recompiled under the view's macro, as
     /// the editor's scene mode does, and its bone texture bound again. The
-    /// lenses' glow and the bone frame are parameters, which go back to
-    /// their defaults: set them again ([`Car::set_lights_on`],
-    /// [`Car::animate`]).
+    /// lenses' glow, the bone frame, the paint and the PRT strength are
+    /// parameters, which go back to their defaults: set them again
+    /// ([`Car::set_lights_on`], [`Car::animate`], [`Car::set_paint`],
+    /// [`Car::set_prt_strength`]).
     pub fn set_debug_view(
         &mut self,
         gpu: &GpuContext,
@@ -524,6 +757,9 @@ impl Car {
             .any(|known| known.id == view && known.label == "material id");
         for (index, entry) in self.imported.scene.materials.iter().enumerate() {
             let mut entry = entry.clone();
+            if self.paint == Some((index, true)) {
+                iridescent_paint(&mut entry, &registry)?;
+            }
             if view != 0 {
                 entry
                     .config

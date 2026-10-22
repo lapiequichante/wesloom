@@ -11,6 +11,19 @@ an entry.
 
 ### Added
 
+- `PipelineConfig::shadow_atlas_size` and `Environment::shadow_atlas_size`:
+  the shadow atlas edge, a power of two from 512 to 8192, 2048 by default
+  (`abi::valid_shadow_atlas_size`, `abi::shadow_tile_in`).
+  `Renderer::shadow_atlas_size` reports the installed pass list's, and a
+  frame whose environment disagrees is `RenderError::ShadowAtlasSize`; a
+  document asking for an invalid edge is `PipelineError::ShadowAtlasSize`
+  ([ADR 0103](docs/adr/0103-the-shadow-atlas-edge-is-a-pipeline-setting.md)).
+  Struct literals of either type need the new field.
+
+- `wxsl.iridescent` has an ambient, `ambient_iridescent`: the film now
+  colours the environment's reflection too, not only direct light
+  ([ADR 0058](docs/adr/0058-iridescence-is-authored-on-the-surface-and-carried-by-a-model-channel.md)).
+
 - `wxsl_prt::ground` and `GroundGrid`: a flat grid under a model, as a
   `.glb` in its space, and `wxsl_prt::bake_receiver`, which bakes such a
   surface against the model without it shadowing anything. The binary

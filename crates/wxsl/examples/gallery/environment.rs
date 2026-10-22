@@ -221,6 +221,7 @@ pub(crate) fn demo_environment(demo: &Demo, aspect: f32, time: f32) -> Environme
         origin: Default::default(),
         cluster_lights: true,
         probe: None,
+        shadow_atlas_size: wxsl::core::abi::SHADOW_ATLAS_SIZE,
     }
 }
 
