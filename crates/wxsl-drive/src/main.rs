@@ -47,6 +47,7 @@
 mod car;
 mod car_ground;
 mod city;
+mod flakes;
 mod lights;
 mod neon;
 mod pipeline;

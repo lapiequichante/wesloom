@@ -142,6 +142,9 @@ pub struct Car {
     /// The body paint's material, when the file has it, and whether it is
     /// compiled for an iridescent paint.
     paint: Option<(usize, bool)>,
+    /// The paint's flakes ([`crate::flakes`]), for the car itself; the
+    /// shadow's stand-in keeps the file's.
+    flakes: Option<wgpu::TextureView>,
 }
 
 /// A wheel: where its axle is, its radius, whether it steers, and the
@@ -278,6 +281,35 @@ const BRAKE_GLOW: f32 = 3.0;
 
 /// The material of me_car's body.
 const PAINT_MATERIAL: &str = "Paint 1 Carmine";
+/// The texture its flakes are, a normal map.
+const FLAKES_SLOT: &str = "normal_texture";
+/// How many times the generated flakes repeat across the body's uv, where
+/// the file's 128² map repeats 80 times.
+const FLAKES_REPEAT: f32 = 8.0;
+
+/// Repeat `entry`'s normal map `repeat` times across its uv. The import
+/// bakes `KHR_texture_transform`'s rotation and scale into the rows of two
+/// `vector.dot` nodes; the paint samples nothing else through one, and
+/// its offset is whole tiles, which a random map does not show.
+fn repeat_flakes(entry: &mut MaterialEntry, repeat: f32) {
+    let dots: Vec<NodeId> = entry
+        .graph
+        .nodes()
+        .filter(|(_, node)| node.def == "vector.dot")
+        .map(|(id, _)| id)
+        .collect();
+    for id in dots {
+        let Some(node) = entry.graph.node_mut(id) else {
+            continue;
+        };
+        if let Some(Value::Vec2(row)) = node.params.get_mut("b") {
+            let length = Vec2::from(*row).length();
+            if length > 0.0 {
+                *row = (Vec2::from(*row) * (repeat / length)).to_array();
+            }
+        }
+    }
+}
 
 /// A body paint, over the clear-coated, flaked paint me_car comes with.
 pub struct Paint {
@@ -555,6 +587,29 @@ fn wheels(imported: &ImportedScene) -> Vec<Wheel> {
     wheels
 }
 
+/// Bind what the car makes rather than reads from the file, which
+/// compiling a material again unbinds: each skinned material's bones, and
+/// the paint's `flakes`.
+fn bind_generated(
+    resources: &mut SceneResources,
+    imported: &ImportedScene,
+    bones: &[Bones],
+    paint: Option<(usize, bool)>,
+    flakes: Option<&wgpu::TextureView>,
+) -> Result<(), Box<dyn Error>> {
+    for (material, skin) in imported.material_skins.iter().enumerate() {
+        if let (Some(skin), Some(bindings)) = (skin, resources.bindings_mut(material)) {
+            bindings.set_texture(BONE_TEXTURE_SLOT, &bones[*skin].view)?;
+        }
+    }
+    if let (Some((material, _)), Some(flakes)) = (paint, flakes) {
+        if let Some(bindings) = resources.bindings_mut(material) {
+            bindings.set_texture(FLAKES_SLOT, flakes)?;
+        }
+    }
+    Ok(())
+}
+
 impl Car {
     /// Import `path` and load it against the frame `install` builds,
     /// which is told whether the car has glass. With `shadow`, a decimated
@@ -575,10 +630,11 @@ impl Car {
         }
         let refractive = refractive(&imported);
         install(renderer, refractive)?;
-        let mut car = Self::load(gpu, renderer, imported, path)?;
+        let flakes = crate::flakes::generate(gpu, crate::flakes::SIZE);
+        let mut car = Self::load(gpu, renderer, imported, path, Some(flakes))?;
         if let Some(path) = shadow {
             let imported = Self::import(path, &[crate::lights::CAR_SHADOW_TAG])?;
-            let mut stand_in = Self::load(gpu, renderer, imported, path)?;
+            let mut stand_in = Self::load(gpu, renderer, imported, path, None)?;
             // Where the car is, whatever the copy's own box.
             stand_in.align = car.align;
             car.shadow = Some(Box::new(stand_in));
@@ -603,12 +659,14 @@ impl Car {
         Ok(imported)
     }
 
-    /// Load `imported`, read from `path`, onto the device.
+    /// Load `imported`, read from `path`, onto the device, its paint
+    /// flaked with `flakes` when given.
     fn load(
         gpu: &GpuContext,
         renderer: &mut Renderer,
         mut imported: ImportedScene,
         path: &Path,
+        flakes: Option<wgpu::TextureView>,
     ) -> Result<Self, Box<dyn Error>> {
         let lenses = light_lenses(&mut imported)?;
         let refractive = refractive(&imported);
@@ -624,6 +682,9 @@ impl Car {
             .iter()
             .position(|material| material.name == PAINT_MATERIAL)
             .map(|material| (material, false));
+        if let (Some((material, _)), Some(_)) = (paint, &flakes) {
+            repeat_flakes(&mut imported.scene.materials[material], FLAKES_REPEAT);
+        }
         let bones: Vec<Bones> = (0..imported.skins.len())
             .map(|skin| Bones::upload(gpu, &imported, skin))
             .collect();
@@ -644,11 +705,8 @@ impl Car {
                 .collect(),
         );
         resources.create_bindings(&gpu.device, &gpu.queue, renderer)?;
-        for (material, skin) in imported.material_skins.iter().enumerate() {
-            if let (Some(skin), Some(bindings)) = (skin, resources.bindings_mut(material)) {
-                bindings.set_texture(BONE_TEXTURE_SLOT, &bones[*skin].view)?;
-            }
-        }
+        let flakes = flakes.filter(|_| paint.is_some());
+        bind_generated(&mut resources, &imported, &bones, paint, flakes.as_ref())?;
         let clip = imported
             .animations
             .iter()
@@ -699,6 +757,7 @@ impl Car {
             prt,
             prt_strength: 1.0,
             paint,
+            flakes,
         })
     }
 
@@ -795,12 +854,14 @@ impl Car {
                     &[],
                 )
                 .map_err(|error| format!("{}: {error}", entry.name))?;
-            if let Some(skin) = self.imported.material_skins[material] {
-                if let Some(bindings) = self.resources.bindings_mut(material) {
-                    bindings.set_texture(BONE_TEXTURE_SLOT, &self.bones[skin].view)?;
-                }
-            }
             self.paint = Some((material, film));
+            bind_generated(
+                &mut self.resources,
+                &self.imported,
+                &self.bones,
+                self.paint,
+                self.flakes.as_ref(),
+            )?;
         }
         let Some(bindings) = self.resources.bindings_mut(material) else {
             return Ok(());
@@ -879,11 +940,13 @@ impl Car {
                 )
                 .map_err(|error| format!("{}: {error}", entry.name))?;
         }
-        for (material, skin) in self.imported.material_skins.iter().enumerate() {
-            if let (Some(skin), Some(bindings)) = (skin, self.resources.bindings_mut(material)) {
-                bindings.set_texture(BONE_TEXTURE_SLOT, &self.bones[*skin].view)?;
-            }
-        }
+        bind_generated(
+            &mut self.resources,
+            &self.imported,
+            &self.bones,
+            self.paint,
+            self.flakes.as_ref(),
+        )?;
         Ok(())
     }
 
