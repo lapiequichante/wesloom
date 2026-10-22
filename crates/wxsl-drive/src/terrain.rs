@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use glam::{Vec2, Vec3};
 use wxsl::render::{MeshData, Vertex};
 
-use crate::road::Road;
+use crate::road::{self, Road};
 
 /// Half the terrain's edge.
 pub const EXTENT: f32 = 3600.0;
@@ -100,7 +100,10 @@ fn height(buckets: &Buckets, x: f32, z: f32) -> f32 {
     let base = hills(x, z);
     match buckets.nearest(Vec2::new(x, z)) {
         Some((road, distance)) => {
-            let cap = road - CLEARANCE + (distance - VALLEY_FLOOR).max(0.0) * VALLEY_SLOPE;
+            // Below the centre line, and below the deck's low edge in the
+            // steepest bank.
+            let bank = (road::HALF_WIDTH + 1.0) * road::MAX_BANK as f32;
+            let cap = road - CLEARANCE - bank + (distance - VALLEY_FLOOR).max(0.0) * VALLEY_SLOPE;
             base.min(cap)
         }
         None => base,

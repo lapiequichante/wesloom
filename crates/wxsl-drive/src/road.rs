@@ -78,11 +78,22 @@ pub struct Road {
 /// One harmonic of the centre line: amplitude, frequency in θ, phase.
 type Harmonic = (f64, f64, f64);
 
-/// x is a sum of cosines, y and z of sines. Long, gentle rises only: a
-/// short vertical wave reads as a bump at motorway speed.
-const X: &[Harmonic] = &[(1150.0, 1.0, 0.0), (120.0, 3.0, 0.6), (35.0, 7.0, 2.0)];
-const Y: &[Harmonic] = &[(14.0, 2.0, 0.4), (4.0, 3.0, 1.1)];
-const Z: &[Harmonic] = &[(850.0, 1.0, 0.0), (90.0, 2.0, 1.3), (60.0, 5.0, 0.0)];
+/// x is a sum of cosines, y and z of sines. The plan's phases are picked
+/// for sixteen bends, none under 150 m of radius. Long rises only: a short
+/// vertical wave reads as a bump at motorway speed.
+const X: &[Harmonic] = &[
+    (1150.0, 1.0, 0.0),
+    (120.0, 3.0, 0.48),
+    (55.0, 7.0, 4.37),
+    (18.0, 11.0, 1.76),
+];
+const Y: &[Harmonic] = &[(16.0, 2.0, 5.51), (8.0, 3.0, 0.45), (3.0, 5.0, 0.73)];
+const Z: &[Harmonic] = &[
+    (850.0, 1.0, 0.0),
+    (90.0, 2.0, 5.4),
+    (75.0, 5.0, 5.71),
+    (24.0, 9.0, 5.32),
+];
 
 /// The centre line at angle θ and its first two derivatives in θ, in
 /// `f64`: positions are a kilometre from the origin, and a frame built
@@ -115,9 +126,10 @@ fn curve(theta: f64) -> [glam::DVec3; 3] {
     })
 }
 
-/// The bank's tangent per unit of curvature (1/m), and its limit.
-const BANK_GAIN: f64 = 50.0;
-const MAX_BANK: f64 = 0.07;
+/// The bank's tangent per unit of curvature (1/m), and its limit. Mostly
+/// linear: a bank saturating early flips fast between two bends.
+const BANK_GAIN: f64 = 16.0;
+pub const MAX_BANK: f64 = 0.14;
 
 /// How many samples the arc-length table holds.
 const SAMPLES: usize = 16384;
@@ -170,17 +182,33 @@ impl Road {
         self.thetas[upper - 1] + (self.thetas[upper] - self.thetas[upper - 1]) * t
     }
 
+    /// The curvature vector at θ, flattened: it points at the bend's
+    /// centre, one over the radius long.
+    fn inward(velocity: glam::DVec3, acceleration: glam::DVec3) -> glam::DVec3 {
+        // The acceleration's part across the road, per metre².
+        let forward = velocity.normalize();
+        let across = acceleration - forward * acceleration.dot(forward);
+        let bend = across / velocity.length_squared();
+        glam::DVec3::new(bend.x, 0.0, bend.z)
+    }
+
+    /// The centre line's curvature in plan at arc length `s`, 1/m,
+    /// positive in a bend to the left.
+    pub fn curvature(&self, s: f32) -> f32 {
+        let [_, velocity, acceleration] = curve(self.theta(s));
+        velocity
+            .normalize()
+            .cross(Self::inward(velocity, acceleration))
+            .y as f32
+    }
+
     /// The road's frame at arc length `s`.
     pub fn frame(&self, s: f32) -> Frame {
         let [here, velocity, acceleration] = curve(self.theta(s));
         let forward = velocity.normalize();
-        // The curvature vector: the acceleration's part across the road,
-        // per metre², flattened. It points at the bend's centre.
-        let across = acceleration - forward * acceleration.dot(forward);
-        let bend = across / velocity.length_squared();
-        let inward = glam::DVec3::new(bend.x, 0.0, bend.z);
+        let inward = Self::inward(velocity, acceleration);
         // Banked in towards the bend's centre, saturating smoothly at about
-        // 4°: a hard clamp is a kink in the roll, and six metres out in the
+        // 8°: a hard clamp is a kink in the roll, and six metres out in the
         // lane a kink is a jolt.
         let tight = inward.length() * BANK_GAIN;
         let bank = if tight > 1e-9 {
@@ -523,7 +551,7 @@ mod tests {
             assert!((frame.up.length() - 1.0).abs() < 1e-3);
             assert!(frame.forward.dot(frame.right).abs() < 1e-3);
             assert!(frame.up.dot(frame.forward).abs() < 1e-3);
-            // A gentle road: under 10% grade, a few degrees of bank.
+            // A motorway: under 10% grade, a few degrees of bank.
             assert!(frame.forward.y.abs() < 0.1, "grade {}", frame.forward.y);
             assert!(frame.up.y > 0.99, "bank {}", frame.up.y);
         }
@@ -544,6 +572,33 @@ mod tests {
             let rock = road.frame(s + step).up.dot(road.frame(s).right).abs();
             assert!(rock < 3e-3, "{rock} at {s} m");
         }
+    }
+
+    #[test]
+    fn the_curvature_turns_the_way_the_road_does() {
+        let road = Road::new();
+        let mut bends = 0;
+        let mut previous = road.curvature(0.0).signum();
+        for index in 1..2000 {
+            let s = index as f32 * road.length() / 2000.0;
+            let (here, ahead) = (road.frame(s), road.frame(s + 4.0));
+            let curvature = road.curvature(s + 2.0);
+            let turn = here.forward.cross(ahead.forward).y / 4.0;
+            assert!(
+                (turn - curvature).abs() < 2e-4,
+                "{turn} against {curvature} at {s} m"
+            );
+            assert!(
+                curvature.abs() < 1.0 / 140.0,
+                "{} m radius at {s} m",
+                1.0 / curvature
+            );
+            if curvature.signum() != previous {
+                bends += 1;
+                previous = curvature.signum();
+            }
+        }
+        assert!(bends >= 12, "{bends} changes of direction");
     }
 
     #[test]

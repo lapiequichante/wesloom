@@ -172,6 +172,8 @@ pub struct CarLamps {
     pub head: [Vec3; 2],
     /// The two tail lights.
     pub tail: [Vec3; 2],
+    /// How bright the tail lights are: 1 at night, more braking.
+    pub tail_glow: f32,
 }
 
 /// How near a lamp head, of either carriageway, must be to the car for its
@@ -278,7 +280,7 @@ pub fn lights(
             25f32.to_radians(),
             60f32.to_radians(),
             TAIL_COLOR,
-            TAIL_INTENSITY * day.lights_on,
+            TAIL_INTENSITY * car_lamps.tail_glow,
         )
         .with_profile(TAIL_LAYER)
         .with_range(TAIL_RANGE)
@@ -376,6 +378,7 @@ mod tests {
         let car = CarLamps {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+            tail_glow: 1.0,
         };
         let eye = lamps[0].foot;
         let day = lights(&DayLight::at(12.0), &lamps, Mat4::IDENTITY, &car, eye);
@@ -423,6 +426,7 @@ mod tests {
         let car_lamps = CarLamps {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+            tail_glow: 1.0,
         };
         let night = DayLight::at(23.0);
         let road = crate::road::Road::new();
@@ -458,6 +462,7 @@ mod tests {
         let car = CarLamps {
             head: [Vec3::ZERO; 2],
             tail: [Vec3::ZERO; 2],
+            tail_glow: 1.0,
         };
         let head = lamps[1].heads[0];
         let night = DayLight::at(23.0);

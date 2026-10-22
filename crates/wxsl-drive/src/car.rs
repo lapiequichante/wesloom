@@ -1,7 +1,10 @@
 //! me_car: the glTF scene (ADR 0080), its driver's skin playing the
 //! `driving` clip from a bone texture (ADR 0099), set down on its wheels
-//! and moved along the road by one transform per frame. The wheels roll:
-//! their nodes turn about their axles and the instances are re-read, and
+//! and moved along the road by one transform per frame. The wheels roll,
+//! and the front ones steer into the bends: their nodes turn about their
+//! axles and the instances are re-read. Everything else, the body, the
+//! cabin and the driver, pitches on the springs as the car speeds up or
+//! brakes. Each
 //! each draw remembers last frame's transform so the velocity pass sees
 //! the spin. When the file has a grayscale PRT bake beside it
 //! (`me_car.gray.prt`, ADR 0092), its materials read it: the sky's light
@@ -118,12 +121,19 @@ pub struct Car {
     headlights: Option<[Vec3; 2]>,
     /// The tail lights' centres, the same way.
     tail_lights: Option<[Vec3; 2]>,
+    /// The tail lights' materials and the emission the file gives them.
+    tails: Vec<(usize, [f32; 3])>,
+    /// How lit the tail lights are as position lights (0 by day, 1 at
+    /// night) and as brake lights (0 to 1).
+    tail_glow: (f32, f32),
     /// Each draw's transform in the file's space last frame, in
     /// [`SceneResources::draw_list`] order.
     previous_locals: Vec<Mat4>,
     /// The decimated stand-in the shadow passes draw instead of the car,
     /// tagged [`crate::lights::CAR_SHADOW_TAG`].
     shadow: Option<Box<Car>>,
+    /// The body's pitch this frame and last, radians, nose up positive.
+    pitch: (f32, f32),
     /// Whether its materials read a PRT bake.
     prt: bool,
     /// The PRT strength last set.
@@ -133,13 +143,19 @@ pub struct Car {
     paint: Option<(usize, bool)>,
 }
 
-/// A wheel: where its axle is, its radius, and the nodes that turn with
-/// it (the rim, the tyre and the disc; not the calliper).
+/// A wheel: where its axle is, its radius, whether it steers, and the
+/// nodes that turn with it.
 struct Wheel {
     center: Vec3,
     radius: f32,
-    /// (node, its rest transform, its parent's world transform).
-    parts: Vec<(usize, Mat4, Mat4)>,
+    /// Ahead of the car's middle: it steers.
+    front: bool,
+    /// Every node under it, which the body's pitch leaves alone.
+    nodes: Vec<usize>,
+    /// (node, its rest transform, its parent's world transform, whether
+    /// it rolls): the rim, the tyre and the disc roll, the calliper only
+    /// steers.
+    parts: Vec<(usize, Mat4, Mat4, bool)>,
 }
 
 /// The materials of me_car's headlights, which the file leaves unlit.
@@ -242,6 +258,13 @@ pub const BULB_SETBACK: f32 = 0.08;
 const BULB_HEIGHT: f32 = 0.75;
 /// The material of me_car's tail lights.
 const TAIL_MATERIAL: &str = "RearLights";
+/// The emission parameter glTF import gives a material.
+const EMISSIVE_PARAM: &str = "emissive_factor";
+/// The tail lights' emission at night and braking, on top, as fractions
+/// of the file's: dimmer than the file at night, so braking shows over
+/// what the tone map would otherwise already saturate.
+const TAIL_GLOW: f32 = 0.3;
+const BRAKE_GLOW: f32 = 3.0;
 
 /// The material of me_car's body.
 const PAINT_MATERIAL: &str = "Paint 1 Carmine";
@@ -303,7 +326,7 @@ pub const PAINTS: [Paint; 6] = [
     },
     Paint {
         name: "matte black",
-        base_color: [0.005, 0.005, 0.005],
+        base_color: [0.001, 0.001, 0.001],
         metallic: 0.0,
         roughness: 0.8,
         flakes: 0.0,
@@ -432,6 +455,14 @@ fn refractive(imported: &ImportedScene) -> bool {
         .any(|material| material.config.tags.contains(wxsl::asset::TAG_REFRACTIVE))
 }
 
+/// How much more the front wheels steer than the bend asks: a motorway
+/// bend needs under a degree, which reads as no steering at all.
+const STEER_EXAGGERATION: f32 = 8.0;
+
+/// The body's pitch per m/s² of acceleration, radians: about a degree
+/// and a half under hard braking.
+const PITCH_PER_ACCELERATION: f32 = 0.002;
+
 /// The wheel nodes' name prefix in me_car.
 const WHEEL_PREFIX: &str = "Tire";
 
@@ -452,7 +483,7 @@ fn subtree(scene: &wxsl::core::scene::Scene, root: usize) -> Vec<usize> {
 }
 
 /// The car's wheels: nodes named `Tire…`, with the box of everything
-/// under each.
+/// under each. The ones ahead of the wheels' middle are the front ones.
 fn wheels(imported: &ImportedScene) -> Vec<Wheel> {
     let scene = &imported.scene;
     let mut wheels = Vec::new();
@@ -486,16 +517,29 @@ fn wheels(imported: &ImportedScene) -> Vec<Wheel> {
             .iter()
             .enumerate()
             .filter(|(_, child)| child.parent == Some(root))
-            .filter(|(_, child)| {
-                !child.name.starts_with("Brake") || child.name.starts_with("BrakeDisc")
+            .map(|(index, child)| {
+                let rolls = !child.name.starts_with("Brake") || child.name.starts_with("BrakeDisc");
+                (
+                    index,
+                    Mat4::from_cols_array(&child.transform),
+                    parent,
+                    rolls,
+                )
             })
-            .map(|(index, child)| (index, Mat4::from_cols_array(&child.transform), parent))
             .collect();
         wheels.push(Wheel {
             center: (min + max) * 0.5,
             radius: ((max.y - min.y) * 0.5).max(0.05),
+            front: false,
+            nodes: under,
             parts,
         });
+    }
+    // Forward is -z.
+    let middle =
+        wheels.iter().map(|wheel| wheel.center.z).sum::<f32>() / wheels.len().max(1) as f32;
+    for wheel in &mut wheels {
+        wheel.front = wheel.center.z < middle;
     }
     wheels
 }
@@ -615,14 +659,26 @@ impl Car {
             .map(|(index, _)| index)
             .collect();
         let tail_lights = lamp_centers(&imported, &tails, center, false).map(to_car);
+        let tails = tails
+            .into_iter()
+            .filter_map(
+                |material| match resources.bindings_mut(material)?.get(EMISSIVE_PARAM)? {
+                    Value::Vec3(emission) => Some((material, emission)),
+                    _ => None,
+                },
+            )
+            .collect();
         Ok(Car {
             align,
             lenses,
             headlights,
             tail_lights,
+            tails,
+            tail_glow: (0.0, 0.0),
             size: max - min,
             refractive,
             wheels: wheels(&imported),
+            pitch: (0.0, 0.0),
             previous_locals: Vec::new(),
             shadow: None,
             imported,
@@ -635,7 +691,8 @@ impl Car {
         })
     }
 
-    /// Light the headlights' lenses for `lights_on` (0 by day, 1 at night).
+    /// Light the headlights' lenses and the tail lights for `lights_on`
+    /// (0 by day, 1 at night).
     pub fn set_lights_on(
         &mut self,
         gpu: &GpuContext,
@@ -644,6 +701,33 @@ impl Car {
         for &material in &self.lenses {
             if let Some(bindings) = self.resources.bindings_mut(material) {
                 bindings.set(LENS_GLOW, Value::Vec3([LENS_RADIANCE * lights_on; 3]))?;
+            }
+        }
+        self.set_tail_glow(gpu, (lights_on, self.tail_glow.1))
+    }
+
+    /// Light the brake lights by `braking`, 0 to 1.
+    pub fn set_braking(&mut self, gpu: &GpuContext, braking: f32) -> Result<(), Box<dyn Error>> {
+        if (braking - self.tail_glow.1).abs() < 1e-3 {
+            return Ok(());
+        }
+        self.set_tail_glow(gpu, (self.tail_glow.0, braking))
+    }
+
+    /// The tail lights' emission, as a fraction of the file's.
+    fn tail_emission(&self) -> f32 {
+        self.tail_glow.0 * TAIL_GLOW + self.tail_glow.1 * BRAKE_GLOW
+    }
+
+    fn set_tail_glow(&mut self, gpu: &GpuContext, glow: (f32, f32)) -> Result<(), Box<dyn Error>> {
+        self.tail_glow = glow;
+        let brightness = self.tail_emission();
+        for &(material, emission) in &self.tails {
+            if let Some(bindings) = self.resources.bindings_mut(material) {
+                bindings.set(
+                    EMISSIVE_PARAM,
+                    Value::Vec3(emission.map(|channel| channel * brightness)),
+                )?;
             }
         }
         self.resources.upload(&gpu.device, &gpu.queue)?;
@@ -793,13 +877,19 @@ impl Car {
     }
 
     /// Show the driving clip at `time` seconds, the wheels rolled for
-    /// `distance` metres.
+    /// `distance` metres and the front ones steered into a bend of
+    /// `curvature` (1/m, positive to the left), the body pitched for an
+    /// `acceleration` along the road (m/s², negative braking).
     pub fn animate(
         &mut self,
         gpu: &GpuContext,
         time: f32,
         distance: f32,
+        curvature: f32,
+        acceleration: f32,
     ) -> Result<(), Box<dyn Error>> {
+        self.pitch = (acceleration * PITCH_PER_ACCELERATION, self.pitch.0);
+        let steer = (self.wheelbase() * curvature).atan() * STEER_EXAGGERATION;
         self.previous_locals = self
             .resources
             .draw_list()
@@ -810,11 +900,15 @@ impl Car {
         let scene = &mut self.imported.scene;
         for wheel in &self.wheels {
             // Forward is -z, so the top of the wheel turns towards -z: a
-            // negative turn about +x.
-            let turn = Mat4::from_translation(wheel.center)
-                * Mat4::from_rotation_x(-(distance / wheel.radius) % std::f32::consts::TAU)
-                * Mat4::from_translation(-wheel.center);
-            for (node, rest, parent) in &wheel.parts {
+            // negative turn about +x. A positive turn about +y takes -z
+            // towards -x, the car's left.
+            let steered = Mat4::from_rotation_y(if wheel.front { steer } else { 0.0 });
+            let roll = Mat4::from_rotation_x(-(distance / wheel.radius) % std::f32::consts::TAU);
+            for (node, rest, parent, rolls) in &wheel.parts {
+                let turn = Mat4::from_translation(wheel.center)
+                    * steered
+                    * if *rolls { roll } else { Mat4::IDENTITY }
+                    * Mat4::from_translation(-wheel.center);
                 let local = parent.inverse() * turn * *parent * *rest;
                 scene.nodes[*node].transform = local.to_cols_array();
             }
@@ -834,9 +928,48 @@ impl Car {
         }
         self.resources.upload(&gpu.device, &gpu.queue)?;
         if let Some(shadow) = &mut self.shadow {
-            shadow.animate(gpu, time, distance)?;
+            shadow.animate(gpu, time, distance, curvature, acceleration)?;
         }
         Ok(())
+    }
+
+    /// The body's pitch by `angle` radians, nose up positive, in the
+    /// car's space: about the axis across the middle of the axles.
+    fn tilt(&self, angle: f32) -> Mat4 {
+        let middle = self.wheels.iter().map(|wheel| wheel.center).sum::<Vec3>()
+            / self.wheels.len().max(1) as f32;
+        let pivot = self.align.transform_point3(middle);
+        // Forward is -z: a positive turn about +x lifts it.
+        Mat4::from_translation(pivot)
+            * Mat4::from_rotation_x(angle)
+            * Mat4::from_translation(-pivot)
+    }
+
+    /// Whether draw `draw` is part of a wheel, which stays on the road.
+    fn unsprung(&self, draw: usize) -> bool {
+        let Some(node) = self
+            .resources
+            .draw_instance(draw)
+            .and_then(|instance| self.imported.scene.instances[instance].node)
+        else {
+            return false;
+        };
+        self.wheels.iter().any(|wheel| wheel.nodes.contains(&node))
+    }
+
+    /// From the rear axle to the front one, metres.
+    fn wheelbase(&self) -> f32 {
+        let axle = |front: bool| {
+            let (sum, count) = self
+                .wheels
+                .iter()
+                .filter(|wheel| wheel.front == front)
+                .fold((0.0, 0), |(sum, count), wheel| {
+                    (sum + wheel.center.z, count + 1)
+                });
+            sum / count.max(1) as f32
+        };
+        axle(false) - axle(true)
     }
 
     /// From the file's space to the car's, which a drawing of something
@@ -859,27 +992,32 @@ impl Car {
     }
 
     /// The car's lamps, in its own space: where the file's lamps are, or
-    /// guessed from its box.
+    /// guessed from its box, pitched with the body.
     pub fn lamps(&self) -> CarLamps {
         let half = self.size * 0.5;
         let side = half.x * 0.68;
         let (front, back) = (-half.z - 0.05, half.z + 0.05);
+        let tilt = self.tilt(self.pitch.0);
+        let pitched = |lamps: [Vec3; 2]| lamps.map(|lamp| tilt.transform_point3(lamp));
         CarLamps {
-            head: self.headlights.unwrap_or([
+            head: pitched(self.headlights.unwrap_or([
                 Vec3::new(-side, self.size.y * 0.42, front),
                 Vec3::new(side, self.size.y * 0.42, front),
-            ]),
-            tail: self.tail_lights.unwrap_or([
+            ])),
+            tail: pitched(self.tail_lights.unwrap_or([
                 Vec3::new(-side, self.size.y * 0.55, back),
                 Vec3::new(side, self.size.y * 0.55, back),
-            ]),
+            ])),
+            tail_glow: self.tail_emission() / TAIL_GLOW,
         }
     }
 
-    /// Its draws at `transform`, last frame at `previous`, its stand-in's
-    /// after them.
+    /// Its draws at `transform`, last frame at `previous`, the body
+    /// pitched, its stand-in's after them.
     pub fn draws(&self, transform: Mat4, previous: Mat4) -> Vec<DrawItem<'_>> {
-        let (now, then) = (transform * self.align, previous * self.align);
+        let (wheels, then_wheels) = (transform * self.align, previous * self.align);
+        let body = transform * self.tilt(self.pitch.0) * self.align;
+        let then_body = previous * self.tilt(self.pitch.1) * self.align;
         let mut draws: Vec<DrawItem<'_>> = self
             .resources
             .draw_list()
@@ -888,6 +1026,11 @@ impl Car {
             .enumerate()
             .map(|(index, item)| {
                 let mut item = *item;
+                let (now, then) = if self.unsprung(index) {
+                    (wheels, then_wheels)
+                } else {
+                    (body, then_body)
+                };
                 let local = item.transform;
                 let before = self.previous_locals.get(index).copied().unwrap_or(local);
                 item.transform = now * local;

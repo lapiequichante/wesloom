@@ -34,7 +34,8 @@
 //! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
 //! then reflecting the sky alone. The
 //! `screenshot` button under the sliders saves the next frame, without
-//! them, as the first free `drive-NNN.png` in the working directory.
+//! them, as the first free `screenshots/drive-NNN.png` under the working
+//! directory.
 
 mod car;
 mod car_ground;
@@ -79,10 +80,20 @@ const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [-
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
         occlusion on the road and on itself, its paint, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
-        the frame to drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
+        the frame to screenshots/drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
+/// The car's best acceleration and braking, m/s².
+const ACCELERATION: f32 = 4.5;
+const BRAKING: f32 = 9.0;
+/// How fast the speed closes on the slider's, per second, before the
+/// limits: the last few km/h ease in.
+const SPEED_GAIN: f32 = 1.5;
+/// The deceleration the brake lights start at and are full by, m/s².
+const BRAKE_LIGHT: (f32, f32) = (0.5, 3.0);
+/// How long the body takes to settle into a pitch, seconds.
+const SPRING_LAG: f32 = 0.25;
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 const APERTURE: &str = "aperture";
@@ -169,8 +180,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         aperture: 8.0,
         fog: 0.7,
         exposure: 0.0,
-        ground_ao: 0.7,
-        car_ao: 0.7,
+        ground_ao: 0.8,
+        car_ao: 0.8,
         at: 0.0,
         look: 0.0,
         pitch: 0.0,
@@ -347,6 +358,12 @@ struct Drive {
     s: f32,
     /// How far the car has driven, for its wheels.
     odometer: f32,
+    /// The car's speed, m/s, which follows the slider within
+    /// [`ACCELERATION`] and [`BRAKING`]; none before the first frame.
+    speed: Option<f32>,
+    /// The acceleration the body pitches for, m/s², lagging the car's as
+    /// the springs do.
+    sprung: f32,
     clip_time: f32,
     /// The hour the sky was last baked for.
     baked_hour: Option<f32>,
@@ -410,6 +427,8 @@ impl Drive {
             car_ao: None,
             s: at,
             odometer: 0.0,
+            speed: None,
+            sprung: 0.0,
             clip_time: 0.0,
             baked_hour: None,
             day: DayLight::at(12.0),
@@ -433,7 +452,14 @@ impl Drive {
         panel: &Panel,
         dt: f32,
     ) -> Result<(), Box<dyn Error>> {
-        let speed = panel.value(SPEED) / 3.6;
+        // Towards the slider's speed, easing in near it, within what the
+        // car can do; the first frame starts at it.
+        let wanted = panel.value(SPEED) / 3.6;
+        let current = self.speed.unwrap_or(wanted);
+        let acceleration = ((wanted - current) * SPEED_GAIN).clamp(-BRAKING, ACCELERATION);
+        let speed = (current + acceleration * dt).max(0.0);
+        self.speed = Some(speed);
+        self.sprung += (acceleration - self.sprung) * (dt / SPRING_LAG).min(1.0);
         self.s = (self.s + speed * dt).rem_euclid(self.world.road.length());
         self.odometer += speed * dt;
         self.clip_time += dt;
@@ -482,7 +508,17 @@ impl Drive {
             self.car.set_prt_strength(gpu, car_ao)?;
             self.car_ao = Some(car_ao);
         }
-        self.car.animate(gpu, self.clip_time, self.odometer)?;
+        // The brake lights come on past a light lift off, full by a firm
+        // stop.
+        let braking =
+            ((-acceleration - BRAKE_LIGHT.0) / (BRAKE_LIGHT.1 - BRAKE_LIGHT.0)).clamp(0.0, 1.0);
+        self.car.set_braking(gpu, braking)?;
+        // In the lane, right of the centre line: a wider bend to the left,
+        // a tighter one to the right.
+        let bend = self.world.road.curvature(self.s);
+        let curvature = bend / (1.0 + bend * road::LANE);
+        self.car
+            .animate(gpu, self.clip_time, self.odometer, curvature, self.sprung)?;
 
         let road = &self.world.road;
         let frame = road.frame(self.s);
@@ -878,8 +914,12 @@ impl App {
     }
 }
 
+/// Where the screenshot button saves, from the working directory
+/// (git-ignored).
+const SCREENSHOTS: &str = "screenshots";
+
 /// Read `texture`, the window's frame, back and save it as the first free
-/// `drive-NNN.png` in the working directory.
+/// `screenshots/drive-NNN.png`.
 fn save_frame(
     gpu: &GpuContext,
     texture: &wgpu::Texture,
@@ -930,8 +970,10 @@ fn save_frame(
             pixel.swap(0, 2);
         }
     }
+    let directory = Path::new(SCREENSHOTS);
+    std::fs::create_dir_all(directory)?;
     let file = (1..)
-        .map(|index| PathBuf::from(format!("drive-{index:03}.png")))
+        .map(|index| directory.join(format!("drive-{index:03}.png")))
         .find(|file| !file.exists())
         .expect("a free name");
     image::save_buffer(
