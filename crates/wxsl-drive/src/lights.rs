@@ -30,7 +30,7 @@ const COOKIE_SIZE: u32 = 512;
 /// A lamp's peak intensity, its colour, and how far it reaches: past
 /// the deck halfway to the next lamp, short of the ground under it
 /// (`terrain::CLEARANCE`), which the deck would shade.
-const LAMP_INTENSITY: f32 = 2500.0;
+const LAMP_INTENSITY: f32 = 6500.0;
 const LAMP_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.58);
 pub const LAMP_RANGE: f32 = 26.0;
 /// A lamp head's tilt from straight down towards its street side, as
@@ -45,12 +45,12 @@ const LAMP_TILT: f32 = 10.0 * std::f32::consts::PI / 180.0;
 /// past this angle it only lights deck beyond its range.
 const LAMP_CONE: f32 = 72.0 * std::f32::consts::PI / 180.0;
 /// A headlight's peak intensity and reach.
-const HEADLIGHT_INTENSITY: f32 = 3500.0;
+const HEADLIGHT_INTENSITY: f32 = 4500.0;
 const HEADLIGHT_RANGE: f32 = 160.0;
 const HEADLIGHT_COLOR: Vec3 = Vec3::new(0.92, 0.97, 1.0);
 /// A tail light's peak intensity, its colour and its reach: barely a
 /// glow on the road behind.
-const TAIL_INTENSITY: f32 = 0.25;
+const TAIL_INTENSITY: f32 = 0.35;
 const TAIL_COLOR: Vec3 = Vec3::new(1.0, 0.04, 0.02);
 const TAIL_RANGE: f32 = 6.0;
 

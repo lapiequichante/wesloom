@@ -2,8 +2,8 @@
 //
 // A building's facade from world space and its own seed: floors and window
 // columns on every wall, whichever way it faces, curtain-wall glass on
-// some buildings and punched windows on the rest, lit rooms in warm, cool
-// and neon tints, neon bands on some towers, and dark roofs. `seed` is the
+// some buildings and punched windows on the rest, lit rooms in yellow,
+// orange, white and blue, neon bands on some towers, and dark roofs. `seed` is the
 // building's, in 0..1; `lights_on` is 0 by day and 1 at night. Window
 // edges are settled by the pixel's footprint, and fade to their average
 // far away, so this is a fragment-stage node.
@@ -62,29 +62,35 @@ fn facade(
     let window = mix(wx * wy, (1.0 - 2.0 * edge.x) * (top - edge.y), far);
     lit = mix(lit, lit_share, far);
 
-    // Room colours: mostly warm and cool white, some neon-tinted.
+    // Room colours, warm pastels: honey, peach, cream and a soft blue,
+    // never green. Honey keeps green well under red: dimmed, it would
+    // otherwise read as olive; cream is warm so a dim room isn't grey.
     let pick = hash13(vec3f(index * 0.37, seed * 31.0));
-    var room_color = vec3f(1.0, 0.6, 0.28);
+    var room_color = vec3f(1.0, 0.7, 0.32);
+    if pick > 0.3 {
+        room_color = vec3f(1.0, 0.55, 0.32);
+    }
     if pick > 0.55 {
-        room_color = vec3f(0.75, 0.85, 1.0);
+        room_color = vec3f(1.0, 0.82, 0.6);
     }
-    if pick > 0.86 {
-        room_color = select(vec3f(1.0, 0.25, 0.75), vec3f(0.2, 0.9, 1.0), tint > 0.5);
+    if pick > 0.82 {
+        room_color = vec3f(0.65, 0.8, 1.0);
     }
-    // Most rooms dim, a few bright; the ceiling's light brightest at the
-    // top, and a blind drawn part way down in half of them.
+    // Some rooms brighter than others, but none so dim that orange turns
+    // brown or cream grey; the ceiling's light brightest at the top, and a
+    // blind drawn part way down in half of them.
     let dim = fract(room * 17.0);
     let height = clamp((local.y - edge.y) / (top - edge.y), 0.0, 1.0);
     let drawn = select(0.0, 0.7 * fract(room * 5.3), fract(room * 3.1) > 0.5);
     let blind = smoothstep(1.0 - drawn - soft.y, 1.0 - drawn + soft.y, height);
-    let inside = (0.5 + 0.8 * height) * mix(1.0, 0.25, blind);
-    let brightness = (0.12 + 0.9 * dim * dim) * mix(inside, 0.9, far);
+    let inside = (0.7 + 0.6 * height) * mix(1.0, 0.55, blind);
+    let brightness = (0.45 + 0.7 * dim * dim) * mix(inside, 1.0, far);
 
     // Concrete and glass: dark, the glass glossy enough to mirror the sky.
     let concrete = mix(vec3f(0.025, 0.025, 0.03), vec3f(0.05, 0.048, 0.046), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 0.2 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * 0.6 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others. Each is box-filtered over the pixel's footprint,

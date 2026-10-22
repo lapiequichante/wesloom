@@ -230,7 +230,7 @@ const FOG_EFFECT: Effect = Effect {
 pub const GRADE: &str = "drive grade";
 /// The grade's saturation until the host sets its rows: 1 leaves the
 /// frame's colours as they are.
-pub const SATURATION: f32 = 1.2;
+pub const SATURATION: f32 = 1.0;
 
 /// The final colour matrix (`shaders/grade.wxsl`): a row per output
 /// channel, its w a lift.
