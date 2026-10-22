@@ -11,6 +11,9 @@ an entry.
 
 ### Added
 
+- `Renderer::set_environment_scale`: scale the environment's radiance from
+  the next frame without installing the pass list again.
+
 - `PipelineConfig::shadow_atlas_size` and `Environment::shadow_atlas_size`:
   the shadow atlas edge, a power of two from 512 to 8192, 2048 by default
   (`abi::valid_shadow_atlas_size`, `abi::shadow_tile_in`).

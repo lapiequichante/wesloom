@@ -41,6 +41,10 @@ pub struct Saved {
     pub orbit: [f32; 2],
     /// How far the camera is from the car, relative to the chase distance.
     pub zoom: f32,
+    /// How far the camera is turned from looking at the car: yaw (alpha),
+    /// pitch (beta), radians; a state saved before it had one looks at it.
+    #[serde(default)]
+    pub rotation: [f32; 2],
     pub motion: Motion,
     /// The last frame that moved before this one, and the seconds between:
     /// the velocity pass measures against it.
@@ -111,6 +115,7 @@ mod tests {
             sliders: sliders(&panel()),
             orbit: [0.4, -0.1],
             zoom: 1.5,
+            rotation: [0.2, -0.05],
             motion: Motion {
                 s: 120.0,
                 odometer: 4000.0,
@@ -126,6 +131,11 @@ mod tests {
         let text = serde_json::to_string_pretty(&saved).unwrap();
         let read: Saved = serde_json::from_str(&text).unwrap();
         assert_eq!(read, saved);
+        let without: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let mut without = without.as_object().unwrap().clone();
+        without.remove("rotation");
+        let read: Saved = serde_json::from_value(without.into()).unwrap();
+        assert_eq!(read.rotation, [0.0, 0.0]);
 
         let mut panel = panel();
         read.apply_sliders(&mut panel).unwrap();

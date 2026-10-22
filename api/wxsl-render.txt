@@ -891,6 +891,7 @@ pub fn wxsl_render::renderer::Renderer::request_graph(&mut self, impl core::conv
 pub fn wxsl_render::renderer::Renderer::request_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline, &[&wxsl_render::material::Material]) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::reset_runs(&mut self)
 pub fn wxsl_render::renderer::Renderer::resize(&mut self, &wgpu::api::device::Device, u32, u32)
+pub fn wxsl_render::renderer::Renderer::set_environment_scale(&mut self, f32)
 pub fn wxsl_render::renderer::Renderer::set_features(&mut self, &[&str]) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_graph(&mut self, impl core::convert::Into<wxsl_render::graph::RenderGraph>) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_library(&mut self, wxsl_render::library::ShaderLibrary) -> core::result::Result<(), wxsl_render::error::RenderError>
@@ -3671,6 +3672,7 @@ pub fn wxsl_render::renderer::Renderer::request_graph(&mut self, impl core::conv
 pub fn wxsl_render::renderer::Renderer::request_pipeline(&mut self, wxsl_frame::pipeline::StockPipeline, &[&wxsl_render::material::Material]) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::reset_runs(&mut self)
 pub fn wxsl_render::renderer::Renderer::resize(&mut self, &wgpu::api::device::Device, u32, u32)
+pub fn wxsl_render::renderer::Renderer::set_environment_scale(&mut self, f32)
 pub fn wxsl_render::renderer::Renderer::set_features(&mut self, &[&str]) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_graph(&mut self, impl core::convert::Into<wxsl_render::graph::RenderGraph>) -> core::result::Result<(), wxsl_render::error::RenderError>
 pub fn wxsl_render::renderer::Renderer::set_library(&mut self, wxsl_render::library::ShaderLibrary) -> core::result::Result<(), wxsl_render::error::RenderError>

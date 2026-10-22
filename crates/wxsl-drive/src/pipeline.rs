@@ -2,11 +2,11 @@
 //! blur and a bloom pyramid composed onto it as nodes, then, on the
 //! compiled pass list, the
 //! sky baked into the environment maps and drawn behind everything, a
-//! height fog lit by that sky, the car's glass, depth of field focused on the car, a colour matrix, the
-//! tonemap and FXAA.
+//! height fog lit by that sky, the car's glass, depth of field focused on the car, a colour matrix,
+//! chromatic aberration when it is on, the tonemap (one of [`TONEMAPS`]) and FXAA.
 //!
 //! ```text
-//! shadows → prepass → forward ─┬─ background (sky) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ tonemap ─ fxaa
+//! shadows → prepass → forward ─┬─ background (sky) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ (aberration) ─ tonemap ─ fxaa
 //!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
@@ -35,6 +35,7 @@ use std::error::Error;
 
 use wxsl::core::abi::{self, MaterialStage};
 use wxsl::core::graph::{Graph, Node, SocketRef};
+use wxsl::core::node::NodeRegistry;
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
 use wxsl::core::Value;
@@ -227,8 +228,9 @@ const FOG_EFFECT: Effect = Effect {
 
 /// The grade's pass label, which its rows are set on.
 pub const GRADE: &str = "drive grade";
-/// The grade's saturation: 1 leaves the frame's colours as they are.
-const SATURATION: f32 = 1.2;
+/// The grade's saturation until the host sets its rows: 1 leaves the
+/// frame's colours as they are.
+pub const SATURATION: f32 = 1.2;
 
 /// The final colour matrix (`shaders/grade.wxsl`): a row per output
 /// channel, its w a lift.
@@ -268,6 +270,37 @@ const GRADE_EFFECT: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
+/// The aberration's pass label, which its strength is set on.
+pub const ABERRATION: &str = "drive aberration";
+
+/// Chromatic aberration (`shaders/aberration.wxsl`): the stdlib's node,
+/// its strength a parameter.
+const ABERRATION_EFFECT: Effect = Effect {
+    id: "drive.aberration",
+    label: "aberration",
+    description: "Lens-dispersion fringing over the linear frame, strongest at the edge.",
+    kind: EffectKind::Screen {
+        vertex_entry: "drive_aberration_vs",
+        fragment_entry: "drive_aberration_fs",
+    },
+    inputs: &[EffectInput {
+        name: "color",
+        kind: EffectInputKind::Image,
+        description: "The frame, as linear radiance.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        default: Value::F32(0.0),
+    }],
+    shader: EffectShader::Source {
+        path: "package::drive::aberration",
+        wxsl: include_str!("../shaders/aberration.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
 /// The grade's rows for `saturation`: each colour pushed from its
 /// luminance (Rec. 709) by that factor, 1 being the identity.
 pub fn grade_rows(saturation: f32) -> [[f32; 4]; 3] {
@@ -282,6 +315,46 @@ pub fn grade_rows(saturation: f32) -> [[f32; 4]; 3] {
     })
 }
 
+/// The display transforms the `tonemap` slider steps through: its name,
+/// the stdlib curve, and the effect that applies it. Filmic is the stock
+/// `wxsl.tonemap`; each other is its graph with that curve in its place.
+pub const TONEMAPS: [(&str, &str, &str); 4] = [
+    ("filmic", "color.tonemap_filmic", "wxsl.tonemap"),
+    ("ACES", "color.tonemap_aces", "drive.tonemap_aces"),
+    (
+        "Reinhard",
+        "color.tonemap_reinhard",
+        "drive.tonemap_reinhard",
+    ),
+    (
+        "Reinhard-Jodie",
+        "color.tonemap_reinhard_jodie",
+        "drive.tonemap_reinhard_jodie",
+    ),
+];
+
+/// The stock tonemap's graph with `curve` for its filmic curve: the same
+/// load, encode and alpha, and the same `color, exposure` sockets.
+fn tonemap_effect(
+    registry: &NodeRegistry,
+    (label, curve, id): (&'static str, &str, &'static str),
+) -> Result<Effect, Box<dyn Error>> {
+    let mut graph = wxsl::effects::tonemap_graph(registry);
+    let filmic = graph
+        .nodes()
+        .find(|(_, node)| node.def == TONEMAPS[0].1)
+        .map(|(node, _)| node)
+        .ok_or("the stock tonemap has no filmic curve")?;
+    graph.node_mut(filmic).ok_or("filmic curve")?.def = curve.to_string();
+    Ok(Effect::from_graph(
+        id,
+        label,
+        "The stock tonemap with another stdlib curve.",
+        graph,
+        registry,
+    )?)
+}
+
 /// The effects the frame names beyond the shipped ones.
 pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
     for effect in [
@@ -294,10 +367,15 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         MOTION_BLUR_EFFECT,
         FOG_EFFECT,
         GRADE_EFFECT,
+        ABERRATION_EFFECT,
     ] {
         renderer.add_effect(effect);
     }
-    renderer.add_effect(wxsl::effects::fxaa(&wxsl::stdlib::registry())?);
+    let registry = wxsl::stdlib::registry();
+    renderer.add_effect(wxsl::effects::fxaa(&registry)?);
+    for tonemap in &TONEMAPS[1..] {
+        renderer.add_effect(tonemap_effect(&registry, *tonemap)?);
+    }
     Ok(())
 }
 
@@ -399,8 +477,9 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
     Ok(document)
 }
 
-/// Build the frame, forward or `deferred`, with or without `fxaa`, and give
-/// it to `renderer`. With `refractive`, the car's glass leaves the opaque
+/// Build the frame, forward or `deferred`, with or without `fxaa` and the
+/// chromatic `aberration` pass, displayed through [`TONEMAPS`]`[tonemap]`,
+/// and give it to `renderer`. With `refractive`, the car's glass leaves the opaque
 /// passes for the refraction tier (ADR 0067). `quality` scales the car's
 /// probe and the shadow atlas from their defaults (0.5, 1 or 2); at 0 the
 /// car has no probe and reflects the sky's maps, and the caller turns the
@@ -410,6 +489,8 @@ pub fn install(
     refractive: bool,
     deferred: bool,
     fxaa: bool,
+    aberration: bool,
+    tonemap: usize,
     quality: f32,
 ) -> Result<(), Box<dyn Error>> {
     let document = motion_blur_document(renderer, deferred)?;
@@ -471,7 +552,11 @@ pub fn install(
     let hdr = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
     let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
     let blur = effect_pass(&graph, MOTION_BLUR_EFFECT.id)?;
-    let tonemap = effect_pass(&graph, "wxsl.tonemap")?;
+    let curve = tonemap;
+    let tonemap = effect_pass(&graph, TONEMAPS[0].2)?;
+    graph.pass_mut(tonemap).ok_or("tonemap pass")?.kind = PassKind::Screen {
+        effect: TONEMAPS[curve].2.to_string(),
+    };
     let shaded = graph.passes()[blur].reads[0].resource;
     let depth = graph
         .passes()
@@ -615,6 +700,18 @@ pub fn install(
             .with_parameter("green", Value::Vec4(green))
             .with_parameter("blue", Value::Vec4(blue)),
     );
+    // The fringe, on the radiance the grade left.
+    let graded = if aberration {
+        let fringed = graph.resource(hdr("drive aberrated"));
+        graph.pass(
+            PassDesc::screen(ABERRATION, ABERRATION_EFFECT.id)
+                .with_color(clear(fringed))
+                .with_reads([Read::current(graded)]),
+        );
+        fringed
+    } else {
+        graded
+    };
     graph.pass_mut(tonemap).ok_or("tonemap pass")?.reads[0] = Read::current(graded);
     // FXAA after the tonemap, on display values.
     if fxaa {
@@ -749,6 +846,20 @@ pub fn set_lens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_other_tonemap_is_the_stock_graph_with_its_own_curve() {
+        let registry = wxsl::stdlib::registry();
+        for tonemap in &TONEMAPS[1..] {
+            let effect = tonemap_effect(&registry, *tonemap).unwrap();
+            let EffectShader::Graph { wxsl, .. } = &effect.shader else {
+                panic!("{} is not a graph effect", tonemap.0);
+            };
+            let curve = tonemap.1.trim_start_matches("color.");
+            assert!(wxsl.contains(curve), "{}", tonemap.0);
+            assert!(!wxsl.contains("tonemap_filmic"), "{}", tonemap.0);
+        }
+    }
 
     #[test]
     fn the_grade_keeps_greys_and_pushes_colours() {

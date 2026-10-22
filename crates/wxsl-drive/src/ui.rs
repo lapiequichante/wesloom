@@ -42,13 +42,15 @@ impl Slider {
 }
 
 /// The panel's geometry, in logical pixels before the window's scale.
-const MARGIN: f32 = 16.0;
-const WIDTH: f32 = 300.0;
-const PADDING: f32 = 14.0;
-const ROW: f32 = 44.0;
-const TITLE: f32 = 30.0;
-const TEXT: f32 = 14.0;
-const BUTTON: f32 = 32.0;
+const MARGIN: f32 = 12.0;
+const WIDTH: f32 = 230.0;
+const PADDING: f32 = 10.0;
+const ROW: f32 = 26.0;
+const TITLE: f32 = 20.0;
+const TEXT: f32 = 11.0;
+const BUTTON: f32 = 22.0;
+/// Where a slider's track sits under its label, and how thick it is.
+const TRACK: (f32, f32) = (16.0, 3.0);
 
 /// Where the panel, each slider's track and the buttons sit.
 pub struct Layout {
@@ -82,7 +84,7 @@ pub fn layout(count: usize, scale: f32) -> Layout {
                 (WIDTH - 2.0 * PADDING) * s,
                 ROW * s,
             );
-            let track = Rect::new(row.min.x, top + 26.0 * s, row.width(), 4.0 * s);
+            let track = Rect::new(row.min.x, top + TRACK.0 * s, row.width(), TRACK.1 * s);
             (row, track)
         })
         .collect();
@@ -194,17 +196,17 @@ impl Overlay {
         let list = &mut self.list;
         list.clear();
         let s = scale;
-        list.round_rect(layout.panel, 10.0 * s, Color::rgba(0.03, 0.03, 0.05, 0.72));
+        list.round_rect(layout.panel, 8.0 * s, Color::rgba(0.03, 0.03, 0.05, 0.72));
         list.round_rect_border(
             layout.panel,
-            10.0 * s,
+            8.0 * s,
             1.0 * s,
             Color::rgba(0.9, 0.3, 0.8, 0.35),
         );
         let mut texts: Vec<(String, Vec2, f32, f32, Color)> = vec![(
             "wxsl drive".to_string(),
             layout.panel.min + Vec2::new(PADDING, PADDING) * s,
-            17.0,
+            13.0,
             0.0,
             Color::rgb(1.0, 0.45, 0.85),
         )];
@@ -233,14 +235,14 @@ impl Overlay {
             );
             list.round_rect(filled, 2.0 * s, Color::rgb(0.25, 0.8, 1.0));
             let knob = Vec2::new(filled.max.x, track.center().y);
-            list.circle(knob, 7.0 * s, Color::rgb(0.95, 0.97, 1.0));
+            list.circle(knob, 5.0 * s, Color::rgb(0.95, 0.97, 1.0));
         }
         for (button, label) in [
             (layout.screenshot, "screenshot"),
             (layout.save, "save state"),
         ] {
-            list.round_rect(button, 6.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.25));
-            list.round_rect_border(button, 6.0 * s, 1.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.6));
+            list.round_rect(button, 5.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.25));
+            list.round_rect_border(button, 5.0 * s, 1.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.6));
             texts.push((
                 label.to_string(),
                 button.center() - Vec2::new(0.0, TEXT * 0.6 * s),
@@ -251,8 +253,8 @@ impl Overlay {
         }
         texts.push((
             status.to_string(),
-            Vec2::new(layout.panel.min.x, layout.panel.max.y + 8.0 * s),
-            12.0,
+            Vec2::new(layout.panel.min.x, layout.panel.max.y + 6.0 * s),
+            10.0,
             0.0,
             Color::rgba(0.85, 0.85, 0.9, 0.8),
         ));

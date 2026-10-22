@@ -703,6 +703,14 @@ impl Renderer {
         &self.graph
     }
 
+    /// Scale the environment's radiance (the ambient, its reflections,
+    /// the background and refraction through it) by `scale` from the next
+    /// frame, without installing the pass list again. Installing one
+    /// brings back its own [`RenderGraph::environment_scale`].
+    pub fn set_environment_scale(&mut self, scale: f32) {
+        self.graph.set_environment_scale(scale);
+    }
+
     /// Run `graph` instead of a stock pass list, now.
     ///
     /// Validated immediately: a pass list that cannot be ordered is an

@@ -10,16 +10,20 @@
 //! maps whenever the hour changes. By day the sun casts cascaded shadows;
 //! at night the moon does, and street lamps and the car's headlights,
 //! both shaped by IES profiles, light the road. The camera follows the
-//! car; depth of field focuses on it and the velocity buffer's motion blur
+//! car; depth of field focuses on it, or nearer or farther by the `focus`
+//! slider (`--focus PCT`), and the velocity buffer's motion blur
 //! smears the road. The car mirrors a probe rendered from its centre every
 //! frame, of everything but itself (ADR 0102). Its shadows are cast by a
 //! decimated, welded copy without its glass,
 //! `resources/glb/me_car_opt/me_car_opt.glb` when it is there
 //! (`--shadow-car FILE`, or `none` for the car's own).
 //!
-//! In the window: the sliders set the speed, the hour, the motion blur and
-//! the aperture; drag elsewhere to look around the car, scroll to zoom,
-//! `R` recentres,
+//! In the window: the sliders set the speed, the hour, the motion blur,
+//! the aperture, the focus, the chromatic aberration (an extra pass,
+//! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie), the
+//! grade's saturation and the vertical field of view; drag elsewhere to look around the car, drag
+//! with the right button to turn the camera on top of looking at it (a
+//! right double-click straightens it), scroll to zoom, `R` recentres,
 //! `Space` pauses, `Esc` quits. The `car color` slider (or `--paint NAME`)
 //! repaints the body: a flaked hornet yellow, a metallic red, a smooth
 //! clear-coated blue, white, matte black and an iridescent pearl. The
@@ -63,7 +67,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -84,18 +88,18 @@ use state::{Motion, Saved};
 use ui::{Panel, Slider};
 use world::World;
 
-const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
-      [--exposure EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
+const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
+      [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
       [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
-window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
+window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
         occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
-        drag elsewhere looks around the car, scroll zooms,
-        R recentres, Space pauses, Esc quits";
+        drag elsewhere looks around the car, right-drag turns the camera (right double-click
+        straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
 /// The car's best acceleration and braking, m/s².
@@ -111,8 +115,25 @@ const SPRING_LAG: f32 = 0.25;
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 const APERTURE: &str = "aperture";
+/// The focus distance, a factor of the car's centre's, shown in %: a
+/// state saved before it had one keeps 1.
+const FOCUS: &str = "focus";
+/// The chromatic aberration's pull at the frame's edge, uv, shown in %:
+/// 0 leaves its pass out.
+const ABERRATION: &str = "aberration";
+/// The display transform, an index into [`pipeline::TONEMAPS`].
+const TONEMAP: &str = "tonemap";
+/// The grade's saturation, the last change to the radiance before the
+/// tonemap: 0 grey, 1 as shaded.
+const SATURATION: &str = "saturation";
+/// The vertical field of view, degrees.
+const FOV: &str = "fov";
 const FOG: &str = "fog";
 const EXPOSURE: &str = "exposure";
+/// Stops on the environment's radiance alone: the sky's ambient and
+/// reflections, the background, the fog's light, not the lamps or the
+/// emissives.
+const ENVIRONMENT: &str = "environment";
 const GROUND_AO: &str = "ground AO";
 const CAR_AO: &str = "car AO";
 const PAINT: &str = "car color";
@@ -124,6 +145,8 @@ const QUALITY: &str = "quality";
 /// The `quality` slider's steps: the probe's and the shadow atlas's
 /// scale, 0 turning both off.
 const QUALITIES: [f32; 4] = [0.0, 0.5, 1.0, 2.0];
+/// How long a second right click may wait to be a double click.
+const DOUBLE_CLICK: f32 = 0.4;
 /// The fog's density per metre at the ground, at the `fog` slider's 1:
 /// about a third of the light survives a kilometre at ground level.
 const FOG_DENSITY: f32 = 0.0012;
@@ -149,10 +172,22 @@ struct Options {
     speed: f32,
     blur: f32,
     aperture: f32,
+    /// The focus distance, a factor of the distance to the car's centre.
+    focus: f32,
+    /// The chromatic aberration, uv at the frame's edge.
+    aberration: f32,
+    /// The tonemap, an index into [`pipeline::TONEMAPS`].
+    tonemap: f32,
+    /// The grade's saturation.
+    saturation: f32,
+    /// The vertical field of view, degrees.
+    fov: f32,
     /// The fog's density, relative to [`FOG_DENSITY`].
     fog: f32,
     /// Stops over the exposure the hour adapts to.
     exposure: f32,
+    /// Stops on the environment's radiance.
+    environment: f32,
     /// How much the car darkens the road under it, 0 to 1.
     ground_ao: f32,
     /// How much the car's PRT bake darkens the car itself, 0 to 1.
@@ -197,8 +232,14 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         speed: 110.0,
         blur: 0.3,
         aperture: 8.0,
+        focus: 1.0,
+        aberration: 0.0,
+        tonemap: 0.0,
+        saturation: pipeline::SATURATION,
+        fov: 55.0,
         fog: 0.7,
         exposure: 0.0,
+        environment: 0.0,
         ground_ao: 0.8,
         car_ao: 0.8,
         at: 0.0,
@@ -232,14 +273,30 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--speed" => options.speed = value()?.parse()?,
             "--blur" => options.blur = value()?.parse()?,
             "--aperture" => options.aperture = value()?.parse()?,
+            "--focus" => options.focus = value()?.parse::<f32>()? / 100.0,
+            "--aberration" => options.aberration = value()?.parse::<f32>()? / 100.0,
             "--fog" => options.fog = value()?.parse()?,
             "--exposure" => options.exposure = value()?.parse()?,
+            "--environment" => options.environment = value()?.parse()?,
             "--ground-ao" => options.ground_ao = value()?.parse()?,
             "--car-ao" => options.car_ao = value()?.parse()?,
             "--at" => options.at = value()?.parse()?,
             "--look" => options.look = value()?.parse()?,
             "--pitch" => options.pitch = value()?.parse()?,
             "--zoom" => options.zoom = value()?.parse::<f32>()?.clamp(0.3, 40.0),
+            "--fov" => options.fov = value()?.parse()?,
+            "--saturation" => options.saturation = value()?.parse()?,
+            "--tonemap" => {
+                let name = value()?;
+                options.tonemap = pipeline::TONEMAPS
+                    .iter()
+                    .position(|(tonemap, ..)| tonemap.eq_ignore_ascii_case(&name))
+                    .ok_or_else(|| {
+                        let names: Vec<&str> =
+                            pipeline::TONEMAPS.iter().map(|(name, ..)| *name).collect();
+                        format!("--tonemap is one of: {}", names.join(", "))
+                    })? as f32;
+            }
             "--paint" => {
                 let name = value()?;
                 options.paint = car::PAINTS
@@ -328,8 +385,34 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
         Slider::new(APERTURE, 1.4, 16.0, options.aperture, |value| {
             format!("f/{value:.1}")
         }),
+        Slider::new(FOCUS, 0.1, 3.0, options.focus, |value| {
+            format!("{:.0}%", value * 100.0)
+        }),
+        Slider::new(ABERRATION, 0.0, 0.02, options.aberration, |value| {
+            if value > 0.0 {
+                format!("{:.2}%", value * 100.0)
+            } else {
+                "off".to_string()
+            }
+        }),
+        Slider::new(
+            TONEMAP,
+            0.0,
+            (pipeline::TONEMAPS.len() - 1) as f32,
+            options.tonemap,
+            |value| pipeline::TONEMAPS[value.round() as usize].0.to_string(),
+        ),
+        Slider::new(SATURATION, 0.0, 2.0, options.saturation, |value| {
+            format!("{value:.2}")
+        }),
+        Slider::new(FOV, 20.0, 100.0, options.fov, |value| {
+            format!("{value:.0}°")
+        }),
         Slider::new(FOG, 0.0, 4.0, options.fog, |value| format!("{value:.2}")),
         Slider::new(EXPOSURE, -4.0, 4.0, options.exposure, |value| {
+            format!("{value:+.1} EV")
+        }),
+        Slider::new(ENVIRONMENT, -4.0, 4.0, options.environment, |value| {
             format!("{value:+.1} EV")
         }),
         Slider::new(GROUND_AO, 0.0, 1.0, options.ground_ao, |value| {
@@ -419,12 +502,19 @@ struct Drive {
     orbit: Vec2,
     /// How far the camera is from the car, relative to the chase distance.
     zoom: f32,
+    /// How far the camera is turned from looking at the car: yaw (alpha),
+    /// pitch (beta), radians.
+    rotation: Vec2,
     /// The paint last put on the car.
     paint: Option<usize>,
     /// The debug view the car's materials are compiled for, 0 shading.
     shown_view: i32,
     /// Whether the frame installed ends in FXAA.
     fxaa: bool,
+    /// Whether the frame installed has the aberration pass.
+    aberration: bool,
+    /// The tonemap the frame installed ends in.
+    tonemap: usize,
     /// The probe and shadow scale the frame installed has.
     quality: f32,
 }
@@ -449,7 +539,9 @@ impl Drive {
             &mut renderer,
             car,
             shadow_car,
-            |renderer, refractive| pipeline::install(renderer, refractive, false, true, 1.0),
+            |renderer, refractive| {
+                pipeline::install(renderer, refractive, false, true, false, 0, 1.0)
+            },
         )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
         let underglow = neon::Underglow::new(gpu, &mut renderer, &registry, &car.neon_strips())?;
@@ -482,9 +574,12 @@ impl Drive {
             previous: None,
             orbit: Vec2::ZERO,
             zoom: 1.0,
+            rotation: Vec2::ZERO,
             paint: None,
             shown_view: 0,
             fxaa: true,
+            aberration: false,
+            tonemap: 0,
             quality: 1.0,
         })
     }
@@ -532,6 +627,7 @@ impl Drive {
             sliders: state::sliders(panel),
             orbit: self.orbit.to_array(),
             zoom: self.zoom,
+            rotation: self.rotation.to_array(),
             motion: self.motion,
             previous,
             dt,
@@ -558,16 +654,24 @@ impl Drive {
         } = self.motion;
         let speed = speed.unwrap_or(0.0);
         let fxaa = panel.value(FXAA) >= 0.5;
+        let aberration = panel.value(ABERRATION) > 0.0;
+        let tonemap = panel.value(TONEMAP).round() as usize;
         let quality = QUALITIES[panel.value(QUALITY).round() as usize];
-        if (fxaa, quality) != (self.fxaa, self.quality) {
+        if (fxaa, aberration, tonemap, quality)
+            != (self.fxaa, self.aberration, self.tonemap, self.quality)
+        {
             pipeline::install(
                 &mut self.renderer,
                 self.car.refractive,
                 false,
                 fxaa,
+                aberration,
+                tonemap,
                 quality,
             )?;
             self.fxaa = fxaa;
+            self.aberration = aberration;
+            self.tonemap = tonemap;
             self.quality = quality;
             // The new frame's sky and environment maps start unbaked.
             self.baked_hour = None;
@@ -625,11 +729,16 @@ impl Drive {
         offset = Mat4::from_rotation_y(self.orbit.x).transform_vector3(offset);
         let side = offset.cross(Vec3::Y).normalize_or(Vec3::X);
         offset = Mat4::from_axis_angle(side, self.orbit.y).transform_vector3(offset) * self.zoom;
+        // The turn, from the eye: yaw about the vertical, then pitch about
+        // the camera's right.
+        let mut look = Mat3::from_rotation_y(self.rotation.x) * -offset;
+        let right = look.cross(Vec3::Y).normalize_or(Vec3::X);
+        look = Mat3::from_axis_angle(right, self.rotation.y) * look;
         let camera = Camera {
             eye: target + offset,
-            target,
+            target: target + offset + look,
             up: Vec3::Y,
-            fov_y: 55f32.to_radians(),
+            fov_y: panel.value(FOV).to_radians(),
             aspect,
             // Depth resolution at the car goes as distance² / near: a near
             // fixed at 0.15 m let the paint z-fight the trim just under it
@@ -685,10 +794,24 @@ impl Drive {
         pipeline::set_lens(
             &mut self.renderer,
             &camera,
-            camera.eye.distance(center),
+            camera.eye.distance(center) * panel.value(FOCUS),
             panel.value(APERTURE),
         )?;
         pipeline::set_fog(&mut self.renderer, panel.value(FOG) * FOG_DENSITY)?;
+        self.renderer
+            .set_environment_scale(panel.value(ENVIRONMENT).exp2());
+        let rows = pipeline::grade_rows(panel.value(SATURATION));
+        for (name, row) in ["red", "green", "blue"].into_iter().zip(rows) {
+            self.renderer
+                .set_pass_param(pipeline::GRADE, name, Value::Vec4(row))?;
+        }
+        if self.aberration {
+            self.renderer.set_pass_param(
+                pipeline::ABERRATION,
+                "strength",
+                Value::F32(panel.value(ABERRATION)),
+            )?;
+        }
         if let Some((ground, shown)) = &mut self.ground {
             let strength = panel.value(GROUND_AO);
             if *shown != Some(strength) {
@@ -814,6 +937,7 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     if let Some(saved) = &options.state {
         drive.orbit = Vec2::from_array(saved.orbit);
         drive.zoom = saved.zoom;
+        drive.rotation = Vec2::from_array(saved.rotation);
     }
     let panel = sliders(options)?;
     let aspect = width as f32 / height as f32;
@@ -896,6 +1020,11 @@ struct App {
     paused: bool,
     /// The left button is down outside the panel: the mouse turns the view.
     looking: bool,
+    /// The right button is down outside the panel: the mouse turns the
+    /// camera.
+    turning: bool,
+    /// When the right button was last pressed, for the double click.
+    right_click: Option<Instant>,
     cursor: Vec2,
     last_frame: Instant,
     /// Frame times, for the status line.
@@ -941,6 +1070,7 @@ impl App {
         if let Some(saved) = &self.options.state {
             drive.orbit = Vec2::from_array(saved.orbit);
             drive.zoom = saved.zoom;
+            drive.rotation = Vec2::from_array(saved.rotation);
             drive.motion = saved.motion;
         }
         let overlay = ui::Overlay::new(&gpu.device, &drive.library)?;
@@ -1185,6 +1315,25 @@ impl ApplicationHandler for App {
                     self.looking = false;
                 }
             }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if state == ElementState::Pressed {
+                    self.turning = !self.layout().panel.contains(self.cursor);
+                    let now = Instant::now();
+                    let double = self
+                        .right_click
+                        .is_some_and(|last| now.duration_since(last).as_secs_f32() < DOUBLE_CLICK);
+                    self.right_click = (!double).then_some(now);
+                    if let (true, true, Some(state)) = (double, self.turning, self.state.as_mut()) {
+                        state.drive.rotation = Vec2::ZERO;
+                    }
+                } else {
+                    self.turning = false;
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let pointer = Vec2::new(position.x as f32, position.y as f32);
                 let delta = pointer - self.cursor;
@@ -1197,6 +1346,13 @@ impl ApplicationHandler for App {
                         let orbit = &mut state.drive.orbit;
                         orbit.x -= delta.x * 0.006;
                         orbit.y = (orbit.y + delta.y * 0.004).clamp(-0.35, 1.0);
+                    }
+                } else if self.turning {
+                    if let Some(state) = self.state.as_mut() {
+                        // Look where the mouse goes.
+                        let rotation = &mut state.drive.rotation;
+                        rotation.x -= delta.x * 0.003;
+                        rotation.y = (rotation.y - delta.y * 0.003).clamp(-1.4, 1.4);
                     }
                 }
             }
@@ -1225,6 +1381,7 @@ impl ApplicationHandler for App {
                     if let Some(state) = self.state.as_mut() {
                         state.drive.orbit = Vec2::ZERO;
                         state.drive.zoom = 1.0;
+                        state.drive.rotation = Vec2::ZERO;
                     }
                 }
                 _ => {}
@@ -1254,6 +1411,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         error: None,
         paused: false,
         looking: false,
+        turning: false,
+        right_click: None,
         cursor: Vec2::ZERO,
         last_frame: Instant::now(),
         fps: 60.0,
