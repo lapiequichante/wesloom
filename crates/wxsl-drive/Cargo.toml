@@ -27,3 +27,6 @@ glam = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 image = { workspace = true }
+# The saved state (`save state`, `--state`).
+serde = { workspace = true }
+serde_json = { workspace = true }

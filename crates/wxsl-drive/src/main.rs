@@ -38,7 +38,11 @@
 //! then reflecting the sky alone. The
 //! `screenshot` button under the sliders saves the next frame, without
 //! them, as the first free `screenshots/drive-NNN.png` under the working
-//! directory.
+//! directory. The `save state` button beside it saves what the frame is
+//! made of (the sliders, the view, the viewport's size and the car's
+//! motion) as `screenshots/state-NNN.json`; `--state FILE` starts there,
+//! and with `--screenshot` renders that frame at that size, after the one
+//! before it so the motion blur matches.
 
 mod car;
 mod car_ground;
@@ -48,6 +52,7 @@ mod neon;
 mod pipeline;
 mod road;
 mod sky;
+mod state;
 mod terrain;
 mod ui;
 mod world;
@@ -74,17 +79,21 @@ use wxsl::render::{
 use car::Car;
 use car_ground::CarGround;
 use sky::DayLight;
+use state::{Motion, Saved};
 use ui::{Panel, Slider};
 use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--fog F]
       [--exposure EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
       [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
-      [--screenshot out.png [--ui] [--frames N] [--profile]]
+      [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
+--state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
+        with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, fog, exposure, the car's
         occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
-        the frame to screenshots/drive-NNN.png; drag elsewhere looks around the car, scroll zooms,
+        the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
+        drag elsewhere looks around the car, scroll zooms,
         R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
@@ -177,6 +186,8 @@ struct Options {
     car: PathBuf,
     /// A decimated copy of the car that casts its shadows in its place.
     shadow_car: Option<PathBuf>,
+    /// A saved state to start from.
+    state: Option<Saved>,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -210,6 +221,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 .join("../../resources/glb/me_car_opt/me_car_opt.glb"),
         )
         .filter(|path| path.exists()),
+        state: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -281,6 +293,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     .filter(|name| name != "none")
                     .map(PathBuf::from);
             }
+            "--state" => {
+                let saved = Saved::load(Path::new(&value()?))?;
+                options.size = (saved.width, saved.height);
+                options.state = Some(saved);
+            }
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -296,8 +313,9 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
     Ok(options)
 }
 
-fn sliders(options: &Options) -> Panel {
-    Panel::new(vec![
+/// The sliders at `options`, or at its saved state's values.
+fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
+    let mut panel = Panel::new(vec![
         Slider::new(SPEED, 0.0, 260.0, options.speed, |value| {
             format!("{value:.0} km/h")
         }),
@@ -365,7 +383,11 @@ fn sliders(options: &Options) -> Panel {
             options.quality,
             |value| format!("x{}", QUALITIES[value.round() as usize]),
         ),
-    ])
+    ]);
+    if let Some(saved) = &options.state {
+        saved.apply_sliders(&mut panel)?;
+    }
+    Ok(panel)
 }
 
 /// The scene, the renderer, and where the drive is.
@@ -381,17 +403,12 @@ struct Drive {
     underglow: neon::Underglow,
     /// The PRT strength last set on the car's materials.
     car_ao: Option<f32>,
-    /// Arc length along the road, metres.
-    s: f32,
-    /// How far the car has driven, for its wheels.
-    odometer: f32,
-    /// The car's speed, m/s, which follows the slider within
-    /// [`ACCELERATION`] and [`BRAKING`]; none before the first frame.
-    speed: Option<f32>,
-    /// The acceleration the body pitches for, m/s², lagging the car's as
-    /// the springs do.
-    sprung: f32,
-    clip_time: f32,
+    /// Where the car is and how it goes; its speed follows the slider
+    /// within [`ACCELERATION`] and [`BRAKING`].
+    motion: Motion,
+    /// The motion before the last frame that moved, and the seconds it
+    /// took: what a saved state renders first.
+    step: Option<(Motion, f32)>,
     /// The hour the sky was last baked for.
     baked_hour: Option<f32>,
     day: DayLight,
@@ -454,11 +471,11 @@ impl Drive {
             ground,
             underglow,
             car_ao: None,
-            s: at,
-            odometer: 0.0,
-            speed: None,
-            sprung: 0.0,
-            clip_time: 0.0,
+            motion: Motion {
+                s: at,
+                ..Motion::default()
+            },
+            step: None,
             baked_hour: None,
             day: DayLight::at(12.0),
             previous: None,
@@ -481,17 +498,64 @@ impl Drive {
         panel: &Panel,
         dt: f32,
     ) -> Result<(), Box<dyn Error>> {
+        let before = self.motion;
+        self.advance(panel, dt);
+        if dt > 0.0 {
+            self.step = Some((before, dt));
+        }
+        self.draw(gpu, view, aspect, panel, dt)
+    }
+
+    fn advance(&mut self, panel: &Panel, dt: f32) {
+        let motion = &mut self.motion;
         // Towards the slider's speed, easing in near it, within what the
         // car can do; the first frame starts at it.
         let wanted = panel.value(SPEED) / 3.6;
-        let current = self.speed.unwrap_or(wanted);
+        let current = motion.speed.unwrap_or(wanted);
         let acceleration = ((wanted - current) * SPEED_GAIN).clamp(-BRAKING, ACCELERATION);
         let speed = (current + acceleration * dt).max(0.0);
-        self.speed = Some(speed);
-        self.sprung += (acceleration - self.sprung) * (dt / SPRING_LAG).min(1.0);
-        self.s = (self.s + speed * dt).rem_euclid(self.world.road.length());
-        self.odometer += speed * dt;
-        self.clip_time += dt;
+        motion.speed = Some(speed);
+        motion.acceleration = acceleration;
+        motion.sprung += (acceleration - motion.sprung) * (dt / SPRING_LAG).min(1.0);
+        motion.s = (motion.s + speed * dt).rem_euclid(self.world.road.length());
+        motion.odometer += speed * dt;
+        motion.time += dt;
+    }
+
+    /// The state to save: this frame's, with the window's `size`.
+    fn saved(&self, panel: &Panel, (width, height): (u32, u32)) -> Saved {
+        let (previous, dt) = self.step.unwrap_or((self.motion, 0.0));
+        Saved {
+            width,
+            height,
+            sliders: state::sliders(panel),
+            orbit: self.orbit.to_array(),
+            zoom: self.zoom,
+            motion: self.motion,
+            previous,
+            dt,
+        }
+    }
+
+    /// Render the motion as it is into `view`, `dt` seconds after the last
+    /// frame.
+    fn draw(
+        &mut self,
+        gpu: &GpuContext,
+        view: &wgpu::TextureView,
+        aspect: f32,
+        panel: &Panel,
+        dt: f32,
+    ) -> Result<(), Box<dyn Error>> {
+        let Motion {
+            s,
+            odometer,
+            speed,
+            acceleration,
+            sprung,
+            time,
+        } = self.motion;
+        let speed = speed.unwrap_or(0.0);
         let fxaa = panel.value(FXAA) >= 0.5;
         let quality = QUALITIES[panel.value(QUALITY).round() as usize];
         if (fxaa, quality) != (self.fxaa, self.quality) {
@@ -544,18 +608,17 @@ impl Drive {
         self.car.set_braking(gpu, braking)?;
         // In the lane, right of the centre line: a wider bend to the left,
         // a tighter one to the right.
-        let bend = self.world.road.curvature(self.s);
+        let bend = self.world.road.curvature(s);
         let curvature = bend / (1.0 + bend * road::LANE);
-        self.car
-            .animate(gpu, self.clip_time, self.odometer, curvature, self.sprung)?;
+        self.car.animate(gpu, time, odometer, curvature, sprung)?;
 
         let road = &self.world.road;
-        let frame = road.frame(self.s);
+        let frame = road.frame(s);
         let transform = self.car.placement(&frame, road::LANE);
         let center = transform.transform_point3(Vec3::Y * self.car.size.y * 0.5);
         // Behind on the road itself, so the camera takes the bends with the
         // car; further back the faster it goes.
-        let behind = road.frame(self.s - 6.0 - speed * 0.04);
+        let behind = road.frame(s - 6.0 - speed * 0.04);
         let target = center + frame.forward * 1.5 + frame.up * 0.2;
         let mut offset = behind.at(road::LANE, 2.0) - target;
         offset = Mat4::from_rotation_y(self.orbit.x).transform_vector3(offset);
@@ -604,8 +667,8 @@ impl Drive {
             ambient_sky: Vec3::splat(0.002),
             ambient_ground: Vec3::splat(0.001),
             exposure: self.day.exposure * panel.value(EXPOSURE).exp2(),
-            time: self.clip_time,
-            previous_time: self.clip_time - dt,
+            time,
+            previous_time: time - dt,
             // The car's reflections, from its own centre (ADR 0102).
             probe: (self.quality > 0.0).then_some(LocalProbe {
                 center,
@@ -747,9 +810,16 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     )?;
     drive.orbit = Vec2::new(options.look, options.pitch);
     drive.zoom = options.zoom;
-    let panel = sliders(options);
+    if let Some(saved) = &options.state {
+        drive.orbit = Vec2::from_array(saved.orbit);
+        drive.zoom = saved.zoom;
+    }
+    let panel = sliders(options)?;
+    let aspect = width as f32 / height as f32;
     // Frames at 60 Hz: the first runs the bakes, and the velocity pass
-    // needs a previous frame to measure against. The rest are timed.
+    // needs a previous frame to measure against. The rest are timed. A
+    // saved state renders its frame before until the last, which is its
+    // own.
     let mut timed = std::time::Duration::ZERO;
     let mut profile = Profile::default();
     for frame in 0..options.frames {
@@ -758,13 +828,17 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
             println!("this device has no timestamp queries: no pass timings");
         }
         let started = Instant::now();
-        drive.frame(
-            &gpu,
-            target.view(),
-            width as f32 / height as f32,
-            &panel,
-            1.0 / 60.0,
-        )?;
+        match &options.state {
+            Some(saved) => {
+                drive.motion = if frame + 1 == options.frames {
+                    saved.motion
+                } else {
+                    saved.previous
+                };
+                drive.draw(&gpu, target.view(), aspect, &panel, saved.dt)?;
+            }
+            None => drive.frame(&gpu, target.view(), aspect, &panel, 1.0 / 60.0)?,
+        }
         gpu.wait();
         if frame >= 2 {
             timed += started.elapsed();
@@ -827,6 +901,8 @@ struct App {
     fps: f32,
     /// The screenshot button was pressed: save the next frame.
     capture: bool,
+    /// The save button was pressed: save the next frame's state.
+    save: bool,
     /// What the last capture did, and when, for the status line.
     captured: Option<(String, Instant)>,
 }
@@ -834,13 +910,13 @@ struct App {
 impl App {
     fn create_state(&mut self, event_loop: &ActiveEventLoop) -> Result<State, Box<dyn Error>> {
         let (width, height) = self.options.size;
-        let window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("wxsl drive")
-                    .with_inner_size(winit::dpi::LogicalSize::new(width, height)),
-            )?,
-        );
+        let mut attributes = Window::default_attributes().with_title("wxsl drive");
+        // A saved state's size is its viewport's, in pixels.
+        attributes = match self.options.state {
+            Some(_) => attributes.with_inner_size(winit::dpi::PhysicalSize::new(width, height)),
+            None => attributes.with_inner_size(winit::dpi::LogicalSize::new(width, height)),
+        };
+        let window = Arc::new(event_loop.create_window(attributes)?);
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance.create_surface(Arc::clone(&window))?;
         let gpu = pollster::block_on(GpuContext::new(instance, Some(&surface)))?;
@@ -854,13 +930,18 @@ impl App {
             .unwrap_or(capabilities.formats[0]);
         let readable = capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let size = window.inner_size();
-        let drive = Drive::new(
+        let mut drive = Drive::new(
             &gpu,
             TargetConfig::new(size.width.max(1), size.height.max(1), format),
             &self.options.car,
             self.options.shadow_car.as_deref(),
             self.options.at,
         )?;
+        if let Some(saved) = &self.options.state {
+            drive.orbit = Vec2::from_array(saved.orbit);
+            drive.zoom = saved.zoom;
+            drive.motion = saved.motion;
+        }
         let overlay = ui::Overlay::new(&gpu.device, &drive.library)?;
         let mut state = State {
             window,
@@ -920,6 +1001,15 @@ impl App {
             println!("{message}");
             self.captured = Some((message, Instant::now()));
         }
+        if std::mem::take(&mut self.save) {
+            let saved = state.drive.saved(&self.panel, (size.width, size.height));
+            let message = match saved.save(Path::new(SCREENSHOTS)) {
+                Ok(file) => format!("saved {}", file.display()),
+                Err(error) => format!("cannot save the state: {error}"),
+            };
+            println!("{message}");
+            self.captured = Some((message, Instant::now()));
+        }
         let captured = match &self.captured {
             Some((message, at)) if at.elapsed().as_secs_f32() < 4.0 => format!(" · {message}"),
             _ => String::new(),
@@ -927,7 +1017,7 @@ impl App {
         let status = format!(
             "{:.0} fps · {:.2} km into the loop{}{captured}",
             self.fps,
-            state.drive.s / 1000.0,
+            state.drive.motion.s / 1000.0,
             if self.paused { " · paused" } else { "" }
         );
         if let Err(error) = state.overlay.render(
@@ -1086,7 +1176,8 @@ impl ApplicationHandler for App {
             } => {
                 if state == ElementState::Pressed {
                     let layout = self.layout();
-                    self.capture |= layout.button.contains(self.cursor);
+                    self.capture |= layout.screenshot.contains(self.cursor);
+                    self.save |= layout.save.contains(self.cursor);
                     self.looking = !self.panel.press(self.cursor, &layout);
                 } else {
                     self.panel.release();
@@ -1156,7 +1247,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
-        panel: sliders(&options),
+        panel: sliders(&options)?,
         options,
         state: None,
         error: None,
@@ -1166,6 +1257,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_frame: Instant::now(),
         fps: 60.0,
         capture: false,
+        save: false,
         captured: None,
     };
     event_loop.run_app(&mut app)?;

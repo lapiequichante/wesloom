@@ -50,13 +50,15 @@ const TITLE: f32 = 30.0;
 const TEXT: f32 = 14.0;
 const BUTTON: f32 = 32.0;
 
-/// Where the panel, each slider's track and the screenshot button sit.
+/// Where the panel, each slider's track and the buttons sit.
 pub struct Layout {
     pub panel: Rect,
     /// Per slider: the row (what a press grabs) and the track.
     pub rows: Vec<(Rect, Rect)>,
-    /// Under the sliders: saves the next frame.
-    pub button: Rect,
+    /// Under the sliders, left: saves the next frame.
+    pub screenshot: Rect,
+    /// Beside it: saves the scene's state.
+    pub save: Rect,
 }
 
 pub fn layout(count: usize, scale: f32) -> Layout {
@@ -67,12 +69,10 @@ pub fn layout(count: usize, scale: f32) -> Layout {
         WIDTH * s,
         (PADDING * 2.0 + TITLE + ROW * count as f32 + BUTTON) * s,
     );
-    let button = Rect::new(
-        panel.min.x + PADDING * s,
-        panel.min.y + (PADDING + TITLE + ROW * count as f32) * s,
-        (WIDTH - 2.0 * PADDING) * s,
-        BUTTON * s,
-    );
+    let top = panel.min.y + (PADDING + TITLE + ROW * count as f32) * s;
+    let half = (WIDTH - 3.0 * PADDING) * 0.5 * s;
+    let screenshot = Rect::new(panel.min.x + PADDING * s, top, half, BUTTON * s);
+    let save = Rect::new(screenshot.max.x + PADDING * s, top, half, BUTTON * s);
     let rows = (0..count)
         .map(|index| {
             let top = panel.min.y + (PADDING + TITLE + ROW * index as f32) * s;
@@ -89,7 +89,8 @@ pub fn layout(count: usize, scale: f32) -> Layout {
     Layout {
         panel,
         rows,
-        button,
+        screenshot,
+        save,
     }
 }
 
@@ -234,20 +235,20 @@ impl Overlay {
             let knob = Vec2::new(filled.max.x, track.center().y);
             list.circle(knob, 7.0 * s, Color::rgb(0.95, 0.97, 1.0));
         }
-        list.round_rect(layout.button, 6.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.25));
-        list.round_rect_border(
-            layout.button,
-            6.0 * s,
-            1.0 * s,
-            Color::rgba(0.9, 0.3, 0.8, 0.6),
-        );
-        texts.push((
-            "screenshot".to_string(),
-            layout.button.center() - Vec2::new(0.0, TEXT * 0.6 * s),
-            TEXT,
-            0.5,
-            Color::rgb(1.0, 0.75, 0.95),
-        ));
+        for (button, label) in [
+            (layout.screenshot, "screenshot"),
+            (layout.save, "save state"),
+        ] {
+            list.round_rect(button, 6.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.25));
+            list.round_rect_border(button, 6.0 * s, 1.0 * s, Color::rgba(0.9, 0.3, 0.8, 0.6));
+            texts.push((
+                label.to_string(),
+                button.center() - Vec2::new(0.0, TEXT * 0.6 * s),
+                TEXT,
+                0.5,
+                Color::rgb(1.0, 0.75, 0.95),
+            ));
+        }
         texts.push((
             status.to_string(),
             Vec2::new(layout.panel.min.x, layout.panel.max.y + 8.0 * s),
@@ -313,13 +314,17 @@ mod tests {
     }
 
     #[test]
-    fn the_button_sits_under_the_last_slider_and_grabs_none() {
+    fn the_buttons_sit_side_by_side_under_the_last_slider_and_grab_none() {
         let mut panel = panel();
         let layout = layout(2, 2.0);
-        assert!(layout.button.min.y >= layout.rows[1].0.max.y);
-        assert!(layout.button.max.y <= layout.panel.max.y);
-        assert!(panel.press(layout.button.center(), &layout));
-        assert!(!panel.dragging());
+        for button in [layout.screenshot, layout.save] {
+            assert!(button.min.y >= layout.rows[1].0.max.y);
+            assert!(button.max.y <= layout.panel.max.y);
+            assert!(button.max.x <= layout.panel.max.x);
+            assert!(panel.press(button.center(), &layout));
+            assert!(!panel.dragging());
+        }
+        assert!(layout.screenshot.max.x < layout.save.min.x);
     }
 
     #[test]
