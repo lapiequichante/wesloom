@@ -1,0 +1,101 @@
+// Screen-space ray march (`wxsl-frame`'s `effect::ssr`)
+//
+// A world-space ray marched against a standard depth buffer in steps
+// sized on the screen: each covers `march.y` pixels at first, `march.z`
+// times more than the last after it, for at most `march.x` steps, so the
+// ray cannot step over something a few pixels wide however near it is.
+// Each sample is projected onto the frame; the first one behind the
+// depth by less than its step's thickness is refined by bisection.
+// Shared by the opaque reflections and the glass's, so both find the
+// same hits.
+import package::wxsl::bindings::{point_sampler, camera};
+
+// Bisections of the step that crossed the depth.
+const SSR_REFINE: i32 = 5;
+// The shortest and longest a step may be, metres.
+const SSR_MIN_STEP: f32 = 0.002;
+const SSR_MAX_STEP: f32 = 20.0;
+
+// The view depth (clip w) of what `depth_image` holds at `uv`.
+fn ssr_scene_w(depth_image: texture_2d<f32>, uv: vec2f) -> f32 {
+    let depth = textureSampleLevel(depth_image, point_sampler, uv, 0.0).x;
+    let ndc = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    return 1.0 / (camera.inverse_view_proj * ndc).w;
+}
+
+// Where `point` lands on the frame, uv in xy, and its view depth (clip w)
+// in z.
+fn ssr_screen(point: vec3f) -> vec3f {
+    let clip = camera.view_proj * vec4f(point, 1.0);
+    let ndc = clip.xy / clip.w;
+    return vec3f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, clip.w);
+}
+
+// Where `point` lands on the frame, uv in xy, and how far behind the
+// depth it is in z (negative in front).
+fn ssr_probe(depth_image: texture_2d<f32>, point: vec3f) -> vec3f {
+    let at = ssr_screen(point);
+    return vec3f(at.xy, at.z - ssr_scene_w(depth_image, at.xy));
+}
+
+// March `ray` from `origin` for at most `distance` metres, in steps of
+// `march` (steps, first stride in pixels, stride growth): the hit's uv in
+// xy and its distance along the ray in z, w 1 on a hit and 0 when the ray
+// left the frame, passed the camera or the reach first.
+fn ssr_trace(depth_image: texture_2d<f32>, origin: vec3f, ray: vec3f, distance: f32, march: vec3f) -> vec4f {
+    let size = vec2f(textureDimensions(depth_image));
+    var before = 0.0;
+    var hit = -1.0;
+    var stride = march.y;
+    var t = 0.0;
+    var step = SSR_MIN_STEP;
+    for (var i = 0; i < i32(march.x); i++) {
+        // How many metres along the ray a pixel is here: from a short
+        // span ahead, scaled by the depth so it stays well conditioned.
+        let here = ssr_screen(origin + ray * t);
+        if here.z < 0.05 {
+            break;
+        }
+        let span = 0.01 * here.z;
+        let ahead = ssr_screen(origin + ray * (t + span));
+        let pixels = length((ahead.xy - here.xy) * size) / span;
+        step = clamp(stride / max(pixels, 1e-4), SSR_MIN_STEP, SSR_MAX_STEP);
+        t += step;
+        if t > distance {
+            break;
+        }
+        let at = ssr_probe(depth_image, origin + ray * t);
+        if any(at.xy < vec2f(0.0)) || any(at.xy > vec2f(1.0)) {
+            break;
+        }
+        // Behind the depth by less than a step: through a surface. By
+        // more, behind something in front of the ray: march on.
+        if at.z > 0.0 && at.z < step * 2.0 + 0.05 {
+            hit = t;
+            break;
+        }
+        before = t;
+        stride *= march.z;
+    }
+    if hit < 0.0 {
+        return vec4f(0.0);
+    }
+    var near = before;
+    var far = hit;
+    for (var i = 0; i < SSR_REFINE; i++) {
+        let middle = 0.5 * (near + far);
+        if ssr_probe(depth_image, origin + ray * middle).z > 0.0 {
+            far = middle;
+        } else {
+            near = middle;
+        }
+    }
+    return vec4f(ssr_probe(depth_image, origin + ray * far).xy, far, 1.0);
+}
+
+// How much a hit at `uv`, `t` metres along a ray of reach `distance`, is
+// trusted: faded at the frame's edge and towards the reach.
+fn ssr_fade(uv: vec2f, t: f32, distance: f32) -> f32 {
+    let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    return smoothstep(0.0, 0.08, edge) * (1.0 - smoothstep(0.7 * distance, distance, t));
+}

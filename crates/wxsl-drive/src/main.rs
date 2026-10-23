@@ -36,7 +36,10 @@
 //! screenshot. The frame is forward. Shadows are hard by default; the `shadows` slider (or
 //! `--soft-shadows`) gives the lights their source size back, for
 //! contact-hardening penumbrae at a higher shading cost. The `fxaa` slider
-//! (or `--no-fxaa`) turns the anti-aliasing off, to compare. The
+//! (or `--no-fxaa`) turns the anti-aliasing off, to compare; the
+//! `reflections` slider (or `--ssr coarse|medium|fine`) adds screen-space
+//! reflections, the finer the costlier but the thinner what they catch
+//! (a wiper), the forward prepass then writing a G-buffer for them. The
 //! `quality` slider (or `--quality x0|x0.5|x1|x2`) scales the car's probe
 //! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
 //! then reflecting the sky alone. The
@@ -75,6 +78,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 use wxsl::core::lighting::{DebugStage, DebugView, LightingSet, DEFAULT_MODELS, OVERDRAW_VIEW};
 use wxsl::core::Value;
+use wxsl::render::effect::ssr::Quality;
 use wxsl::render::environment::LocalProbe;
 use wxsl::render::{
     Camera, DrawList, Environment, GpuContext, OffscreenTarget, RenderRequest, Renderer,
@@ -90,13 +94,13 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--quality x0|x0.5|x1|x2]
+      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--quality x0|x0.5|x1|x2]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
-        occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
         drag elsewhere looks around the car, right-drag turns the camera (right double-click
         straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
@@ -141,6 +145,13 @@ const NEON: &str = "neons";
 const VIEW: &str = "view";
 const SHADOWS: &str = "shadows";
 const FXAA: &str = "fxaa";
+/// Screen-space reflections: off, then one step per [`SSR_QUALITIES`].
+const SSR: &str = "reflections";
+const SSR_QUALITIES: [(&str, Quality); 3] = [
+    ("coarse", Quality::Coarse),
+    ("medium", Quality::Medium),
+    ("fine", Quality::Fine),
+];
 const QUALITY: &str = "quality";
 /// The `quality` slider's steps: the probe's and the shadow atlas's
 /// scale, 0 turning both off.
@@ -158,6 +169,14 @@ fn debug_views() -> Vec<DebugView> {
         .into_iter()
         .filter(|view| view.stage != DebugStage::Deferred && view.label != OVERDRAW_VIEW)
         .collect()
+}
+
+/// The reflections' quality the `reflections` slider's `value` picks, or
+/// `None` for none.
+fn ssr_quality(value: f32) -> Option<(&'static str, Quality)> {
+    (value.round() as usize)
+        .checked_sub(1)
+        .and_then(|index| SSR_QUALITIES.get(index).copied())
 }
 
 /// The debug view the `view` slider's `value` picks, or `None` to shade.
@@ -211,6 +230,9 @@ struct Options {
     soft_shadows: bool,
     /// Start without FXAA.
     no_fxaa: bool,
+    /// The `reflections` slider's start: 0 off, then one per
+    /// [`SSR_QUALITIES`].
+    ssr: f32,
     /// The `quality` slider's start, an index into [`QUALITIES`].
     quality: f32,
     screenshot: Option<PathBuf>,
@@ -252,6 +274,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         profile: false,
         soft_shadows: true,
         no_fxaa: true,
+        ssr: 0.0,
         quality: 3.0,
         screenshot: None,
         ui: false,
@@ -334,6 +357,17 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
             "--profile" => options.profile = true,
             "--soft-shadows" => options.soft_shadows = true,
             "--no-fxaa" => options.no_fxaa = true,
+            "--ssr" => {
+                let name = value()?;
+                options.ssr = match SSR_QUALITIES
+                    .iter()
+                    .position(|(quality, _)| *quality == name)
+                {
+                    Some(index) => (index + 1) as f32,
+                    None if name == "off" => 0.0,
+                    None => return Err("--ssr is one of off, coarse, medium, fine".into()),
+                };
+            }
             "--quality" => {
                 let name = value()?;
                 options.quality = QUALITIES
@@ -460,6 +494,11 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             if options.no_fxaa { 0.0 } else { 1.0 },
             |value| if value >= 0.5 { "on" } else { "off" }.to_string(),
         ),
+        Slider::new(SSR, 0.0, SSR_QUALITIES.len() as f32, options.ssr, |value| {
+            ssr_quality(value)
+                .map_or("off", |(name, _)| name)
+                .to_string()
+        }),
         Slider::new(
             QUALITY,
             0.0,
@@ -513,6 +552,8 @@ struct Drive {
     fxaa: bool,
     /// Whether the frame installed has the aberration pass.
     aberration: bool,
+    /// The screen-space reflections' quality the frame installed has.
+    ssr: Option<Quality>,
     /// The tonemap the frame installed ends in.
     tonemap: usize,
     /// The probe and shadow scale the frame installed has.
@@ -540,7 +581,7 @@ impl Drive {
             car,
             shadow_car,
             |renderer, refractive| {
-                pipeline::install(renderer, refractive, false, true, false, 0, 1.0)
+                pipeline::install(renderer, refractive, false, true, false, None, 0, 1.0)
             },
         )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
@@ -579,6 +620,7 @@ impl Drive {
             shown_view: 0,
             fxaa: true,
             aberration: false,
+            ssr: None,
             tonemap: 0,
             quality: 1.0,
         })
@@ -655,10 +697,17 @@ impl Drive {
         let speed = speed.unwrap_or(0.0);
         let fxaa = panel.value(FXAA) >= 0.5;
         let aberration = panel.value(ABERRATION) > 0.0;
+        let ssr = ssr_quality(panel.value(SSR)).map(|(_, quality)| quality);
         let tonemap = panel.value(TONEMAP).round() as usize;
         let quality = QUALITIES[panel.value(QUALITY).round() as usize];
-        if (fxaa, aberration, tonemap, quality)
-            != (self.fxaa, self.aberration, self.tonemap, self.quality)
+        if (fxaa, aberration, ssr, tonemap, quality)
+            != (
+                self.fxaa,
+                self.aberration,
+                self.ssr,
+                self.tonemap,
+                self.quality,
+            )
         {
             pipeline::install(
                 &mut self.renderer,
@@ -666,11 +715,13 @@ impl Drive {
                 false,
                 fxaa,
                 aberration,
+                ssr,
                 tonemap,
                 quality,
             )?;
             self.fxaa = fxaa;
             self.aberration = aberration;
+            self.ssr = ssr;
             self.tonemap = tonemap;
             self.quality = quality;
             // The new frame's sky and environment maps start unbaked.

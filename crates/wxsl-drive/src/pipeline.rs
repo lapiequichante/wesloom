@@ -6,7 +6,7 @@
 //! chromatic aberration when it is on, the tonemap (one of [`TONEMAPS`]) and FXAA.
 //!
 //! ```text
-//! shadows → prepass → forward ─┬─ background (sky) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ (aberration) ─ tonemap ─ fxaa
+//! shadows → prepass → forward ─┬─ background (sky) ─ (ssr) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ (aberration) ─ tonemap ─ fxaa
 //!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
@@ -40,8 +40,8 @@ use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
 use wxsl::core::Value;
 use wxsl::render::effect::{
-    ibl, refraction, Downlevel, Effect, EffectInput, EffectInputKind, EffectKind, EffectParameter,
-    EffectShader,
+    ibl, refraction, ssr, Downlevel, Effect, EffectInput, EffectInputKind, EffectKind,
+    EffectParameter, EffectShader,
 };
 use wxsl::render::pass::{
     Attachment, DepthAttachment, DrawSource, Extent, Load, PassDesc, PassKind, PassState, Policy,
@@ -270,6 +270,11 @@ const GRADE_EFFECT: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
+/// The reflections' pass label.
+pub const SSR: &str = "drive ssr";
+/// The glass reflections' pass label.
+const SSR_GLASS: &str = "drive glass ssr";
+
 /// The aberration's pass label, which its strength is set on.
 pub const ABERRATION: &str = "drive aberration";
 
@@ -369,6 +374,8 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         FOG_EFFECT,
         GRADE_EFFECT,
         ABERRATION_EFFECT,
+        ssr::SSR,
+        ssr::GLASS,
     ] {
         renderer.add_effect(effect);
     }
@@ -478,9 +485,10 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
     Ok(document)
 }
 
-/// Build the frame, forward or `deferred`, with or without `fxaa` and the
-/// chromatic `aberration` pass, displayed through [`TONEMAPS`]`[tonemap]`,
-/// and give it to `renderer`. With `refractive`, the car's glass leaves the opaque
+/// Build the frame, forward or `deferred`, with or without `fxaa`, the
+/// chromatic `aberration` pass and the screen-space reflections (`ssr`, at
+/// that quality),
+/// displayed through [`TONEMAPS`]`[tonemap]`, and give it to `renderer`. With `refractive`, the car's glass leaves the opaque
 /// passes for the refraction tier (ADR 0067). `quality` scales the car's
 /// probe and the shadow atlas from their defaults (0.5, 1 or 2); at 0 the
 /// car has no probe and reflects the sky's maps, and the caller turns the
@@ -491,6 +499,7 @@ pub fn install(
     deferred: bool,
     fxaa: bool,
     aberration: bool,
+    ssr: Option<ssr::Quality>,
     tonemap: usize,
     quality: f32,
 ) -> Result<(), Box<dyn Error>> {
@@ -516,6 +525,15 @@ pub fn install(
             }
         }
     }
+    // The G-buffer the reflections read, before the probe's passes join.
+    let gbuffer = match ssr {
+        Some(quality) => {
+            let layout = config.plan().map_err(|error| error.to_string())?;
+            let targets = ssr::gbuffer(&mut graph, layout.layout().to_vec(), "drive")?;
+            Some((targets, quality))
+        }
+        None => None,
+    };
 
     // The sky, baked into the environment maps whenever the hour changes
     // (`Renderer::invalidate_bakes`), and drawn behind the scene.
@@ -645,22 +663,39 @@ pub fn install(
     }
     let sky_behind =
         ibl::append_background(&mut graph, shaded, depth, maps.radiance, "drive background");
+    // The reflections of the opaque frame, before the fog fogs them.
+    let opaque = match gbuffer {
+        Some((targets, quality)) => {
+            ssr::append(&mut graph, sky_behind, depth, targets, quality, SSR)
+        }
+        None => sky_behind,
+    };
     // The fog over everything opaque, before the glass refracts it.
     let mut background = graph.resource(hdr(FOG));
-    graph.pass(fog_pass(
-        FOG,
-        background,
-        [sky_behind, depth, maps.radiance],
-    ));
+    graph.pass(fog_pass(FOG, background, [opaque, depth, maps.radiance]));
     if refractive {
-        background = refraction::append(
+        let optics = refraction::append_optics(
             &mut graph,
             background,
             depth,
             probe.radiance,
             "drive glass",
             2,
+            refraction::Quality::Layered,
         );
+        // The glass's own reflections, of the fogged opaque frame.
+        background = match gbuffer {
+            Some((_, quality)) => ssr::append_glass(
+                &mut graph,
+                optics,
+                background,
+                depth,
+                probe.radiance,
+                quality,
+                SSR_GLASS,
+            ),
+            None => optics.color,
+        };
     }
     graph.pass_mut(blur).ok_or("motion blur pass")?.reads[0] = Read::current(background);
 

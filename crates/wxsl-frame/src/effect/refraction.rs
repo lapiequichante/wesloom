@@ -212,6 +212,43 @@ pub fn append_with_quality(
     surface_count: u32,
     quality: Quality,
 ) -> ResourceId {
+    append_optics(
+        graph,
+        scene,
+        depth,
+        environment,
+        name,
+        surface_count,
+        quality,
+    )
+    .color
+}
+
+/// What [`append_optics`] leaves: the composed colour, and the peeled
+/// layers it was composed from, nearest first, for a later pass over the
+/// glass (the screen-space reflections' `ssr::append_glass`).
+#[derive(Clone, Copy, Debug)]
+pub struct Optics {
+    /// Linear colour, the glass composed over the scene.
+    pub color: ResourceId,
+    /// Per layer: the surface normal, and its depth in w.
+    pub normals: ResourceId,
+    /// Per layer: the optical material the composition reads, its IOR in
+    /// w (zero where there is no glass).
+    pub optics: ResourceId,
+}
+
+/// [`append_with_quality`], with the peeled layers returned beside the
+/// colour.
+pub fn append_optics(
+    graph: &mut FrameGraph,
+    scene: ResourceId,
+    depth: ResourceId,
+    environment: ResourceId,
+    name: &str,
+    surface_count: u32,
+    quality: Quality,
+) -> Optics {
     let layers = surface_count.clamp(1, 4) * 2;
     let mut bounds = graph.resource(ResourceDesc::color(
         format!("{name} bounds 0"),
@@ -373,7 +410,11 @@ pub fn append_with_quality(
             color = output;
             composed_depth = next_depth;
         }
-        return color;
+        return Optics {
+            color,
+            normals,
+            optics,
+        };
     }
     let output = graph.resource(ResourceDesc::color(
         format!("{name} color"),
@@ -384,5 +425,9 @@ pub fn append_with_quality(
             .with_color(Attachment::clear(output, Color::TRANSPARENT))
             .with_reads(reads),
     );
-    output
+    Optics {
+        color: output,
+        normals,
+        optics,
+    }
 }

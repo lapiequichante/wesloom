@@ -81,8 +81,14 @@ impl FrameGraph {
     /// requests — which is what keeps the scheduler's target-count check
     /// exact once that count stops being fixed.
     pub fn with_gbuffer_layout(mut self, layout: Vec<abi::GBufferTarget>) -> Self {
-        self.gbuffer_layout = layout;
+        self.set_gbuffer_layout(layout);
         self
+    }
+
+    /// [`FrameGraph::with_gbuffer_layout`] on a graph already built: what a
+    /// recipe that adds a G-buffer pass to a compiled graph calls.
+    pub fn set_gbuffer_layout(&mut self, layout: Vec<abi::GBufferTarget>) {
+        self.gbuffer_layout = layout;
     }
 
     /// The G-buffer layout this graph was built for.

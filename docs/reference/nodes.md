@@ -3,7 +3,7 @@
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
 - [Shader nodes](#shader-nodes) (194)
-- [Pipeline nodes](#pipeline-nodes) (30)
+- [Pipeline nodes](#pipeline-nodes) (32)
 
 ## Shader nodes
 
@@ -2081,6 +2081,34 @@ Copy opaque depth for optical composition. Reads: `depth` (Opaque or peeled dept
 
 - in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
 - in `depth: depth_target`: Opaque or peeled depth.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.ssr` · reflections
+
+Screen-space reflections over the opaque frame, in place of the environment's where a ray hits. Reads: `color` (The opaque frame, as linear radiance.), `depth` (The opaque depth.), `normal` (The G-buffer's normal target: octahedral normal, roughness.), `base_color` (The G-buffer's base colour target: base colour, metalness.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `color: color_target`: The opaque frame, as linear radiance.
+- in `depth: depth_target`: The opaque depth.
+- in `normal: color_target`: The G-buffer's normal target: octahedral normal, roughness.
+- in `base_color: color_target`: The G-buffer's base colour target: base colour, metalness.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.ssr_glass` · glass reflections
+
+Screen-space reflections on the nearest glass, in place of the radiance cube's where a ray hits. Reads: `color` (The frame with its glass composed, as linear radiance.), `opaque` (The opaque frame the glass was composed over.), `depth` (The opaque depth.), `environment` (The radiance cube the composition reflected.), `normal_layers` (The refraction's peeled normals, depth in w.), `optical_layers` (The refraction's peeled optical materials.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `color: color_target`: The frame with its glass composed, as linear radiance.
+- in `opaque: color_target`: The opaque frame the glass was composed over.
+- in `depth: depth_target`: The opaque depth.
+- in `environment: color_target`: The radiance cube the composition reflected.
+- in `normal_layers: color_target`: The refraction's peeled normals, depth in w.
+- in `optical_layers: color_target`: The refraction's peeled optical materials.
 - out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
 - setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
 - only in document graphs

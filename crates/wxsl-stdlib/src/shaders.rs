@@ -53,6 +53,9 @@ modules! {
     "package::wxsl::shadow" => "wxsl/shadow.wxsl",
     "package::wxsl::shadow_clear" => "wxsl/shadow_clear.wxsl",
     "package::wxsl::gbuffer" => "wxsl/gbuffer.wxsl",
+    // The screen-space reflections' ray march, shared by `wxsl-frame`'s
+    // opaque and glass passes.
+    "package::wxsl::ssr_trace" => "wxsl/ssr_trace.wxsl",
     // The shading function and the lighting pass are *generated* now, from
     // the enabled lighting models (wxsl_core::lighting, ADR 0028), so
     // neither ships as a file. The model functions the generated shaders

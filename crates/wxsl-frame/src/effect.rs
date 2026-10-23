@@ -63,6 +63,7 @@ use wxsl_core::wxsl::WxslIdent;
 /// Environment conversion and convolution recipes (ADR 0062).
 pub mod ibl;
 pub mod refraction;
+pub mod ssr;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -1593,6 +1594,8 @@ impl EffectRegistry {
                 refraction::SCENE_DEPTH,
                 refraction::COMPOSE,
                 refraction::COMPOSE_DEPTH,
+                ssr::SSR,
+                ssr::GLASS,
             ],
         }
     }
@@ -1866,12 +1869,13 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            30,
+            32,
             "lighting, tonemap, bloom, the separable bloom pair, the bloom \
              pyramid's four passes, the depth-of-field chain's three, the \
              TAA resolve, the motion blur, and the five peel passes \
              `pass.peel` expands into, plus the four environment bake \
-             effects and background, plus the five optical effects"
+             effects and background, plus the five optical effects, plus \
+             the screen-space reflections, opaque and on glass"
         );
 
         let lighting = registry
