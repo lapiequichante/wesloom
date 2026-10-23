@@ -355,6 +355,7 @@ pub const wxsl_frame::effect::TONEMAP_MODULE: &str
 pub mod wxsl_frame::environment
 pub enum wxsl_frame::environment::LightKind
 pub wxsl_frame::environment::LightKind::Directional
+pub wxsl_frame::environment::LightKind::Disc
 pub wxsl_frame::environment::LightKind::Point
 pub wxsl_frame::environment::LightKind::Rectangle
 pub wxsl_frame::environment::LightKind::Spot
@@ -559,6 +560,7 @@ pub const wxsl_frame::environment::Light::DEFAULTS: wxsl_frame::environment::Lig
 pub fn wxsl_frame::environment::Light::area_sample_positions(&self) -> [glam::f32::vec3::Vec3; 16]
 pub fn wxsl_frame::environment::Light::casting_shadow(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::directional(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
+pub fn wxsl_frame::environment::Light::disc(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, glam::f32::vec3::Vec3, f32) -> Self
 pub fn wxsl_frame::environment::Light::is_local(&self) -> bool
 pub fn wxsl_frame::environment::Light::point(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self
 pub fn wxsl_frame::environment::Light::rectangle(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32) -> Self

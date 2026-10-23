@@ -48,8 +48,10 @@ const LAMP_CONE: f32 = 72.0 * std::f32::consts::PI / 180.0;
 const HEADLIGHT_INTENSITY: f32 = 4500.0;
 const HEADLIGHT_RANGE: f32 = 160.0;
 const HEADLIGHT_COLOR: Vec3 = Vec3::new(0.92, 0.97, 1.0);
-/// An optic's own light inside its housing, and its reach: faint, and so
-/// short that only the housing and the body around it are inside it.
+/// An optic's own light inside its housing, a disc the optic's size facing
+/// ahead, and its reach: faint, its intensity straight ahead whatever its
+/// size, and so short that only the housing and the body around it are
+/// inside it.
 const OPTIC_INTENSITY: f32 = 0.1;
 const OPTIC_RANGE: f32 = 0.25;
 /// A tail light's peak intensity, its colour and its reach: barely a
@@ -176,6 +178,8 @@ pub struct CarLamps {
     /// The headlights' optics, inside their housings, when the car has
     /// headlights of its own.
     pub optics: Option<[Vec3; 4]>,
+    /// How large an optic is, across its middle.
+    pub optic_radius: f32,
     /// The two tail lights.
     pub tail: [Vec3; 2],
     /// How bright the tail lights are: 1 at night, more braking.
@@ -270,18 +274,6 @@ pub fn lights(
         headlight.shadow_distance = HEADLIGHT_RANGE;
         lights.push(headlight);
     }
-    // The optics, each lighting its housing from within, unshadowed.
-    for optic in car_lamps.optics.into_iter().flatten() {
-        lights.push(
-            Light::point(
-                car.transform_point3(optic),
-                HEADLIGHT_COLOR,
-                OPTIC_INTENSITY * day.lights_on,
-            )
-            .with_range(OPTIC_RANGE),
-        );
-    }
-
     // The tail lights: a faint red wash on the road just behind, from
     // spots aimed back and down, so they never reach the middle of the
     // road. The car shadows them, drawn once in its frame like the
@@ -346,6 +338,25 @@ pub fn lights(
     }
     lights.push(key);
 
+    // The optics, each lighting its housing from within, unshadowed. Last
+    // of the uniform's lights, so they are what a full scene drops.
+    if car_lamps.optic_radius > 0.0 {
+        let radius = car_lamps.optic_radius * car.transform_vector3(Vec3::X).length();
+        let radiance = OPTIC_INTENSITY / (std::f32::consts::PI * radius * radius);
+        for optic in car_lamps.optics.into_iter().flatten() {
+            lights.push(
+                Light::disc(
+                    car.transform_point3(optic),
+                    forward,
+                    radius,
+                    HEADLIGHT_COLOR,
+                    radiance * day.lights_on,
+                )
+                .with_range(OPTIC_RANGE),
+            );
+        }
+    }
+
     // The lamps within reach of what the camera sees well; the light grid
     // bins them (ADR 0076).
     for lamp_at in lamps {
@@ -394,6 +405,7 @@ mod tests {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
             optics: None,
+            optic_radius: 0.0,
             tail_glow: 1.0,
         };
         let eye = lamps[0].foot;
@@ -443,6 +455,7 @@ mod tests {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
             optics: None,
+            optic_radius: 0.0,
             tail_glow: 1.0,
         };
         let night = DayLight::at(23.0);
@@ -480,6 +493,7 @@ mod tests {
             head: [Vec3::ZERO; 2],
             tail: [Vec3::ZERO; 2],
             optics: None,
+            optic_radius: 0.0,
             tail_glow: 1.0,
         };
         let head = lamps[1].heads[0];

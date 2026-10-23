@@ -29,8 +29,9 @@
 //!
 //! The sprites add `params.strength` of each light, spread over its rays,
 //! onto the target (an additive pass). The sprites are placed on the
-//! extract the cells were gathered from, bound second for its size;
-//! `params.scale` is how many target pixels one of its texels spans.
+//! extract the cells were gathered from, bound second for its size and
+//! that of the grid laid over it (`grid_image`); `params.scale` is how
+//! many target pixels one of its texels spans.
 
 @group(3) @binding(0) var cells: texture_2d<f32>;
 @group(3) @binding(1) var extract: texture_2d<f32>;
@@ -51,6 +52,12 @@ struct Sprite {
 /// only one ray in nine is past half.
 const SKEW: f32 = 6.0;
 
+/// The extract as the cells' grid sees it. Keep in sync with
+/// `glare_cells.wxsl`.
+fn grid_image(extract: vec2f) -> vec2f {
+    return extract / max(extract.y / 540.0, 0.5);
+}
+
 /// A pseudo-random number in 0..1, the same for the same `x`.
 fn hash(x: f32) -> f32 {
     return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
@@ -64,13 +71,14 @@ fn vertex(@builtin(vertex_index) corner_index: u32, @builtin(instance_index) ins
     out.offset = vec2f(0.0);
     out.flux = vec3f(0.0);
     out.half_size = 1.0;
-    let grid = vec2u(textureDimensions(cells));
+    let extract_size = vec2f(textureDimensions(extract));
+    let image = grid_image(extract_size);
+    let grid = vec2u(ceil(image / 8.0));
     if instance >= grid.x * grid.y {
         return out;
     }
     let cell = vec2u(instance % grid.x, instance / grid.x);
     let texel = textureLoad(cells, vec2i(cell), 0);
-    let extract_size = vec2f(textureDimensions(extract));
     let size = extract_size * params.scale;
     // The light's peak radiance, over `area` pixels of a 1080-line frame.
     let pixels = size.y / 1080.0;
@@ -81,8 +89,8 @@ fn vertex(@builtin(vertex_index) corner_index: u32, @builtin(instance_index) ins
     }
     let x = floor(texel.a / 2048.0);
     let centre_in_cell = vec2f(x, texel.a - x * 2048.0) / 64.0 - 8.0;
-    // In the extract's uv, which spans the target exactly.
-    let centre = (vec2f(cell) * 8.0 + centre_in_cell) / extract_size;
+    // In the grid's uv, which spans the target exactly.
+    let centre = (vec2f(cell) * 8.0 + centre_in_cell) / image;
     let half_size = clamp(params.reach * sqrt(light), params.smallest, params.largest * size.y);
     var corners = array<vec2f, 6>(
         vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),

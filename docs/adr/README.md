@@ -135,6 +135,7 @@ The ten decisions the rest of the log builds on:
 | [0101](0101-a-static-shadow-is-drawn-once-in-its-casters-frame.md) | A static shadow is drawn once, in its casters' frame | Accepted |
 | [0102](0102-a-local-probe-is-captured-in-the-frame-and-lit-per-pass.md) | A local probe is captured in the frame and read per pass | Accepted |
 | [0103](0103-the-shadow-atlas-edge-is-a-pipeline-setting.md) | The shadow atlas edge is a pipeline setting | Accepted, amends 0071 |
+| [0104](0104-a-disc-light-is-an-octagon-to-ltc-and-a-masked-rectangle-to-samples.md) | A disc light is an octagon to LTC and a masked rectangle to samples | Accepted, amends 0095, 0096 |
 
 To add one: copy `template.md` to `NNNN-short-title.md` (next number), fill
 it in, add a row here. See `AGENTS.md` at the repo root for when an ADR is

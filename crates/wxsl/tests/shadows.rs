@@ -639,6 +639,70 @@ fn rectangular_area_light_casts_a_penumbra_and_emits_on_one_side() {
     }
 }
 
+/// A disc lights the floor under it as a point light carrying its flux
+/// would, through LTC (lambert) and through samples (phong), on both
+/// paths; nothing from behind it or past its range (ADR 0104).
+#[test]
+fn a_disc_light_lights_like_its_point_from_one_side_within_its_range() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "disc receiver");
+    // 1.5 m up, 0.4 m across: the irradiance under it is L π r² / (h² + r²),
+    // a point's I / h².
+    let (height, radius, radiance) = (1.5_f32, 0.4_f32, 7.2_f32);
+    let disc = Light::disc(Vec3::Y * height, Vec3::NEG_Y, radius, Vec3::ONE, radiance);
+    let intensity = radiance * std::f32::consts::PI * radius * radius * height * height
+        / (height * height + radius * radius);
+    let point = Light::point(Vec3::Y * height, Vec3::ONE, intensity);
+    scene
+        .renderer
+        .set_lighting(wxsl::core::lighting::default_set().expect("the shipped models"))
+        .expect("the shipped models are in the library");
+    for model in ["wxsl.lambert", "wxsl.phong"] {
+        let config = MaterialConfig {
+            model: Some(model.to_string()),
+            ..MaterialConfig::default()
+        };
+        let ground =
+            Material::with_lighting(&graph, &scene.registry, &config, scene.renderer.lighting())
+                .expect("the graph compiles");
+        for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+            scene.renderer.set_pipeline(pipeline);
+            let mut env = lit(false);
+            env.lights = vec![disc.clone()];
+            let from_disc = brightness(&scene.render(&env, &ground, None), Vec3::ZERO);
+            env.lights = vec![point.clone()];
+            let from_point = brightness(&scene.render(&env, &ground, None), Vec3::ZERO);
+            env.lights.clear();
+            let ambient = scene.render(&env, &ground, None);
+            assert!(
+                from_disc.abs_diff(from_point) <= 4
+                    && from_disc > brightness(&ambient, Vec3::ZERO) + 40,
+                "{model}, {}: disc {from_disc} vs point {from_point}",
+                pipeline.name()
+            );
+            env.lights = vec![Light::disc(
+                Vec3::Y * height,
+                Vec3::Y,
+                radius,
+                Vec3::ONE,
+                radiance,
+            )];
+            assert_eq!(
+                scene.render(&env, &ground, None),
+                ambient,
+                "{model}: the back emits nothing"
+            );
+            env.lights = vec![disc.clone().with_range(height - 0.1)];
+            assert_eq!(
+                scene.render(&env, &ground, None),
+                ambient,
+                "{model}: nothing past the range"
+            );
+        }
+    }
+}
+
 /// A source radius turns the hard edge into a penumbra as wide as similar
 /// triangles say, and finds no blocker on open ground (ADR 0098): the
 /// blocker search must not take the receiver for its own caster.

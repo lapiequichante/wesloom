@@ -11,6 +11,11 @@ an entry.
 
 ### Added
 
+- Disc lights (`Light::disc`, `LightKind::Disc`): a one-sided round
+  emitter, integrated as an octagon by the LTC models and sampled as a
+  masked rectangle by the others. Unshadowed, and bounded by `range`
+  ([ADR 0104](docs/adr/0104-a-disc-light-is-an-octagon-to-ltc-and-a-masked-rectangle-to-samples.md)).
+
 - `Renderer::set_environment_scale`: scale the environment's radiance from
   the next frame without installing the pass list again.
 

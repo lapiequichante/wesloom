@@ -123,6 +123,9 @@ pub struct Car {
     /// The headlights' two optics each, left then right, inside the
     /// housing just behind the glass: what lights the housing from within.
     optics: Option<[Vec3; 4]>,
+    /// How large one optic is: a quarter of its headlight across, at most
+    /// half its height.
+    optic_radius: f32,
     /// The tail lights' centres, the same way.
     tail_lights: Option<[Vec3; 2]>,
     /// The tail lights' materials and the emission the file gives them.
@@ -170,10 +173,9 @@ struct Wheel {
 /// The materials of me_car's headlights, which the file leaves unlit.
 const LENS_MATERIALS: &[&str] = &["Headlight", "hl inside", "ll shell"];
 /// The parameter their glow is, and its radiance at night at an optic's
-/// middle: the street lamps' own, so the headlights outshine them only by
-/// being nearer.
+/// middle: half again the street lamps' own.
 const LENS_GLOW: &str = "headlight_glow";
-const LENS_RADIANCE: f32 = 30.0;
+const LENS_RADIANCE: f32 = 350.0;
 
 /// Give the headlights' materials an emission the night can turn up: a
 /// `headlight_glow` parameter, the radiance at the middle of each optic,
@@ -340,7 +342,7 @@ fn optic_middles(
 /// How far past the tail lights' lenses their light starts, and how far
 /// ahead of the headlights' glass their beams do.
 const LAMP_CLEARANCE: f32 = 0.03;
-const HEADLIGHT_CLEARANCE: f32 = 0.08;
+const HEADLIGHT_CLEARANCE: f32 = 0.16;
 /// How far behind a headlight's glass its optics' lights are.
 const OPTIC_DEPTH: f32 = 0.05;
 /// An optic's hot spot: how far from its middle its glow falls to 1/e,
@@ -808,6 +810,13 @@ impl Car {
         let optics = head_boxes.map(|boxes| {
             optic_middles(boxes, OPTIC_DEPTH).map(|optic| align.transform_point3(optic))
         });
+        let optic_radius = head_boxes.map_or(0.0, |boxes| {
+            boxes
+                .iter()
+                .map(|(min, max)| ((max.x - min.x) * 0.25).min((max.y - min.y) * 0.5))
+                .sum::<f32>()
+                * 0.5
+        });
         let tails: Vec<usize> = imported
             .scene
             .materials
@@ -832,6 +841,7 @@ impl Car {
             lenses,
             headlights,
             optics,
+            optic_radius,
             tail_lights,
             tails,
             tail_glow: (0.0, 0.0),
@@ -1176,6 +1186,7 @@ impl Car {
             optics: self
                 .optics
                 .map(|optics| optics.map(|optic| tilt.transform_point3(optic))),
+            optic_radius: self.optic_radius,
             tail_glow: self.tail_emission() / TAIL_GLOW,
         }
     }

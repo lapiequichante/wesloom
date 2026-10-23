@@ -11,6 +11,7 @@ const LIGHT_KIND_DIRECTIONAL: f32 = 1.0;
 const LIGHT_KIND_RECTANGLE: f32 = 2.0;
 const LIGHT_KIND_SPOT: f32 = 3.0;
 const LIGHT_KIND_TUBE: f32 = 4.0;
+const LIGHT_KIND_DISC: f32 = 5.0;
 
 @group(0) @binding(11) var light_cookies: texture_2d_array<f32>;
 // Nearest and non-filtering: every pass reads a depth texel by sampling its
@@ -209,11 +210,15 @@ struct LightSample {
 
 // Number of direct BRDF/visibility evaluations for this light: sixteen
 // fixed points for a shadowed rectangle (ADR 0072), two grids of sixteen
-// for an unshadowed one and of eight for a tube (ADR 0095).
+// for an unshadowed one or a disc (ADR 0104) and of eight for a tube
+// (ADR 0095).
 fn light_sample_count(index: u32) -> u32 {
     let light = scene.lights[index];
     if light.kind == LIGHT_KIND_RECTANGLE {
         return select(32u, 16u, light.tile_count > 0u);
+    }
+    if light.kind == LIGHT_KIND_DISC {
+        return 32u;
     }
     return select(1u, 16u, light.kind == LIGHT_KIND_TUBE);
 }
@@ -322,8 +327,10 @@ fn area_emission(light: Light, uv: vec2f, cell: f32) -> vec3f {
 // An unshadowed rectangle or a tube, as an area lighting model integrates
 // it (ADR 0096): four corners from the shading point, `corner0` the
 // texture's (0, 0) and `corner1` its (1, 0), `corner3` its (0, 1); a tube
-// is the ribbon of its diameter that faces the point. `shape` is 0 for
-// any other light, which the light loop samples instead.
+// is the ribbon of its diameter that faces the point. A disc is its
+// centre from the point, `corner0`, and its semi-axes, `corner1` and
+// `corner2` (ADR 0104). `shape` is 0 for any other light, and for a disc
+// out of range, which the light loop samples instead.
 struct AreaLight {
     corner0: vec3f,
     corner1: vec3f,
@@ -331,7 +338,7 @@ struct AreaLight {
     corner3: vec3f,
     radiance: vec3f,
     cookie_layer: u32,
-    shape: u32, // 0: not an area light; 1: a rectangle; 2: a tube
+    shape: u32, // 0: not an area light; 1: a rectangle; 2: a tube; 3: a disc
 }
 
 fn area_light(index: u32, world_position: vec3f) -> AreaLight {
@@ -341,6 +348,22 @@ fn area_light(index: u32, world_position: vec3f) -> AreaLight {
     area.radiance = light.color * light.intensity;
     area.cookie_layer = light.cookie_layer;
     var across = light.area_v;
+    if light.kind == LIGHT_KIND_DISC {
+        let window = range_window(light, dot(centre, centre));
+        if window <= 0.0 {
+            return area;
+        }
+        area.shape = 3u;
+        area.radiance = area.radiance * window;
+        // One-sided, like a rectangle.
+        if dot(centre, cross(light.area_u, light.area_v)) >= 0.0 {
+            area.radiance = vec3f(0.0);
+        }
+        area.corner0 = centre;
+        area.corner1 = light.area_u;
+        area.corner2 = light.area_v;
+        return area;
+    }
     if light.kind == LIGHT_KIND_TUBE {
         area.shape = 2u;
         var side = cross(light.area_u, centre);
@@ -399,6 +422,9 @@ fn ltc_edge(start: vec3f, end: vec3f) -> vec3f {
 // sphere approximation, times its texture prefiltered by how far the
 // cosine's lobe spreads over it (Heitz et al.'s textured lights).
 fn area_integral(area: AreaLight, transform: mat3x3f) -> vec3f {
+    if area.shape == 3u {
+        return disc_integral(area, transform);
+    }
     let p0 = transform * area.corner0;
     let p1 = transform * area.corner1;
     let p2 = transform * area.corner2;
@@ -415,6 +441,38 @@ fn area_integral(area: AreaLight, transform: mat3x3f) -> vec3f {
     let l = length(form);
     let factor = max((l * l + form.z) / (l + 1.0), 0.0);
     return area.radiance * factor * area_texture(area, p0, p1, p3);
+}
+
+// A disc's octagon of the same area: its corners on the unit circle,
+// scaled by the square root of pi / 2 sqrt(2).
+const DISC_OCTAGON = array<vec2f, 8>(
+    vec2f(1.0539011, 0.0), vec2f(0.7452212, 0.7452212),
+    vec2f(0.0, 1.0539011), vec2f(-0.7452212, 0.7452212),
+    vec2f(-1.0539011, 0.0), vec2f(-0.7452212, -0.7452212),
+    vec2f(0.0, -1.0539011), vec2f(0.7452212, -0.7452212),
+);
+
+// `area_integral` for a disc, as the octagon of its area; its texture
+// spans the square around it.
+fn disc_integral(area: AreaLight, transform: mat3x3f) -> vec3f {
+    let centre = transform * area.corner0;
+    let u = transform * area.corner1;
+    let v = transform * area.corner2;
+    var form = vec3f(0.0);
+    var towards = vec3f(0.0);
+    var previous = normalize(centre + u * DISC_OCTAGON[7].x + v * DISC_OCTAGON[7].y);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let next = normalize(centre + u * DISC_OCTAGON[k].x + v * DISC_OCTAGON[k].y);
+        form = form + ltc_edge(previous, next);
+        towards = towards + next;
+        previous = next;
+    }
+    if dot(form, towards) < 0.0 {
+        form = -form;
+    }
+    let l = length(form);
+    let factor = max((l * l + form.z) / (l + 1.0), 0.0);
+    return area.radiance * factor * area_texture(area, centre - u + v, centre + u + v, centre - u - v);
 }
 
 // The emission texture where the origin projects onto the polygon
@@ -472,11 +530,12 @@ fn area_specular(area: AreaLight, normal: vec3f, view_direction: vec3f, roughnes
 // balance heuristic combines them, so each covers what it samples
 // densely, every weight is continuous, and neither a glossy reflection
 // nor the light close to the emitter shows the samples. A tube uses the
-// `u` distributions only.
+// `u` distributions only; a disc is sampled as the rectangle around it,
+// masked to the disc (ADR 0104).
 struct LightSetup {
     light: Light,
     count: u32,
-    shape: u32, // 0: the light's own samples; 1: a rectangle; 2: a tube
+    shape: u32, // 0: the light's own samples; 1: a rectangle; 2: a tube; 3: a disc
     centre: vec3f, // the light's centre, from the surface
     near_u: Cauchy,
     near_v: Cauchy,
@@ -496,6 +555,13 @@ fn light_value_setup(light: Light, count: u32, world_position: vec3f, lobe: Spec
     if light.kind == LIGHT_KIND_TUBE {
         setup.shape = 2u;
         setup = tube_setup(setup, lobe);
+    } else if light.kind == LIGHT_KIND_DISC {
+        setup.shape = 3u;
+        if range_window(light, dot(setup.centre, setup.centre)) <= 0.0 {
+            setup.count = 0u;
+            return setup;
+        }
+        setup = rectangle_setup(setup, lobe);
     } else if light.kind == LIGHT_KIND_RECTANGLE && light.tile_count == 0u {
         setup.shape = 1u;
         setup = rectangle_setup(setup, lobe);
@@ -505,7 +571,7 @@ fn light_value_setup(light: Light, count: u32, world_position: vec3f, lobe: Spec
 
 // Sample `sample` of `setup.count`.
 fn sample_light_setup(setup: LightSetup, sample: u32, world_position: vec3f) -> LightSample {
-    if setup.shape == 1u {
+    if setup.shape == 1u || setup.shape == 3u {
         return sample_rectangle(setup, sample);
     }
     if setup.shape == 2u {
@@ -558,7 +624,8 @@ fn rectangle_setup(prepared: LightSetup, lobe: SpecularLobe) -> LightSetup {
 }
 
 // Sample `sample` of 32 over a rectangle: a 4x4 Gauss grid through the
-// near distributions, then through the mirror ones.
+// near distributions, then through the mirror ones. A disc's samples
+// outside it carry nothing, and its range windows the rest.
 fn sample_rectangle(setup: LightSetup, sample: u32) -> LightSample {
     let light = setup.light;
     let i = sample % 4u;
@@ -582,7 +649,11 @@ fn sample_rectangle(setup: LightSetup, sample: u32) -> LightSample {
     // One sample's share of the emitter, in texture units.
     let cell = 0.5 * inverseSqrt(16.0 * density);
     let emitted = area_emission(light, vec2f(0.5 + 0.5 * point.x, 0.5 - 0.5 * point.y), cell);
-    let cosine = max(dot(cross(light.area_u, light.area_v), -out.direction), 0.0);
+    var cosine = max(dot(cross(light.area_u, light.area_v), -out.direction), 0.0);
+    if setup.shape == 3u {
+        let inside = select(0.0, 1.0, dot(point, point) <= 1.0);
+        cosine = cosine * inside * range_window(light, dot(setup.centre, setup.centre));
+    }
     out.radiance = light.color * light.intensity * emitted * cosine * weight / distance_squared;
     return out;
 }
@@ -669,12 +740,19 @@ fn light_profile(light: Light, direction: vec3f) -> f32 {
 // One light's sample at a point, from the light itself rather than its
 // slot: the uniform's lights and the clustered list's share this.
 fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> LightSample {
+    // No lobe to follow: the mirror half is as wide as the near one.
+    let lobe = SpecularLobe(vec3f(0.0, 1.0, 0.0), 1.0, vec3f(0.0, 1.0, 0.0));
     if light.kind == LIGHT_KIND_TUBE {
-        // No lobe to follow: the mirror half is as wide as the near one.
-        let lobe = SpecularLobe(vec3f(0.0, 1.0, 0.0), 1.0, vec3f(0.0, 1.0, 0.0));
         return sample_tube(light_value_setup(light, 16u, world_position, lobe), sample);
     }
     var out: LightSample;
+    if light.kind == LIGHT_KIND_DISC {
+        let setup = light_value_setup(light, 32u, world_position, lobe);
+        if setup.count == 0u {
+            return out;
+        }
+        return sample_rectangle(setup, sample);
+    }
     if light.kind == LIGHT_KIND_DIRECTIONAL {
         out.direction = normalize(light.position_or_direction);
         out.radiance = light.color * light.intensity;
@@ -713,17 +791,24 @@ fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> Light
     if light.profile_layer != 0xffffffffu && (light.kind == LIGHT_KIND_SPOT || light.kind == LIGHT_KIND_POINT) {
         weight = weight * light_profile(light, -out.direction);
     }
-    // A ranged light's inverse square is windowed to reach exactly zero at
-    // its range — the (1 - (d/r)^4)^2 window — which is what makes binning
-    // it into clusters exact rather than approximate (ADR 0076). Zero range
-    // is unbounded.
-    if light.range > 0.0 && light.kind != LIGHT_KIND_RECTANGLE {
-        let ratio = distance_squared / (light.range * light.range);
-        let window = saturate(1.0 - ratio * ratio);
-        weight = weight * window * window;
+    if light.kind != LIGHT_KIND_RECTANGLE {
+        weight = weight * range_window(light, distance_squared);
     }
     out.radiance = light.color * light.intensity * weight * cookie / distance_squared;
     return out;
+}
+
+// A ranged light's inverse square is windowed to reach exactly zero at
+// its range — the (1 - (d/r)^4)^2 window — which is what makes binning
+// it into clusters exact rather than approximate (ADR 0076). Zero range
+// is unbounded.
+fn range_window(light: Light, distance_squared: f32) -> f32 {
+    if light.range <= 0.0 {
+        return 1.0;
+    }
+    let ratio = distance_squared / (light.range * light.range);
+    let window = saturate(1.0 - ratio * ratio);
+    return window * window;
 }
 
 // Which local lights can reach `world_position` (ADR 0076): the first

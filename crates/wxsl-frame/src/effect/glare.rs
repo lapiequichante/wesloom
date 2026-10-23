@@ -68,9 +68,12 @@ pub const EXTRACT: Effect = Effect {
 };
 
 /// The highlights, one per light: each texel keeps the peak radiance of
-/// 8×8 of the extract's when no cell around outshines it, and packs where
-/// that light's core is, counting it only as far as it is a point, much
-/// brighter than the cells around it.
+/// a cell, 8×8 texels of the extract seen as a 540-line image, when no
+/// cell around outshines it, and packs where that light's core is,
+/// counting it only as far as it is a point, much brighter than the cells
+/// around it. The grid fills the target's top left; the target is a
+/// quarter of the extract, room for the grid of any frame of 540 lines or
+/// more.
 pub const CELLS: Effect = Effect {
     id: "wxsl.glare_cells",
     label: "glare cells",
@@ -89,8 +92,9 @@ pub const CELLS: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
-/// How many sprites [`STARBURST`] draws at most: one per cell of an 8K
-/// frame's grid.
+/// How many sprites [`STARBURST`] draws at most: one per cell of the grid,
+/// 120 × 68 at 16:9 whatever the size, of a frame up to eight times wider
+/// than high.
 pub const STARBURST_SPRITES: u32 = 65536;
 
 /// A starburst's sprites, one per cell of [`CELLS`]' grid with light
@@ -638,7 +642,7 @@ pub fn append_star(
             let cells = target_scaled(
                 graph,
                 extract,
-                1.0 / 8.0,
+                1.0 / 4.0,
                 TextureFormat::Rgba32Float,
                 format!("{name} cells"),
             );
@@ -1004,7 +1008,7 @@ mod tests {
         let cells = graph
             .resource_by_label("glare star cells")
             .expect("the cells");
-        assert_eq!(extent(cells), Extent::Viewport { scale: 0.0625 });
+        assert_eq!(extent(cells), Extent::Viewport { scale: 0.125 });
         let rays = graph
             .passes()
             .iter()

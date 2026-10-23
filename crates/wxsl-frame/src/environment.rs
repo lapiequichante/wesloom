@@ -156,6 +156,9 @@ pub enum LightKind {
     /// A glowing cylinder, sampled along its axis around the specular lobe;
     /// never shadowed (ADR 0095).
     Tube,
+    /// A one-sided disc, or ellipse, integrated like an unshadowed
+    /// rectangle; never shadowed (ADR 0104).
+    Disc,
 }
 
 /// Where a light renders one shadow tile from.
@@ -185,11 +188,14 @@ pub struct Light {
     pub position_or_direction: Vec3,
     /// Linear-light colour.
     pub color: Vec3,
-    /// Radiant intensity multiplier, or emitted radiance for a rectangle.
+    /// Radiant intensity multiplier, or emitted radiance for a rectangle,
+    /// a tube or a disc.
     pub intensity: f32,
-    /// Rectangle half-edge vectors; cross(u, v) points towards its emitting side.
+    /// Rectangle half-edge vectors, or a disc's semi-axes; cross(u, v)
+    /// points towards its emitting side.
     pub area_u: Vec3,
-    /// Second perpendicular half-edge of a rectangle; zero for other lights.
+    /// Second perpendicular half-edge of a rectangle, or semi-axis of a
+    /// disc; zero for other lights.
     pub area_v: Vec3,
     /// A tube's radius (its half-axis is `area_u`), or the source radius
     /// a point, spot or directional light's shadow softens from: world
@@ -258,7 +264,8 @@ pub struct Light {
     /// inside a housing that should not shadow it (a bulb behind its
     /// lens) sets it to the housing's depth.
     pub shadow_near: f32,
-    /// Where a point or spot light's falloff reaches zero, in world units.
+    /// Where a point, spot or disc light's falloff reaches zero, in world
+    /// units.
     ///
     /// Zero — the default — is the unbounded inverse square every light
     /// had before the field. A finite range windows the falloff to exactly
@@ -364,6 +371,28 @@ impl Light {
         }
     }
 
+    /// A one-sided disc of `radius` around `centre`, emitting `radiance`
+    /// towards `normal`. Seen through LTC it is the octagon of its area;
+    /// sampled, the rectangle around it, masked. It casts no shadow and is
+    /// never local, but a range bounds it (ADR 0104).
+    pub fn disc(centre: Vec3, normal: Vec3, radius: f32, color: Vec3, radiance: f32) -> Self {
+        assert!(centre.is_finite() && normal.is_finite() && radius.is_finite());
+        assert!(
+            normal.length_squared() > 1e-8 && radius > 0.0,
+            "a disc needs a nonzero normal and radius"
+        );
+        let (u, v) = normal.normalize().any_orthonormal_pair();
+        Light {
+            kind: LightKind::Disc,
+            position_or_direction: centre,
+            area_u: u * radius,
+            area_v: v * radius,
+            color,
+            intensity: radiance,
+            ..Light::DEFAULTS
+        }
+    }
+
     /// The sixteen points used by rectangular lighting and its shadow views.
     pub fn area_sample_positions(&self) -> [Vec3; 16] {
         // Four-point Gauss-Legendre nodes; same order as bindings.wxsl.
@@ -406,16 +435,16 @@ impl Light {
     }
 
     /// Project this layer of Renderer::set_light_cookies through a spot,
-    /// or emit it from a rectangle (u along `area_u`, v down `area_v`) or
-    /// along a tube (u along its axis, the middle row), prefiltered to the
-    /// samples' spacing (ADR 0095).
+    /// or emit it from a rectangle or the square around a disc (u along
+    /// `area_u`, v down `area_v`) or along a tube (u along its axis, the
+    /// middle row), prefiltered to the samples' spacing (ADR 0095).
     pub fn with_cookie(mut self, layer: u32) -> Self {
         assert!(
             matches!(
                 self.kind,
-                LightKind::Spot | LightKind::Rectangle | LightKind::Tube
+                LightKind::Spot | LightKind::Rectangle | LightKind::Tube | LightKind::Disc
             ),
-            "cookies require a spotlight, a rectangle or a tube"
+            "cookies require a spotlight, a rectangle, a tube or a disc"
         );
         self.cookie_layer = Some(layer);
         self
@@ -613,7 +642,7 @@ impl Light {
                     sample.face_views()
                 })
                 .collect(),
-            LightKind::Tube => Vec::new(),
+            LightKind::Tube | LightKind::Disc => Vec::new(),
             LightKind::Directional => {
                 if direction.length_squared() < 1e-6 {
                     return Vec::new();
@@ -817,6 +846,7 @@ impl Light {
                 LightKind::Spot => 3.0,
                 LightKind::Directional => 1.0,
                 LightKind::Tube => 4.0,
+                LightKind::Disc => 5.0,
             },
             color: self.color.to_array(),
             intensity: self.intensity,
@@ -1599,6 +1629,30 @@ mod tests {
     fn a_rectangle_takes_no_source_radius() {
         let _ =
             Light::rectangle(Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::ONE, 1.0).with_source_radius(0.1);
+    }
+
+    #[test]
+    fn a_disc_spans_its_radius_faces_its_normal_and_never_shadows_or_clusters() {
+        let normal = Vec3::new(0.0, -1.0, 1.0);
+        let disc = Light::disc(Vec3::Y, normal, 0.2, Vec3::ONE, 4.0)
+            .with_range(0.5)
+            .casting_shadow(4.0);
+        assert!((disc.area_u.length() - 0.2).abs() < 1e-6);
+        assert!((disc.area_v.length() - 0.2).abs() < 1e-6);
+        assert!(disc.area_u.dot(disc.area_v).abs() < 1e-6);
+        let facing = disc.area_u.cross(disc.area_v).normalize();
+        assert!(facing.dot(normal.normalize()) > 0.9999);
+        assert!(disc.shadow_views(&Camera::default()).is_empty());
+        assert!(!disc.is_local());
+        let uniform = disc.uniform(0, 0);
+        assert_eq!(uniform.kind, 5.0);
+        assert_eq!(uniform.range, 0.5);
+        let env = Environment {
+            lights: vec![disc],
+            ..Environment::default()
+        };
+        assert!(env.shadow_tiles().is_empty());
+        assert_eq!(env.uniform().lights[0].tile_count, 0);
     }
 
     #[test]

@@ -1,11 +1,17 @@
 //! glare_cells — the highlights, one per light (`effect::glare`).
 //!
-//! Each texel of the target looks at the 8×8 texels of the image under it
-//! (the glare's extract), its cell, and keeps the light whose brightest
-//! texel is there: its colour at that peak radiance, and where its hot
-//! core is — the luminance-weighted centre of the texels past half the
-//! peak in the 3×3 cells around, in the image's texels from the cell's
-//! corner, to a sixty-fourth of one. The centre is packed into alpha as
+//! The grid is laid over the glare's extract seen as a 540-line image,
+//! the extract of a 1080-line frame (`grid_image`), so that a cell, and
+//! every neighbourhood below, is the same share of the frame at any size:
+//! at 4K each of its texels is the average of 2×2 of the extract's. The
+//! grid fills the target's top left, and the rest stays dark.
+//!
+//! Each texel of the grid looks at the 8×8 texels of that image under it,
+//! its cell, and keeps the light whose brightest texel is there: its
+//! colour at that peak radiance, and where its hot core is — the
+//! luminance-weighted centre of the texels past half the peak in the 3×3
+//! cells around, in the image's texels from the cell's corner, to a
+//! sixty-fourth of one. The centre is packed into alpha as
 //! `(x + 8) * 2048 + (y + 8)`, each in 64ths (exact in a 32-bit float), so
 //! one texel carries a highlight whole: what the starburst's sprites are
 //! placed from (`glare_starburst.wxsl`).
@@ -25,7 +31,24 @@
 //! car body under the lamps, which fills that much, or the edge of one, a
 //! few.
 
+import package::wxsl::bindings::environment_lut_sampler;
+
 @group(3) @binding(0) var image: texture_2d<f32>;
+
+/// The extract as the grid sees it: as many lines as a 1080-line frame's,
+/// but never more than twice the extract's (the target holds that grid).
+/// Keep in sync with `glare_starburst.wxsl`.
+fn grid_image(extract: vec2f) -> vec2f {
+    return extract / max(extract.y / 540.0, 0.5);
+}
+
+/// The grid's image at texel `at`, sampled from the extract between its
+/// texels (an exact average at a whole ratio); nothing off its edge.
+fn grid_texel(at: vec2i, size: vec2f) -> vec3f {
+    let inside = all(at >= vec2i(0)) && all(vec2f(at) < size);
+    let uv = (vec2f(at) + 0.5) / size;
+    return select(vec3f(0.0), textureSampleLevel(image, environment_lut_sampler, uv, 0.0).rgb, inside);
+}
 
 /// How many times its surroundings the brightest texel must be for the
 /// cell's light to start counting, and to count whole.
@@ -42,7 +65,10 @@ fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 
 @fragment
 fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
-    let top = vec2i(textureDimensions(image)) - vec2i(1);
+    let size = grid_image(vec2f(textureDimensions(image)));
+    if any(floor(position.xy) >= ceil(size / 8.0)) {
+        return vec4f(0.0);
+    }
     let base = vec2i(position.xy) * 8;
     var sum = vec3f(0.0);
     var peak = 0.0;
@@ -55,10 +81,8 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // middle 8×8.
     for (var y = -16; y < 24; y++) {
         for (var x = -16; x < 24; x++) {
-            let at = base + vec2i(x, y);
             // Off the image's edge reads nothing, rather than its edge again.
-            let inside = all(at >= vec2i(0)) && all(at <= top);
-            let color = select(vec3f(0.0), textureLoad(image, clamp(at, vec2i(0), top), 0).rgb, inside);
+            let color = grid_texel(base + vec2i(x, y), size);
             let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
             around += luminance;
             let cell = vec2i(floor(vec2f(f32(x), f32(y)) / 8.0));
@@ -82,9 +106,7 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     var total = 0.0;
     for (var y = -8; y < 16; y++) {
         for (var x = -8; x < 16; x++) {
-            let at = base + vec2i(x, y);
-            let inside = all(at >= vec2i(0)) && all(at <= top);
-            let color = select(vec3f(0.0), textureLoad(image, clamp(at, vec2i(0), top), 0).rgb, inside);
+            let color = grid_texel(base + vec2i(x, y), size);
             let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
             let weight = select(0.0, luminance, luminance >= 0.5 * peak);
             weighted += (vec2f(f32(x), f32(y)) + 0.5) * weight;
