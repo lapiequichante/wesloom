@@ -69,12 +69,15 @@ pub struct ResourcePool {
     layout: Vec<SlotDesc>,
     target: Option<TargetConfig>,
     // Keyed on what the bind group *is* — the shapes, the physical slots
-    // and, when the pass has effect parameters, its label's hash — rather
-    // than on which pass asked for it: two passes that agree on all of it
-    // would build the identical bind group, and a pass index would go
-    // stale the moment the pass list changed.
+    // and, when the pass has effect parameters, the buffer they live in —
+    // rather than on which pass asked for it: two passes that agree on all
+    // of it would build the identical bind group, and a pass index would
+    // go stale the moment the pass list changed. The buffer, not the
+    // pass's label: a pass list re-installed with other values gets a new
+    // buffer under the same label, and a group keyed on the label would
+    // keep binding the old one.
     #[allow(clippy::type_complexity)]
-    bind_groups: HashMap<(Vec<PassBinding>, Vec<usize>, Option<u64>), wgpu::BindGroup>,
+    bind_groups: HashMap<(Vec<PassBinding>, Vec<usize>, Option<wgpu::Buffer>), wgpu::BindGroup>,
     bind_layouts: HashMap<Vec<PassBinding>, wgpu::BindGroupLayout>,
     frame: u64,
     generation: u64,
@@ -661,7 +664,7 @@ impl RenderGraph {
         ),
         RenderError,
     > {
-        let params_key = params.map(|(_, _)| wxsl_core::wxsl::stable_hash(pass.label.as_bytes()));
+        let params_key = params.map(|(buffer, _)| buffer.clone());
         if pass.reads.is_empty() && pass.writes.is_empty() && params.is_none() {
             return Ok((Vec::new(), None, None));
         }
@@ -806,8 +809,8 @@ impl RenderGraph {
         // only built when the pass runs, and a bake runs once or on
         // demand. Every other pass is keyed as before: two passes with
         // the same shapes and the same slots but different parameter
-        // buffers must not share a group, and the label — unique per pass,
-        // the name its author knows — is what tells them apart.
+        // buffers must not share a group, and the buffer is what tells
+        // them apart.
         let slots: Vec<usize> = sources
             .iter()
             .map(|source| source.as_ref().copied().unwrap_or(usize::MAX))

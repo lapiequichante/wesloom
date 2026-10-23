@@ -1,0 +1,50 @@
+//! sun_disc — the sun's disc on the sky (`effect::sun`).
+//!
+//! The environment maps hold the sky's scattered light and no sun: a disc
+//! a few texels across would alias in them and light everything a second
+//! time, over the sun the frame's directional light already is. This pass
+//! draws it where the frame shows sky (depth at the far plane) instead:
+//! `params.direction` is the direction towards it (xyz), `params.radiance`
+//! its linear radiance (rgb, 0 for none), `params.radius` its angular
+//! radius in radians. The limb darkens
+//! towards the edge (the Sun's at visible wavelengths, `1 - 0.6 (1 - μ)`),
+//! and the edge is smoothed over a pixel. The radiance is pre-exposed by
+//! the scene's exposure and environment scale, as the background is, and
+//! added onto the target (an additive pass).
+
+import package::wxsl::bindings::{camera, scene, point_sampler};
+
+@group(3) @binding(0) var depth_image: texture_2d<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(depth_image));
+    let uv = position.xy / size;
+    let ndc = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
+    let far = camera.inverse_view_proj * ndc;
+    let view = normalize(far.xyz / far.w - camera.position);
+    let angle = acos(clamp(dot(view, normalize(params.direction.xyz)), -1.0, 1.0));
+    // Before any branch: a derivative needs its neighbours.
+    let edge = fwidth(angle);
+    let depth = textureSampleLevel(depth_image, point_sampler, uv, 0.0).x;
+    if all(params.radiance.rgb <= vec3f(0.0)) || depth < 1.0 {
+        return vec4f(0.0);
+    }
+    let inside = 1.0 - smoothstep(params.radius - edge, params.radius + edge, angle);
+    if inside <= 0.0 {
+        return vec4f(0.0);
+    }
+    let across = min(angle / params.radius, 1.0);
+    let mu = sqrt(1.0 - across * across);
+    let limb = 1.0 - 0.6 * (1.0 - mu);
+    let radiance = params.radiance.rgb * (limb * inside * scene.exposure * scene.environment_scale);
+    return vec4f(radiance, 0.0);
+}

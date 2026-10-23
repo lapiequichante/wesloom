@@ -49,6 +49,10 @@ const NODES: &[(&str, &str)] = &[
     ),
     ("lamp_lens", include_str!("../shaders/lamp_lens.wxsl")),
     (
+        "headlight_glow",
+        include_str!("../shaders/headlight_glow.wxsl"),
+    ),
+    (
         "car_ground_transfer",
         include_str!("../shaders/car_ground_transfer.wxsl"),
     ),
@@ -70,6 +74,14 @@ pub fn libraries() -> Result<(NodeRegistry, ShaderLibrary), Box<dyn Error>> {
         library.insert(path, *source);
     }
     Ok((registry, library))
+}
+
+/// The node library with the demo's nodes added, for graphs that use
+/// them: the car's headlights.
+pub fn registry() -> NodeRegistry {
+    libraries()
+        .expect("the demo's nodes parse: every frame is built from them")
+        .0
 }
 
 /// A material and its bindings.

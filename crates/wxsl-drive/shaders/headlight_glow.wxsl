@@ -1,0 +1,27 @@
+// Headlight glow
+//
+// A headlight's emission: `glow` at the middle of each of its optics,
+// falling off as a gaussian over `radius` from the nearest one to `rim`
+// of it. A hot spot in each optic outshines its own edge and the body
+// around it many times over, so the glare takes it for a point of light
+// even close up, where the glass covers many pixels.
+//
+// Original implementation.
+
+fn headlight_glow(
+    glow: vec3f,       // The radiance at an optic's middle. @default 1.0, 1.0, 1.0
+    position: vec3f,   // The point, in the object's space.
+    a: vec3f,          // The optics' middles, in the object's space.
+    b: vec3f,
+    c: vec3f,
+    d: vec3f,
+    radius: f32,       // How far from a middle the glow falls to 1/e. @default 1.0
+    rim: f32,          // The share of the glow left far from every middle. @default 0.1
+) -> vec3f {
+    let nearest = min(
+        min(distance(position, a), distance(position, b)),
+        min(distance(position, c), distance(position, d)),
+    );
+    let t = nearest / max(radius, 1e-6);
+    return glow * mix(rim, 1.0, exp(-t * t));
+}

@@ -1,0 +1,28 @@
+//! glare_add — a glare added onto the frame (`effect::glare`).
+//!
+//! `glow`, at any resolution, read bilinear through the frame's linear,
+//! clamped sampler, times `params.tint` and `params.strength`, added onto
+//! `color`. Both are linear radiance: the glare is light, and the display
+//! transform is somebody else's pass (ADR 0039). The target has `color`'s
+//! size.
+
+import package::wxsl::bindings::environment_lut_sampler;
+
+@group(3) @binding(0) var color_image: texture_2d<f32>;
+@group(3) @binding(1) var glow_image: texture_2d<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let color = textureLoad(color_image, vec2i(position.xy), 0);
+    let uv = position.xy / vec2f(textureDimensions(color_image));
+    let glow = textureSampleLevel(glow_image, environment_lut_sampler, uv, 0.0).rgb;
+    return vec4f(color.rgb + glow * params.tint.rgb * params.strength, color.a);
+}

@@ -61,9 +61,11 @@ use wxsl_core::resources::BufferLayout;
 use wxsl_core::wxsl::WxslIdent;
 
 /// Environment conversion and convolution recipes (ADR 0062).
+pub mod glare;
 pub mod ibl;
 pub mod refraction;
 pub mod ssr;
+pub mod sun;
 
 /// Module path the shipped bloom effect's shader is mounted under.
 pub const BLOOM_MODULE: &str = "package::wxsl::bloom";
@@ -217,6 +219,23 @@ pub enum EffectKind {
         vertex_entry: &'static str,
         /// Fragment entry point.
         fragment_entry: &'static str,
+    },
+    /// Sprites: `instances` instances of `vertices` vertices each, with no
+    /// vertex buffer, into the pass's colour attachment like a screen
+    /// effect. The vertex entry places each from `@builtin(instance_index)`
+    /// and `@builtin(vertex_index)` and what it reads of the pass's inputs
+    /// (one per texel of a grid image, say), and moves the ones it has no
+    /// use for off screen; the count is a budget, fixed with the effect,
+    /// so the host needs to know nothing about what it draws.
+    Sprites {
+        /// Vertex entry point.
+        vertex_entry: &'static str,
+        /// Fragment entry point.
+        fragment_entry: &'static str,
+        /// Vertices per instance: 6 for a quad of two triangles.
+        vertices: u32,
+        /// How many instances are drawn.
+        instances: u32,
     },
     /// One compute dispatch. The entry is the module's; the workgroup
     /// count is the effect's own business — it knows its shader's
@@ -1596,6 +1615,14 @@ impl EffectRegistry {
                 refraction::COMPOSE_DEPTH,
                 ssr::SSR,
                 ssr::GLASS,
+                glare::EXTRACT,
+                glare::CELLS,
+                glare::STARBURST,
+                glare::STREAK,
+                glare::GHOSTS,
+                glare::FLARE,
+                glare::ADD,
+                sun::SUN,
             ],
         }
     }
@@ -1869,13 +1896,15 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            32,
+            40,
             "lighting, tonemap, bloom, the separable bloom pair, the bloom \
              pyramid's four passes, the depth-of-field chain's three, the \
              TAA resolve, the motion blur, and the five peel passes \
              `pass.peel` expands into, plus the four environment bake \
              effects and background, plus the five optical effects, plus \
-             the screen-space reflections, opaque and on glass"
+             the screen-space reflections, opaque and on glass, plus the \
+             glare's extract, cells, starburst, streak, ghosts, flare and \
+             add, plus the sun's disc"
         );
 
         let lighting = registry

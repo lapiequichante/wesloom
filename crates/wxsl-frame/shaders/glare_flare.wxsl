@@ -1,0 +1,132 @@
+//! glare_flare — a lens flare from one light whose direction is known,
+//! the sun (`effect::glare`).
+//!
+//! Where the bright-part ghosts (`glare_ghosts.wxsl`) mirror whatever is
+//! bright, this draws a flare's elements procedurally from the light's
+//! place on screen, as a photograph of the sun shows them: ghosts on the
+//! line from the light through the image centre, round or hexagonal (the
+//! iris' shape), each with a brighter rim and its colours fringed apart;
+//! an iridescent ring around the light; and for an anamorphic lens a long
+//! horizontal streak through it. They fade as the light leaves the frame
+//! and as the scene hides it: the depth at the light, over a disc
+//! `params.occluder` of the height across, is read for how much of it is
+//! sky.
+//!
+//! `params.light` is the direction towards the light in xyz and its
+//! strength in w, 0 for none. Ghost `i` sits at `light * scale_i` from
+//! the centre (negative across it) with a radius `size_i` of the height,
+//! the scales in `params.scales_a/b`, the sizes in `params.sizes_a/b`,
+//! a size of 0 for none; `params.hexagon` 1 draws them as hexagons. The
+//! ring is `params.ring` of the height around the light, `params.ring_strength`
+//! strong; the streak `params.streak` strong. All are tinted by
+//! `params.tint` and added onto the target (an additive pass).
+//!
+//! An original implementation; the set of elements follows the ones
+//! Anderson Mancini's "Ultimate Lens Flare" for three.js
+//! (github.com/ektogamat/lensflare-threejs-vanilla) draws, none of whose
+//! code is used.
+
+import package::wxsl::bindings::{camera, point_sampler};
+
+@group(3) @binding(0) var depth_image: texture_2d<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+/// The distance from the centre of a hexagon with flats one apart, over
+/// the half-width: 1 on its edge.
+fn hexagon(p: vec2f) -> f32 {
+    let q = abs(p);
+    return max(q.x * 0.8660254 + q.y * 0.5, q.y);
+}
+
+/// A ghost of radius 1 at distance `d` (in radii) from its centre: soft
+/// inside, brighter towards the rim, gone past it.
+fn ghost(d: f32) -> f32 {
+    let inside = 1.0 - smoothstep(0.85, 1.0, d);
+    return inside * (0.35 + 0.65 * d * d * d * d);
+}
+
+/// How much of the light at `uv` the scene leaves visible: the share of
+/// a disc of taps around it that is sky.
+fn visibility(uv: vec2f, radius: vec2f) -> f32 {
+    var sky = 0.0;
+    for (var i = 0; i < 16; i++) {
+        // A Vogel disc: the golden angle, the square root of the share.
+        let a = f32(i) * 2.3999632;
+        let r = sqrt((f32(i) + 0.5) / 16.0);
+        let at = uv + vec2f(cos(a), sin(a)) * r * radius;
+        let inside = all(at >= vec2f(0.0)) && all(at <= vec2f(1.0));
+        let depth = textureSampleLevel(depth_image, point_sampler, clamp(at, vec2f(0.0), vec2f(1.0)), 0.0).x;
+        sky += select(0.0, 1.0, inside && depth >= 1.0);
+    }
+    return sky / 16.0;
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    if params.light.w <= 0.0 {
+        return vec4f(0.0);
+    }
+    // The light at infinity: its direction through the view and projection.
+    let clip = camera.view_proj * vec4f(params.light.xyz, 0.0);
+    if clip.w <= 0.0 {
+        return vec4f(0.0);
+    }
+    let size = vec2f(textureDimensions(depth_image));
+    let aspect = vec2f(size.x / size.y, 1.0);
+    let ndc = clip.xy / clip.w;
+    let light_uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    // In units of the height, from the image centre.
+    let light = (light_uv - 0.5) * aspect;
+    let p = (position.xy / size - 0.5) * aspect;
+    // Fading out past the frame's edge, gone half a height beyond it.
+    let outside = max(abs(light.x) - aspect.x * 0.5, abs(light.y) - 0.5);
+    let framed = 1.0 - smoothstep(0.0, 0.5, outside);
+    let seen = framed * visibility(light_uv, vec2f(params.occluder * 0.5) / aspect);
+    if seen <= 0.0 {
+        return vec4f(0.0);
+    }
+
+    var sum = vec3f(0.0);
+    let scales = array<f32, 8>(
+        params.scales_a.x, params.scales_a.y, params.scales_a.z, params.scales_a.w,
+        params.scales_b.x, params.scales_b.y, params.scales_b.z, params.scales_b.w,
+    );
+    let sizes = array<f32, 8>(
+        params.sizes_a.x, params.sizes_a.y, params.sizes_a.z, params.sizes_a.w,
+        params.sizes_b.x, params.sizes_b.y, params.sizes_b.z, params.sizes_b.w,
+    );
+    for (var i = 0; i < 8; i++) {
+        let radius = sizes[i];
+        if radius <= 0.0 {
+            continue;
+        }
+        let at = (p - light * scales[i]) * vec2f(params.squeeze, 1.0);
+        // Each channel a little larger than the last, red outside.
+        let fringe = vec3f(1.04, 1.0, 0.96) * radius;
+        let d = select(vec3f(length(at)), vec3f(hexagon(at)), params.hexagon > 0.5) / fringe;
+        let palette = vec3f(0.6) + 0.4 * cos(6.2831853 * (f32(i) * 0.19 + vec3f(0.0, 0.33, 0.67)));
+        // Smaller ghosts are brighter: the same light, a smaller image.
+        let weight = 0.012 / max(radius, 0.01);
+        sum += vec3f(ghost(d.x), ghost(d.y), ghost(d.z)) * palette * weight;
+    }
+    if params.ring > 0.0 {
+        // Each channel's ring a little wider than the last: a spectrum.
+        let away = length(p - light);
+        let rings = (vec3f(away) - params.ring * vec3f(1.03, 1.0, 0.97)) / (params.ring * 0.06);
+        sum += exp(-rings * rings) * params.ring_strength;
+    }
+    if params.streak > 0.0 {
+        let along = abs(p.x - light.x);
+        let across = abs(p.y - light.y);
+        let line = exp(-across / 0.0025) * exp(-along / 0.6);
+        sum += vec3f(0.35, 0.55, 1.0) * line * params.streak;
+    }
+    return vec4f(sum * params.tint.rgb * params.light.w * seen, 0.0);
+}

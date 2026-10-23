@@ -1,0 +1,51 @@
+//! glare_streak — one pass of a blur along one direction (`effect::glare`).
+//!
+//! `params.taps` bilinear taps, `params.step` of the image's height apart
+//! along `params.direction`: both ways from the pixel when `params.sided`
+//! is 0, a centred streak, or only forwards when it is 1, a segment
+//! starting at the pixel. Each tap weighs `exp(-k / params.falloff)`, `k`
+//! taps out, a falloff of 0 weighing them all alike (a box); the weights
+//! sum to one, so a pass moves light and makes none.
+//!
+//! Run a few times along the same direction with the step growing
+//! fourfold each time (Kawase's streak filter, 2003), a centred streak
+//! reaches far with few taps and decays smoothly: a star's spike. Run once
+//! per side of a hexagon, one-sided boxes compose into its rhombi
+//! (`glare::append_hexagon`).
+//!
+//! The target has the image's size; reads go through the frame's linear,
+//! clamped sampler, so taps between texels interpolate and taps off the
+//! edge repeat it.
+
+import package::wxsl::bindings::environment_lut_sampler;
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(image));
+    let uv = position.xy / size;
+    // One step in uv: a fraction of the height, the same in texels both
+    // ways, so the direction keeps its angle on a wide image.
+    let step = normalize(params.direction) * (params.step * size.y) / size;
+    let taps = i32(clamp(params.taps, 1.0, 16.0));
+    // Centred: taps -(n-1)/2 .. (n-1)/2; one-sided: 0 .. n-1.
+    let first = select(-(taps - 1) / 2, 0, params.sided > 0.5);
+    var sum = vec3f(0.0);
+    var total = 0.0;
+    for (var tap = 0; tap < taps; tap++) {
+        let k = f32(first + tap);
+        let weight = select(1.0, exp(-abs(k) / params.falloff), params.falloff > 0.0);
+        sum += textureSampleLevel(image, environment_lut_sampler, uv + step * k, 0.0).rgb * weight;
+        total += weight;
+    }
+    return vec4f(sum / total, 1.0);
+}

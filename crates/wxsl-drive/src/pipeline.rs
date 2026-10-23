@@ -2,11 +2,12 @@
 //! blur and a bloom pyramid composed onto it as nodes, then, on the
 //! compiled pass list, the
 //! sky baked into the environment maps and drawn behind everything, a
-//! height fog lit by that sky, the car's glass, depth of field focused on the car, a colour matrix,
+//! height fog lit by that sky, the car's glass, depth of field focused on the car, the lens'
+//! glare (a star through the highlights and a lens flare, [`HALOS`] and [`FLARES`]), a colour matrix,
 //! chromatic aberration when it is on, the tonemap (one of [`TONEMAPS`]) and FXAA.
 //!
 //! ```text
-//! shadows → prepass → forward ─┬─ background (sky) ─ (ssr) ─ fog ─ glass ─ motion blur ─ bloom ─ dof ─ grade ─ (aberration) ─ tonemap ─ fxaa
+//! shadows → prepass → forward ─┬─ background (sky) ─ (ssr) ─ fog ─ sun ─ glass ─ motion blur ─ bloom ─ dof ─ (glare) ─ grade ─ (aberration) ─ tonemap ─ fxaa
 //!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
@@ -34,6 +35,8 @@
 
 use std::error::Error;
 
+use glam::Vec3;
+
 use wxsl::core::abi::{self, MaterialStage};
 use wxsl::core::graph::{Graph, Node, SocketRef};
 use wxsl::core::node::NodeRegistry;
@@ -41,7 +44,7 @@ use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
 use wxsl::core::Value;
 use wxsl::render::effect::{
-    ibl, refraction, ssr, Downlevel, Effect, EffectInput, EffectInputKind, EffectKind,
+    glare, ibl, refraction, ssr, sun, Downlevel, Effect, EffectInput, EffectInputKind, EffectKind,
     EffectParameter, EffectShader,
 };
 use wxsl::render::pass::{
@@ -86,6 +89,49 @@ const BLOOM: [(&str, &str); 4] = [
     ("knee", "2"),
     ("strength", "0.07"),
 ];
+
+/// What the lens adds to the highlights: the bloom's glow or not, and a
+/// star and a lens flare through its highlights (`effect::glare`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Glare {
+    pub bloom: bool,
+    pub star: Option<glare::Star>,
+    pub flare: Option<glare::Flare>,
+}
+
+/// The `halo` slider's steps: (name, the bloom's glow, a star).
+pub const HALOS: [(&str, bool, Option<glare::Star>); 6] = [
+    ("none", false, None),
+    ("bloom", true, None),
+    ("cross", true, Some(glare::Star::Cross)),
+    ("starburst", true, Some(glare::Star::Starburst)),
+    ("hexagonal", true, Some(glare::Star::Hexagonal)),
+    ("anamorphic", true, Some(glare::Star::Anamorphic)),
+];
+
+/// The `lens flare` slider's steps.
+pub const FLARES: [(&str, Option<glare::Flare>); 4] = [
+    ("off", None),
+    ("ghosts", Some(glare::Flare::Ghosts)),
+    ("aperture", Some(glare::Flare::Aperture)),
+    ("anamorphic", Some(glare::Flare::Anamorphic)),
+];
+
+/// The bloom document node's label, and the glare's passes'.
+const BLOOM_LABEL: &str = "drive bloom";
+const GLARE: &str = "drive glare";
+/// What glares: only what is brighter than this, the lamps, the
+/// headlights, the sun and its glints, not a lit wall.
+pub const GLARE_THRESHOLD: f32 = 6.0;
+/// The sun's disc pass, and the disc: twice the Sun's own size, so it
+/// reads as a disc rather than a point, and far dimmer than the Sun's
+/// irradiance over it would make it, so it glares without whiting out
+/// the frame.
+const SUN: &str = "drive sun";
+const SUN_RADIUS: f32 = sun::SUN_RADIUS * 2.0;
+const SUN_GAIN: f32 = 150.0;
+/// The sun's flare's strength per unit of its colour.
+const FLARE_GAIN: f32 = 0.6;
 
 /// `wxsl.motion_blur`'s gather, refusing taps that did not move with the
 /// pixel: the car the camera follows leaves no trail on the road.
@@ -156,7 +202,7 @@ const ADD: BlendState = BlendState {
 };
 
 /// The pass that adds the far lamps' halos to the frame.
-const HALOS: &str = "drive lamp halos";
+const LAMP_HALOS: &str = "drive lamp halos";
 
 /// The draws tagged `tag`, the neons' or the halos', added over `color`,
 /// depth-tested against `depth`, both faces: a halo's sprite faces the
@@ -387,6 +433,14 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ABERRATION_EFFECT,
         ssr::SSR,
         ssr::GLASS,
+        glare::EXTRACT,
+        glare::CELLS,
+        glare::STARBURST,
+        glare::STREAK,
+        glare::GHOSTS,
+        glare::FLARE,
+        glare::ADD,
+        sun::SUN,
     ] {
         renderer.add_effect(effect);
     }
@@ -473,7 +527,7 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
             .with_setting(doc::SETTING_PRECISION, "hdr"),
     );
     let bloom = BLOOM.iter().fold(
-        Node::new(doc::PASS_BLOOM).with_label("drive bloom"),
+        Node::new(doc::PASS_BLOOM).with_label(BLOOM_LABEL),
         |node, (name, value)| node.with_setting(*name, *value),
     );
     let bloom = document.add(bloom);
@@ -499,11 +553,13 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
 /// Build the frame, forward or `deferred`, with or without `fxaa`, the
 /// chromatic `aberration` pass and the screen-space reflections (`ssr`, at
 /// that quality),
+/// the lens' `glare`,
 /// displayed through [`TONEMAPS`]`[tonemap]`, and give it to `renderer`. With `refractive`, the car's glass leaves the opaque
 /// passes for the refraction tier (ADR 0067). `quality` scales the car's
 /// probe and the shadow atlas from their defaults (0.5, 1 or 2); at 0 the
 /// car has no probe and reflects the sky's maps, and the caller turns the
 /// shadows off.
+#[allow(clippy::too_many_arguments)]
 pub fn install(
     renderer: &mut Renderer,
     refractive: bool,
@@ -511,6 +567,7 @@ pub fn install(
     fxaa: bool,
     aberration: bool,
     ssr: Option<ssr::Quality>,
+    glare: Glare,
     tonemap: usize,
     quality: f32,
 ) -> Result<(), Box<dyn Error>> {
@@ -643,7 +700,7 @@ pub fn install(
         .with_environment(probe.diffuse, probe.specular),
     );
     graph.pass(add_pass(NEON.into(), NEON_TAG, shaded, depth));
-    graph.pass(add_pass(HALOS.into(), HALO_TAG, shaded, depth));
+    graph.pass(add_pass(LAMP_HALOS.into(), HALO_TAG, shaded, depth));
     if !deferred {
         // The world, then the car on the same targets with the probe.
         let forward = graph
@@ -685,6 +742,8 @@ pub fn install(
     // The fog over everything opaque, before the glass refracts it.
     let mut background = graph.resource(hdr(FOG));
     graph.pass(fog_pass(FOG, background, [opaque, depth, maps.radiance]));
+    // The sun's disc on the fogged sky, before the glass refracts it.
+    sun::append(&mut graph, background, depth, SUN_RADIUS, SUN);
     if refractive {
         let optics = refraction::append_optics(
             &mut graph,
@@ -737,6 +796,30 @@ pub fn install(
             ])
             .with_parameter("max_coc", Value::F32(MAX_COC)),
     );
+    // The lens' glare after the depth of field: it is the lens', not the
+    // scene's, so nothing blurs it.
+    if !glare.bloom {
+        let combine = format!("{BLOOM_LABEL} combine");
+        let index = graph
+            .passes()
+            .iter()
+            .position(|pass| pass.label == combine)
+            .ok_or("the frame has no bloom")?;
+        if let Some(pass) = graph.pass_mut(index) {
+            pass.parameters.insert("strength".into(), Value::F32(0.0));
+        }
+    }
+    let focused = glare::append(
+        &mut graph,
+        focused,
+        depth,
+        glare::Lens {
+            star: glare.star,
+            flare: glare.flare,
+            threshold: GLARE_THRESHOLD,
+        },
+        GLARE,
+    );
     // The colour matrix, the last change to the radiance.
     let graded = graph.resource(hdr("drive graded"));
     let [red, green, blue] = grade_rows(SATURATION);
@@ -783,7 +866,7 @@ pub fn install(
         let Some(pass) = graph.pass_mut(index) else {
             continue;
         };
-        if [GROUND, NEON, HALOS].contains(&pass.label.as_str()) {
+        if [GROUND, NEON, LAMP_HALOS].contains(&pass.label.as_str()) {
             continue;
         }
         if let PassKind::Geometry {
@@ -857,6 +940,59 @@ fn fog_pass(label: &str, into: ResourceId, [color, depth, radiance]: [ResourceId
         ])
 }
 
+/// Put the sun's disc, and the light its lens flare is drawn from, at
+/// `direction` (towards it) with `color` (its light, 0 at night).
+pub fn set_sun(
+    renderer: &mut Renderer,
+    direction: Vec3,
+    color: Vec3,
+) -> Result<(), Box<dyn Error>> {
+    let towards = Value::Vec4([direction.x, direction.y, direction.z, 0.0]);
+    let radiance = color * SUN_GAIN;
+    renderer.set_pass_param(SUN, "direction", towards)?;
+    renderer.set_pass_param(
+        SUN,
+        "radiance",
+        Value::Vec4([radiance.x, radiance.y, radiance.z, 0.0]),
+    )?;
+    let flare = glare::light_label(&format!("{GLARE} flare"));
+    if renderer
+        .render_graph()
+        .passes()
+        .iter()
+        .any(|pass| pass.label == flare)
+    {
+        let strength = color.length() * FLARE_GAIN;
+        renderer.set_pass_param(
+            &flare,
+            "light",
+            Value::Vec4([direction.x, direction.y, direction.z, strength]),
+        )?;
+    }
+    Ok(())
+}
+
+/// Make `star`'s rays reach `length` times as far as it sets them to, and
+/// add `opacity` times as strongly; nothing for no star or one without
+/// rays.
+pub fn set_rays(
+    renderer: &mut Renderer,
+    star: Option<glare::Star>,
+    length: f32,
+    opacity: f32,
+) -> Result<(), Box<dyn Error>> {
+    let Some(star) = star else {
+        return Ok(());
+    };
+    let rays = format!("{} rays", glare::star_label(GLARE));
+    for (name, scale) in [("length", length), ("strength", opacity)] {
+        if let Some(value) = star.ray_parameter(name) {
+            renderer.set_pass_param(&rays, name, Value::F32(value * scale))?;
+        }
+    }
+    Ok(())
+}
+
 /// Set the fog's `density` per metre at the ground, on the frame and on
 /// each of the probe's faces.
 pub fn set_fog(renderer: &mut Renderer, density: f32) -> Result<(), Box<dyn Error>> {
@@ -897,6 +1033,61 @@ pub fn set_lens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the `halo` slider does: each step re-installs the frame, and
+    /// the renderer must then hold the new step's values, not the ones
+    /// the passes it replaced had.
+    #[test]
+    fn each_halo_step_installs_its_own_values() {
+        use glare::Star;
+        let Ok(gpu) = pollster::block_on(wxsl::render::gpu::GpuContext::headless()) else {
+            return;
+        };
+        let (_, library) = crate::world::libraries().unwrap();
+        let target = wxsl::render::TargetConfig::new(64, 64, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut renderer = Renderer::new(&gpu.device, library, target).unwrap();
+        add_effects(&mut renderer).unwrap();
+        let rays = format!("{} rays", glare::star_label(GLARE));
+        let combine = format!("{BLOOM_LABEL} combine");
+        let mut step = |bloom: bool, star: Option<Star>| {
+            let glare = Glare {
+                bloom,
+                star,
+                flare: None,
+            };
+            install(
+                &mut renderer,
+                false,
+                false,
+                true,
+                false,
+                None,
+                glare,
+                0,
+                1.0,
+            )
+            .unwrap();
+            (
+                renderer.pass_param(&rays, "rays"),
+                renderer.pass_param(&combine, "strength"),
+            )
+        };
+        let bloom = Some(Value::F32(0.07));
+        assert_eq!(
+            step(false, Some(Star::Hexagonal)),
+            (Some(Value::F32(6.0)), Some(Value::F32(0.0)))
+        );
+        assert_eq!(
+            step(false, Some(Star::Starburst)),
+            (Some(Value::F32(128.0)), Some(Value::F32(0.0)))
+        );
+        assert_eq!(step(true, None), (None, bloom));
+        assert_eq!(step(false, None), (None, Some(Value::F32(0.0))));
+        assert_eq!(
+            step(false, Some(Star::Cross)),
+            (Some(Value::F32(4.0)), Some(Value::F32(0.0)))
+        );
+    }
 
     #[test]
     fn every_other_tonemap_is_the_stock_graph_with_its_own_curve() {

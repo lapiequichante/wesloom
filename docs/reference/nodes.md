@@ -3,7 +3,7 @@
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
 - [Shader nodes](#shader-nodes) (196)
-- [Pipeline nodes](#pipeline-nodes) (32)
+- [Pipeline nodes](#pipeline-nodes) (36)
 
 ## Shader nodes
 
@@ -2014,6 +2014,38 @@ Camera rays into radiance cube on untouched opaque depth, before tonemap Reads: 
 - setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
 - only in document graphs
 
+#### `pass.screen.wxsl.glare_add` · glare add
+
+Add a glare, at any resolution, tinted, onto the frame. Reads: `color` (The frame, as linear radiance.), `glow` (The glare to add, as linear radiance.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `color: color_target`: The frame, as linear radiance.
+- in `glow: color_target`: The glare to add, as linear radiance.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.glare_flare` · lens flare
+
+Draw a known light's lens flare from its place on screen, hidden as the scene hides it. Reads: `depth` (The opaque depth, for how much of the light is hidden.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `depth: depth_target`: The opaque depth, for how much of the light is hidden.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.glare_starburst` · starburst
+
+Draw a starburst of thin rays through each highlight, as sprites. Reads: `cells` (The highlights per cell, from the glare cells pass.), `extract` (The glare's extract the cells were gathered from.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `cells: color_target`: The highlights per cell, from the glare cells pass.
+- in `extract: color_target`: The glare's extract the cells were gathered from.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
 #### `pass.screen.wxsl.motion_blur` · motion blur
 
 Smear the frame along its own velocity buffer. Reads: `color` (The frame, as linear radiance.), `velocity` (The velocity stage's screen motion, uv per frame.).
@@ -2125,6 +2157,16 @@ Screen-space reflections on the nearest glass, in place of the radiance cube's w
 - in `environment: color_target`: The radiance cube the composition reflected.
 - in `normal_layers: color_target`: The refraction's peeled normals, depth in w.
 - in `optical_layers: color_target`: The refraction's peeled optical materials.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.sun_disc` · sun disc
+
+Draw the sun's disc, limb-darkened, where the frame shows sky. Reads: `depth` (The opaque depth: the sky is where it is the far plane.).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `depth: depth_target`: The opaque depth: the sky is where it is the far plane.
 - out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
 - setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
 - only in document graphs

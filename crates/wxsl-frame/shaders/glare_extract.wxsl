@@ -1,0 +1,43 @@
+//! glare_extract — the highlights a glare is drawn from (`effect::glare`).
+//!
+//! The part of the image brighter than `params.threshold`, averaged 2×2
+//! into a target half the image's size. Only the excess passes, so a
+//! higher threshold dims every highlight's glare as well as dropping the
+//! faint ones; a knee half the threshold wide eases it in, without a
+//! crease where it starts (the curve Unity's and Unreal's bloom use). A
+//! plain average, not the bloom extract's Karis average: that one keeps a
+//! single bright texel from outweighing its neighbourhood, which is right
+//! for a soft glow and wrong here, where the small, intense highlights
+//! (a lamp, a glint of the sun) are the ones that make spikes and ghosts.
+//! Whole texels are loaded, so nothing between them is skipped and a
+//! highlight a pixel wide neither drops out nor flickers.
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+/// The part of the texel at `at` past the threshold: its excess over it,
+/// eased in over a knee half the threshold wide.
+fn bright(at: vec2i, top: vec2i) -> vec3f {
+    let color = textureLoad(image, clamp(at, vec2i(0), top), 0).rgb;
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    let knee = max(params.threshold * 0.5, 1e-6);
+    let soft = clamp(luminance - params.threshold + knee, 0.0, 2.0 * knee);
+    let excess = max(soft * soft / (4.0 * knee), luminance - params.threshold);
+    return color * (excess / max(luminance, 1e-6));
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let top = vec2i(textureDimensions(image)) - vec2i(1);
+    let base = vec2i(position.xy) * 2;
+    let sum = bright(base, top) + bright(base + vec2i(1, 0), top)
+        + bright(base + vec2i(0, 1), top) + bright(base + vec2i(1, 1), top);
+    return vec4f(sum * 0.25, 1.0);
+}

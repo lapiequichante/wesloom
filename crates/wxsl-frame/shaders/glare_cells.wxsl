@@ -1,0 +1,100 @@
+//! glare_cells — the highlights, one per light (`effect::glare`).
+//!
+//! Each texel of the target looks at the 8×8 texels of the image under it
+//! (the glare's extract), its cell, and keeps the light whose brightest
+//! texel is there: its colour at that peak radiance, and where its hot
+//! core is — the luminance-weighted centre of the texels past half the
+//! peak in the 3×3 cells around, in the image's texels from the cell's
+//! corner, to a sixty-fourth of one. The centre is packed into alpha as
+//! `(x + 8) * 2048 + (y + 8)`, each in 64ths (exact in a 32-bit float), so
+//! one texel carries a highlight whole: what the starburst's sprites are
+//! placed from (`glare_starburst.wxsl`).
+//!
+//! One light, one star: a light spanning several cells keeps only the
+//! cell holding its peak, the others of the 3×3 around giving way (a tie
+//! goes to the first in reading order). And the peak, not the sum: a lamp
+//! far away and a headlight close by, as bright, make the same star,
+//! however many pixels each covers.
+//!
+//! Only a point of light makes a starburst: a lit surface, however
+//! bright, spreads its rays over itself, and they are lost in it. So the
+//! cell's light counts by how much its brightest texel outshines the 5×5
+//! cells around it on average: not at all up to `POINT_FROM` times, all of
+//! it from `POINT_TO` times. A lamp in the dark is hundreds of times its
+//! surroundings, the sun's disc (a cell or two across) twenty and more; a
+//! car body under the lamps, which fills that much, or the edge of one, a
+//! few.
+
+@group(3) @binding(0) var image: texture_2d<f32>;
+
+/// How many times its surroundings the brightest texel must be for the
+/// cell's light to start counting, and to count whole.
+const POINT_FROM: f32 = 4.0;
+const POINT_TO: f32 = 16.0;
+
+@vertex
+fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let top = vec2i(textureDimensions(image)) - vec2i(1);
+    let base = vec2i(position.xy) * 8;
+    var sum = vec3f(0.0);
+    var peak = 0.0;
+    var around = 0.0;
+    // The brightest texel of the 3×3 cells around, before this cell in
+    // reading order and after it.
+    var before = 0.0;
+    var after = 0.0;
+    // The 5×5 cells around this one; this one's own texels are the
+    // middle 8×8.
+    for (var y = -16; y < 24; y++) {
+        for (var x = -16; x < 24; x++) {
+            let at = base + vec2i(x, y);
+            // Off the image's edge reads nothing, rather than its edge again.
+            let inside = all(at >= vec2i(0)) && all(at <= top);
+            let color = select(vec3f(0.0), textureLoad(image, clamp(at, vec2i(0), top), 0).rgb, inside);
+            let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+            around += luminance;
+            let cell = vec2i(floor(vec2f(f32(x), f32(y)) / 8.0));
+            if all(cell == vec2i(0)) {
+                sum += color;
+                peak = max(peak, luminance);
+            } else if all(abs(cell) <= vec2i(1)) {
+                if cell.y < 0 || (cell.y == 0 && cell.x < 0) {
+                    before = max(before, luminance);
+                } else {
+                    after = max(after, luminance);
+                }
+            }
+        }
+    }
+    if peak <= before || peak < after {
+        return vec4f(0.0, 0.0, 0.0, 8.0 * 64.0 * 2048.0 + 8.0 * 64.0);
+    }
+    // The hot core's centre, over the 3×3 cells.
+    var weighted = vec2f(0.0);
+    var total = 0.0;
+    for (var y = -8; y < 16; y++) {
+        for (var x = -8; x < 16; x++) {
+            let at = base + vec2i(x, y);
+            let inside = all(at >= vec2i(0)) && all(at <= top);
+            let color = select(vec3f(0.0), textureLoad(image, clamp(at, vec2i(0), top), 0).rgb, inside);
+            let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+            let weight = select(0.0, luminance, luminance >= 0.5 * peak);
+            weighted += (vec2f(f32(x), f32(y)) + 0.5) * weight;
+            total += weight;
+        }
+    }
+    let centre = weighted / max(total, 1e-12);
+    let packed = round((centre.x + 8.0) * 64.0) * 2048.0 + round((centre.y + 8.0) * 64.0);
+    let contrast = peak / max(around / 1600.0, 1e-6);
+    let light = dot(sum, vec3f(0.2126, 0.7152, 0.0722));
+    let color = sum * (peak / max(light, 1e-12));
+    return vec4f(color * smoothstep(POINT_FROM, POINT_TO, contrast), packed);
+}

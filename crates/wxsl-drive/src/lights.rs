@@ -48,6 +48,10 @@ const LAMP_CONE: f32 = 72.0 * std::f32::consts::PI / 180.0;
 const HEADLIGHT_INTENSITY: f32 = 4500.0;
 const HEADLIGHT_RANGE: f32 = 160.0;
 const HEADLIGHT_COLOR: Vec3 = Vec3::new(0.92, 0.97, 1.0);
+/// An optic's own light inside its housing, and its reach: faint, and so
+/// short that only the housing and the body around it are inside it.
+const OPTIC_INTENSITY: f32 = 0.1;
+const OPTIC_RANGE: f32 = 0.25;
 /// A tail light's peak intensity, its colour and its reach: barely a
 /// glow on the road behind.
 const TAIL_INTENSITY: f32 = 0.35;
@@ -169,6 +173,9 @@ pub fn cookies(gpu: &GpuContext) -> Result<wgpu::TextureView, Box<dyn Error>> {
 pub struct CarLamps {
     /// The two headlights, left then right.
     pub head: [Vec3; 2],
+    /// The headlights' optics, inside their housings, when the car has
+    /// headlights of its own.
+    pub optics: Option<[Vec3; 4]>,
     /// The two tail lights.
     pub tail: [Vec3; 2],
     /// How bright the tail lights are: 1 at night, more braking.
@@ -253,9 +260,6 @@ pub fn lights(
         .with_profile(HEADLIGHT_LAYER)
         .with_range(HEADLIGHT_RANGE)
         .casting_shadow(1.0)
-        // The shadow starts at the housing's back: the car's body around
-        // the bulb, behind it, does not shadow its own beam.
-        .with_shadow_near(crate::car::BULB_SETBACK * 2.)
         .with_source_radius(0.04)
         .with_normal_bias(0.04)
         // The car and the deck, drawn once in the car's frame (ADR 0101):
@@ -265,6 +269,17 @@ pub fn lights(
         .with_static_shadow(car);
         headlight.shadow_distance = HEADLIGHT_RANGE;
         lights.push(headlight);
+    }
+    // The optics, each lighting its housing from within, unshadowed.
+    for optic in car_lamps.optics.into_iter().flatten() {
+        lights.push(
+            Light::point(
+                car.transform_point3(optic),
+                HEADLIGHT_COLOR,
+                OPTIC_INTENSITY * day.lights_on,
+            )
+            .with_range(OPTIC_RANGE),
+        );
     }
 
     // The tail lights: a faint red wash on the road just behind, from
@@ -378,6 +393,7 @@ mod tests {
         let car = CarLamps {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+            optics: None,
             tail_glow: 1.0,
         };
         let eye = lamps[0].foot;
@@ -426,6 +442,7 @@ mod tests {
         let car_lamps = CarLamps {
             head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
             tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+            optics: None,
             tail_glow: 1.0,
         };
         let night = DayLight::at(23.0);
@@ -462,6 +479,7 @@ mod tests {
         let car = CarLamps {
             head: [Vec3::ZERO; 2],
             tail: [Vec3::ZERO; 2],
+            optics: None,
             tail_glow: 1.0,
         };
         let head = lamps[1].heads[0];

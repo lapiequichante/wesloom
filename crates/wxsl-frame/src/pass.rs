@@ -367,6 +367,21 @@ pub const PREMULTIPLIED_OVER: BlendState = BlendState {
     },
 };
 
+/// Additive: `dst + src`, colour and alpha alike — light added onto
+/// light, as a glare is.
+pub const ADDITIVE: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+};
+
 /// Per-channel maximum. Factors are `One`: that is what a max blend
 /// requires, and what `FLOAT32_BLENDABLE` is asked for.
 pub const MAX_BLEND: BlendState = BlendState {

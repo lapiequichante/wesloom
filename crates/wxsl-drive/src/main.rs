@@ -40,6 +40,13 @@
 //! `reflections` slider (or `--ssr coarse|medium|fine`) adds screen-space
 //! reflections, the finer the costlier but the thinner what they catch
 //! (a wiper), the forward prepass then writing a G-buffer for them. The
+//! `halo` slider (or `--halo NAME`) picks what the lens draws around the
+//! highlights: nothing, the bloom's glow, or the glow and a star's spikes
+//! (cross, starburst, hexagonal, anamorphic); the `lens flare` slider (or
+//! `--flare NAME`) adds a flare's ghosts (ghosts, aperture, anamorphic),
+//! and the sun's own flare while it is in view; the `ray length` and
+//! `ray opacity` sliders (or `--ray-length X`, `--ray-opacity X`) scale
+//! how far a star's rays reach and how strongly they add. The
 //! `quality` slider (or `--quality x0|x0.5|x1|x2`) scales the car's probe
 //! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
 //! then reflecting the sky alone. The
@@ -95,7 +102,7 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--quality x0|x0.5|x1|x2]
+      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--flare NAME] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
@@ -153,6 +160,19 @@ const SSR_QUALITIES: [(&str, Quality); 3] = [
     ("medium", Quality::Medium),
     ("fine", Quality::Fine),
 ];
+/// The lens' glare: [`pipeline::HALOS`] and [`pipeline::FLARES`].
+const HALO: &str = "halo";
+/// The glare the frame is first installed with: the bloom alone.
+const DEFAULT_GLARE: pipeline::Glare = pipeline::Glare {
+    bloom: true,
+    star: None,
+    flare: None,
+};
+const FLARE: &str = "lens flare";
+/// How far a star's rays reach, and how strongly they add, times what
+/// the star sets.
+const RAY_LENGTH: &str = "ray length";
+const RAY_OPACITY: &str = "ray opacity";
 const QUALITY: &str = "quality";
 /// The `quality` slider's steps: the probe's and the shadow atlas's
 /// scale, 0 turning both off.
@@ -178,6 +198,13 @@ fn ssr_quality(value: f32) -> Option<(&'static str, Quality)> {
     (value.round() as usize)
         .checked_sub(1)
         .and_then(|index| SSR_QUALITIES.get(index).copied())
+}
+
+/// The lens' glare the `halo` and `lens flare` sliders pick.
+fn glare(panel: &Panel) -> pipeline::Glare {
+    let (_, bloom, star) = pipeline::HALOS[panel.value(HALO).round() as usize];
+    let (_, flare) = pipeline::FLARES[panel.value(FLARE).round() as usize];
+    pipeline::Glare { bloom, star, flare }
 }
 
 /// The debug view the `view` slider's `value` picks, or `None` to shade.
@@ -234,6 +261,13 @@ struct Options {
     /// The `reflections` slider's start: 0 off, then one per
     /// [`SSR_QUALITIES`].
     ssr: f32,
+    /// The `halo` and `lens flare` sliders' starts, indices into
+    /// [`pipeline::HALOS`] and [`pipeline::FLARES`].
+    halo: f32,
+    flare: f32,
+    /// The `ray length` and `ray opacity` sliders' starts.
+    ray_length: f32,
+    ray_opacity: f32,
     /// The `quality` slider's start, an index into [`QUALITIES`].
     quality: f32,
     screenshot: Option<PathBuf>,
@@ -275,7 +309,11 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         profile: false,
         soft_shadows: true,
         no_fxaa: true,
-        ssr: 0.0,
+        ssr: 3.0,
+        halo: 1.0,
+        flare: 0.0,
+        ray_length: 1.0,
+        ray_opacity: 1.0,
         quality: 3.0,
         screenshot: None,
         ui: false,
@@ -369,6 +407,25 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     None => return Err("--ssr is one of off, coarse, medium, fine".into()),
                 };
             }
+            "--halo" => {
+                let name = value()?;
+                options.halo = pipeline::HALOS
+                    .iter()
+                    .position(|(halo, ..)| *halo == name)
+                    .ok_or(
+                        "--halo is one of none, bloom, cross, starburst, hexagonal, anamorphic",
+                    )? as f32;
+            }
+            "--flare" => {
+                let name = value()?;
+                options.flare = pipeline::FLARES
+                    .iter()
+                    .position(|(flare, _)| *flare == name)
+                    .ok_or("--flare is one of off, ghosts, aperture, anamorphic")?
+                    as f32;
+            }
+            "--ray-length" => options.ray_length = value()?.parse()?,
+            "--ray-opacity" => options.ray_opacity = value()?.parse()?,
             "--quality" => {
                 let name = value()?;
                 options.quality = QUALITIES
@@ -501,6 +558,26 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
                 .to_string()
         }),
         Slider::new(
+            HALO,
+            0.0,
+            (pipeline::HALOS.len() - 1) as f32,
+            options.halo,
+            |value| pipeline::HALOS[value.round() as usize].0.to_string(),
+        ),
+        Slider::new(
+            FLARE,
+            0.0,
+            (pipeline::FLARES.len() - 1) as f32,
+            options.flare,
+            |value| pipeline::FLARES[value.round() as usize].0.to_string(),
+        ),
+        Slider::new(RAY_LENGTH, 0.25, 2.0, options.ray_length, |value| {
+            format!("×{value:.2}")
+        }),
+        Slider::new(RAY_OPACITY, 0.0, 2.0, options.ray_opacity, |value| {
+            format!("×{value:.2}")
+        }),
+        Slider::new(
             QUALITY,
             0.0,
             (QUALITIES.len() - 1) as f32,
@@ -555,6 +632,8 @@ struct Drive {
     aberration: bool,
     /// The screen-space reflections' quality the frame installed has.
     ssr: Option<Quality>,
+    /// The lens' glare the frame installed has.
+    glare: pipeline::Glare,
     /// The tonemap the frame installed ends in.
     tonemap: usize,
     /// The probe and shadow scale the frame installed has.
@@ -582,7 +661,17 @@ impl Drive {
             car,
             shadow_car,
             |renderer, refractive| {
-                pipeline::install(renderer, refractive, false, true, false, None, 0, 1.0)
+                pipeline::install(
+                    renderer,
+                    refractive,
+                    false,
+                    true,
+                    false,
+                    None,
+                    DEFAULT_GLARE,
+                    0,
+                    1.0,
+                )
             },
         )?;
         let world = World::new(gpu, &mut renderer, &registry)?;
@@ -622,6 +711,7 @@ impl Drive {
             fxaa: true,
             aberration: false,
             ssr: None,
+            glare: DEFAULT_GLARE,
             tonemap: 0,
             quality: 1.0,
         })
@@ -702,11 +792,13 @@ impl Drive {
         let ssr = ssr_quality(panel.value(SSR)).map(|(_, quality)| quality);
         let tonemap = panel.value(TONEMAP).round() as usize;
         let quality = QUALITIES[panel.value(QUALITY).round() as usize];
-        if (fxaa, aberration, ssr, tonemap, quality)
+        let glare = glare(panel);
+        if (fxaa, aberration, ssr, glare, tonemap, quality)
             != (
                 self.fxaa,
                 self.aberration,
                 self.ssr,
+                self.glare,
                 self.tonemap,
                 self.quality,
             )
@@ -718,12 +810,14 @@ impl Drive {
                 fxaa,
                 aberration,
                 ssr,
+                glare,
                 tonemap,
                 quality,
             )?;
             self.fxaa = fxaa;
             self.aberration = aberration;
             self.ssr = ssr;
+            self.glare = glare;
             self.tonemap = tonemap;
             self.quality = quality;
             // The new frame's sky and environment maps start unbaked.
@@ -852,6 +946,19 @@ impl Drive {
             panel.value(APERTURE),
         )?;
         pipeline::set_fog(&mut self.renderer, panel.value(FOG) * FOG_DENSITY)?;
+        // The sun's disc and its flare, while it is up.
+        let sun = if self.day.sun_up() {
+            self.day.sun_color
+        } else {
+            Vec3::ZERO
+        };
+        pipeline::set_sun(&mut self.renderer, self.day.sun, sun)?;
+        pipeline::set_rays(
+            &mut self.renderer,
+            self.glare.star,
+            panel.value(RAY_LENGTH),
+            panel.value(RAY_OPACITY),
+        )?;
         self.renderer
             .set_environment_scale(panel.value(ENVIRONMENT).exp2());
         let rows = pipeline::grade_rows(panel.value(SATURATION));

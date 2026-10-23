@@ -164,6 +164,8 @@ pub struct Renderer {
 /// values are synced where the pass list lands and no device is there.
 struct PassParamBlock {
     layout: BufferLayout,
+    /// The values the pass list authored, which `data` started from.
+    authored: Vec<u8>,
     data: Vec<u8>,
     buffer: Option<wgpu::Buffer>,
     dirty: bool,
@@ -577,8 +579,10 @@ impl Renderer {
     /// declared defaults — a pipeline renders as authored before the
     /// application has set anything, which is the material parameters'
     /// rule again. Re-created only when the declaration's *layout*
-    /// changes, so a re-registered effect that kept its knobs keeps its
-    /// values; a block whose pass is gone is dropped.
+    /// changes or the pass list authors other values for the pass, so a
+    /// re-registered effect that kept its knobs, or a pass list re-applied
+    /// unchanged, keeps the values set since, while one that asks for new
+    /// values gets them; a block whose pass is gone is dropped.
     ///
     /// Device-free on purpose: values are host data, and keeping this off
     /// the device lets it run where the pass list lands rather than where
@@ -599,21 +603,21 @@ impl Renderer {
                 continue;
             }
             let layout = known.param_layout();
-            let stale = self
-                .pass_params
-                .get(&pass.label)
-                .is_none_or(|existing| existing.layout.signature() != layout.signature());
+            // Invalid authored values are reported before recording by
+            // set_graph/compile_frame, also after effect replacement.
+            let authored = known
+                .initial_parameters(&pass.parameters)
+                .unwrap_or_else(|_| known.initial_parameters(&Default::default()).unwrap());
+            let stale = self.pass_params.get(&pass.label).is_none_or(|existing| {
+                existing.layout.signature() != layout.signature() || existing.authored != authored
+            });
             if stale {
-                // Invalid authored values are reported before recording by
-                // set_graph/compile_frame, also after effect replacement.
-                let data = known
-                    .initial_parameters(&pass.parameters)
-                    .unwrap_or_else(|_| known.initial_parameters(&Default::default()).unwrap());
                 self.pass_params.insert(
                     pass.label.clone(),
                     PassParamBlock {
                         layout,
-                        data,
+                        data: authored.clone(),
+                        authored,
                         buffer: None,
                         dirty: true,
                     },
@@ -2150,14 +2154,24 @@ fn record_pass(
                     .ok_or_else(|| RenderError::UnknownEffect {
                         effect: effect.clone(),
                     })?;
-            let EffectKind::Screen {
-                vertex_entry,
-                fragment_entry,
-            } = known.kind
-            else {
-                return Err(RenderError::UnknownEffect {
-                    effect: effect.clone(),
-                });
+            // A fullscreen triangle, from the vertex index, or the
+            // sprites' budget.
+            let (vertex_entry, fragment_entry, vertices, instances) = match known.kind {
+                EffectKind::Screen {
+                    vertex_entry,
+                    fragment_entry,
+                } => (vertex_entry, fragment_entry, 3, 1),
+                EffectKind::Sprites {
+                    vertex_entry,
+                    fragment_entry,
+                    vertices,
+                    instances,
+                } => (vertex_entry, fragment_entry, vertices, instances),
+                EffectKind::Compute { .. } => {
+                    return Err(RenderError::UnknownEffect {
+                        effect: effect.clone(),
+                    })
+                }
             };
             let pipeline = pipelines.screen(
                 device,
@@ -2179,8 +2193,7 @@ fn record_pass(
             if let Some(group) = pass.pass_bind_group.as_ref() {
                 render.set_bind_group(abi::GROUP_PASS, group, &[]);
             }
-            // A fullscreen triangle, from the vertex index.
-            render.draw(0..3, 0..1);
+            render.draw(0..vertices, 0..instances);
         }
         (PassKind::Compute { effect }, PassEncoder::Compute(compute)) => {
             let (known, variant) =

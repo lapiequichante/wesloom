@@ -120,6 +120,9 @@ pub struct Car {
     /// The headlights' centres in the car's space, left then right, when
     /// the file has them.
     headlights: Option<[Vec3; 2]>,
+    /// The headlights' two optics each, left then right, inside the
+    /// housing just behind the glass: what lights the housing from within.
+    optics: Option<[Vec3; 4]>,
     /// The tail lights' centres, the same way.
     tail_lights: Option<[Vec3; 2]>,
     /// The tail lights' materials and the emission the file gives them.
@@ -166,62 +169,112 @@ struct Wheel {
 
 /// The materials of me_car's headlights, which the file leaves unlit.
 const LENS_MATERIALS: &[&str] = &["Headlight", "hl inside", "ll shell"];
-/// The parameter their glow is, and its radiance at night.
+/// The parameter their glow is, and its radiance at night at an optic's
+/// middle: the street lamps' own, so the headlights outshine them only by
+/// being nearer.
 const LENS_GLOW: &str = "headlight_glow";
 const LENS_RADIANCE: f32 = 30.0;
 
 /// Give the headlights' materials an emission the night can turn up: a
-/// `headlight_glow` parameter into their surface's `emissive`, which the
-/// file leaves unwired. They cast no shadow, so the beam from the bulb
-/// inside them leaves through the glass. Their indices.
+/// `headlight_glow` parameter, the radiance at the middle of each optic,
+/// through `drive.headlight_glow`'s hot spots into their surface's
+/// `emissive`, which the file leaves unwired. They cast no shadow, so the
+/// beam, starting just ahead of the glass, is never caught by its edge.
+/// Their indices.
 fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Error>> {
-    use wxsl::core::graph::{Node, SocketRef};
-    let registry = wxsl::stdlib::registry();
-    let mut lenses = Vec::new();
-    for (index, material) in imported.scene.materials.iter_mut().enumerate() {
-        if !LENS_MATERIALS.contains(&material.name.as_str()) {
-            continue;
-        }
-        material.config.cast_shadow = false;
-        let graph = &mut material.graph;
-        let Some(output) = graph
+    use wxsl::core::graph::SocketRef;
+    let surface = |graph: &Graph| {
+        graph
             .nodes()
             .find(|(_, node)| node.def == wxsl::core::abi::SURFACE_OUTPUT_ID)
             .map(|(id, _)| id)
-        else {
-            continue;
+    };
+    let lenses: Vec<usize> = imported
+        .scene
+        .materials
+        .iter()
+        .enumerate()
+        .filter(|(_, material)| {
+            LENS_MATERIALS.contains(&material.name.as_str())
+                && surface(&material.graph).is_some_and(|output| {
+                    material
+                        .graph
+                        .edge_into(&SocketRef::new(output, "emissive"))
+                        .is_none()
+                })
+        })
+        .map(|(index, _)| index)
+        .collect();
+    // The optics' middles on the glass, the two headlights told apart
+    // about the middle of the four, and how wide one optic is: a quarter
+    // of a headlight's box across.
+    let boxes = lamp_boxes(imported, &lenses, Vec3::ZERO)
+        .map(|[left, right]| (left.0.x.min(right.0.x) + left.1.x.max(right.1.x)) * 0.5)
+        .and_then(|middle| lamp_boxes(imported, &lenses, Vec3::new(middle, 0.0, 0.0)));
+    let middles = boxes.map(|boxes| optic_middles(boxes, 0.0));
+    let width = boxes.map_or(0.0, |[left, right]| {
+        ((left.1.x - left.0.x) + (right.1.x - right.0.x)) * 0.125
+    });
+    let registry = crate::world::registry();
+    for &index in &lenses {
+        // From the file's space into the lens' own, where its fragments'
+        // positions are: the hot spots ride with the mesh.
+        let world = imported
+            .scene
+            .instances
+            .iter()
+            .find(|instance| instance.material == index)
+            .map_or(Mat4::IDENTITY, |instance| {
+                Mat4::from_cols_array(&imported.scene.instance_world(instance))
+            });
+        let to_object = world.inverse();
+        let scale = world.transform_vector3(Vec3::X).length().max(1e-6);
+        let material = &mut imported.scene.materials[index];
+        material.config.cast_shadow = false;
+        let name = material.name.clone();
+        let graph = &mut material.graph;
+        let output = surface(graph).expect("filtered on its surface output");
+        let wire = |graph: &mut Graph, from: (NodeId, &str), to: (NodeId, &str)| {
+            graph
+                .wire(&registry, from, to)
+                .map_err(|error| format!("{name}: {error}"))
         };
-        if graph
-            .edge_into(&SocketRef::new(output, "emissive"))
-            .is_some()
-        {
-            continue;
-        }
         let glow = graph.add(
             Node::new("param.value")
                 .with_setting("name", LENS_GLOW)
                 .with_param("value", Value::Vec3([0.0; 3])),
         );
-        graph
-            .wire(&registry, (glow, "out"), (output, "emissive"))
-            .map_err(|error| format!("{}: {error}", material.name))?;
-        lenses.push(index);
+        let mut spots = Node::new("drive.headlight_glow")
+            .with_param("radius", Value::F32(width * OPTIC_SPOT / scale))
+            .with_param("rim", Value::F32(OPTIC_RIM));
+        // Without headlights to find, the spots are nowhere and the glass
+        // glows at its rim alone.
+        let middles = middles.unwrap_or([Vec3::splat(1e9); 4]);
+        for (socket, middle) in ["a", "b", "c", "d"].into_iter().zip(middles) {
+            spots = spots.with_param(
+                socket,
+                Value::Vec3(to_object.transform_point3(middle).to_array()),
+            );
+        }
+        let spots = graph.add(spots);
+        // Read per vertex and interpolated: the fragment stage has no
+        // object space.
+        let position = graph.add_node(wxsl::core::abi::context_node_id("object_position"));
+        graph.set_stage(position, wxsl::core::graph::StageConstraint::Vertex);
+        wire(graph, (glow, "out"), (spots, "glow"))?;
+        wire(graph, (position, "out"), (spots, "position"))?;
+        wire(graph, (spots, "out"), (output, "emissive"))?;
     }
     Ok(lenses)
 }
 
-/// Where each lamp of `materials`' light leaves it, left then right, in
-/// the file's space: the middle of their box across. A headlight's is its
-/// bulb, just behind its housing (`+z`) and high in it
-/// ([`BULB_HEIGHT`]), whose glass casts no shadow ([`light_lenses`]); a
-/// tail light's is just past its back face, halfway up, so the housing
-/// never shadows its own beam.
-fn lamp_centers(
+/// The box of each lamp of `materials`, left then right, in the file's
+/// space.
+fn lamp_boxes(
     imported: &ImportedScene,
     materials: &[usize],
     center: Vec3,
-    front: bool,
-) -> Option<[Vec3; 2]> {
+) -> Option<[(Vec3, Vec3); 2]> {
     let scene = &imported.scene;
     let mut sides = [(Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); 2];
     for instance in scene
@@ -240,28 +293,60 @@ fn lamp_centers(
             side.1 = side.1.max(point);
         }
     }
-    (sides[0].0.x <= sides[0].1.x && sides[1].0.x <= sides[1].1.x).then(|| {
-        sides.map(|(min, max)| {
-            let middle = (min + max) * 0.5;
-            let (y, z) = if front {
-                (min.y + (max.y - min.y) * BULB_HEIGHT, max.z + BULB_SETBACK)
-            } else {
-                (middle.y, max.z + LAMP_CLEARANCE)
-            };
-            Vec3::new(middle.x, y, z)
-        })
+    (sides[0].0.x <= sides[0].1.x && sides[1].0.x <= sides[1].1.x).then_some(sides)
+}
+
+/// Where each lamp of `boxes` sends its beam from: the middle of its box
+/// across and up, past its outer face — well ahead of a headlight's glass
+/// (`-z`), just behind a tail light's. Out there the housing never
+/// shadows its own beam, and the body around the lamp is behind the
+/// light, out of its cone: from inside the housing, the beam lit the
+/// paint around the glass from a few centimetres, far brighter than the
+/// glass itself glows.
+fn lamp_centers(boxes: [(Vec3, Vec3); 2], front: bool) -> [Vec3; 2] {
+    boxes.map(|(min, max)| {
+        let middle = (min + max) * 0.5;
+        let z = if front {
+            min.z - HEADLIGHT_CLEARANCE
+        } else {
+            max.z + LAMP_CLEARANCE
+        };
+        Vec3::new(middle.x, middle.y, z)
     })
 }
 
-/// How far past the tail lights' lenses their light starts.
+/// A headlight's two optics' middles, side by side across its box,
+/// halfway up and `depth` behind the glass: the left headlight's outer
+/// then inner, then the right's.
+fn optic_middles(
+    [(left_min, left_max), (right_min, right_max)]: [(Vec3, Vec3); 2],
+    depth: f32,
+) -> [Vec3; 4] {
+    let pair = |min: Vec3, max: Vec3| {
+        let at = |across: f32| {
+            Vec3::new(
+                min.x + (max.x - min.x) * across,
+                (min.y + max.y) * 0.5,
+                min.z + depth,
+            )
+        };
+        [at(0.25), at(0.75)]
+    };
+    let [a, b] = pair(left_min, left_max);
+    let [c, d] = pair(right_min, right_max);
+    [a, b, c, d]
+}
+
+/// How far past the tail lights' lenses their light starts, and how far
+/// ahead of the headlights' glass their beams do.
 const LAMP_CLEARANCE: f32 = 0.03;
-/// How far behind the back of a headlight's housing its bulb is: the
-/// housing casts no shadow, so its whole depth is lit from behind.
-pub const BULB_SETBACK: f32 = 0.08;
-/// How high in a headlight's housing its bulb is, from its bottom (0) to
-/// its top (1): high enough that the beam, aimed a touch down, lights the
-/// whole inside of the housing, not only its lower half.
-const BULB_HEIGHT: f32 = 0.75;
+const HEADLIGHT_CLEARANCE: f32 = 0.08;
+/// How far behind a headlight's glass its optics' lights are.
+const OPTIC_DEPTH: f32 = 0.05;
+/// An optic's hot spot: how far from its middle its glow falls to 1/e,
+/// as a share of the optic's width, and the share left at its edge.
+const OPTIC_SPOT: f32 = 0.35;
+const OPTIC_RIM: f32 = 0.08;
 /// How many slices along the car the underglow's outline is measured in,
 /// and up to what height off the road the body counts for it.
 const NEON_BINS: usize = 96;
@@ -479,7 +564,7 @@ fn attach_prt(
         })
         .collect();
     let environment = wxsl_prt::sh::project_equirect(width, height, &sky);
-    let registry = wxsl::stdlib::registry();
+    let registry = crate::world::registry();
     for material in &mut imported.scene.materials {
         wxsl_prt::apply(&mut material.graph, &registry, &environment, bake.transfer)?;
     }
@@ -691,7 +776,7 @@ impl Car {
         let mut resources = SceneResources::load_resolved(
             &gpu.device,
             &imported.scene,
-            &wxsl::stdlib::registry(),
+            &crate::world::registry(),
             imported.directory.as_deref(),
             renderer.lighting(),
             &[],
@@ -718,7 +803,11 @@ impl Car {
         let to_car = |[left, right]: [Vec3; 2]| {
             [align.transform_point3(left), align.transform_point3(right)]
         };
-        let headlights = lamp_centers(&imported, &lenses, center, true).map(to_car);
+        let head_boxes = lamp_boxes(&imported, &lenses, center);
+        let headlights = head_boxes.map(|boxes| to_car(lamp_centers(boxes, true)));
+        let optics = head_boxes.map(|boxes| {
+            optic_middles(boxes, OPTIC_DEPTH).map(|optic| align.transform_point3(optic))
+        });
         let tails: Vec<usize> = imported
             .scene
             .materials
@@ -727,7 +816,8 @@ impl Car {
             .filter(|(_, material)| material.name == TAIL_MATERIAL)
             .map(|(index, _)| index)
             .collect();
-        let tail_lights = lamp_centers(&imported, &tails, center, false).map(to_car);
+        let tail_lights =
+            lamp_boxes(&imported, &tails, center).map(|boxes| to_car(lamp_centers(boxes, false)));
         let tails = tails
             .into_iter()
             .filter_map(
@@ -741,6 +831,7 @@ impl Car {
             align,
             lenses,
             headlights,
+            optics,
             tail_lights,
             tails,
             tail_glow: (0.0, 0.0),
@@ -841,7 +932,7 @@ impl Car {
         if film != iridescent {
             let mut entry = self.imported.scene.materials[material].clone();
             if film {
-                iridescent_paint(&mut entry, &wxsl::stdlib::registry())?;
+                iridescent_paint(&mut entry, &crate::world::registry())?;
             }
             self.resources
                 .set_material(
@@ -849,7 +940,7 @@ impl Car {
                     renderer,
                     material,
                     &entry,
-                    &wxsl::stdlib::registry(),
+                    &crate::world::registry(),
                     &renderer.lighting().clone(),
                     &[],
                 )
@@ -906,7 +997,7 @@ impl Car {
     ) -> Result<(), Box<dyn Error>> {
         use wxsl::core::lighting::{debug_views, DEBUG_MATERIAL_MACRO, DEBUG_VIEW_MACRO};
         use wxsl::core::macros::MacroValue;
-        let registry = wxsl::stdlib::registry();
+        let registry = crate::world::registry();
         let lighting = renderer.lighting().clone();
         let by_material = debug_views()
             .iter()
@@ -1082,6 +1173,9 @@ impl Car {
                 Vec3::new(-side, self.size.y * 0.55, back),
                 Vec3::new(side, self.size.y * 0.55, back),
             ])),
+            optics: self
+                .optics
+                .map(|optics| optics.map(|optic| tilt.transform_point3(optic))),
             tail_glow: self.tail_emission() / TAIL_GLOW,
         }
     }

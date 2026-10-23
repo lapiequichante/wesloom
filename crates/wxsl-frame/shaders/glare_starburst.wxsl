@@ -1,0 +1,136 @@
+//! glare_starburst — a starburst through each highlight, as sprites
+//! (`effect::glare`).
+//!
+//! Diffraction on the aperture spreads each point of light into thin
+//! rays, the same for every light in the frame: a sprite per cell of
+//! `glare_cells.wxsl`'s grid draws them around the cell's highlight, its
+//! light the cell's peak radiance over `params.area` pixels of a
+//! 1080-line frame — so two lights as bright make the same star, whatever
+//! their size on screen. One instance per cell, six vertices each; a cell
+//! with less light than `params.least` moves its quad off screen.
+//!
+//! `params.rays` rays, evenly spaced from `params.angle` (radians) but for
+//! `params.jitter` of a spacing each way. With a `params.spread` of 1
+//! their strengths vary a great deal, a handful strong and most faint
+//! (the strength is a uniform number to the power `SKEW`), and so do
+//! their lengths; at 0 all are alike, the spikes of a cross or a hexagon.
+//! A ray is `params.base` pixels wide at the light, narrowing to
+//! `params.width` over the first half of its length, whatever the
+//! distance; it fades as `exp(-t (1 + t))`, `t` the distance over
+//! `params.length` pixels of a 1080-line frame — as one over e at first,
+//! then ever faster, so the tip thins out rather than ending (red a
+//! little further than blue, as diffraction scales with wavelength) and,
+//! past `params.core`, falls off as one over the distance. The kernel is
+//! one for every light: a brighter light shows more of the faint rays and
+//! shows them longer, as a real starburst does. The quad reaches
+//! `params.reach` pixels times the square root of the cell's light,
+//! between `params.smallest` pixels and `params.largest` of the height,
+//! and the rays fade out at its edge.
+//!
+//! The sprites add `params.strength` of each light, spread over its rays,
+//! onto the target (an additive pass). The sprites are placed on the
+//! extract the cells were gathered from, bound second for its size;
+//! `params.scale` is how many target pixels one of its texels spans.
+
+@group(3) @binding(0) var cells: texture_2d<f32>;
+@group(3) @binding(1) var extract: texture_2d<f32>;
+
+struct Sprite {
+    @builtin(position) position: vec4f,
+    /// From the highlight, in target pixels.
+    @location(0) offset: vec2f,
+    /// The cell's light: its peak radiance over `params.area`, in target
+    /// pixels.
+    @location(1) flux: vec3f,
+    /// The quad's half size, in target pixels.
+    @location(2) half_size: f32,
+}
+
+/// How uneven the rays' strengths are at a spread of 1: a strength is a
+/// uniform number to this power, so a seventh of them on average, and
+/// only one ray in nine is past half.
+const SKEW: f32 = 6.0;
+
+/// A pseudo-random number in 0..1, the same for the same `x`.
+fn hash(x: f32) -> f32 {
+    return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
+}
+
+@vertex
+fn vertex(@builtin(vertex_index) corner_index: u32, @builtin(instance_index) instance: u32) -> Sprite {
+    var out: Sprite;
+    // Off screen: a quad with nothing to draw.
+    out.position = vec4f(2.0, 2.0, 0.0, 1.0);
+    out.offset = vec2f(0.0);
+    out.flux = vec3f(0.0);
+    out.half_size = 1.0;
+    let grid = vec2u(textureDimensions(cells));
+    if instance >= grid.x * grid.y {
+        return out;
+    }
+    let cell = vec2u(instance % grid.x, instance / grid.x);
+    let texel = textureLoad(cells, vec2i(cell), 0);
+    let extract_size = vec2f(textureDimensions(extract));
+    let size = extract_size * params.scale;
+    // The light's peak radiance, over `area` pixels of a 1080-line frame.
+    let pixels = size.y / 1080.0;
+    let flux = texel.rgb * params.area * pixels * pixels;
+    let light = dot(flux, vec3f(0.2126, 0.7152, 0.0722));
+    if light < params.least {
+        return out;
+    }
+    let x = floor(texel.a / 2048.0);
+    let centre_in_cell = vec2f(x, texel.a - x * 2048.0) / 64.0 - 8.0;
+    // In the extract's uv, which spans the target exactly.
+    let centre = (vec2f(cell) * 8.0 + centre_in_cell) / extract_size;
+    let half_size = clamp(params.reach * sqrt(light), params.smallest, params.largest * size.y);
+    var corners = array<vec2f, 6>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+        vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0),
+    );
+    let offset = corners[corner_index % 6u] * half_size;
+    let uv = centre + offset / size;
+    out.position = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    out.offset = offset;
+    out.flux = flux;
+    out.half_size = half_size;
+    return out;
+}
+
+@fragment
+fn fragment(sprite: Sprite) -> @location(0) vec4f {
+    let tau = 6.2831853;
+    let r = length(sprite.offset);
+    let height = f32(textureDimensions(extract).y) * params.scale;
+    // The distance on a 1080-line frame, so the look holds at any size.
+    let s = r * 1080.0 / height;
+    let n = max(params.rays, 1.0);
+    let theta = atan2(sprite.offset.y, sprite.offset.x) - params.angle;
+    let k = floor(theta / tau * n);
+    var rays = vec3f(0.0);
+    // The rays either side and the nearest: with a jitter under a
+    // spacing, no other is nearer.
+    for (var j = -1; j <= 1; j++) {
+        let i = k + f32(j);
+        let id = i - n * floor(i / n);
+        let at = (i + 0.5 + params.jitter * (hash(id) - 0.5)) * tau / n;
+        let across = r * abs(sin(theta - at));
+        let strength = mix(1.0, pow(hash(id + 17.3), SKEW), params.spread);
+        let length = params.length * mix(1.0, 0.3 + 0.7 * hash(id + 5.1), params.spread);
+        // Wide at the light, narrowing to the tip.
+        let width = mix(params.width, params.base, exp(-s / (0.5 * length)));
+        let line = exp(-across * across / (width * width));
+        let t = s / (length * vec3f(1.12, 1.0, 0.86));
+        rays += strength * line * exp(-t * (1.0 + t));
+    }
+    let falloff = 1.0 / (1.0 + s / params.core);
+    let edge = 1.0 - smoothstep(0.7, 1.0, r / sprite.half_size);
+    // The kernel's integral, roughly: rays times their mean strength, the
+    // line's width and its mean reach in target pixels; the base adds its
+    // excess width over a third of the reach.
+    let mean_strength = mix(1.0, 1.0 / (SKEW + 1.0), params.spread);
+    let mean_length = params.length * mix(1.0, 0.65, params.spread) * height / 1080.0;
+    let mean_width = params.width + 0.33 * max(params.base - params.width, 0.0);
+    let area = n * mean_strength * 1.7725 * mean_width * mean_length * 0.5;
+    return vec4f(sprite.flux * rays * (falloff * edge * params.strength / area), 1.0);
+}

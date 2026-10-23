@@ -272,4 +272,78 @@ fn defaults_render_as_authored_and_a_retuned_effect_keeps_its_values() {
         Some(Value::F32(0.25)),
         "the tuned value survives the pass list changing under it"
     );
+
+    // But a pass list that authors another value for the pass asks for
+    // that value: a host switching a setting by re-installing its passes
+    // gets the switch, not the value the passes it replaced had — on the
+    // GPU too, after a frame has bound the old values.
+    let registry = wxsl::stdlib::registry();
+    let material = wxsl::render::Material::from_graph(&bright_material(), &registry)
+        .expect("the material compiles");
+    let mesh = Mesh::plane(&gpu.device, 2.0);
+    let mut bindings = renderer.material_bindings(&gpu.device, &material);
+    bindings
+        .upload(&gpu.device, &gpu.queue)
+        .expect("nothing unbound");
+    let item = DrawItem::new(&mesh, &material)
+        .with_transform(Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2))
+        .with_bindings(&bindings);
+    let draws = wxsl::render::single_draw(item);
+    let dull = || {
+        let mut graph = compile_pipeline(
+            &bloom_document(),
+            &wxsl::render::document_registry(&effects),
+            &effects,
+            &PipelineConfig::new(TargetConfig::new(size, size, target.format())),
+        )
+        .expect("compiles again");
+        let index = graph
+            .passes()
+            .iter()
+            .position(|pass| pass.label == "bloom")
+            .expect("the bloom pass");
+        graph
+            .pass_mut(index)
+            .expect("the bloom pass")
+            .parameters
+            .insert("strength".into(), Value::F32(0.0));
+        graph
+    };
+    let glowing =
+        render_list_in(&gpu, &mut renderer, &target, &draws, &unlit()).expect("the frame renders");
+    renderer.set_graph(dull()).expect("schedules");
+    assert_eq!(
+        renderer.pass_param("bloom", "strength"),
+        Some(Value::F32(0.0)),
+        "the newly authored value replaces the old one"
+    );
+    let switched =
+        render_list_in(&gpu, &mut renderer, &target, &draws, &unlit()).expect("the frame renders");
+    let mut fresh = Renderer::new(
+        &gpu.device,
+        wxsl::stdlib_library(),
+        TargetConfig::new(size, size, target.format()),
+    )
+    .expect("renderer");
+    fresh.set_graph(dull()).expect("schedules");
+    let mut bindings = fresh.material_bindings(&gpu.device, &material);
+    bindings
+        .upload(&gpu.device, &gpu.queue)
+        .expect("nothing unbound");
+    let item = DrawItem::new(&mesh, &material)
+        .with_transform(Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2))
+        .with_bindings(&bindings);
+    let expected = render_list_in(
+        &gpu,
+        &mut fresh,
+        &target,
+        &wxsl::render::single_draw(item),
+        &unlit(),
+    )
+    .expect("the frame renders");
+    assert_ne!(glowing, expected, "the glow is the strength's");
+    assert_eq!(
+        switched, expected,
+        "the re-installed pass binds its new values, not the buffer it replaced"
+    );
 }
