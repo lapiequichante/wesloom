@@ -1,0 +1,27 @@
+// Hable tonemap
+//
+// John Hable's filmic curve from Uncharted 2: a rational toe and shoulder,
+// per channel, applied at twice the exposure and divided by the curve's
+// value at a linear white of 11.2, so that 11.2 maps to 1. Darker and
+// more contrasted than the filmic curve, with a long, soft shoulder;
+// highlights desaturate as their channels compress, and what is brighter
+// than the white point clips.
+//
+// Written from the published formula (Hable, "Uncharted 2: HDR Lighting",
+// GDC 2010, and "Filmic Tonemapping Operators", filmicworlds.com), with
+// its constants: shoulder strength A 0.15, linear strength B 0.50, linear
+// angle C 0.10, toe strength D 0.20, toe numerator E 0.02, toe
+// denominator F 0.30, white 11.2, exposure bias 2. The white's scale is
+// precomputed. Like `tonemap_aces` it does no sRGB encoding — the display
+// transform owns that.
+fn tonemap_hable(
+    color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
+) -> vec3f {
+    // 2 is the curve's own exposure bias.
+    let x = max(color * (exposure * 2.0), vec3f(0.0));
+    // ((x(Ax + CB) + DE) / (x(Ax + B) + DF)) - E/F.
+    let curve = (x * (0.15 * x + vec3f(0.05)) + vec3f(0.004)) / (x * (0.15 * x + vec3f(0.5)) + vec3f(0.06)) - vec3f(0.02 / 0.3);
+    // 1 / curve(11.2).
+    return saturate(curve * 1.3790642);
+}

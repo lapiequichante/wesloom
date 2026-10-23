@@ -2,7 +2,7 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (194)
+- [Shader nodes](#shader-nodes) (196)
 - [Pipeline nodes](#pipeline-nodes) (32)
 
 ## Shader nodes
@@ -128,11 +128,27 @@ Maps unbounded positive radiance into 0..1 through the ACES fit: a pre-tonemap c
 - in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 
+#### `color.tonemap_agx` · AgX tonemap
+
+Maps unbounded positive radiance into 0..1 the AgX way: into Rec. 2020, through AgX's inset matrix, onto a log2 range of 16.5 stops around middle grey, then a sigmoid, the outset matrix and back to linear Rec. 709. Saturated highlights desaturate towards white as they brighten instead of skewing hue, and shadows keep their colour; flatter and less saturated than ACES in the midtones.
+
+- in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
+- out `out: vec3f`
+
 #### `color.tonemap_filmic` · Tonemap (filmic)
 
 Filmic curve with a gentle toe, a long shoulder and highlight desaturation. Also what the shipped `tonemap` effect applies at the end of a pipeline's chain.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
+- out `out: vec3f`
+
+#### `color.tonemap_hable` · Hable tonemap
+
+John Hable's filmic curve from Uncharted 2: a rational toe and shoulder, per channel, applied at twice the exposure and divided by the curve's value at a linear white of 11.2, so that 11.2 maps to 1. Darker and more contrasted than the filmic curve, with a long, soft shoulder; highlights desaturate as their channels compress, and what is brighter than the white point clips.
+
+- in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
 - in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
 - out `out: vec3f`
 

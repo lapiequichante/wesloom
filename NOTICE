@@ -21,6 +21,12 @@ Adapted files (source files and symbols listed per file):
   symbols ACESFilmicToneMapping and RRTAndODTFit; WXSL translation, the
   fit inlined into one function, exposure a parameter rather than a
   uniform, WGSL column-order matrices.
+- crates/wxsl-stdlib/shaders/color/tonemap_agx.wxsl
+  from src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js,
+  symbols AgXToneMapping, agxDefaultContrastApprox and the Rec. 2020
+  matrices; WXSL translation, the sigmoid and the matrices inlined into
+  one function, exposure a parameter rather than a uniform, WGSL
+  column-order matrices.
 Complete license text and packaged attribution: crates/wxsl-stdlib/NOTICE.
 
 webgl-noise — MIT — Copyright (C) 2011 Ashima Arts (Simplex noise),

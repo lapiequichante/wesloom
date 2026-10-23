@@ -20,7 +20,7 @@
 //!
 //! In the window: the sliders set the speed, the hour, the motion blur,
 //! the aperture, the focus, the chromatic aberration (an extra pass,
-//! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie, WXSL), the
+//! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie, WXSL, AgX, Hable), the
 //! grade's saturation and the vertical field of view; drag elsewhere to look around the car, drag
 //! with the right button to turn the camera on top of looking at it (a
 //! right double-click straightens it), scroll to zoom, `R` recentres,

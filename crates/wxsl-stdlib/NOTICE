@@ -27,6 +27,17 @@ Changes: GLSL to WXSL, the fit inlined into one function, exposure a
 parameter rather than a uniform, matrices written in WGSL column order as
 upstream wrote them in GLSL.
 
+three.js — MIT
+Source: https://github.com/mrdoob/three.js
+Revision: 8d486d4cc1a2b420b2585ea52a3e0f783c919282
+Source file: src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js
+Original symbols: AgXToneMapping, agxDefaultContrastApprox,
+LINEAR_SRGB_TO_LINEAR_REC2020, LINEAR_REC2020_TO_LINEAR_SRGB
+Adapted file: shaders/color/tonemap_agx.wxsl
+Changes: GLSL to WXSL, the sigmoid and the colour space matrices inlined
+into one function, exposure a parameter rather than a uniform, matrices
+written in WGSL column order as upstream wrote them in GLSL.
+
 webgl-noise — MIT
 Source: https://github.com/ashima/webgl-noise
 Revision: 6abed1e77ed1e18b181627c35f688eb30c9fe75e
