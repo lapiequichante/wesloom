@@ -30,7 +30,9 @@ contact shadow away.
 - `Outside` stretches the centred filter's reading `v` to
   `saturate(2v - 1)`. The filter reads half the light at the edge and
   all of it a penumbra out, so the shadow stays whole and its edge
-  softens outward.
+  softens outward. The stretch halves the penumbra, so the filter is
+  twice as wide (`WXSL_SHADOW_OUTSIDE_SCALE`): the penumbra is as wide
+  as a centred one, from the edge outward.
 - Under `Outside`, the search keeps each tap's penumbra. The blockers are
   two kinds when the widest penumbra is more than `WXSL_SHADOW_MIXED`
   (4) times the narrowest (contact counting as one texel).
@@ -55,7 +57,8 @@ contact shadow away.
 
 ## Consequences
 
-- An outside shadow is as large as its hard shadow plus its penumbra.
+- An outside shadow is as large as its hard shadow plus its penumbra,
+  which is the centred one's full width.
   It reads as a slightly larger shadow with a soft rim, not as one the
   source's size would cast.
 - Mixed pixels pay 72 comparisons instead of 24. The others are

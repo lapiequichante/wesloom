@@ -26,14 +26,18 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
             let light = sample_light_setup(setup, sample, ctx.world_position);
             // Declared unconditionally and overwritten under the flag,
             // because a `let` inside an `@if` is removed along with it.
+            // The shadow's bias and receiver plane follow the geometry's
+            // normal: a normal map's would move each pixel's lookup on its
+            // own, and grain the penumbra a low sun stretches. Deferred,
+            // the G-buffer's shading normal is all there is (ADR 0026).
             var shadow = 1.0;
             @if(wxsl_receive_shadows)
             shadow = ${SHADOW_FN}(
                 index,
                 sample,
                 ctx.world_position,
-                normal,
-                saturate(dot(normal, light.direction)),
+                normalize(ctx.world_normal),
+                saturate(dot(normalize(ctx.world_normal), light.direction)),
             );
             lit = lit
                 + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS})

@@ -32,6 +32,9 @@ const WXSL_SHADOW_BISECTIONS: i32 = 4;
 // filtered at its own width: a contact shadow inside a far caster's
 // penumbra (ADR 0105).
 const WXSL_SHADOW_MIXED: f32 = 4.0;
+// How much wider an outside penumbra's filter is: stretched outward, it is
+// then as wide as a centred one (ADR 0105).
+const WXSL_SHADOW_OUTSIDE_SCALE: f32 = 2.0;
 
 // Keep in sync with SHADOW_CASCADE_BLEND in environment.rs.
 const WXSL_SHADOW_CASCADE_BLEND: f32 = 0.1;
@@ -251,7 +254,8 @@ fn vogel_disk(index: i32, count: i32, phase: f32) -> vec2f {
 // The penumbra straddles the hard edge, or, `outside`, lies wholly
 // outside the shadow (ADR 0105): the centred filter reads half the light
 // at the edge and all of it a penumbra out, and is stretched to read none
-// at the edge, so the shadow's inside stays dark. Outside, blockers of two
+// at the edge, so the shadow's inside stays dark; the filter is twice as
+// wide, for the penumbra to keep its width. Outside, blockers of two
 // kinds, a contact shadow inside a far caster's penumbra, are filtered
 // each at its own width and the darker wins: one average would blur the
 // contact shadow away inside the far penumbra.
@@ -340,8 +344,9 @@ fn soft_shadow(
     if !found {
         return 1.0;
     }
+    let scale = select(1.0, WXSL_SHADOW_OUTSIDE_SCALE, outside);
     if !outside || widest <= narrowest * WXSL_SHADOW_MIXED {
-        let width = max(penumbrae / max(counted, 1.0), 1.0);
+        let width = max(penumbrae / max(counted, 1.0), 1.0) * scale;
         var lit = 0.0;
         for (var i = 0; i < WXSL_SHADOW_SOFT_TAPS; i = i + 1) {
             let tap = clamp(uv + vogel_disk(i, WXSL_SHADOW_SOFT_TAPS, phase) * width * texel, low, high);
@@ -371,8 +376,8 @@ fn soft_shadow(
             near_count = near_count + 1.0;
         }
     }
-    let near_width = max(near_sum / max(near_count, 1.0), 1.0);
-    let far_width = far_sum / max(far_count, 1.0);
+    let near_width = max(near_sum / max(near_count, 1.0), 1.0) * scale;
+    let far_width = far_sum / max(far_count, 1.0) * scale;
     // The far blockers over their own width; the near ones over theirs,
     // as what is shadowed at the receiver but not by a far blocker.
     var far_lit = 0.0;

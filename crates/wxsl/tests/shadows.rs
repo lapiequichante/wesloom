@@ -798,17 +798,20 @@ fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
             );
             assert!(inside < outside, "{kind}: the penumbra brightens outward");
             // An outside penumbra (ADR 0105) leaves the shadow's inside as
-            // dark as the hard edge's and still softens the outside.
+            // dark as the hard edge's and still softens the outside. Its
+            // filter is twice as wide, and so is the stretch's error: the
+            // pixel on the edge may catch a little light, so the inside is
+            // probed twice as far in.
             env.lights = vec![light
                 .clone()
                 .with_source_radius(radius)
                 .with_penumbra(wxsl::render::environment::Penumbra::Outside)];
             let out = scene.render(&env, &ground, Some(&caster));
             assert!(
-                at(&out, edge - probe) <= at(&hard, edge - probe) + 2,
+                at(&out, edge - 2.0 * probe) <= at(&hard, edge - 2.0 * probe) + 2,
                 "{kind}: an outside penumbra lights the inside: {} vs {}",
-                at(&out, edge - probe),
-                at(&hard, edge - probe)
+                at(&out, edge - 2.0 * probe),
+                at(&hard, edge - 2.0 * probe)
             );
             assert!(
                 at(&out, edge + probe) + 2 < at(&hard, edge + probe),
@@ -844,13 +847,13 @@ fn a_contact_shadow_stays_narrow_inside_a_far_casters_penumbra() {
     let quad = Mesh::plane(&scene.gpu.device, 1.0);
     let floor = Mesh::plane(&scene.gpu.device, 8.0);
     // The sun at 45° over +x, so a shadow falls a caster's height towards
-    // -x. A wide slab 3.5 m up, its shadow's edge at x = 0 and blurred by
+    // -x. A wide slab 3.5 m up, its shadow's edge at x = -0.1 and blurred by
     // the sun's 0.2 rad; a tile 10 cm up, its shadow from x = 0.05 to
     // 0.35, the strip below x = 0.15 seen beside the tile itself.
     let slab = Mat4::from_scale_rotation_translation(
         Vec3::new(8.0, 1.0, 8.0),
         glam::Quat::IDENTITY,
-        Vec3::new(-0.5, 3.5, 0.0),
+        Vec3::new(-0.6, 3.5, 0.0),
     );
     let tile = Mat4::from_scale_rotation_translation(
         Vec3::new(0.3, 1.0, 1.0),
@@ -862,7 +865,7 @@ fn a_contact_shadow_stays_narrow_inside_a_far_casters_penumbra() {
         .casting_shadow(4.0)
         .with_source_radius(0.2)
         .with_penumbra(wxsl::render::environment::Penumbra::Outside)];
-    let beyond = Vec3::new(-0.1, 0.0, 0.0);
+    let beyond = Vec3::new(-0.2, 0.0, 0.0);
     let under = Vec3::new(0.1, 0.0, 0.0);
     for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
         scene.renderer.set_pipeline(pipeline);

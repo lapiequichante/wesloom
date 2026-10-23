@@ -14,7 +14,8 @@ an entry.
 - Outside penumbrae: `Light::with_penumbra(Penumbra::Outside)` puts a soft
   shadow's penumbra outside its hard edge, its inside staying dark, and
   filters a contact shadow inside a far caster's penumbra at its own
-  width. In the C header, the light row's first `_padding3` float is now
+  width. Its filter is twice as wide, for the penumbra to keep a centred
+  one's width. In the C header, the light row's first `_padding3` float is now
   `penumbra`
   ([ADR 0105](docs/adr/0105-a-soft-shadows-penumbra-can-lie-outside-it.md)).
 
@@ -199,6 +200,9 @@ an entry.
 
 ### Fixed
 
+- A shadow is biased along the geometry's normal rather than the shading
+  normal (forward only; the G-buffer keeps the shading one): a normal map
+  grained its edges under a grazing light (ADR 0026).
 - `generative.simplex3` hashed its lattice without the cell's `y` and `x`
   offsets, so its noise repeated along those axes in straight-edged
   blocks.

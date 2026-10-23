@@ -172,6 +172,12 @@ there. This is not new: `wxsl_tonemap` and `wxsl_debug_normals` have
 always behaved this way. Making it per material needs a bit in the
 G-buffer, and there is no ninth channel going spare.
 
+The normal offset and the receiver plane follow the context's normal,
+the geometry's, not the shading normal: a normal map's would move each
+pixel's lookup on its own, and under a grazing light grain every
+shadow's edge. The deferred lighting pass has only the G-buffer's
+shading normal, so there it is that one.
+
 A shadow pass draws every material that casts, including ones whose graph
 does nothing in a shadow stage. That is one draw call per object per
 casting light, with no culling: the frustum is the light's, and nothing
