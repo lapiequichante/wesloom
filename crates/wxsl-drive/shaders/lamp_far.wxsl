@@ -1,0 +1,33 @@
+// Far lamp
+//
+// How far a lamp's lens at `world` has shrunk on screen, as what its
+// halo sprite does about it: x, the share of the lamp's glow the sprite
+// carries rather than the lens (0 while the lens covers `empty` pixels or
+// more, 1 once it covers `full` or fewer, where the lens alone would
+// flicker in and out of the pixels it no longer fills); y, the sprite's
+// half size in metres, never under `pixels` pixels. The screen's height
+// in pixels is `height`; the vertical field of view is read off the
+// camera's projection.
+//
+// Original implementation.
+
+import package::wxsl::bindings::{camera, eye_position};
+
+fn lamp_far(
+    world: vec3f,      // The lamp's lens, world space. @default 0.0, 0.0, 0.0
+    size: f32,         // The lens' width, metres. @default 0.3
+    height: f32,       // The screen's height, pixels. @default 1080.0
+    pixels: f32,       // The sprite's least half size, pixels. @default 3.0
+    full: f32,         // The lens' width in pixels at and under which the sprite carries all of the glow. @default 1.5
+    empty: f32,        // The lens' width in pixels at and over which it carries none. @default 4.0
+) -> vec2f {
+    // Row 1 of the projection times the view: the camera's up, scaled
+    // by 1 / tan(fov / 2).
+    let focal = length(vec3f(camera.view_proj[0][1], camera.view_proj[1][1], camera.view_proj[2][1]));
+    let distance = length(eye_position() - world);
+    // One pixel's height in metres at that distance.
+    let pixel = 2.0 * distance / max(focal * height, 1e-6);
+    let lens = size / max(pixel, 1e-6);
+    let share = 1.0 - smoothstep(full, empty, lens);
+    return vec2f(share, max(size * 0.75, pixels * pixel));
+}

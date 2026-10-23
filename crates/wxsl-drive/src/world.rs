@@ -27,6 +27,7 @@ use wxsl::render::{
 };
 
 use crate::city::{self, Building, Kind};
+use crate::halo::{self, Halos};
 use crate::road::{self, Lamp, Road};
 use crate::terrain::Ground;
 
@@ -40,6 +41,13 @@ const NODES: &[(&str, &str)] = &[
     ("neon", include_str!("../shaders/neon.wxsl")),
     ("neon_streak", include_str!("../shaders/neon_streak.wxsl")),
     ("toward_eye", include_str!("../shaders/toward_eye.wxsl")),
+    ("lamp_far", include_str!("../shaders/lamp_far.wxsl")),
+    ("lamp_halo", include_str!("../shaders/lamp_halo.wxsl")),
+    (
+        "lamp_halo_glow",
+        include_str!("../shaders/lamp_halo_glow.wxsl"),
+    ),
+    ("lamp_lens", include_str!("../shaders/lamp_lens.wxsl")),
     (
         "car_ground_transfer",
         include_str!("../shaders/car_ground_transfer.wxsl"),
@@ -252,37 +260,19 @@ fn textured_graph(
     )
 }
 
-/// A plain surface: a colour, a roughness, a metalness, and optionally an
-/// emission scaled by the `glow` parameter.
-fn plain_graph(
-    name: &str,
-    color: [f32; 3],
-    roughness: f32,
-    metallic: f32,
-    glow: Option<[f32; 3]>,
-) -> Result<Graph, Box<dyn Error>> {
+/// A plain surface: a colour, a roughness and a metalness.
+fn plain_graph(name: &str, color: [f32; 3], roughness: f32, metallic: f32) -> Graph {
     let mut graph = Graph::new(name);
     let output = graph.add_node(abi::SURFACE_OUTPUT_ID);
     graph.set_param(output, "base_color", Value::Vec3(color));
     graph.set_param(output, "roughness", Value::F32(roughness));
     graph.set_param(output, "metallic", Value::F32(metallic));
-    if let Some(glow) = glow {
-        let registry = wxsl::stdlib::registry();
-        let parameter = graph.add(
-            Node::new("param.value")
-                .with_setting("name", "glow")
-                .with_param("value", Value::Vec3(glow)),
-        );
-        graph
-            .wire(&registry, (parameter, "out"), (output, "emissive"))
-            .map_err(|error| format!("{name}: {error}"))?;
-    }
-    Ok(graph)
+    graph
 }
 
 /// The lamps' paint, metallic grey: (colour, roughness, metalness).
 const LAMP_PAINT: ([f32; 3], f32, f32) = ([0.5, 0.51, 0.53], 0.4, 0.8);
-/// A lamp head's glow at full night.
+/// A lamp lens' glow at full night.
 const LAMP_GLOW: [f32; 3] = [30.0, 22.0, 14.0];
 
 pub struct World {
@@ -296,6 +286,11 @@ pub struct World {
     /// One per [`Kind`], in [`Kind::ALL`]'s order.
     kinds: Vec<Mesh>,
     surfaces: Vec<Surface>,
+    /// The far lamps' sprites.
+    halos: Halos,
+    /// The lenses' glow and the screen's height last set.
+    glow: [f32; 3],
+    screen_height: f32,
 }
 
 /// Indices into [`World::surfaces`].
@@ -319,8 +314,9 @@ impl World {
         let lamps = road.lamps();
         let mut poles = MeshData::new(Vec::new(), Vec::new());
         let mut glow = MeshData::new(Vec::new(), Vec::new());
+        let mut lenses = Vec::new();
         for lamp in &lamps {
-            lamp_parts(lamp, &mut poles, &mut glow);
+            lenses.extend(lamp_parts(lamp, &mut poles, &mut glow));
         }
         let buildings = city::buildings(&road, |x, z| ground.height(x, z));
         let terrain = ground.mesh(city::paving(&buildings));
@@ -375,14 +371,8 @@ impl World {
                 CONCRETE_SAMPLER,
                 2.5,
             )?,
-            plain_graph("lamp", LAMP_PAINT.0, LAMP_PAINT.1, LAMP_PAINT.2, None)?,
-            plain_graph(
-                "lamp head",
-                LAMP_PAINT.0,
-                LAMP_PAINT.1,
-                LAMP_PAINT.2,
-                Some(LAMP_GLOW),
-            )?,
+            plain_graph("lamp", LAMP_PAINT.0, LAMP_PAINT.1, LAMP_PAINT.2),
+            halo::lens_graph(registry, LAMP_PAINT, LAMP_GLOW)?,
             node_graph(
                 registry,
                 "ground",
@@ -409,7 +399,7 @@ impl World {
                 &[(city::SEED, ValueType::F32)],
                 &["base_color", "metallic", "roughness", "emissive"],
             )?,
-            plain_graph("rail", [0.3, 0.3, 0.3], 0.8, 0.9, None)?,
+            plain_graph("rail", [0.3, 0.3, 0.3], 0.8, 0.9),
         ];
         let mut surfaces = graphs
             .iter()
@@ -477,7 +467,11 @@ impl World {
             .iter()
             .map(|building| InstanceAttributes::new().with(city::SEED, Value::F32(building.seed)))
             .collect();
+        let halos = Halos::new(gpu, renderer, registry, &lenses)?;
         Ok(World {
+            halos,
+            glow: LAMP_GLOW,
+            screen_height: 1080.0,
             meshes,
             kinds: Kind::ALL
                 .iter()
@@ -508,13 +502,30 @@ impl World {
             bindings.set(LIGHTS_ON, Value::F32(lights_on))?;
             bindings.upload(&gpu.device, &gpu.queue)?;
         }
-        let glow = &mut self.surfaces[GLOW].bindings;
-        glow.set(
-            "glow",
-            Value::Vec3(LAMP_GLOW.map(|channel| channel * lights_on)),
-        )?;
-        glow.upload(&gpu.device, &gpu.queue)?;
+        self.glow = LAMP_GLOW.map(|channel| channel * lights_on);
+        self.set_lamps(gpu)
+    }
+
+    /// Tell the far lamps' sprites, and the lenses they take over from,
+    /// how many pixels high the screen is.
+    pub fn set_screen_height(
+        &mut self,
+        gpu: &GpuContext,
+        height: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.screen_height != height as f32 {
+            self.screen_height = height as f32;
+            self.set_lamps(gpu)?;
+        }
         Ok(())
+    }
+
+    fn set_lamps(&mut self, gpu: &GpuContext) -> Result<(), Box<dyn Error>> {
+        let lens = &mut self.surfaces[GLOW].bindings;
+        lens.set(halo::GLOW, Value::Vec3(self.glow))?;
+        lens.set(halo::SCREEN_HEIGHT, Value::F32(self.screen_height))?;
+        lens.upload(&gpu.device, &gpu.queue)?;
+        self.halos.set(gpu, self.glow, self.screen_height)
     }
 
     /// Everything to draw. Nothing here moves, so no draw needs a
@@ -538,20 +549,21 @@ impl World {
                     .with_bounds(min, max),
             );
         }
+        draws.extend(self.halos.draws());
         draws
     }
 }
 
 /// The ground a piece of a merged mesh covers, metres square: small enough
 /// that the camera and each shadow tile cull most of the road.
-const CHUNK: f32 = 150.0;
+pub const CHUNK: f32 = 150.0;
 /// The terrain's pieces: it stretches kilometres past the road, so
 /// coarser, or its draws outnumber everything else's.
 const TERRAIN_CHUNK: f32 = 600.0;
 
 /// `mesh` cut into pieces by the [`CHUNK`] square each triangle's centre
 /// lies in, each with its bounds, in a fixed order.
-fn chunks(mesh: &MeshData, size: f32) -> Vec<(MeshData, (Vec3, Vec3))> {
+pub fn chunks(mesh: &MeshData, size: f32) -> Vec<(MeshData, (Vec3, Vec3))> {
     use std::collections::{BTreeMap, HashMap};
     let mut pieces: BTreeMap<(i32, i32), (MeshData, HashMap<u32, u32>)> = BTreeMap::new();
     for triangle in mesh.indices.chunks(3) {
@@ -590,8 +602,10 @@ fn chunks(mesh: &MeshData, size: f32) -> Vec<(MeshData, (Vec3, Vec3))> {
         .collect()
 }
 
-/// A median lamp as boxes: the pole and the arm, the two heads glowing.
-fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
+/// A median lamp as boxes: the pole, the arm and the heads' housings in
+/// `steel`, a lens under each housing in `glow`, which therefore shines
+/// down and to the sides but never up. Returns the lenses' centres.
+fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) -> [Vec3; 2] {
     let across = lamp.across;
     // x across the road, y up, z along it.
     let basis = |center: Vec3, size: Vec3| {
@@ -617,13 +631,22 @@ fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) {
             Vec3::new(road::ARM_REACH * 2.0 + 0.6, 0.14, 0.14),
         ),
     );
-    for head in lamp.heads {
+    lamp.heads.map(|head| {
+        // The housing, a little wider than the lens, hangs from the arm.
         road::push_box(
-            glow,
-            basis(head + Vec3::Y * 0.12, Vec3::new(0.32, 0.12, 0.3)),
+            steel,
+            basis(head + Vec3::Y * (HOUSING_BOTTOM + HOUSING.y * 0.5), HOUSING),
         );
-    }
+        let lens = head + Vec3::Y * (HOUSING_BOTTOM - halo::LENS.y * 0.5);
+        road::push_box(glow, basis(lens, halo::LENS));
+        lens
+    })
 }
+
+/// A lamp head's housing, metres (across, high, along), and how far over
+/// the head its underside is, the lens just under it.
+const HOUSING: Vec3 = Vec3::new(0.4, 0.09, 0.38);
+const HOUSING_BOTTOM: f32 = 0.105;
 
 /// One black texel, for a texture slot with nothing to read.
 fn black_texel(gpu: &GpuContext) -> wgpu::TextureView {

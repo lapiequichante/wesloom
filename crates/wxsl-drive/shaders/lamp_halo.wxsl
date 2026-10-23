@@ -1,0 +1,28 @@
+// Lamp halo corner
+//
+// Where a corner of a lamp's halo sprite goes, as an object-space offset
+// from the lens it is centred on: along the camera's right and up by the
+// half size `far.y`, the uv's corner choosing which way, so the sprite
+// always faces the screen, and `lift` metres along the view ray towards
+// the eye, which leaves it where it is on screen but in front of the
+// lamp's own housing.
+//
+// Original implementation.
+
+import package::wxsl::bindings::camera;
+
+fn lamp_halo(
+    normal_matrix: mat3x3f,
+    view: vec3f,       // Towards the eye, world space. @default 0.0, 1.0, 0.0
+    uv: vec2f,         // The corner: 0 or 1 each way. @default 0.0, 0.0
+    far: vec2f,        // `drive.lamp_far`'s share and half size; the size is read. @default 1.0, 0.5
+    lift: f32,         // How far towards the eye, metres. @default 0.5
+) -> vec3f {
+    // Rows 0 and 1 of the projection times the view: the camera's right
+    // and up, scaled.
+    let right = normalize(vec3f(camera.view_proj[0][0], camera.view_proj[1][0], camera.view_proj[2][0]));
+    let up = normalize(vec3f(camera.view_proj[0][1], camera.view_proj[1][1], camera.view_proj[2][1]));
+    let corner = uv * 2.0 - vec2f(1.0);
+    let offset = (right * corner.x + up * corner.y) * far.y + view * lift;
+    return transpose(normal_matrix) * offset;
+}

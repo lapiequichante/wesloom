@@ -1,0 +1,14 @@
+// Lamp lens glow
+//
+// A lamp lens' emission: `glow`, less the share of it its halo sprite
+// carries once the lens is too small on screen to cover whole pixels
+// (`drive.lamp_far`'s x), so the two add up to the lamp's light.
+//
+// Original implementation.
+
+fn lamp_lens(
+    glow: vec3f,       // The lens' radiance. @default 1.0, 1.0, 1.0
+    far: vec2f,        // `drive.lamp_far`'s share and half size. @default 0.0, 0.5
+) -> vec3f {
+    return glow * (1.0 - saturate(far.x));
+}

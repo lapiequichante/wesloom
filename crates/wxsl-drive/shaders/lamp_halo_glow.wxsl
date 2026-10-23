@@ -1,0 +1,34 @@
+// Lamp halo glow
+//
+// A far lamp's light as its halo sprite adds it to the frame: `halo`'s
+// profile, through its mips, carrying `far.x` of the light the lens would
+// send the eye. That light is the lens' radiance `glow` over the area it
+// shows: its sides, `side` square metres, hidden by the housing over it
+// from above, and its underside, `bottom`, as much as the view looks up
+// at it. Spread over the sprite's (2 `far.y`)², through `spread` (one over
+// the profile's mean over its square), it keeps that
+// total however big the sprite has to be to cover whole pixels, so the
+// lamp does not flicker far away; and never under `least` of the lens'
+// radiance at its peak, so it does not fade to nothing either: past
+// that, the fog dims it. The frame's bloom spreads it into a halo
+// afterwards, as it does the lens.
+//
+// Original implementation.
+
+fn lamp_halo_glow(
+    halo: texture_2d<f32>,
+    samp: sampler,
+    uv: vec2f,         // Across the sprite, 0..1. @default 0.5, 0.5
+    view: vec3f,       // Towards the eye, world space. @default 0.0, -1.0, 0.0
+    far: vec2f,        // `drive.lamp_far`'s share and half size. @default 1.0, 0.5
+    glow: vec3f,       // The lens' radiance. @default 1.0, 1.0, 1.0
+    side: f32,         // The lens' side area, as seen level, square metres. @default 0.02
+    bottom: f32,       // Its underside's area, square metres. @default 0.08
+    spread: f32,       // One over the profile's mean. @default 1.0
+    least: f32,        // The least peak, against the lens' radiance. @default 0.3
+) -> vec4f {
+    let shown = side * (1.0 - smoothstep(0.0, 0.5, view.y)) + bottom * saturate(-view.y);
+    let half = max(far.y, 1e-4);
+    let scale = far.x * max(shown * spread / (4.0 * half * half), least);
+    return vec4f(glow * (textureSample(halo, samp, uv).r * scale), 1.0);
+}

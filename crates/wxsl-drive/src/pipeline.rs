@@ -15,7 +15,8 @@
 //! Under the car, before the background, a pass multiplies the road by
 //! the car's occlusion: the ground grid's PRT bake lit by the car's probe
 //! (`car_ground`), drawn by no other pass. Another then adds the neons'
-//! baked light (`neon`); the probe does not capture it.
+//! baked light (`neon`), and a third the far lamps' halos (`halo`); the
+//! probe captures neither.
 //!
 //! The car (body, glass and driver) mirrors a probe at its centre rather
 //! than the sky (ADR 0102): every frame, six forward passes of everything
@@ -53,6 +54,7 @@ use wxsl::render::types::{
 use wxsl::render::{Camera, Renderer, StockPipeline};
 
 use crate::car_ground::GROUND_TAG;
+use crate::halo::HALO_TAG;
 use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
 use crate::neon::NEON_TAG;
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
@@ -153,11 +155,17 @@ const ADD: BlendState = BlendState {
     },
 };
 
-/// The neons' light added over `color`, depth-tested against `depth`.
-fn neon_pass(label: String, color: ResourceId, depth: ResourceId) -> PassDesc {
+/// The pass that adds the far lamps' halos to the frame.
+const HALOS: &str = "drive lamp halos";
+
+/// The draws tagged `tag`, the neons' or the halos', added over `color`,
+/// depth-tested against `depth`, both faces: a halo's sprite faces the
+/// screen whichever way its corners wind, and the decal is seen from
+/// above.
+fn add_pass(label: String, tag: &str, color: ResourceId, depth: ResourceId) -> PassDesc {
     PassDesc::geometry(
         label,
-        DrawSource::Scene(TagExpr::tag(NEON_TAG)),
+        DrawSource::Scene(TagExpr::tag(tag)),
         MaterialStage::FORWARD_LIT,
     )
     .with_color(Attachment::load(color))
@@ -165,7 +173,8 @@ fn neon_pass(label: String, color: ResourceId, depth: ResourceId) -> PassDesc {
     .with_state(
         PassState::OPAQUE
             .with_depth_test(CompareFunction::LessEqual, false)
-            .with_blend(ADD),
+            .with_blend(ADD)
+            .with_cull_mode(None),
     )
 }
 
@@ -633,7 +642,8 @@ pub fn install(
         )
         .with_environment(probe.diffuse, probe.specular),
     );
-    graph.pass(neon_pass(NEON.into(), shaded, depth));
+    graph.pass(add_pass(NEON.into(), NEON_TAG, shaded, depth));
+    graph.pass(add_pass(HALOS.into(), HALO_TAG, shaded, depth));
     if !deferred {
         // The world, then the car on the same targets with the probe.
         let forward = graph
@@ -763,14 +773,17 @@ pub fn install(
         );
     }
     // The car's stand-in is drawn by the shadow passes and by no other,
-    // the ground grid and the neons by their own passes alone.
+    // the ground grid, the neons and the halos by their own passes alone.
     let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
-    let grid = TagExpr::tag(GROUND_TAG).or(TagExpr::tag(NEON_TAG)).not();
+    let grid = TagExpr::tag(GROUND_TAG)
+        .or(TagExpr::tag(NEON_TAG))
+        .or(TagExpr::tag(HALO_TAG))
+        .not();
     for index in 0..graph.passes().len() {
         let Some(pass) = graph.pass_mut(index) else {
             continue;
         };
-        if pass.label == GROUND || pass.label == NEON {
+        if [GROUND, NEON, HALOS].contains(&pass.label.as_str()) {
             continue;
         }
         if let PassKind::Geometry {

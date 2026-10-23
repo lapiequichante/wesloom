@@ -55,6 +55,7 @@ mod car;
 mod car_ground;
 mod city;
 mod flakes;
+mod halo;
 mod lights;
 mod neon;
 mod pipeline;
@@ -632,7 +633,7 @@ impl Drive {
         &mut self,
         gpu: &GpuContext,
         view: &wgpu::TextureView,
-        aspect: f32,
+        size: (u32, u32),
         panel: &Panel,
         dt: f32,
     ) -> Result<(), Box<dyn Error>> {
@@ -641,7 +642,7 @@ impl Drive {
         if dt > 0.0 {
             self.step = Some((before, dt));
         }
-        self.draw(gpu, view, aspect, panel, dt)
+        self.draw(gpu, view, size, panel, dt)
     }
 
     fn advance(&mut self, panel: &Panel, dt: f32) {
@@ -676,16 +677,17 @@ impl Drive {
         }
     }
 
-    /// Render the motion as it is into `view`, `dt` seconds after the last
-    /// frame.
+    /// Render the motion as it is into `view`, `size` pixels, `dt`
+    /// seconds after the last frame.
     fn draw(
         &mut self,
         gpu: &GpuContext,
         view: &wgpu::TextureView,
-        aspect: f32,
+        (width, height): (u32, u32),
         panel: &Panel,
         dt: f32,
     ) -> Result<(), Box<dyn Error>> {
+        let aspect = width as f32 / height.max(1) as f32;
         let Motion {
             s,
             odometer,
@@ -738,6 +740,7 @@ impl Drive {
             self.car.set_lights_on(gpu, self.day.lights_on)?;
             self.baked_hour = Some(hour);
         }
+        self.world.set_screen_height(gpu, height)?;
         let shown = debug_view(panel.value(VIEW)).map_or(0, |view| view.id);
         if shown != self.shown_view {
             self.car.set_debug_view(gpu, &mut self.renderer, shown)?;
@@ -991,7 +994,6 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
         drive.rotation = Vec2::from_array(saved.rotation);
     }
     let panel = sliders(options)?;
-    let aspect = width as f32 / height as f32;
     // Frames at 60 Hz: the first runs the bakes, and the velocity pass
     // needs a previous frame to measure against. The rest are timed. A
     // saved state renders its frame before until the last, which is its
@@ -1011,9 +1013,9 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
                 } else {
                     saved.previous
                 };
-                drive.draw(&gpu, target.view(), aspect, &panel, saved.dt)?;
+                drive.draw(&gpu, target.view(), (width, height), &panel, saved.dt)?;
             }
-            None => drive.frame(&gpu, target.view(), aspect, &panel, 1.0 / 60.0)?,
+            None => drive.frame(&gpu, target.view(), (width, height), &panel, 1.0 / 60.0)?,
         }
         gpu.wait();
         if frame >= 2 {
@@ -1164,7 +1166,7 @@ impl App {
         if let Err(error) = state.drive.frame(
             &state.gpu,
             &view,
-            size.width as f32 / size.height.max(1) as f32,
+            (size.width, size.height),
             &self.panel,
             dt,
         ) {
