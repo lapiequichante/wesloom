@@ -47,7 +47,7 @@
 //! and the sun's own flare while it is in view; the `ray length` and
 //! `ray opacity` sliders (or `--ray-length X`, `--ray-opacity X`) scale
 //! how far a star's rays reach and how strongly they add. The
-//! `quality` slider (or `--quality x0|x0.5|x1|x2`) scales the car's probe
+//! `quality` slider (or `--quality x0|x0.5|x1|x2|x4`) scales the car's probe
 //! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
 //! then reflecting the sky alone. The
 //! `screenshot` button under the sliders saves the next frame, without
@@ -102,7 +102,7 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--flare NAME] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2]
+      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--flare NAME] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
@@ -175,8 +175,9 @@ const RAY_LENGTH: &str = "ray length";
 const RAY_OPACITY: &str = "ray opacity";
 const QUALITY: &str = "quality";
 /// The `quality` slider's steps: the probe's and the shadow atlas's
-/// scale, 0 turning both off.
-const QUALITIES: [f32; 4] = [0.0, 0.5, 1.0, 2.0];
+/// scale, 0 turning both off; x4 is the largest atlas a pipeline may ask
+/// for, 8192².
+const QUALITIES: [f32; 5] = [0.0, 0.5, 1.0, 2.0, 4.0];
 /// How long a second right click may wait to be a double click.
 const DOUBLE_CLICK: f32 = 0.4;
 /// The fog's density per metre at the ground, at the `fog` slider's 1:
@@ -431,7 +432,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 options.quality = QUALITIES
                     .iter()
                     .position(|scale| format!("x{scale}") == name)
-                    .ok_or("--quality is one of x0, x0.5, x1, x2")?
+                    .ok_or("--quality is one of x0, x0.5, x1, x2, x4")?
                     as f32;
             }
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
