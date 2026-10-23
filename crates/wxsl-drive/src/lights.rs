@@ -218,10 +218,12 @@ fn heads(lamp: &Lamp) -> [(Vec3, Vec3); 2] {
 /// `eye`, the ones over the car casting shadows.
 ///
 /// Shadow tiles go in list order, largest first (`abi::shadow_tile`):
-/// by day all to the sun's cascades; at night first to the headlights and
-/// the tail lights, whose static tiles keep their slots (ADR 0101), then
-/// to the lamps near the car, nearest first. The sun casts its shadow
-/// while it is up; the moon casts none, which saves its four cascades.
+/// by day all to the sun's cascades; once the lamps are on, first to the
+/// lamps near the car, nearest first, whose wide cones need the texels
+/// most, then to the headlights and the tail lights, then to the sun's
+/// cascades while it is up. The moon casts none, which saves its four
+/// cascades. A static tile (ADR 0101) is redrawn when the lamps' count
+/// moves it to another slot.
 pub fn lights(
     day: &DayLight,
     lamps: &[Lamp],
@@ -250,6 +252,45 @@ pub fn lights(
         return vec![key];
     }
     let mut lights = Vec::new();
+    // Each lamp head near the car is two lights: a shadowed one carrying
+    // `shadow` of its intensity and a local one the rest, so a lamp's
+    // shadow fades in and out instead of switching.
+    let at = car.transform_point3(Vec3::ZERO);
+    let lamp = |(head, street): (Vec3, Vec3), share: f32| {
+        Light::spot(
+            head - Vec3::Y * 0.2,
+            (Vec3::NEG_Y + street * LAMP_TILT.tan()).normalize(),
+            LAMP_CONE - 2f32.to_radians(),
+            LAMP_CONE,
+            LAMP_COLOR,
+            LAMP_INTENSITY * day.lights_on * share,
+        )
+        .with_profile(LAMP_LAYER)
+        .with_range(LAMP_RANGE)
+    };
+    let mut near: Vec<((Vec3, Vec3), f32)> = lamps
+        .iter()
+        .flat_map(heads)
+        .map(|head| {
+            (
+                head,
+                1.0 - smoothstep(LAMP_SHADOW_NEAR, LAMP_SHADOW_FAR, head.0.distance(at)),
+            )
+        })
+        .filter(|(_, shadow)| *shadow > 0.0)
+        .collect();
+    // Nearest first, so the lamps over the car get the larger tiles.
+    near.sort_by(|a, b| a.0 .0.distance(at).total_cmp(&b.0 .0.distance(at)));
+    near.truncate(SHADOWED_LAMPS);
+    for &(head, shadow) in &near {
+        let mut light = lamp(head, shadow)
+            .casting_shadow(1.0)
+            .with_source_radius(0.15)
+            .with_penumbra(Penumbra::Outside)
+            .with_normal_bias(0.06);
+        light.shadow_distance = LAMP_RANGE;
+        lights.push(light);
+    }
     let forward = car.transform_vector3(Vec3::NEG_Z).normalize();
     for position in car_lamps.head {
         // Straight ahead and a touch down; the profile holds the beam.
@@ -300,45 +341,6 @@ pub fn lights(
         lights.push(tail);
     }
 
-    // Each lamp head near the car is two lights: a shadowed one carrying
-    // `shadow` of its intensity and a local one the rest, so a lamp's
-    // shadow fades in and out instead of switching.
-    let at = car.transform_point3(Vec3::ZERO);
-    let lamp = |(head, street): (Vec3, Vec3), share: f32| {
-        Light::spot(
-            head - Vec3::Y * 0.2,
-            (Vec3::NEG_Y + street * LAMP_TILT.tan()).normalize(),
-            LAMP_CONE - 2f32.to_radians(),
-            LAMP_CONE,
-            LAMP_COLOR,
-            LAMP_INTENSITY * day.lights_on * share,
-        )
-        .with_profile(LAMP_LAYER)
-        .with_range(LAMP_RANGE)
-    };
-    let mut near: Vec<((Vec3, Vec3), f32)> = lamps
-        .iter()
-        .flat_map(heads)
-        .map(|head| {
-            (
-                head,
-                1.0 - smoothstep(LAMP_SHADOW_NEAR, LAMP_SHADOW_FAR, head.0.distance(at)),
-            )
-        })
-        .filter(|(_, shadow)| *shadow > 0.0)
-        .collect();
-    // Nearest first, so the lamps over the car get the larger tiles.
-    near.sort_by(|a, b| a.0 .0.distance(at).total_cmp(&b.0 .0.distance(at)));
-    near.truncate(SHADOWED_LAMPS);
-    for &(head, shadow) in &near {
-        let mut light = lamp(head, shadow)
-            .casting_shadow(1.0)
-            .with_source_radius(0.15)
-            .with_penumbra(Penumbra::Outside)
-            .with_normal_bias(0.06);
-        light.shadow_distance = LAMP_RANGE;
-        lights.push(light);
-    }
     lights.push(key);
 
     // The optics, each lighting its housing from within, unshadowed. Last
@@ -430,6 +432,35 @@ mod tests {
             night.iter().filter(|light| !light.is_local()).count(),
             shadowed + 1
         );
+    }
+
+    #[test]
+    fn the_lamps_near_the_car_get_the_first_shadow_tiles() {
+        let lamps = crate::road::Road::new().lamps();
+        let car_lamps = CarLamps {
+            head: [Vec3::new(-0.6, 0.6, -2.2), Vec3::new(0.6, 0.6, -2.2)],
+            tail: [Vec3::new(-0.6, 0.7, 2.2), Vec3::new(0.6, 0.7, 2.2)],
+            optics: None,
+            optic_radius: 0.0,
+            tail_glow: 1.0,
+        };
+        // Dusk: the lamps on and the sun still casting.
+        let dusk = (0..240)
+            .map(|step| DayLight::at(12.0 + step as f32 * 0.05))
+            .find(|day| day.sun_up() && day.lights_on > 0.5)
+            .expect("a dusk with both the sun and the lamps");
+        let at = lamps[2].foot;
+        let all = lights(&dusk, &lamps, Mat4::from_translation(at), &car_lamps, at);
+        let casting: Vec<_> = all.iter().filter(|light| light.casts_shadow).collect();
+        let lamp_count = casting
+            .iter()
+            .take_while(|light| light.profile_layer == Some(LAMP_LAYER))
+            .count();
+        assert!(lamp_count >= 4, "{lamp_count} lamps first");
+        assert!(casting[lamp_count..]
+            .iter()
+            .all(|light| light.profile_layer != Some(LAMP_LAYER)));
+        assert!(casting.last().is_some_and(|light| !light.is_local()));
     }
 
     #[test]
