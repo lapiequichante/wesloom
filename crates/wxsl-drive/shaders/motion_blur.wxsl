@@ -4,13 +4,38 @@
 //! The camera carries the car along, so the car's velocity is nearly zero
 //! while the road under it streams past. The plain gather has a road pixel
 //! just behind the car sample back along the road's motion, into the car,
-//! and smears the car's colour down the road as a trail. Here a tap whose
-//! own motion is much shorter than this pixel's is something that stayed
-//! put in front of it, whose light never crossed this pixel during the
-//! exposure, and it is left out of the average.
+//! and smears the car's colour down the road as a trail. Here a tap that
+//! does not move as this pixel does, by direction as much as by length,
+//! is something else in front of it, whose light never crossed this
+//! pixel during the exposure, and it is left out of the average: the car
+//! that stays put, but also what moves on it, a turning wheel, a body
+//! part swaying on its springs, whose bright edge would otherwise streak
+//! down the road.
+//!
+//! The car's shadow on the road moves with the car, not with the road:
+//! smeared with the road, it would wash out into a pale band along the
+//! car. So what is smeared is the frame divided by the share of the
+//! road's light the car leaves it (`car_shadow.wxsl`), and that share
+//! multiplies the result back, unblurred.
 
 @group(3) @binding(0) var color_image: texture_2d<f32>;
 @group(3) @binding(1) var velocity_image: texture_2d<f32>;
+@group(3) @binding(2) var shadow_image: texture_2d<f32>;
+
+/// The least share of light the shadow is divided by: deeper, the
+/// division would only lift noise.
+const DARKEST: f32 = 0.02;
+
+/// The frame at `pixel`, the car's shadow divided out.
+fn unshadowed(pixel: vec2i) -> vec3f {
+    let shadow = max(textureLoad(shadow_image, pixel, 0).r, DARKEST);
+    return textureLoad(color_image, pixel, 0).rgb / shadow;
+}
+
+/// How far apart a tap's motion and the pixel's may be, as a share of the
+/// pixel's, for the tap to count whole, and to count at all.
+const APART_FROM: f32 = 0.3;
+const APART_TO: f32 = 0.6;
 
 /// How many samples the smear averages, current pixel included.
 const TAPS: i32 = 12;
@@ -33,15 +58,17 @@ fn drive_motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4
     let motion = own * 0.5 * params.strength;
     let reach = length(own);
 
-    var sum = textureLoad(color_image, pixel, 0).rgb;
+    var sum = unshadowed(pixel);
     var weight = 1.0;
     for (var tap = 1; tap < TAPS; tap++) {
         let fraction = f32(tap) / f32(TAPS - 1);
         let sample_pixel = vec2i(clamp(uv - motion * fraction, vec2f(0.0), vec2f(1.0)) * size);
-        let moved = length(textureLoad(velocity_image, sample_pixel, 0).xy);
-        let accept = smoothstep(0.25, 0.6, moved / max(reach, 1e-6));
-        sum += textureLoad(color_image, sample_pixel, 0).rgb * accept;
+        let moved = textureLoad(velocity_image, sample_pixel, 0).xy;
+        let apart = length(moved - own) / max(reach, 1e-6);
+        let accept = 1.0 - smoothstep(APART_FROM, APART_TO, apart);
+        sum += unshadowed(sample_pixel) * accept;
         weight += accept;
     }
-    return vec4f(sum / weight, 1.0);
+    let shadow = max(textureLoad(shadow_image, pixel, 0).r, DARKEST);
+    return vec4f(sum / weight * shadow, 1.0);
 }

@@ -15,7 +15,11 @@
 //!
 //! Under the car, before the background, a pass multiplies the road by
 //! the car's occlusion: the ground grid's PRT bake lit by the car's probe
-//! (`car_ground`), drawn by no other pass. Another then adds the neons'
+//! (`car_ground`), drawn by no other pass. The road near the car is then
+//! drawn again without shadows, and the share of its light the shaded
+//! road kept is what the motion blur leaves unblurred: the car's shadow
+//! and occlusion move with the car, not with the road
+//! (`shaders/car_shadow.wxsl`). Another then adds the neons'
 //! baked light (`neon`), and a third the far lamps' halos (`halo`); the
 //! probe captures neither.
 //!
@@ -38,7 +42,7 @@ use std::error::Error;
 use glam::Vec3;
 
 use wxsl::core::abi::{self, MaterialStage};
-use wxsl::core::graph::{Graph, Node, SocketRef};
+use wxsl::core::graph::{Graph, Node, NodeId, SocketRef};
 use wxsl::core::node::NodeRegistry;
 use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
@@ -61,6 +65,7 @@ use crate::halo::HALO_TAG;
 use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
 use crate::neon::NEON_TAG;
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
+use crate::world::UNSHADOWED_TAG;
 
 /// The pass the lens' numbers go to.
 const DOF_CIRCLES: &str = "drive dof circles";
@@ -156,6 +161,12 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
             description: "The velocity stage's screen motion, uv per frame.",
             history: 0,
         },
+        EffectInput {
+            name: "shadow",
+            kind: EffectInputKind::Image,
+            description: "The share of the road's light the car leaves it, left unblurred.",
+            history: 0,
+        },
     ],
     outputs: &[],
     parameters: &[EffectParameter {
@@ -165,6 +176,46 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
     shader: EffectShader::Source {
         path: "package::drive::motion_blur",
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// The car's shadow target, wired into the motion blur by the document,
+/// and the passes that fill it: the road near the car without shadows,
+/// then the share of its light the shaded road kept.
+const CAR_SHADOW: &str = "car shadow";
+const UNSHADOWED: &str = "drive unshadowed road";
+const CAR_SHADOW_PASS: &str = "drive car shadow";
+
+/// The share of the road's light the car leaves it
+/// (`shaders/car_shadow.wxsl`).
+const CAR_SHADOW_EFFECT: Effect = Effect {
+    id: "drive.car_shadow",
+    label: "car shadow",
+    description: "The share of the road's light its shadows leave it, from the road drawn with and without them.",
+    kind: EffectKind::Screen {
+        vertex_entry: "drive_car_shadow_vs",
+        fragment_entry: "drive_car_shadow_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "shaded",
+            kind: EffectInputKind::Image,
+            description: "The road as shaded, the car's occlusion on it.",
+            history: 0,
+        },
+        EffectInput {
+            name: "unshadowed",
+            kind: EffectInputKind::Image,
+            description: "The road near the car without shadows; alpha 0 elsewhere.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: "package::drive::car_shadow",
+        wxsl: include_str!("../shaders/car_shadow.wxsl"),
     },
     downlevel: Downlevel::Portable,
 };
@@ -428,6 +479,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
+        CAR_SHADOW_EFFECT,
         FOG_EFFECT,
         GRADE_EFFECT,
         ABERRATION_EFFECT,
@@ -454,8 +506,13 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
 
 /// The stock forward (or deferred) document with a velocity pass over the
 /// prepass' (or the G-buffer's) depth, then a motion blur and a bloom
-/// between the shaded colour and the tonemap.
-fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Box<dyn Error>> {
+/// between the shaded colour and the tonemap; without `motion_blur`, only
+/// the bloom: no velocity pass, no blur.
+fn motion_blur_document(
+    renderer: &Renderer,
+    deferred: bool,
+    motion_blur: bool,
+) -> Result<Graph, Box<dyn Error>> {
     let registry = wxsl::render::document_registry(renderer.effects());
     let (stock, preset, depth_stage) = match deferred {
         true => (StockPipeline::Deferred, "deferred", "gbuffer"),
@@ -498,6 +555,25 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
         },
         "tonemap",
     )?;
+    let glowing = document.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label("glowing")
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
+    let bloom = BLOOM.iter().fold(
+        Node::new(doc::PASS_BLOOM).with_label(BLOOM_LABEL),
+        |node, (name, value)| node.with_setting(*name, *value),
+    );
+    let bloom = document.add(bloom);
+    document.disconnect(&registry, &SocketRef::new(tonemap, "image"));
+    let mut wires = vec![
+        ((glowing, "color"), (bloom, "into")),
+        ((glowing, "color"), (tonemap, "image")),
+    ];
+    if !motion_blur {
+        wires.push(((color, "color"), (bloom, "image")));
+        return wire(document, &registry, &wires);
+    }
     let velocity = document.add(
         Node::new(doc::RESOURCE_COLOR)
             .with_label("velocity")
@@ -513,6 +589,12 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
             .with_label("blurred")
             .with_setting(doc::SETTING_PRECISION, "hdr"),
     );
+    // Written by the passes `install` adds.
+    let shadow = document.add(
+        Node::new(doc::RESOURCE_COLOR)
+            .with_label(CAR_SHADOW)
+            .with_setting(doc::SETTING_PRECISION, "hdr"),
+    );
     let blur = document.add(
         Node::new(format!(
             "{}{}",
@@ -521,38 +603,40 @@ fn motion_blur_document(renderer: &Renderer, deferred: bool) -> Result<Graph, Bo
         ))
         .with_label(MOTION_BLUR),
     );
-    let glowing = document.add(
-        Node::new(doc::RESOURCE_COLOR)
-            .with_label("glowing")
-            .with_setting(doc::SETTING_PRECISION, "hdr"),
-    );
-    let bloom = BLOOM.iter().fold(
-        Node::new(doc::PASS_BLOOM).with_label(BLOOM_LABEL),
-        |node, (name, value)| node.with_setting(*name, *value),
-    );
-    let bloom = document.add(bloom);
-    document.disconnect(&registry, &SocketRef::new(tonemap, "image"));
-    for (from, to) in [
+    wires.extend([
         ((scene, "draws"), (motion, "draws")),
         ((prepass, "depth"), (motion, "depth")),
         ((velocity, "color"), (motion, "into")),
         ((color, "color"), (blur, "color")),
         ((velocity, "color"), (blur, "velocity")),
+        ((shadow, "color"), (blur, "shadow")),
         ((blurred, "color"), (blur, "into")),
         ((blurred, "color"), (bloom, "image")),
-        ((glowing, "color"), (bloom, "into")),
-        ((glowing, "color"), (tonemap, "image")),
-    ] {
+    ]);
+    wire(document, &registry, &wires)
+}
+
+/// One wire of a document: from a node's socket to another's.
+type Wire<'a> = ((NodeId, &'a str), (NodeId, &'a str));
+
+/// `document` with each of `wires` wired.
+fn wire(
+    mut document: Graph,
+    registry: &NodeRegistry,
+    wires: &[Wire<'_>],
+) -> Result<Graph, Box<dyn Error>> {
+    for &(from, to) in wires {
         document
-            .wire(&registry, from, to)
+            .wire(registry, from, to)
             .map_err(|error| format!("motion blur wiring: {error}"))?;
     }
     Ok(document)
 }
 
-/// Build the frame, forward or `deferred`, with or without `fxaa`, the
-/// chromatic `aberration` pass and the screen-space reflections (`ssr`, at
-/// that quality),
+/// Build the frame, forward or `deferred`, with or without the
+/// `motion_blur` (its velocity pass, the car's shadow and the blur), `fxaa`,
+/// the chromatic `aberration` pass and the screen-space reflections (`ssr`,
+/// at that quality),
 /// the lens' `glare`,
 /// displayed through [`TONEMAPS`]`[tonemap]`, and give it to `renderer`. With `refractive`, the car's glass leaves the opaque
 /// passes for the refraction tier (ADR 0067). `quality` scales the car's
@@ -564,6 +648,7 @@ pub fn install(
     renderer: &mut Renderer,
     refractive: bool,
     deferred: bool,
+    motion_blur: bool,
     fxaa: bool,
     aberration: bool,
     ssr: Option<ssr::Quality>,
@@ -571,7 +656,7 @@ pub fn install(
     tonemap: usize,
     quality: f32,
 ) -> Result<(), Box<dyn Error>> {
-    let document = motion_blur_document(renderer, deferred)?;
+    let document = motion_blur_document(renderer, deferred, motion_blur)?;
     // The renderer's own: its lighting set shapes the G-buffer.
     let mut config = renderer.pipeline_config().clone();
     if quality > 0.0 {
@@ -638,13 +723,26 @@ pub fn install(
     };
     let hdr = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
     let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
-    let blur = effect_pass(&graph, MOTION_BLUR_EFFECT.id)?;
+    let blur = match motion_blur {
+        true => Some(effect_pass(&graph, MOTION_BLUR_EFFECT.id)?),
+        false => None,
+    };
+    let bloom_pass = |pass: &PassDesc| pass.label.starts_with(BLOOM_LABEL);
     let curve = tonemap;
     let tonemap = effect_pass(&graph, TONEMAPS[0].2)?;
     graph.pass_mut(tonemap).ok_or("tonemap pass")?.kind = PassKind::Screen {
         effect: TONEMAPS[curve].2.to_string(),
     };
-    let shaded = graph.passes()[blur].reads[0].resource;
+    // What the blur reads, or without it the bloom.
+    let shaded = match blur {
+        Some(blur) => graph.passes()[blur].reads[0].resource,
+        None => graph
+            .passes()
+            .iter()
+            .find(|pass| bloom_pass(pass))
+            .map(|pass| pass.reads[0].resource)
+            .ok_or("the frame has no bloom")?,
+    };
     let depth = graph
         .passes()
         .iter()
@@ -699,6 +797,29 @@ pub fn install(
         )
         .with_environment(probe.diffuse, probe.specular),
     );
+    // The car's shadow and occlusion on the road, for the motion blur to
+    // leave in place, read before the neons and the car are drawn over it.
+    if motion_blur {
+        let unshadowed = graph.resource(hdr(UNSHADOWED));
+        graph.pass(
+            PassDesc::geometry(
+                UNSHADOWED,
+                DrawSource::Scene(TagExpr::tag(UNSHADOWED_TAG)),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(clear(unshadowed))
+            .with_depth(DepthAttachment::load(depth))
+            .with_state(PassState::OPAQUE.with_depth_test(CompareFunction::LessEqual, false)),
+        );
+        let car_shadow = graph
+            .resource_by_label(CAR_SHADOW)
+            .ok_or("the frame has no car shadow target")?;
+        graph.pass(
+            PassDesc::screen(CAR_SHADOW_PASS, CAR_SHADOW_EFFECT.id)
+                .with_color(clear(car_shadow))
+                .with_reads([Read::current(shaded), Read::current(unshadowed)]),
+        );
+    }
     graph.pass(add_pass(NEON.into(), NEON_TAG, shaded, depth));
     graph.pass(add_pass(LAMP_HALOS.into(), HALO_TAG, shaded, depth));
     if !deferred {
@@ -768,7 +889,24 @@ pub fn install(
             None => optics.color,
         };
     }
-    graph.pass_mut(blur).ok_or("motion blur pass")?.reads[0] = Read::current(background);
+    match blur {
+        Some(blur) => {
+            graph.pass_mut(blur).ok_or("motion blur pass")?.reads[0] = Read::current(background)
+        }
+        // The bloom's passes read the frame where the blur would have.
+        None => {
+            for index in 0..graph.passes().len() {
+                let Some(pass) = graph.pass_mut(index).filter(|pass| bloom_pass(pass)) else {
+                    continue;
+                };
+                for read in &mut pass.reads {
+                    if read.resource == shaded {
+                        *read = Read::current(background);
+                    }
+                }
+            }
+        }
+    }
 
     // Depth of field over the blurred, glowing image, before the tonemap.
     let blurred = graph.passes()[tonemap].reads[0].resource;
@@ -856,17 +994,19 @@ pub fn install(
         );
     }
     // The car's stand-in is drawn by the shadow passes and by no other,
-    // the ground grid, the neons and the halos by their own passes alone.
+    // the ground grid, the neons, the halos and the unshadowed road by
+    // their own passes alone.
     let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
     let grid = TagExpr::tag(GROUND_TAG)
         .or(TagExpr::tag(NEON_TAG))
         .or(TagExpr::tag(HALO_TAG))
+        .or(TagExpr::tag(UNSHADOWED_TAG))
         .not();
     for index in 0..graph.passes().len() {
         let Some(pass) = graph.pass_mut(index) else {
             continue;
         };
-        if [GROUND, NEON, LAMP_HALOS].contains(&pass.label.as_str()) {
+        if [GROUND, NEON, LAMP_HALOS, UNSHADOWED].contains(&pass.label.as_str()) {
             continue;
         }
         if let PassKind::Geometry {
@@ -1059,6 +1199,7 @@ mod tests {
                 &mut renderer,
                 false,
                 false,
+                true,
                 true,
                 false,
                 None,

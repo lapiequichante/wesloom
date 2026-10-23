@@ -1,0 +1,38 @@
+//! drive car shadow: how much of the road's light the car takes, per
+//! pixel, for the motion blur to leave in place.
+//!
+//! The car's shadow and occlusion on the road move with the car, which the
+//! camera follows, while the road under them streams past: blurred with
+//! the road, they wash out into a pale band along the car. This pass
+//! divides the road as shaded (its shadows, then the car's occlusion) by
+//! the same road drawn again near the car without shadows
+//! (`world::UNSHADOWED_TAG`): the share of its light that reaches it, 1
+//! wherever that road was not drawn. The blur smears the frame divided by
+//! it, then multiplies it back, sharp.
+//!
+//! One factor for all three channels, from luminance: a ratio per channel
+//! of a dark pixel would be noise.
+
+@group(3) @binding(0) var shaded_image: texture_2d<f32>;
+@group(3) @binding(1) var unshadowed_image: texture_2d<f32>;
+
+@vertex
+fn drive_car_shadow_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn drive_car_shadow_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let pixel = vec2i(position.xy);
+    let open = textureLoad(unshadowed_image, pixel, 0);
+    let luma = vec3f(0.2126, 0.7152, 0.0722);
+    let unshadowed = dot(open.rgb, luma);
+    if open.a <= 0.0 || unshadowed <= 1e-6 {
+        return vec4f(1.0);
+    }
+    let shaded = dot(textureLoad(shaded_image, pixel, 0).rgb, luma);
+    return vec4f(vec3f(saturate(shaded / unshadowed)), 1.0);
+}

@@ -626,6 +626,8 @@ struct Drive {
     paint: Option<usize>,
     /// The debug view the car's materials are compiled for, 0 shading.
     shown_view: i32,
+    /// Whether the frame installed has the motion blur, and its passes.
+    motion_blur: bool,
     /// Whether the frame installed ends in FXAA.
     fxaa: bool,
     /// Whether the frame installed has the aberration pass.
@@ -665,6 +667,7 @@ impl Drive {
                     renderer,
                     refractive,
                     false,
+                    true,
                     true,
                     false,
                     None,
@@ -708,6 +711,7 @@ impl Drive {
             rotation: Vec2::ZERO,
             paint: None,
             shown_view: 0,
+            motion_blur: true,
             fxaa: true,
             aberration: false,
             ssr: None,
@@ -787,14 +791,17 @@ impl Drive {
             time,
         } = self.motion;
         let speed = speed.unwrap_or(0.0);
+        // At 0 the blur and everything only it reads are left out.
+        let motion_blur = panel.value(BLUR) > 0.0;
         let fxaa = panel.value(FXAA) >= 0.5;
         let aberration = panel.value(ABERRATION) > 0.0;
         let ssr = ssr_quality(panel.value(SSR)).map(|(_, quality)| quality);
         let tonemap = panel.value(TONEMAP).round() as usize;
         let quality = QUALITIES[panel.value(QUALITY).round() as usize];
         let glare = glare(panel);
-        if (fxaa, aberration, ssr, glare, tonemap, quality)
+        if (motion_blur, fxaa, aberration, ssr, glare, tonemap, quality)
             != (
+                self.motion_blur,
                 self.fxaa,
                 self.aberration,
                 self.ssr,
@@ -807,6 +814,7 @@ impl Drive {
                 &mut self.renderer,
                 self.car.refractive,
                 false,
+                motion_blur,
                 fxaa,
                 aberration,
                 ssr,
@@ -814,6 +822,7 @@ impl Drive {
                 tonemap,
                 quality,
             )?;
+            self.motion_blur = motion_blur;
             self.fxaa = fxaa;
             self.aberration = aberration;
             self.ssr = ssr;
@@ -980,12 +989,20 @@ impl Drive {
                 *shown = Some(strength);
             }
         }
-        self.renderer.set_pass_param(
-            pipeline::MOTION_BLUR,
-            "strength",
-            Value::F32(panel.value(BLUR)),
-        )?;
         let mut draws: DrawList = self.world.draws().into_iter().collect();
+        if self.motion_blur {
+            self.renderer.set_pass_param(
+                pipeline::MOTION_BLUR,
+                "strength",
+                Value::F32(panel.value(BLUR)),
+            )?;
+            for item in self
+                .world
+                .unshadowed_draws(transform.transform_point3(Vec3::ZERO))
+            {
+                draws.push(item);
+            }
+        }
         for item in self.car.draws(transform, previous_transform) {
             draws.push(item);
         }
