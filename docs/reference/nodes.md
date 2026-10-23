@@ -2,8 +2,8 @@
 
 Every node a graph can place, generated from the registries. A node is added with `add_node` by its id, and its sockets are named as listed here. A socket with a default can be left unconnected. `T`, `U`… are generic: they take the type of what is connected, or the one `set_generic` picks.
 
-- [Shader nodes](#shader-nodes) (193)
-- [Pipeline nodes](#pipeline-nodes) (29)
+- [Shader nodes](#shader-nodes) (194)
+- [Pipeline nodes](#pipeline-nodes) (30)
 
 ## Shader nodes
 
@@ -147,6 +147,14 @@ Compress high dynamic range on luminance, preserving hue.
 #### `color.tonemap_reinhard_jodie` · Reinhard-Jodie tonemap
 
 Maps unbounded positive radiance into 0..1, blending the plain global Reinhard scale with a per-channel one so saturated highlights keep their hue instead of collapsing to white.
+
+- in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
+- in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
+- out `out: vec3f`
+
+#### `color.tonemap_wxsl` · Tonemap (WXSL)
+
+Between the filmic curve and ACES: ACES's contrast and midtone saturation, filmic's near-linear toe, soft shoulder and highlight desaturation, for the cost of the filmic curve.
 
 - in `color: vec3f = vec3f(1.0, 1.0, 1.0)`: Linear radiance, unbounded positive.
 - in `exposure: f32 = 1.0f`: Multiplies the radiance before the curve; 2.0 is one stop brighter.
@@ -1997,6 +2005,18 @@ Smear the frame along its own velocity buffer. Reads: `color` (The frame, as lin
 - in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
 - in `color: color_target`: The frame, as linear radiance.
 - in `velocity: color_target`: The velocity stage's screen motion, uv per frame.
+- out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
+- setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
+- only in document graphs
+
+#### `pass.screen.wxsl.probe_face` · Probe face
+
+A probe view's capture, flipped into its cube face over the environment Reads: `color` (The face's linear forward capture), `depth` (The face's standard depth), `radiance` (The environment's radiance cube, behind what was drawn).
+
+- in `into: color_target` (optional): Where to write. Unconnected means the frame's own target.
+- in `color: color_target`: The face's linear forward capture
+- in `depth: depth_target`: The face's standard depth
+- in `radiance: color_target`: The environment's radiance cube, behind what was drawn
 - out `color: color_target`: What the effect wrote — the frame's target when `into` is unconnected.
 - setting `policy` = `per frame`: How often the pass runs: per frame, once, on resize or on demand. Only a pass whose target survives frames may skip.
 - only in document graphs

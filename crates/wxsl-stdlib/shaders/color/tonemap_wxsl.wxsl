@@ -1,0 +1,28 @@
+// Tonemap (WXSL)
+//
+// Between the filmic curve and ACES: ACES's contrast and midtone
+// saturation, filmic's near-linear toe, soft shoulder and highlight
+// desaturation, for the cost of the filmic curve.
+//
+// Our own curve. The same per-channel rational form as `tonemap_filmic`,
+// with coefficients solved so that the toe has unit slope (filmic lifts
+// the shadows at twice that, ACES crushes them), 0.18 maps to about 0.245
+// and 1.0 to 0.74 (between the two), and it approaches 1.0 without
+// clipping. Instead of ACES's colour space round trip, the chroma is
+// scaled around luminance: up 10% in the midtones, easing to down 20% as
+// the highlight is compressed. Like `tonemap_aces` it does no sRGB
+// encoding — the display transform owns that.
+import package::color::luminance::luminance;
+
+fn tonemap_wxsl(
+    color: vec3f, // Linear radiance, unbounded positive. @default 1.0, 1.0, 1.0
+    exposure: f32, // Multiplies the radiance before the curve; 2.0 is one stop brighter. @default 1.0
+) -> vec3f {
+    let x = max(color * exposure, vec3f(0.0));
+    let mapped = x * (x + vec3f(0.11)) / (x * (x + vec3f(0.39)) + vec3f(0.11));
+
+    let level = luminance(mapped);
+    let compression = saturate(luminance(x) - 1.0);
+    let chroma = 1.1 - 0.3 * compression;
+    return saturate(vec3f(level) + (mapped - vec3f(level)) * chroma);
+}

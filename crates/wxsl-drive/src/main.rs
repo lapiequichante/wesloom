@@ -20,7 +20,7 @@
 //!
 //! In the window: the sliders set the speed, the hour, the motion blur,
 //! the aperture, the focus, the chromatic aberration (an extra pass,
-//! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie), the
+//! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie, WXSL), the
 //! grade's saturation and the vertical field of view; drag elsewhere to look around the car, drag
 //! with the right button to turn the camera on top of looking at it (a
 //! right double-click straightens it), scroll to zoom, `R` recentres,
@@ -233,13 +233,13 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         blur: 0.3,
         aperture: 8.0,
         focus: 1.0,
-        aberration: 0.0,
-        tonemap: 1.0,
+        aberration: 0.002,
+        tonemap: 4.0,
         saturation: pipeline::SATURATION,
         fov: 55.0,
         fog: 0.7,
         exposure: 0.0,
-        environment: 1.0,
+        environment: 0.0,
         ground_ao: 0.8,
         car_ao: 0.8,
         at: 0.0,

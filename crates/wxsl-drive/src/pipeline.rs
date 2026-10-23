@@ -318,7 +318,7 @@ pub fn grade_rows(saturation: f32) -> [[f32; 4]; 3] {
 /// The display transforms the `tonemap` slider steps through: its name,
 /// the stdlib curve, and the effect that applies it. Filmic is the stock
 /// `wxsl.tonemap`; each other is its graph with that curve in its place.
-pub const TONEMAPS: [(&str, &str, &str); 4] = [
+pub const TONEMAPS: [(&str, &str, &str); 5] = [
     ("filmic", "color.tonemap_filmic", "wxsl.tonemap"),
     ("ACES", "color.tonemap_aces", "drive.tonemap_aces"),
     (
@@ -331,6 +331,7 @@ pub const TONEMAPS: [(&str, &str, &str); 4] = [
         "color.tonemap_reinhard_jodie",
         "drive.tonemap_reinhard_jodie",
     ),
+    ("WXSL", "color.tonemap_wxsl", "drive.tonemap_wxsl"),
 ];
 
 /// The stock tonemap's graph with `curve` for its filmic curve: the same

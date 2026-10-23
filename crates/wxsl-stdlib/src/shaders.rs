@@ -89,6 +89,7 @@ modules! {
     "package::color::tonemap_filmic" => "color/tonemap_filmic.wxsl",
     "package::color::tonemap_reinhard" => "color/tonemap_reinhard.wxsl",
     "package::color::tonemap_reinhard_jodie" => "color/tonemap_reinhard_jodie.wxsl",
+    "package::color::tonemap_wxsl" => "color/tonemap_wxsl.wxsl",
 
     "package::distort::swirl_uv" => "distort/swirl_uv.wxsl",
 

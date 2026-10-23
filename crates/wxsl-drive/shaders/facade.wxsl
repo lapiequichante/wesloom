@@ -39,8 +39,8 @@ fn facade(
     let wall = round(dot(n, vec3f(1.0, 0.0, 2.0)) * 16.0);
     let across = normalize(n.xz);
     let along = dot(world.xz, vec2f(-across.y, across.x));
-    let storey = 3.3 + seed * 0.9;
-    let bay = 2.2 + fract(seed * 7.0) * 1.8;
+    let storey = 2.64 + seed * 0.72;
+    let bay = 1.76 + fract(seed * 7.0) * 1.44;
     let grid = vec2f(along / bay, (world.y + 100.0) / storey);
     let index = floor(grid);
     let local = fract(grid);
@@ -55,7 +55,7 @@ fn facade(
     let wx = smoothstep(edge.x - soft.x, edge.x + soft.x, local.x) * (1.0 - smoothstep(1.0 - edge.x - soft.x, 1.0 - edge.x + soft.x, local.x)) * (1.0 - mullion);
     let wy = smoothstep(edge.y - soft.y, edge.y + soft.y, local.y) * (1.0 - smoothstep(top - soft.y, top + soft.y, local.y));
     let room = hash13(vec3f(index, seed * 97.0 + wall));
-    let lit_share = 0.08 + 0.3 * fract(seed * 13.0);
+    let lit_share = 0.064 + 0.24 * fract(seed * 13.0);
     var lit = step(room, lit_share);
     // Far away a window is under a pixel: its average, not its aliasing.
     let far = smoothstep(0.3, 0.8, max(pixel.x, pixel.y));
