@@ -124,7 +124,11 @@ pub fn structures() -> Vec<Structure> {
                 field("spot_outer_cos", "spot_outer_cos", F32),
                 field("spot_inner_cos", "spot_inner_cos", F32),
                 field("cookie_layer", "cookie_layer", U32),
-                field("_padding3", "_pad3", Vector(2)),
+                // Which side of the hard edge a soft shadow's penumbra
+                // lies on: 0 straddling it, 1 outside the shadow
+                // (ADR 0105).
+                field("penumbra", "penumbra", F32),
+                field("_padding3", "_pad3", F32),
             ],
         },
         Structure {
@@ -695,7 +699,7 @@ mod tests {
         // the scene uniform's table.
         assert_eq!(
             all[1].offsets(),
-            vec![0, 12, 16, 28, 32, 36, 40, 44, 48, 60, 64, 76, 80, 92, 96, 100, 104]
+            vec![0, 12, 16, 28, 32, 36, 40, 44, 48, 60, 64, 76, 80, 92, 96, 100, 104, 108]
         );
         assert_eq!(all[2].offsets(), vec![0, 16, 80, 88]);
         assert_eq!(all[5].offsets(), vec![0, 12, 24, 40]);

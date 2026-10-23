@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 use glam::{Mat4, Vec3};
 use wxsl::core::scene::TagExpr;
-use wxsl::render::environment::IesProfile;
+use wxsl::render::environment::{IesProfile, Penumbra};
 use wxsl::render::{GpuContext, Light};
 
 use crate::road::Lamp;
@@ -241,7 +241,8 @@ pub fn lights(
             // The towers' tops, kilometres up-sun of the long shadows
             // they throw on the road under a low sun.
             .with_caster_reach(3000.0)
-            .with_source_radius(0.0047);
+            .with_source_radius(0.0047)
+            .with_penumbra(Penumbra::Outside);
         key.shadow_distance = 500.0;
         key.shadow_normal_bias = 0.05;
     }
@@ -265,6 +266,7 @@ pub fn lights(
         .with_range(HEADLIGHT_RANGE)
         .casting_shadow(1.0)
         .with_source_radius(0.04)
+        .with_penumbra(Penumbra::Outside)
         .with_normal_bias(0.04)
         // The car and the deck, drawn once in the car's frame (ADR 0101):
         // the deck kept is the stretch under the car when it was drawn,
@@ -332,6 +334,7 @@ pub fn lights(
         let mut light = lamp(head, shadow)
             .casting_shadow(1.0)
             .with_source_radius(0.15)
+            .with_penumbra(Penumbra::Outside)
             .with_normal_bias(0.06);
         light.shadow_distance = LAMP_RANGE;
         lights.push(light);

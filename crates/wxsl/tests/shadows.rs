@@ -239,6 +239,25 @@ impl Scene {
         self.gpu.wait();
         self.target.read_rgba8(&self.gpu.device, &self.gpu.queue)
     }
+
+    /// Draw `items`, over meshes of the test's own, and read the image
+    /// back.
+    fn render_items(&mut self, environment: &Environment, items: Vec<DrawItem<'_>>) -> Vec<u8> {
+        let draws: DrawList<'_> = items.into_iter().collect();
+        self.renderer
+            .render(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &RenderRequest {
+                    view: self.target.view(),
+                    environment,
+                    draws: &draws,
+                },
+            )
+            .expect("the frame renders");
+        self.gpu.wait();
+        self.target.read_rgba8(&self.gpu.device, &self.gpu.queue)
+    }
 }
 
 /// How much darker a pixel has to be than the unshadowed reference before
@@ -751,7 +770,7 @@ fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
             let unlit = scene.render(&env, &ground, Some(&caster));
             env.lights[0].casts_shadow = true;
             let soft = scene.render(&env, &ground, Some(&caster));
-            env.lights = vec![light];
+            env.lights = vec![light.clone()];
             let hard = scene.render(&env, &ground, Some(&caster));
             let at = |image: &[u8], x: f32| i16::from(brightness(image, Vec3::new(x, 0.0, 0.0)));
             let full = at(&unlit, edge);
@@ -778,6 +797,24 @@ fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
                 at(&hard, edge + probe)
             );
             assert!(inside < outside, "{kind}: the penumbra brightens outward");
+            // An outside penumbra (ADR 0105) leaves the shadow's inside as
+            // dark as the hard edge's and still softens the outside.
+            env.lights = vec![light
+                .clone()
+                .with_source_radius(radius)
+                .with_penumbra(wxsl::render::environment::Penumbra::Outside)];
+            let out = scene.render(&env, &ground, Some(&caster));
+            assert!(
+                at(&out, edge - probe) <= at(&hard, edge - probe) + 2,
+                "{kind}: an outside penumbra lights the inside: {} vs {}",
+                at(&out, edge - probe),
+                at(&hard, edge - probe)
+            );
+            assert!(
+                at(&out, edge + probe) + 2 < at(&hard, edge + probe),
+                "{kind}: an outside penumbra leaves the outside hard"
+            );
+            env.lights = vec![light.clone()];
             // Pixels neither umbra nor lit, along a sweep one pixel apart.
             let between = |image: &[u8]| {
                 (0..16)
@@ -792,6 +829,58 @@ fn a_source_radius_softens_the_edge_and_leaves_open_ground_lit() {
                 between(&soft)
             );
         }
+    }
+}
+
+/// Under an outside penumbra, a contact shadow inside a far caster's
+/// penumbra keeps its own, narrow width (ADR 0105): filtered at the
+/// average of both, it would turn as black as the far caster's umbra.
+#[test]
+fn a_contact_shadow_stays_narrow_inside_a_far_casters_penumbra() {
+    let Some(gpu) = gpu() else { return };
+    let mut scene = Scene::new(gpu);
+    let graph = plain(&scene.registry, "mixed receiver");
+    let material = scene.material(&graph, &MaterialConfig::default());
+    let quad = Mesh::plane(&scene.gpu.device, 1.0);
+    let floor = Mesh::plane(&scene.gpu.device, 8.0);
+    // The sun at 45° over +x, so a shadow falls a caster's height towards
+    // -x. A wide slab 3.5 m up, its shadow's edge at x = 0 and blurred by
+    // the sun's 0.2 rad; a tile 10 cm up, its shadow from x = 0.05 to
+    // 0.35, the strip below x = 0.15 seen beside the tile itself.
+    let slab = Mat4::from_scale_rotation_translation(
+        Vec3::new(8.0, 1.0, 8.0),
+        glam::Quat::IDENTITY,
+        Vec3::new(-0.5, 3.5, 0.0),
+    );
+    let tile = Mat4::from_scale_rotation_translation(
+        Vec3::new(0.3, 1.0, 1.0),
+        glam::Quat::IDENTITY,
+        Vec3::new(0.3, 0.1, 0.0),
+    );
+    let mut env = lit(false);
+    env.lights = vec![Light::directional(Vec3::new(1.0, 1.0, 0.0), Vec3::ONE, 3.0)
+        .casting_shadow(4.0)
+        .with_source_radius(0.2)
+        .with_penumbra(wxsl::render::environment::Penumbra::Outside)];
+    let beyond = Vec3::new(-0.1, 0.0, 0.0);
+    let under = Vec3::new(0.1, 0.0, 0.0);
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        let draw = |transform: Mat4| DrawItem::new(&quad, &material).with_transform(transform);
+        let ground = || DrawItem::new(&floor, &material);
+        let slab_only = scene.render_items(&env, vec![ground(), draw(slab)]);
+        let both = scene.render_items(&env, vec![ground(), draw(slab), draw(tile)]);
+        let name = pipeline.name();
+        let umbra = brightness(&slab_only, beyond);
+        let (alone, with) = (brightness(&slab_only, under), brightness(&both, under));
+        assert!(
+            with + 5 < alone,
+            "{name}: the tile shadows its strip: {with} vs {alone}"
+        );
+        assert!(
+            with > umbra + 10,
+            "{name}: the tile's strip is as dark as the slab's umbra: {with} vs {umbra}"
+        );
     }
 }
 

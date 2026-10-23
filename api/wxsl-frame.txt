@@ -376,6 +376,27 @@ impl core::marker::Unpin for wxsl_frame::environment::LightKind
 impl core::marker::UnsafeUnpin for wxsl_frame::environment::LightKind
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::LightKind
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::LightKind
+pub enum wxsl_frame::environment::Penumbra
+pub wxsl_frame::environment::Penumbra::Inside
+pub wxsl_frame::environment::Penumbra::Outside
+impl core::clone::Clone for wxsl_frame::environment::Penumbra
+pub fn wxsl_frame::environment::Penumbra::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::environment::Penumbra
+impl core::cmp::PartialEq for wxsl_frame::environment::Penumbra
+pub fn wxsl_frame::environment::Penumbra::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::environment::Penumbra
+pub fn wxsl_frame::environment::Penumbra::default() -> wxsl_frame::environment::Penumbra
+impl core::fmt::Debug for wxsl_frame::environment::Penumbra
+pub fn wxsl_frame::environment::Penumbra::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::environment::Penumbra
+impl core::marker::StructuralPartialEq for wxsl_frame::environment::Penumbra
+impl core::marker::Freeze for wxsl_frame::environment::Penumbra
+impl core::marker::Send for wxsl_frame::environment::Penumbra
+impl core::marker::Sync for wxsl_frame::environment::Penumbra
+impl core::marker::Unpin for wxsl_frame::environment::Penumbra
+impl core::marker::UnsafeUnpin for wxsl_frame::environment::Penumbra
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::environment::Penumbra
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::environment::Penumbra
 pub struct wxsl_frame::environment::Camera
 pub wxsl_frame::environment::Camera::aspect: f32
 pub wxsl_frame::environment::Camera::eye: glam::f32::vec3::Vec3
@@ -539,6 +560,7 @@ pub wxsl_frame::environment::Light::color: glam::f32::vec3::Vec3
 pub wxsl_frame::environment::Light::cookie_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::intensity: f32
 pub wxsl_frame::environment::Light::kind: wxsl_frame::environment::LightKind
+pub wxsl_frame::environment::Light::penumbra: wxsl_frame::environment::Penumbra
 pub wxsl_frame::environment::Light::position_or_direction: glam::f32::vec3::Vec3
 pub wxsl_frame::environment::Light::profile_layer: core::option::Option<u32>
 pub wxsl_frame::environment::Light::radius: f32
@@ -572,6 +594,7 @@ pub fn wxsl_frame::environment::Light::with_cascades(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_caster_reach(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_cookie(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_normal_bias(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_penumbra(self, wxsl_frame::environment::Penumbra) -> Self
 pub fn wxsl_frame::environment::Light::with_profile(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_shadow_casters(self, wxsl_core::scene::TagExpr) -> Self
@@ -596,6 +619,7 @@ pub wxsl_frame::environment::LightUniform::color: [f32; 3]
 pub wxsl_frame::environment::LightUniform::cookie_layer: u32
 pub wxsl_frame::environment::LightUniform::intensity: f32
 pub wxsl_frame::environment::LightUniform::kind: f32
+pub wxsl_frame::environment::LightUniform::penumbra: f32
 pub wxsl_frame::environment::LightUniform::position_or_direction: [f32; 3]
 pub wxsl_frame::environment::LightUniform::profile_layer: u32
 pub wxsl_frame::environment::LightUniform::radius: f32

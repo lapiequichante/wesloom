@@ -140,6 +140,19 @@ impl Camera {
     }
 }
 
+/// Which side of the hard edge a soft shadow's penumbra lies on
+/// (ADR 0105).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Penumbra {
+    /// Straddling the edge, as a source that size casts: half of it
+    /// lights the shadow's inside.
+    #[default]
+    Inside,
+    /// Wholly outside the shadow, whose inside stays dark; a contact
+    /// shadow inside a far caster's penumbra keeps its own width.
+    Outside,
+}
+
 /// What kind of light a [`Light`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LightKind {
@@ -202,6 +215,8 @@ pub struct Light {
     /// units for a point or spot, the tangent of the angular radius for a
     /// directional light. Zero keeps the fixed-kernel shadow (ADR 0098).
     pub radius: f32,
+    /// Which side of the hard edge a soft shadow's penumbra lies on.
+    pub penumbra: Penumbra,
     /// Direction away from a spotlight, normalized by its constructor.
     pub spot_direction: Vec3,
     /// Inner cone half-angle in radians, fully illuminated.
@@ -301,6 +316,7 @@ impl Light {
         area_u: Vec3::ZERO,
         area_v: Vec3::ZERO,
         radius: 0.0,
+        penumbra: Penumbra::Inside,
         spot_direction: Vec3::NEG_Y,
         spot_inner_angle: 0.4,
         spot_outer_angle: 0.7,
@@ -584,6 +600,13 @@ impl Light {
         self
     }
 
+    /// Put a soft shadow's penumbra on `side` of its hard edge; see
+    /// [`Penumbra`].
+    pub fn with_penumbra(mut self, side: Penumbra) -> Self {
+        self.penumbra = side;
+        self
+    }
+
     /// Draw this light's shadow from the draws `casters` matches only.
     pub fn with_shadow_casters(mut self, casters: TagExpr) -> Self {
         self.shadow_casters = casters;
@@ -862,7 +885,11 @@ impl Light {
             spot_outer_cos: self.spot_outer_angle.cos(),
             spot_inner_cos: self.spot_inner_angle.cos(),
             cookie_layer: self.cookie_layer.unwrap_or(u32::MAX),
-            _padding3: [0.0; 2],
+            penumbra: match self.penumbra {
+                Penumbra::Inside => 0.0,
+                Penumbra::Outside => 1.0,
+            },
+            _padding3: 0.0,
         }
     }
 }

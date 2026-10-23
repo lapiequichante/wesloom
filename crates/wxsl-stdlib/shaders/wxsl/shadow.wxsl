@@ -27,6 +27,11 @@ const WXSL_SHADOW_SEARCH_TAPS: i32 = 12;
 const WXSL_SHADOW_SOFT_TAPS: i32 = 24;
 const WXSL_SHADOW_SOFT_MAX_TEXELS: f32 = 32.0;
 const WXSL_SHADOW_BISECTIONS: i32 = 4;
+// How many times the narrowest penumbra the search finds its widest must
+// be for the blockers to be two kinds under an outside penumbra, each
+// filtered at its own width: a contact shadow inside a far caster's
+// penumbra (ADR 0105).
+const WXSL_SHADOW_MIXED: f32 = 4.0;
 
 // Keep in sync with SHADOW_CASCADE_BLEND in environment.rs.
 const WXSL_SHADOW_CASCADE_BLEND: f32 = 0.1;
@@ -132,11 +137,12 @@ fn shadow_factor_at(
     // A rectangle's softness is its own quadrature (ADR 0072); for the
     // other kinds `radius` is the source's size (ADR 0098).
     let source_radius = select(light.radius, 0.0, light.kind == LIGHT_KIND_RECTANGLE);
+    let outside = light.penumbra > 0.5;
     let shadow = sample_shadow_tile(tile_index, absolute, world_normal, n_dot_l,
-        light.shadow_normal_bias, source_radius);
+        light.shadow_normal_bias, source_radius, outside);
     if blend > 0.0 {
         let next = sample_shadow_tile(tile_index + 1u, absolute, world_normal, n_dot_l,
-            light.shadow_normal_bias, source_radius);
+            light.shadow_normal_bias, source_radius, outside);
         return mix(shadow, next, blend);
     }
     return mix(shadow, 1.0, fade);
@@ -149,6 +155,7 @@ fn sample_shadow_tile(
     n_dot_l: f32,
     normal_bias: f32,
     source_radius: f32,
+    outside: bool,
 ) -> f32 {
     let tile = scene.shadow_tiles[tile_index];
     let rect = tile.rect;
@@ -190,7 +197,7 @@ fn sample_shadow_tile(
             / det * vec2f(2.0, -2.0) / rect.zw;
     }
     if source_radius > 0.0 {
-        return soft_shadow(tile_index, uv, clip, ndc, depth_gradient, texel, source_radius);
+        return soft_shadow(tile_index, uv, clip, ndc, depth_gradient, texel, source_radius, outside);
     }
     // The PCF kernel's bilinear taps, one texel apart, cover a block of
     // texels one wider than the kernel; summed, each texel weighs 1 but
@@ -241,6 +248,14 @@ fn vogel_disk(index: i32, count: i32, phase: f32) -> vec2f {
 // receiver is behind the average blocker, so a contact shadow stays sharp
 // and a far one blurs.
 //
+// The penumbra straddles the hard edge, or, `outside`, lies wholly
+// outside the shadow (ADR 0105): the centred filter reads half the light
+// at the edge and all of it a penumbra out, and is stretched to read none
+// at the edge, so the shadow's inside stays dark. Outside, blockers of two
+// kinds, a contact shadow inside a far caster's penumbra, are filtered
+// each at its own width and the darker wins: one average would blur the
+// contact shadow away inside the far penumbra.
+//
 // By similar triangles a blocker at reach b casts a penumbra of
 // R (r - b) / b at a receiver at reach r from a point-like source (the
 // distance from the eye of a perspective tile: a spot, a point face,
@@ -252,7 +267,7 @@ fn vogel_disk(index: i32, count: i32, phase: f32) -> vec2f {
 // penumbra would pass the widest is clamped to it anyway.
 fn soft_shadow(
     tile_index: u32, uv: vec2f, clip: vec4f, ndc: vec3f, gradient: vec2f, texel: vec2f,
-    source_radius: f32,
+    source_radius: f32, outside: bool,
 ) -> f32 {
     let tile = scene.shadow_tiles[tile_index];
     let rect = tile.rect;
@@ -279,10 +294,16 @@ fn soft_shadow(
     // parallel one. Nearer blockers' penumbrae are underestimated; a wider
     // search would spread the taps too thin to find an edge.
     let search = clamp(spread * select(receiver, 1.0, perspective), 1.0, WXSL_SHADOW_SOFT_MAX_TEXELS);
+    // Each tap's blocker as its penumbra in texels: -1 for none, 0 for
+    // contact.
+    var penumbra_of: array<f32, WXSL_SHADOW_SEARCH_TAPS>;
     var penumbrae = 0.0;
     var counted = 0.0;
     var found = false;
+    var narrowest = WXSL_SHADOW_SOFT_MAX_TEXELS;
+    var widest = 0.0;
     for (var i = 0; i < WXSL_SHADOW_SEARCH_TAPS; i = i + 1) {
+        penumbra_of[i] = -1.0;
         let tap = clamp(uv + vogel_disk(i, WXSL_SHADOW_SEARCH_TAPS, phase) * search * texel, low, high);
         let reference = min(ndc.z + dot(gradient, tap - uv), 1.0);
         if textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, reference) < 0.5 {
@@ -290,8 +311,7 @@ fn soft_shadow(
             var wider = WXSL_SHADOW_SOFT_MAX_TEXELS;
             for (var k = 0; k < WXSL_SHADOW_BISECTIONS; k = k + 1) {
                 let middle = 0.5 * (narrower + wider);
-                let reach = select(receiver - middle / spread, receiver * spread / (spread + middle), perspective);
-                let depth = select(reach * depth_scale, a + b / reach, perspective);
+                let depth = blocker_depth(middle, receiver, spread, perspective, depth_scale, a, b);
                 // The comparison is `Less`: shadowed means the stored
                 // depth is in front, so the blocker is nearer the light
                 // and its penumbra wider.
@@ -306,23 +326,86 @@ fn soft_shadow(
             // receiver itself seen past its bias: either way the edge is
             // sharp there, and averaging it in would narrow the penumbra
             // of the real blockers around it.
+            var penumbra = 0.0;
             if narrower > 0.0 {
-                penumbrae = penumbrae + 0.5 * (narrower + wider);
+                penumbra = 0.5 * (narrower + wider);
+                penumbrae = penumbrae + penumbra;
                 counted = counted + 1.0;
             }
+            penumbra_of[i] = penumbra;
+            narrowest = min(narrowest, max(penumbra, 1.0));
+            widest = max(widest, penumbra);
         }
     }
     if !found {
         return 1.0;
     }
-    let width = max(penumbrae / max(counted, 1.0), 1.0);
-    var lit = 0.0;
-    for (var i = 0; i < WXSL_SHADOW_SOFT_TAPS; i = i + 1) {
-        let tap = clamp(uv + vogel_disk(i, WXSL_SHADOW_SOFT_TAPS, phase) * width * texel, low, high);
-        let reference = min(ndc.z + dot(gradient, tap - uv), 1.0);
-        lit = lit + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, reference);
+    if !outside || widest <= narrowest * WXSL_SHADOW_MIXED {
+        let width = max(penumbrae / max(counted, 1.0), 1.0);
+        var lit = 0.0;
+        for (var i = 0; i < WXSL_SHADOW_SOFT_TAPS; i = i + 1) {
+            let tap = clamp(uv + vogel_disk(i, WXSL_SHADOW_SOFT_TAPS, phase) * width * texel, low, high);
+            let reference = min(ndc.z + dot(gradient, tap - uv), 1.0);
+            lit = lit + textureSampleCompareLevel(shadow_maps, shadow_sampler, tap, reference);
+        }
+        let centred = lit / f32(WXSL_SHADOW_SOFT_TAPS);
+        return select(centred, outward(centred), outside);
     }
-    return lit / f32(WXSL_SHADOW_SOFT_TAPS);
+
+    // Two kinds of blockers, told apart at the geometric mean of the
+    // narrowest and widest penumbrae: the depth a blocker casting that
+    // penumbra has. A stored depth in front of it is a far blocker's.
+    let split = sqrt(narrowest * widest);
+    let split_depth = blocker_depth(split, receiver, spread, perspective, depth_scale, a, b);
+    var near_sum = 0.0;
+    var near_count = 0.0;
+    var far_sum = 0.0;
+    var far_count = 0.0;
+    for (var i = 0; i < WXSL_SHADOW_SEARCH_TAPS; i = i + 1) {
+        let penumbra = penumbra_of[i];
+        if penumbra >= split {
+            far_sum = far_sum + penumbra;
+            far_count = far_count + 1.0;
+        } else if penumbra > 0.0 {
+            near_sum = near_sum + penumbra;
+            near_count = near_count + 1.0;
+        }
+    }
+    let near_width = max(near_sum / max(near_count, 1.0), 1.0);
+    let far_width = far_sum / max(far_count, 1.0);
+    // The far blockers over their own width; the near ones over theirs,
+    // as what is shadowed at the receiver but not by a far blocker.
+    var far_lit = 0.0;
+    var near_shadowed = 0.0;
+    for (var i = 0; i < WXSL_SHADOW_SOFT_TAPS; i = i + 1) {
+        let disk = vogel_disk(i, WXSL_SHADOW_SOFT_TAPS, phase);
+        let far_tap = clamp(uv + disk * far_width * texel, low, high);
+        far_lit = far_lit + textureSampleCompareLevel(shadow_maps, shadow_sampler, far_tap,
+            min(split_depth + dot(gradient, far_tap - uv), 1.0));
+        let near_tap = clamp(uv + disk * near_width * texel, low, high);
+        let past_far = textureSampleCompareLevel(shadow_maps, shadow_sampler, near_tap,
+            min(split_depth + dot(gradient, near_tap - uv), 1.0));
+        let at_receiver = textureSampleCompareLevel(shadow_maps, shadow_sampler, near_tap,
+            min(ndc.z + dot(gradient, near_tap - uv), 1.0));
+        near_shadowed = near_shadowed + max(past_far - at_receiver, 0.0);
+    }
+    let taps = f32(WXSL_SHADOW_SOFT_TAPS);
+    return min(outward(far_lit / taps), outward(1.0 - near_shadowed / taps));
+}
+
+// A centred filter's light, `lit`, as a penumbra outside the edge: none at
+// the edge, where the filter reads half, all of it where it reads all.
+fn outward(lit: f32) -> f32 {
+    return saturate(2.0 * lit - 1.0);
+}
+
+// The depth in the tile of a blocker whose penumbra at `receiver` is
+// `penumbra` atlas texels: by similar triangles (see `soft_shadow`).
+fn blocker_depth(
+    penumbra: f32, receiver: f32, spread: f32, perspective: bool, depth_scale: f32, a: f32, b: f32,
+) -> f32 {
+    let reach = select(receiver - penumbra / spread, receiver * spread / (spread + penumbra), perspective);
+    return select(reach * depth_scale, a + b / reach, perspective);
 }
 
 fn shadow_normal_offset(normal: vec3f, bias: f32, n_dot_l: f32) -> vec3f {

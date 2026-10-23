@@ -11,6 +11,13 @@ an entry.
 
 ### Added
 
+- Outside penumbrae: `Light::with_penumbra(Penumbra::Outside)` puts a soft
+  shadow's penumbra outside its hard edge, its inside staying dark, and
+  filters a contact shadow inside a far caster's penumbra at its own
+  width. In the C header, the light row's first `_padding3` float is now
+  `penumbra`
+  ([ADR 0105](docs/adr/0105-a-soft-shadows-penumbra-can-lie-outside-it.md)).
+
 - Disc lights (`Light::disc`, `LightKind::Disc`): a one-sided round
   emitter, integrated as an octagon by the LTC models and sampled as a
   masked rectangle by the others. Unshadowed, and bounded by `range`
