@@ -18,7 +18,10 @@
 //! `resources/glb/me_car_opt/me_car_opt.glb` when it is there
 //! (`--shadow-car FILE`, or `none` for the car's own).
 //!
-//! In the window: the sliders set the speed, the hour, the motion blur,
+//! In the window: the sliders set the speed, the hour, the motion blur
+//! and its quality (`--blur-quality off|fast|good`: the gather along
+//! each pixel's motion, or the reconstruction filter, whose fast posts
+//! smear over a still background too),
 //! the aperture, the focus, the chromatic aberration (an extra pass,
 //! off at 0), the tonemap (filmic, ACES, Reinhard, Reinhard-Jodie, WXSL, AgX, Hable), the
 //! grade's saturation and the vertical field of view; drag elsewhere to look around the car, drag
@@ -42,9 +45,7 @@
 //! (a wiper), the forward prepass then writing a G-buffer for them. The
 //! `halo` slider (or `--halo NAME`) picks what the lens draws around the
 //! highlights: nothing, the bloom's glow, or the glow and a star's spikes
-//! (cross, starburst, hexagonal, anamorphic); the `lens flare` slider (or
-//! `--flare NAME`) adds a flare's ghosts (ghosts, aperture, anamorphic),
-//! and the sun's own flare while it is in view; the `ray length` and
+//! (cross, starburst, hexagonal, anamorphic); the `ray length` and
 //! `ray opacity` sliders (or `--ray-length X`, `--ray-opacity X`) scale
 //! how far a star's rays reach and how strongly they add. The
 //! `quality` slider (or `--quality x0|x0.5|x1|x2|x4`) scales the car's probe
@@ -95,6 +96,7 @@ use wxsl::render::{
 
 use car::Car;
 use car_ground::CarGround;
+use pipeline::Blur;
 use sky::DayLight;
 use state::{Motion, Saved};
 use ui::{Panel, Slider};
@@ -102,7 +104,7 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--flare NAME] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
+      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--blur-quality off|fast|good] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
@@ -126,6 +128,9 @@ const BRAKE_LIGHT: (f32, f32) = (0.5, 3.0);
 const SPRING_LAG: f32 = 0.25;
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
+/// The blur's [`pipeline::BLURS`]: off, the gather along each pixel's
+/// motion, or the reconstruction filter.
+const BLUR_QUALITY: &str = "motion blur quality";
 const APERTURE: &str = "aperture";
 /// The focus distance, a factor of the car's centre's, shown in %: a
 /// state saved before it had one keeps 1.
@@ -166,9 +171,7 @@ const HALO: &str = "halo";
 const DEFAULT_GLARE: pipeline::Glare = pipeline::Glare {
     bloom: true,
     star: None,
-    flare: None,
 };
-const FLARE: &str = "lens flare";
 /// How far a star's rays reach, and how strongly they add, times what
 /// the star sets.
 const RAY_LENGTH: &str = "ray length";
@@ -201,11 +204,10 @@ fn ssr_quality(value: f32) -> Option<(&'static str, Quality)> {
         .and_then(|index| SSR_QUALITIES.get(index).copied())
 }
 
-/// The lens' glare the `halo` and `lens flare` sliders pick.
+/// The lens' glare the `halo` slider picks.
 fn glare(panel: &Panel) -> pipeline::Glare {
     let (_, bloom, star) = pipeline::HALOS[panel.value(HALO).round() as usize];
-    let (_, flare) = pipeline::FLARES[panel.value(FLARE).round() as usize];
-    pipeline::Glare { bloom, star, flare }
+    pipeline::Glare { bloom, star }
 }
 
 /// The debug view the `view` slider's `value` picks, or `None` to shade.
@@ -219,6 +221,9 @@ struct Options {
     hour: f32,
     speed: f32,
     blur: f32,
+    /// The `motion blur quality` slider's start, an index into
+    /// [`pipeline::BLURS`].
+    blur_quality: f32,
     aperture: f32,
     /// The focus distance, a factor of the distance to the car's centre.
     focus: f32,
@@ -262,10 +267,8 @@ struct Options {
     /// The `reflections` slider's start: 0 off, then one per
     /// [`SSR_QUALITIES`].
     ssr: f32,
-    /// The `halo` and `lens flare` sliders' starts, indices into
-    /// [`pipeline::HALOS`] and [`pipeline::FLARES`].
+    /// The `halo` slider's start, an index into [`pipeline::HALOS`].
     halo: f32,
-    flare: f32,
     /// The `ray length` and `ray opacity` sliders' starts.
     ray_length: f32,
     ray_opacity: f32,
@@ -289,6 +292,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         hour: 21.0,
         speed: 110.0,
         blur: 0.3,
+        blur_quality: 1.0,
         aperture: 8.0,
         focus: 1.0,
         aberration: 0.002,
@@ -312,7 +316,6 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         no_fxaa: true,
         ssr: 3.0,
         halo: 1.0,
-        flare: 0.0,
         ray_length: 1.0,
         ray_opacity: 1.0,
         quality: 3.0,
@@ -417,12 +420,12 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                         "--halo is one of none, bloom, cross, starburst, hexagonal, anamorphic",
                     )? as f32;
             }
-            "--flare" => {
+            "--blur-quality" => {
                 let name = value()?;
-                options.flare = pipeline::FLARES
+                options.blur_quality = pipeline::BLURS
                     .iter()
-                    .position(|(flare, _)| *flare == name)
-                    .ok_or("--flare is one of off, ghosts, aperture, anamorphic")?
+                    .position(|(blur, _)| *blur == name)
+                    .ok_or("--blur-quality is one of off, fast, good")?
                     as f32;
             }
             "--ray-length" => options.ray_length = value()?.parse()?,
@@ -475,6 +478,13 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             format!("{:02}:{:02}", minutes / 60, minutes % 60)
         }),
         Slider::new(BLUR, 0.0, 2.0, options.blur, |value| format!("{value:.2}")),
+        Slider::new(
+            BLUR_QUALITY,
+            0.0,
+            (pipeline::BLURS.len() - 1) as f32,
+            options.blur_quality,
+            |value| pipeline::BLURS[value.round() as usize].0.to_string(),
+        ),
         Slider::new(APERTURE, 1.4, 16.0, options.aperture, |value| {
             format!("f/{value:.1}")
         }),
@@ -565,13 +575,6 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             options.halo,
             |value| pipeline::HALOS[value.round() as usize].0.to_string(),
         ),
-        Slider::new(
-            FLARE,
-            0.0,
-            (pipeline::FLARES.len() - 1) as f32,
-            options.flare,
-            |value| pipeline::FLARES[value.round() as usize].0.to_string(),
-        ),
         Slider::new(RAY_LENGTH, 0.25, 2.0, options.ray_length, |value| {
             format!("×{value:.2}")
         }),
@@ -627,8 +630,8 @@ struct Drive {
     paint: Option<usize>,
     /// The debug view the car's materials are compiled for, 0 shading.
     shown_view: i32,
-    /// Whether the frame installed has the motion blur, and its passes.
-    motion_blur: bool,
+    /// The motion blur the frame installed has, with its passes, if any.
+    motion_blur: Option<Blur>,
     /// Whether the frame installed ends in FXAA.
     fxaa: bool,
     /// Whether the frame installed has the aberration pass.
@@ -668,7 +671,7 @@ impl Drive {
                     renderer,
                     refractive,
                     false,
-                    true,
+                    Some(Blur::Fast),
                     true,
                     false,
                     None,
@@ -712,7 +715,7 @@ impl Drive {
             rotation: Vec2::ZERO,
             paint: None,
             shown_view: 0,
-            motion_blur: true,
+            motion_blur: Some(Blur::Fast),
             fxaa: true,
             aberration: false,
             ssr: None,
@@ -792,8 +795,10 @@ impl Drive {
             time,
         } = self.motion;
         let speed = speed.unwrap_or(0.0);
-        // At 0 the blur and everything only it reads are left out.
-        let motion_blur = panel.value(BLUR) > 0.0;
+        // At 0, or off, the blur and everything only it reads are left out.
+        let motion_blur = pipeline::BLURS[panel.value(BLUR_QUALITY).round() as usize]
+            .1
+            .filter(|_| panel.value(BLUR) > 0.0);
         let fxaa = panel.value(FXAA) >= 0.5;
         let aberration = panel.value(ABERRATION) > 0.0;
         let ssr = ssr_quality(panel.value(SSR)).map(|(_, quality)| quality);
@@ -1003,12 +1008,14 @@ impl Drive {
             }
         }
         let mut draws: DrawList = self.world.draws().into_iter().collect();
-        if self.motion_blur {
-            self.renderer.set_pass_param(
-                pipeline::MOTION_BLUR,
-                "strength",
-                Value::F32(panel.value(BLUR)),
-            )?;
+        if let Some(quality) = self.motion_blur {
+            let strength = Value::F32(panel.value(BLUR));
+            self.renderer
+                .set_pass_param(pipeline::MOTION_BLUR, "strength", strength)?;
+            if quality == Blur::Good {
+                self.renderer
+                    .set_pass_param(pipeline::MOTION_NEIGHBORS, "strength", strength)?;
+            }
         }
         for item in self.car.draws(transform, previous_transform) {
             draws.push(item);

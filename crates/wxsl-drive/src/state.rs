@@ -52,11 +52,18 @@ pub struct Saved {
     pub dt: f32,
 }
 
+/// Sliders the drive no longer has, which older states still hold.
+const RETIRED: [&str; 1] = ["lens flare"];
+
 impl Saved {
     /// Set `panel`'s sliders to the saved values; a label the panel does not
-    /// have is refused by name, one the file lacks keeps its value.
+    /// have is refused by name, unless it is [`RETIRED`], and one the file
+    /// lacks keeps its value.
     pub fn apply_sliders(&self, panel: &mut Panel) -> Result<(), Box<dyn Error>> {
         for (label, value) in &self.sliders {
+            if RETIRED.contains(&label.as_str()) {
+                continue;
+            }
             let slider = panel
                 .sliders
                 .iter_mut()

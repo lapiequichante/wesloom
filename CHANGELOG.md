@@ -163,6 +163,12 @@ an entry.
 
 ### Changed
 
+- `pass.screen.wxsl.motion_blur` is a reconstruction filter: a document
+  also wires the opaque `depth` and a `neighbors` image, written by the
+  new `wxsl.motion_tiles` and `wxsl.motion_neighbors` screen effects into
+  two `pair` targets at `effect::MOTION_TILES_SCALE`. A fast foreground
+  now smears over a still background
+  ([ADR 0046](docs/adr/0046-velocity-is-a-stage-taa-is-a-policyd-chain.md)).
 - Cascaded shadows are fitted without the camera's near plane, so their
   texel size holds while it moves and their shadows no longer pop; the
   splits move slightly. The last cascade fades out instead of ending on a

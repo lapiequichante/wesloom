@@ -1,49 +1,86 @@
 //! motion_blur — the first consumer of the velocity buffer that is not
-//! TAA.
+//! TAA, as a reconstruction filter (McGuire et al. 2012, "A
+//! Reconstruction Filter for Plausible Motion Blur").
 //!
-//! One fullscreen pass over the frame's colour: each fragment samples
-//! back along its own screen motion, which is what makes the smear lie
-//! along the *object's* movement rather than a global direction — a
-//! screen-space filter that knows per-pixel where things went. The input
-//! is linear radiance (ADR 0039's rule: everything before the display
-//! transform is light), so the blur averages brightness, not encoded
-//! tones.
+//! One fullscreen pass over the frame's colour. Each fragment samples
+//! along the longest motion around it (`wxsl.motion_tiles`, then
+//! `wxsl.motion_neighbors`) and, every other tap, along its own: a still
+//! far background still gathers the fast post that crosses it. The
+//! shutter is the last half of the frame, the span the velocity's chord
+//! into the past describes. Each tap counts as far as its light could
+//! have crossed the pixel during it: a tap in front by its own smear, as
+//! deep as it was then, a tap behind by the pixel's, and two of one
+//! surface both, trailing back along the motion. What stays still in front of a moving background (the
+//! car a camera follows) leaves no trail on it. The input is linear radiance (ADR 0039's rule: everything before
+//! the display transform is light), so the blur averages brightness, not
+//! encoded tones.
 //!
-//! Mounted by the `wxsl.motion_blur` effect, whose two declared inputs
-//! are this file's two bindings. The taps follow the smear's length, at
-//! least one per pixel; `strength` and `isolate` are parameters of the
+//! Mounted by the `wxsl.motion_blur` effect, whose four declared inputs
+//! are this file's four bindings; `strength` is a parameter of the
 //! descriptor (ADR 0042).
+
+import package::wxsl::bindings::{camera, point_sampler};
 
 @group(3) @binding(0) var color_image: texture_2d<f32>;
 @group(3) @binding(1) var velocity_image: texture_2d<f32>;
-
-/// How far a tap's motion may stray from the pixel's to count whole, and
-/// to count at all: by length, in octaves, and by direction, as one less
-/// the cosine. By ratio rather than difference, the road's own motion,
-/// which perspective stretches fast near the camera, stays in.
-const OCTAVES_FROM: f32 = 1.0;
-const OCTAVES_TO: f32 = 2.0;
-const TURN_FROM: f32 = 0.15;
-const TURN_TO: f32 = 0.4;
-
-/// The share of a tap moving by `moved` in the smear of a pixel moving
-/// by `own`.
-fn kinship(own: vec2f, moved: vec2f) -> f32 {
-    let reach = max(length(own), 1e-6);
-    let length_moved = max(length(moved), 1e-6);
-    let octaves = abs(log2(length_moved / reach));
-    let turn = 1.0 - dot(own, moved) / (reach * length_moved);
-    return (1.0 - smoothstep(OCTAVES_FROM, OCTAVES_TO, octaves))
-        * (1.0 - smoothstep(TURN_FROM, TURN_TO, turn));
-}
+@group(3) @binding(2) var depth_image: texture_2d<f32>;
+@group(3) @binding(3) var neighbors_image: texture_2d<f32>;
 
 /// The longest smear, in uv: a bound on what a slow frame's motion asks
-/// of the taps.
-const MAX_SMEAR: f32 = 0.4;
+/// of the taps, and on how far `wxsl.motion_neighbors` looks.
+const MAX_SMEAR: f32 = 0.2;
 
 /// Limit the cost of very long exposures. Below this limit, sample at
 /// least once per pixel so fine highlights do not form echoes.
 const MAX_TAPS: i32 = 256;
+
+/// How far apart two depths may be, as a share of the nearer, and still
+/// be one surface.
+const SOFT_DEPTH: f32 = 0.05;
+
+/// The smear's length for a velocity, in pixels: the motion over the
+/// shutter, the last half of the frame at full `strength`.
+fn smear(motion: vec2f, size: vec2f) -> vec2f {
+    let radius = motion * 0.5 * params.strength;
+    return radius * min(1.0, MAX_SMEAR / max(length(radius), 1e-9)) * size;
+}
+
+/// The view depth of what `pixel` shows, and how much it grew over the
+/// last frame, as if it stood still in the world.
+fn depth_at(pixel: vec2i, size: vec2f) -> vec2f {
+    let depth = textureSampleLevel(depth_image, point_sampler, (vec2f(pixel) + 0.5) / size, 0.0).x;
+    let uv = (vec2f(pixel) + 0.5) / size;
+    let world = camera.inverse_view_proj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    let point = vec4f(world.xyz / world.w, 1.0);
+    let now = (camera.view_proj * point).w;
+    return vec2f(now, now - (camera.previous_view_proj * point).w);
+}
+
+/// How `1 / depth` changes per pixel on the surface `pixel` shows, from
+/// whichever neighbour on each axis is nearer in depth, so as not to
+/// reach across an edge: plane, `1 / depth` is linear on screen.
+fn inverse_depth_slope(pixel: vec2i, inverse: f32, size: vec2f, last: vec2i) -> vec2f {
+    var slope = vec2f(0.0);
+    for (var axis = 0; axis < 2; axis++) {
+        var step = vec2i(0);
+        step[axis] = 1;
+        let ahead = 1.0 / depth_at(min(pixel + step, last), size).x - inverse;
+        let behind = inverse - 1.0 / depth_at(max(pixel - step, vec2i(0)), size).x;
+        slope[axis] = select(behind, ahead, abs(ahead) < abs(behind));
+    }
+    return slope;
+}
+
+/// How clearly `near` is in front of `far`: 0 for one surface or
+/// behind, 1 well in front.
+fn in_front(near: f32, far: f32) -> f32 {
+    return clamp((far - near) / (SOFT_DEPTH * min(near, far)) - 1.0, 0.0, 1.0);
+}
+
+/// Whether a smear of `radius` covers `distance`, whole to its end.
+fn cylinder(distance: f32, radius: f32) -> f32 {
+    return 1.0 - smoothstep(0.95 * radius, 1.05 * radius, distance);
+}
 
 /// Bilinear radiance at `point`, in pixels.
 fn sample_color(point: vec2f, last: vec2i) -> vec3f {
@@ -70,40 +107,86 @@ fn motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let size = vec2f(textureDimensions(color_image));
     let last = vec2i(size) - vec2i(1);
     let pixel = vec2i(position.xy);
+    let own = textureLoad(color_image, pixel, 0).rgb;
 
-    // Walk *backwards* along the motion: where this fragment's light came
-    // from during the frame, which is the smear a shutter would record.
-    // Halved because the velocity is per frame and a shutter shows half
-    // the way back and half the way forward around the sample point.
-    let own = textureLoad(velocity_image, pixel, 0).xy;
-    let unclamped = own * 0.5 * params.strength;
-    let motion = unclamped * min(1.0, MAX_SMEAR / max(length(unclamped), 1e-9));
-    let taps = clamp(i32(ceil(length(motion * size))) + 1, 2, MAX_TAPS);
+    let tiles = vec2f(textureDimensions(neighbors_image));
+    let tile = min(vec2i(vec2f(pixel) * tiles / size), vec2i(tiles) - vec2i(1));
+    let around = smear(textureLoad(neighbors_image, tile, 0).xy, size);
+    let span = length(around);
+    if (span < 0.5) {
+        return vec4f(own, 1.0);
+    }
+    let own_motion = textureLoad(velocity_image, pixel, 0).xy;
+    let own_smear = smear(own_motion, size);
+    let radius = length(own_smear);
+    let here = depth_at(pixel, size);
+    let depth = here.x;
+    let slope = inverse_depth_slope(pixel, 1.0 / depth, size, last);
 
-    var sum = textureLoad(color_image, pixel, 0).rgb;
-    var weight = 1.0;
-    // How far back the path stays in the frame, as a share of it. Off the
-    // frame nothing is known, and a tap clamped to the edge would slide
-    // along it and gather whatever the edge row holds; the share that
-    // does not fit behind is taken ahead instead, so the smear keeps its
-    // length and its line.
-    let path = motion * size;
-    let here = vec2f(pixel);
-    let behind = select((vec2f(last) - here) / max(-path, vec2f(1e-6)), here / max(path, vec2f(1e-6)), path > vec2f(0.0));
-    let ahead = max(1.0 - min(min(behind.x, behind.y), 1.0), 0.0);
-    for (var tap = 1; tap < taps; tap++) {
-        let fraction = f32(tap) / f32(taps - 1) - ahead;
-        let point = here - path * fraction;
+    // Odd, so the centre is the pixel itself, counted apart.
+    let taps = clamp(i32(ceil(2.0 * span)) | 1, 3, MAX_TAPS - 1);
+    // Weights are shares of the exposure: the pixel's own light for one
+    // pixel of its smear, and each tap's for its spacing over the smear
+    // that carries it, so a thin fast post covers a still city for its
+    // width over its smear, as it did.
+    var weight = 1.0 / max(radius, 1.0);
+    var sum = own * weight;
+    for (var tap = 0; tap < taps; tap++) {
+        if (tap == taps / 2) {
+            continue;
+        }
+        // Every other tap along the pixel's own motion (Guertin et al.
+        // 2014): where it moves otherwise than what is around, its own
+        // surface still smears its own way.
+        let along = mix(-1.0, 1.0, (f32(tap) + 0.5) / f32(taps));
+        var path = around;
+        if (tap % 2 == 1 && radius >= 0.5) {
+            path = own_smear;
+        }
+        let point = vec2f(pixel) + path * along;
+        // Off the frame, nothing is known.
         if (any(point < vec2f(0.0)) || any(point > vec2f(last))) {
             continue;
         }
-        // Under `isolate`, a tap that does not move as this pixel does is
-        // something else in front of it, whose light never crossed this
-        // pixel: what the camera follows leaves no trail behind it.
-        let moved = textureLoad(velocity_image, vec2i(round(point)), 0).xy;
-        let accept = mix(1.0, kinship(own, moved), params.isolate);
-        sum += sample_color(point, last) * accept;
-        weight += accept;
+        let other = vec2i(round(point));
+        let distance = length(path) * abs(along);
+        let other_motion = textureLoad(velocity_image, other, 0).xy;
+        let other_smear = smear(other_motion, size);
+        let other_radius = length(other_smear);
+        let other_depth = depth_at(other, size);
+        // The shutter closes now, so a tap's light crossed only what lies
+        // behind it on its way; what crossed the pixel came from ahead of
+        // it. The velocity is a chord into the past, and a centred
+        // shutter would push it into a future it does not describe: the
+        // road ahead of a car, receding, would cover the car.
+        let to_pixel = vec2f(pixel) - point;
+        let behind_tap = select(0.0, 1.0, dot(to_pixel, other_smear) <= 0.0);
+        let ahead_of_pixel = select(0.0, 1.0, dot(to_pixel, own_smear) <= 0.0);
+        // One surface smears back along its motion, as the trail a light
+        // riding with the camera leaves (the car's own on the road under
+        // it), not ahead of it, which the texture alone would ask and no
+        // eye tells apart.
+        let behind_pixel = select(0.0, 1.0, dot(to_pixel, other_smear) >= 0.0);
+        // How deep the tap was when it crossed the pixel, as if it stood
+        // still in the world.
+        let frames = dot(to_pixel, other_smear)
+            / max(other_radius * length(other_motion * size), 1e-9);
+        let crossing = other_depth.x + other_depth.y * frames;
+        // And how deep the pixel's own surface runs where the tap stands:
+        // the road just ahead of a car reveals nothing of it, it runs on
+        // under the car, and past the horizon behind everything.
+        let inverse_there = 1.0 / depth - dot(slope, to_pixel);
+        let reaching = select(1e30, 1.0 / inverse_there, inverse_there > 0.0);
+        let front = in_front(crossing, depth);
+        let back = in_front(max(depth, reaching), other_depth.x);
+        let spacing = 2.0 * length(path) / f32(taps);
+        let share = spacing
+            * (behind_tap * front * cylinder(distance, other_radius) / max(other_radius, 1.0)
+                + ahead_of_pixel * back * cylinder(distance, radius) / max(radius, 1.0)
+                + behind_pixel * max(1.0 - front - back, 0.0) * cylinder(distance, other_radius)
+                    * cylinder(distance, radius) / max(max(radius, other_radius), 1.0));
+        sum += sample_color(point, last) * share;
+        weight += share;
     }
     return vec4f(sum / weight, 1.0);
 }

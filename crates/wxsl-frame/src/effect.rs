@@ -1352,15 +1352,80 @@ pub const TAA: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
-/// Motion blur: sample back along each fragment's own screen motion — the
-/// first consumer of the velocity buffer that is not TAA, and the second
-/// proof that a two-image effect cannot sit on the fixed `pass.screen`
-/// socket set. Reads linear radiance, before the display transform, which
-/// is the only place averaging brightness means anything.
+/// Module path the motion blur's tiles pass is mounted under.
+pub const MOTION_TILES_MODULE: &str = "package::wxsl::motion_tiles";
+/// Module path the motion blur's neighbourhood pass is mounted under.
+pub const MOTION_NEIGHBORS_MODULE: &str = "package::wxsl::motion_neighbors";
+/// The scale of the targets [`MOTION_TILES`] and [`MOTION_NEIGHBORS`]
+/// write, as a `resource.color`'s `scale`: one texel a tile of 32 pixels.
+pub const MOTION_TILES_SCALE: &str = "0.03125";
+
+/// The motion blur's first reconstruction pass: the longest motion in each
+/// tile, into a `pair` target at [`MOTION_TILES_SCALE`].
+pub const MOTION_TILES: Effect = Effect {
+    id: "wxsl.motion_tiles",
+    label: "motion tiles",
+    description: "Write the longest screen motion in each tile of 32 pixels.",
+    kind: EffectKind::Screen {
+        vertex_entry: "motion_tiles_vs",
+        fragment_entry: "motion_tiles_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The velocity stage's screen motion, uv per frame.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[],
+    shader: EffectShader::Source {
+        path: MOTION_TILES_MODULE,
+        wxsl: include_str!("../shaders/motion_tiles.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// The motion blur's second reconstruction pass: the longest of the tiles'
+/// motions whose smear reaches each tile, at the tiles' size. Its
+/// `strength` is the blur's.
+pub const MOTION_NEIGHBORS: Effect = Effect {
+    id: "wxsl.motion_neighbors",
+    label: "motion neighbours",
+    description: "Write the longest tile motion within the longest smear of each tile.",
+    kind: EffectKind::Screen {
+        vertex_entry: "motion_neighbors_vs",
+        fragment_entry: "motion_neighbors_fs",
+    },
+    inputs: &[EffectInput {
+        name: "image",
+        kind: EffectInputKind::Image,
+        description: "The motion tiles' longest motions.",
+        history: 0,
+    }],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        // The blur's own, which scales how far each tile's smear reaches.
+        default: Value::F32(1.0),
+    }],
+    shader: EffectShader::Source {
+        path: MOTION_NEIGHBORS_MODULE,
+        wxsl: include_str!("../shaders/motion_neighbors.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// Motion blur: a reconstruction filter over the velocity buffer (McGuire
+/// et al. 2012) — the first consumer of the velocity buffer that is not
+/// TAA. Each fragment samples along the longest motion around it, from
+/// [`MOTION_NEIGHBORS`], so a fast foreground smears over a still
+/// background, and the depth decides what could have crossed what. Reads
+/// linear radiance, before the display transform, which is the only
+/// place averaging brightness means anything.
 pub const MOTION_BLUR: Effect = Effect {
     id: "wxsl.motion_blur",
     label: "motion blur",
-    description: "Smear the frame along its own velocity buffer.",
+    description: "Smear the frame along its velocity buffer, foreground over background.",
     kind: EffectKind::Screen {
         vertex_entry: "motion_blur_vs",
         fragment_entry: "motion_blur_fs",
@@ -1378,22 +1443,26 @@ pub const MOTION_BLUR: Effect = Effect {
             description: "The velocity stage's screen motion, uv per frame.",
             history: 0,
         },
+        EffectInput {
+            name: "depth",
+            kind: EffectInputKind::DepthImage,
+            description: "The opaque depth that says what is in front.",
+            history: 0,
+        },
+        EffectInput {
+            name: "neighbors",
+            kind: EffectInputKind::Image,
+            description: "The motion neighbours' longest motions around each tile.",
+            history: 0,
+        },
     ],
     outputs: &[],
-    parameters: &[
-        EffectParameter {
-            name: "strength",
-            // 1 is a full frame's motion smeared across the exposure; 0 is
-            // the image exactly as it was.
-            default: Value::F32(1.0),
-        },
-        EffectParameter {
-            name: "isolate",
-            // 1 leaves out taps that moved otherwise than the pixel, for a
-            // camera that follows what is in front; 0 gathers them all.
-            default: Value::F32(0.0),
-        },
-    ],
+    parameters: &[EffectParameter {
+        name: "strength",
+        // 1 is a full frame's motion smeared across the exposure; 0 is
+        // the image exactly as it was.
+        default: Value::F32(1.0),
+    }],
     shader: EffectShader::Source {
         path: MOTION_BLUR_MODULE,
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
@@ -1587,7 +1656,8 @@ pub struct EffectRegistry {
 impl EffectRegistry {
     /// The effects this crate ships: the migrated lighting pass, the
     /// display transform every stock chain ends in, bloom (the one-pass
-    /// row and the separable pair), the TAA resolve, and the motion blur.
+    /// row and the separable pair), the TAA resolve, and the motion blur
+    /// with its two tile passes.
     pub fn shipped() -> Self {
         EffectRegistry {
             effects: vec![
@@ -1604,6 +1674,8 @@ impl EffectRegistry {
                 DOF_FAR,
                 DOF_NEAR,
                 TAA,
+                MOTION_TILES,
+                MOTION_NEIGHBORS,
                 MOTION_BLUR,
                 PEEL_BOUNDS,
                 PEEL_DEPTH_BOUNDS,
@@ -1904,12 +1976,13 @@ mod tests {
         let registry = EffectRegistry::shipped();
         assert_eq!(
             registry.len(),
-            40,
+            42,
             "lighting, tonemap, bloom, the separable bloom pair, the bloom \
              pyramid's four passes, the depth-of-field chain's three, the \
-             TAA resolve, the motion blur, and the five peel passes \
-             `pass.peel` expands into, plus the four environment bake \
-             effects and background, plus the five optical effects, plus \
+             TAA resolve, the motion blur and its two tile passes, and the \
+             five peel passes `pass.peel` expands into, plus the four \
+             environment bake effects and background, plus the five optical \
+             effects, plus \
              the screen-space reflections, opaque and on glass, plus the \
              glare's extract, cells, starburst, streak, ghosts, flare and \
              add, plus the sun's disc"

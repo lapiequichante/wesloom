@@ -3,12 +3,13 @@
 //! compiled pass list, the
 //! sky baked into the environment maps and drawn behind everything, a
 //! height fog lit by that sky, the car's glass, depth of field focused on the car, the lens'
-//! glare (a star through the highlights and a lens flare, [`HALOS`] and [`FLARES`]), a colour matrix,
+//! glare (a star through the highlights, [`HALOS`]), a colour matrix,
 //! chromatic aberration when it is on, the tonemap (one of [`TONEMAPS`]) and FXAA.
 //!
 //! ```text
 //! shadows → prepass → forward ─┬─ background (sky) ─ (ssr) ─ fog ─ sun ─ glass ─ motion blur ─ bloom ─ dof ─ (glare) ─ grade ─ (aberration) ─ tonemap ─ fxaa
-//!                               │   (the demo's own, `shaders/motion_blur.wxsl`)
+//!                               │   (the demo's own, `shaders/motion_blur.wxsl`, or
+//!                               │    `shaders/motion_good.wxsl` after the motion tiles)
 //!                     velocity ┘
 //! sky (once per hour) → IBL bake (once) ┘
 //! ```
@@ -47,8 +48,8 @@ use wxsl::core::pipeline as doc;
 use wxsl::core::scene::TagExpr;
 use wxsl::core::Value;
 use wxsl::render::effect::{
-    glare, ibl, refraction, ssr, sun, Downlevel, Effect, EffectInput, EffectInputKind, EffectKind,
-    EffectParameter, EffectShader,
+    self, glare, ibl, refraction, ssr, sun, Downlevel, Effect, EffectInput, EffectInputKind,
+    EffectKind, EffectParameter, EffectShader,
 };
 use wxsl::render::pass::{
     Attachment, DepthAttachment, DepthBias, DrawSource, Extent, Load, PassDesc, PassKind,
@@ -73,6 +74,9 @@ const MAX_COC: f32 = 20.0;
 const SHADOW_SLOPE_BIAS: f32 = 1.0;
 /// The motion blur's pass label, which `strength` is set on.
 pub const MOTION_BLUR: &str = "motion blur";
+/// The reconstruction's neighbourhood pass, which takes the same
+/// `strength`.
+pub const MOTION_NEIGHBORS: &str = "motion neighbours";
 /// The sky's environment cubes: the edge of the radiance and specular
 /// cubes, the diffuse cube's, and the specular mips. The car's probe has
 /// the same mips, as a pass's own cubes must (ADR 0102), and its edge
@@ -96,12 +100,11 @@ const BLOOM: [(&str, &str); 4] = [
 ];
 
 /// What the lens adds to the highlights: the bloom's glow or not, and a
-/// star and a lens flare through its highlights (`effect::glare`).
+/// star through its highlights (`effect::glare`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glare {
     pub bloom: bool,
     pub star: Option<glare::Star>,
-    pub flare: Option<glare::Flare>,
 }
 
 /// The `halo` slider's steps: (name, the bloom's glow, a star).
@@ -112,14 +115,6 @@ pub const HALOS: [(&str, bool, Option<glare::Star>); 6] = [
     ("starburst", true, Some(glare::Star::Starburst)),
     ("hexagonal", true, Some(glare::Star::Hexagonal)),
     ("anamorphic", true, Some(glare::Star::Anamorphic)),
-];
-
-/// The `lens flare` slider's steps.
-pub const FLARES: [(&str, Option<glare::Flare>); 4] = [
-    ("off", None),
-    ("ghosts", Some(glare::Flare::Ghosts)),
-    ("aperture", Some(glare::Flare::Aperture)),
-    ("anamorphic", Some(glare::Flare::Anamorphic)),
 ];
 
 /// The bloom document node's label, and the glare's passes'.
@@ -135,8 +130,6 @@ pub const GLARE_THRESHOLD: f32 = 6.0;
 const SUN: &str = "drive sun";
 const SUN_RADIUS: f32 = sun::SUN_RADIUS * 2.0;
 const SUN_GAIN: f32 = 150.0;
-/// The sun's flare's strength per unit of its colour.
-const FLARE_GAIN: f32 = 0.6;
 
 /// `wxsl.motion_blur`'s gather, refusing taps that did not move with the
 /// pixel: the car the camera follows leaves no trail on the road.
@@ -176,6 +169,79 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
     shader: EffectShader::Source {
         path: "package::drive::motion_blur",
         wxsl: include_str!("../shaders/motion_blur.wxsl"),
+    },
+    downlevel: Downlevel::Portable,
+};
+
+/// The motion blur's qualities: the drive's own gather along each
+/// pixel's motion, or `wxsl.motion_blur`'s reconstruction filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blur {
+    /// Along each pixel's own motion, refusing taps that moved otherwise:
+    /// a fast post stays sharp over a still background.
+    Fast,
+    /// Along the longest motion around each pixel, by depth: a fast post
+    /// smears over whatever it crosses.
+    Good,
+}
+
+/// The `motion blur quality` slider's steps.
+pub const BLURS: [(&str, Option<Blur>); 3] = [
+    ("off", None),
+    ("fast", Some(Blur::Fast)),
+    ("good", Some(Blur::Good)),
+];
+
+/// `wxsl.motion_blur`'s reconstruction filter, with the car's contact
+/// occlusion left in place.
+const MOTION_GOOD_EFFECT: Effect = Effect {
+    id: "drive.motion_good",
+    label: "motion blur",
+    description: "Smear the frame along the longest motion around it, by depth.",
+    kind: EffectKind::Screen {
+        vertex_entry: "drive_motion_good_vs",
+        fragment_entry: "drive_motion_good_fs",
+    },
+    inputs: &[
+        EffectInput {
+            name: "color",
+            kind: EffectInputKind::Image,
+            description: "The frame, as linear radiance.",
+            history: 0,
+        },
+        EffectInput {
+            name: "velocity",
+            kind: EffectInputKind::Image,
+            description: "The velocity stage's screen motion, uv per frame.",
+            history: 0,
+        },
+        EffectInput {
+            name: "depth",
+            kind: EffectInputKind::DepthImage,
+            description: "The opaque depth that says what is in front.",
+            history: 0,
+        },
+        EffectInput {
+            name: "neighbors",
+            kind: EffectInputKind::Image,
+            description: "The motion neighbours' longest motions around each tile.",
+            history: 0,
+        },
+        EffectInput {
+            name: "shadow",
+            kind: EffectInputKind::Image,
+            description: "The car's PRT ground occlusion, left unblurred.",
+            history: 0,
+        },
+    ],
+    outputs: &[],
+    parameters: &[EffectParameter {
+        name: "strength",
+        default: Value::F32(1.0),
+    }],
+    shader: EffectShader::Source {
+        path: "package::drive::motion_good",
+        wxsl: include_str!("../shaders/motion_good.wxsl"),
     },
     downlevel: Downlevel::Portable,
 };
@@ -444,6 +510,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
+        MOTION_GOOD_EFFECT,
         FOG_EFFECT,
         GRADE_EFFECT,
         ABERRATION_EFFECT,
@@ -475,7 +542,7 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
 fn motion_blur_document(
     renderer: &Renderer,
     deferred: bool,
-    motion_blur: bool,
+    motion_blur: Option<Blur>,
 ) -> Result<Graph, Box<dyn Error>> {
     let registry = wxsl::render::document_registry(renderer.effects());
     let (stock, preset, depth_stage) = match deferred {
@@ -534,10 +601,10 @@ fn motion_blur_document(
         ((glowing, "color"), (bloom, "into")),
         ((glowing, "color"), (tonemap, "image")),
     ];
-    if !motion_blur {
+    let Some(quality) = motion_blur else {
         wires.push(((color, "color"), (bloom, "image")));
         return wire(document, &registry, &wires);
-    }
+    };
     let velocity = document.add(
         Node::new(doc::RESOURCE_COLOR)
             .with_label("velocity")
@@ -563,7 +630,7 @@ fn motion_blur_document(
         Node::new(format!(
             "{}{}",
             doc::PASS_SCREEN_PREFIX,
-            MOTION_BLUR_EFFECT.id
+            blur_effect(quality).id
         ))
         .with_label(MOTION_BLUR),
     );
@@ -577,7 +644,45 @@ fn motion_blur_document(
         ((blurred, "color"), (blur, "into")),
         ((blurred, "color"), (bloom, "image")),
     ]);
+    if quality == Blur::Good {
+        // The reconstruction's tiles: the longest motion per tile, then
+        // around it, which the blur follows.
+        let tile = |label: &str| {
+            Node::new(doc::RESOURCE_COLOR)
+                .with_label(label)
+                .with_setting(doc::SETTING_PRECISION, "pair")
+                .with_setting(doc::SETTING_SCALE, effect::MOTION_TILES_SCALE)
+        };
+        let tiles = document.add(tile("motion tiles target"));
+        let neighbors = document.add(tile("motion neighbours target"));
+        let tiling = document.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_setting(doc::SETTING_EFFECT, effect::MOTION_TILES.id)
+                .with_label("motion tiles"),
+        );
+        let spreading = document.add(
+            Node::new(doc::PASS_SCREEN)
+                .with_setting(doc::SETTING_EFFECT, effect::MOTION_NEIGHBORS.id)
+                .with_label(MOTION_NEIGHBORS),
+        );
+        wires.extend([
+            ((velocity, "color"), (tiling, "image")),
+            ((tiles, "color"), (tiling, "into")),
+            ((tiles, "color"), (spreading, "image")),
+            ((neighbors, "color"), (spreading, "into")),
+            ((prepass, "depth"), (blur, "depth")),
+            ((neighbors, "color"), (blur, "neighbors")),
+        ]);
+    }
     wire(document, &registry, &wires)
+}
+
+/// The blur's effect at `quality`.
+fn blur_effect(quality: Blur) -> &'static Effect {
+    match quality {
+        Blur::Fast => &MOTION_BLUR_EFFECT,
+        Blur::Good => &MOTION_GOOD_EFFECT,
+    }
 }
 
 /// One wire of a document: from a node's socket to another's.
@@ -612,7 +717,7 @@ pub fn install(
     renderer: &mut Renderer,
     refractive: bool,
     deferred: bool,
-    motion_blur: bool,
+    motion_blur: Option<Blur>,
     fxaa: bool,
     aberration: bool,
     ssr: Option<ssr::Quality>,
@@ -692,8 +797,8 @@ pub fn install(
     let hdr = |name: &str| ResourceDesc::color(name, TextureFormat::Rgba16Float);
     let clear = |resource| Attachment::clear(resource, Color::TRANSPARENT);
     let blur = match motion_blur {
-        true => Some(effect_pass(&graph, MOTION_BLUR_EFFECT.id)?),
-        false => None,
+        Some(quality) => Some(effect_pass(&graph, blur_effect(quality).id)?),
+        None => None,
     };
     let bloom_pass = |pass: &PassDesc| pass.label.starts_with(BLOOM_LABEL);
     let curve = tonemap;
@@ -768,7 +873,7 @@ pub fn install(
     // Preserve only the car's contact occlusion. A ratio of shaded and
     // unshadowed road would also restore world shadows and normal detail
     // after the blur. The PRT grid already outputs the isolated factor.
-    if motion_blur {
+    if motion_blur.is_some() {
         let car_shadow = graph
             .resource_by_label(CAR_SHADOW)
             .ok_or("the frame has no car shadow target")?;
@@ -925,7 +1030,7 @@ pub fn install(
         depth,
         glare::Lens {
             star: glare.star,
-            flare: glare.flare,
+            flare: None,
             threshold: GLARE_THRESHOLD,
         },
         GLARE,
@@ -1051,8 +1156,8 @@ fn fog_pass(label: &str, into: ResourceId, [color, depth, radiance]: [ResourceId
         ])
 }
 
-/// Put the sun's disc, and the light its lens flare is drawn from, at
-/// `direction` (towards it) with `color` (its light, 0 at night).
+/// Put the sun's disc at `direction` (towards it) with `color` (its
+/// light, 0 at night).
 pub fn set_sun(
     renderer: &mut Renderer,
     direction: Vec3,
@@ -1066,20 +1171,6 @@ pub fn set_sun(
         "radiance",
         Value::Vec4([radiance.x, radiance.y, radiance.z, 0.0]),
     )?;
-    let flare = glare::light_label(&format!("{GLARE} flare"));
-    if renderer
-        .render_graph()
-        .passes()
-        .iter()
-        .any(|pass| pass.label == flare)
-    {
-        let strength = color.length() * FLARE_GAIN;
-        renderer.set_pass_param(
-            &flare,
-            "light",
-            Value::Vec4([direction.x, direction.y, direction.z, strength]),
-        )?;
-    }
     Ok(())
 }
 
@@ -1165,16 +1256,12 @@ mod tests {
         let rays = format!("{} rays", glare::star_label(GLARE));
         let combine = format!("{BLOOM_LABEL} combine");
         let mut step = |bloom: bool, star: Option<Star>| {
-            let glare = Glare {
-                bloom,
-                star,
-                flare: None,
-            };
+            let glare = Glare { bloom, star };
             install(
                 &mut renderer,
                 false,
                 false,
-                true,
+                Some(Blur::Good),
                 true,
                 false,
                 None,

@@ -260,14 +260,40 @@ pub(crate) fn motion_blur_document() -> Graph {
         wxsl::core::graph::Node::new(format!("{}wxsl.motion_blur", doc::PASS_SCREEN_PREFIX))
             .with_label("motion blur"),
     );
+    // The reconstruction's tiles: the longest motion per tile, then
+    // around it, which the blur follows.
+    let tile = |label: &str| {
+        wxsl::core::graph::Node::new(doc::RESOURCE_COLOR)
+            .with_label(label)
+            .with_setting(doc::SETTING_PRECISION, "pair")
+            .with_setting(doc::SETTING_SCALE, wxsl::render::effect::MOTION_TILES_SCALE)
+    };
+    let tiles = document.add(tile("motion tiles"));
+    let neighbors = document.add(tile("motion neighbours"));
+    let tiling = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_setting(doc::SETTING_EFFECT, "wxsl.motion_tiles")
+            .with_label("motion tiles"),
+    );
+    let spreading = document.add(
+        wxsl::core::graph::Node::new(doc::PASS_SCREEN)
+            .with_setting(doc::SETTING_EFFECT, "wxsl.motion_neighbors")
+            .with_label("motion neighbours"),
+    );
 
     document.disconnect(&registry, &SocketRef::new(tonemap, "image"));
     for (from, to) in [
         ((scene, "draws"), (motion, "draws")),
         ((prepass, "depth"), (motion, "depth")),
         ((velocity, "color"), (motion, "into")),
+        ((velocity, "color"), (tiling, "image")),
+        ((tiles, "color"), (tiling, "into")),
+        ((tiles, "color"), (spreading, "image")),
+        ((neighbors, "color"), (spreading, "into")),
         ((scene_color, "color"), (blur, "color")),
         ((velocity, "color"), (blur, "velocity")),
+        ((prepass, "depth"), (blur, "depth")),
+        ((neighbors, "color"), (blur, "neighbors")),
         ((blurred, "color"), (blur, "into")),
         ((blurred, "color"), (tonemap, "image")),
     ] {

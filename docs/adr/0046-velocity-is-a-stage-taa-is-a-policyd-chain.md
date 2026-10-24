@@ -198,13 +198,23 @@ second spelling of the same wire is a document that cannot be checked.
   smoothed by the clamp, not resolved by it, and trails for a few
   frames by design. Variance clipping or a change-detection channel is
   the escalation, and it lands with a consumer that needs it.
-* Motion blur is no longer eight fixed taps: it takes the drive demo's
-  gather, at least one bilinear tap per pixel of smear (256 at most),
-  taking ahead what of its path does not fit behind in the frame,
-  rather than clamping to the edge, whose row a clamped tap would smear
-  along. Its `isolate` parameter (0 by default) leaves out taps that
-  moved otherwise than the pixel, for a camera that follows what is in
-  front of it. Its smear is capped at 0.4 of the frame (`MAX_SMEAR`).
+* Motion blur is no longer eight fixed taps but a reconstruction filter
+  (McGuire et al. 2012): `wxsl.motion_tiles` writes the longest motion
+  per 32-pixel tile, `wxsl.motion_neighbors` the longest whose smear
+  reaches each tile, and `wxsl.motion_blur` reads both, the opaque depth
+  and the velocity, so a fast foreground smears over a still background
+  and a still one in front of a moving background leaves no trail. Taps
+  alternate between the neighbourhood's motion and the pixel's own
+  (Guertin et al. 2014), at least one per pixel of smear, and are
+  weighed as shares of the exposure. The shutter is the last half of
+  the frame, the span the velocity's chord into the past describes; a
+  tap in front counts as deep as it was when it crossed, and a pixel
+  reveals what is behind it only past where its own surface, extended
+  as a plane, runs: the road ahead of a followed car runs on under it.
+  One surface trails back along its motion, as the light a followed car
+  carries on the road does. Taps off the frame are skipped, and the
+  smear is capped at 0.2 of the frame (`MAX_SMEAR`). A document wires
+  the two tile targets (`pair`, `MOTION_TILES_SCALE`) itself.
 * `screen_motion` starts the motion of a point that was behind the near
   plane last frame where its clip segment crosses that plane. A slow
   frame under a camera backing away from the road had a negative `w`

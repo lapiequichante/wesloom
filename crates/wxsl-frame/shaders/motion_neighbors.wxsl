@@ -1,0 +1,53 @@
+//! motion_neighbors — the motion blur's second reconstruction pass: the
+//! longest of the tiles' motions within the longest smear's reach of each
+//! tile, so a pixel that barely moves still knows what fast thing passes
+//! over it (a railing's post across a far city).
+//!
+//! Mounted by `wxsl.motion_neighbors`, at the tiles' size. The paper's
+//! 3×3 neighbourhood assumes the smear never outreaches a tile; here the
+//! window is the longest smear's, `MAX_SMEAR` of the frame, and a tile
+//! counts only where its own smear, at the blur's `strength`, reaches:
+//! a fast thing far away is no reason to sample along its motion.
+
+@group(3) @binding(0) var tiles_image: texture_2d<f32>;
+
+/// The longest smear, in uv: the twin of `wxsl.motion_blur`'s.
+const MAX_SMEAR: f32 = 0.2;
+
+@vertex
+fn motion_neighbors_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    // A fullscreen triangle: (-1,-1), (3,-1), (-1,3).
+    let x = f32(i32(index & 1u) * 4 - 1);
+    let y = f32(i32(index >> 1u) * 4 - 1);
+    return vec4f(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn motion_neighbors_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let size = vec2i(textureDimensions(tiles_image));
+    let tile = vec2i(position.xy);
+    let window = vec2i(ceil(MAX_SMEAR * vec2f(size)));
+    // Longest in tiles, which are square in pixels.
+    var longest = vec2f(0.0);
+    var reach = 0.0;
+    for (var y = -window.y; y <= window.y; y++) {
+        for (var x = -window.x; x <= window.x; x++) {
+            let other = tile + vec2i(x, y);
+            if (any(other < vec2i(0)) || any(other >= size)) {
+                continue;
+            }
+            let motion = textureLoad(tiles_image, other, 0).xy;
+            let length_here = length(motion * vec2f(size));
+            // The smear's radius, as the gather has it, in tiles; a tile
+            // reaches from its far corner.
+            let radius = min(length(motion) * 0.5 * params.strength, MAX_SMEAR) * length_here
+                / max(length(motion), 1e-9);
+            let apart = max(length(vec2f(vec2i(x, y))) - 1.5, 0.0);
+            if (length_here > reach && radius >= apart) {
+                reach = length_here;
+                longest = motion;
+            }
+        }
+    }
+    return vec4f(longest, 0.0, 1.0);
+}

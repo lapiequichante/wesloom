@@ -84,13 +84,13 @@ fn facade(
     let drawn = select(0.0, 0.7 * fract(room * 5.3), fract(room * 3.1) > 0.5);
     let blind = smoothstep(1.0 - drawn - soft.y, 1.0 - drawn + soft.y, height);
     let inside = (0.7 + 0.6 * height) * mix(1.0, 0.55, blind);
-    let brightness = (0.45 + 0.7 * dim * dim) * mix(inside, 1.0, far);
+    let brightness = (0.25 + 0.9 * dim * dim) * mix(inside, 1.0, far);
 
     // Concrete and glass: dark, the glass glossy enough to mirror the sky.
     let concrete = mix(vec3f(0.025, 0.025, 0.03), vec3f(0.05, 0.048, 0.046), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 0.4 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * 0.5 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others. Each is box-filtered over the pixel's footprint,
