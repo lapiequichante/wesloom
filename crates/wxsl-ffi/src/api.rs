@@ -226,6 +226,8 @@ impl Config {
             profile: self.profile,
             // The C ABI's atlas is the header's `SHADOW_ATLAS_SIZE`.
             shadow_atlas_size: abi::SHADOW_ATLAS_SIZE,
+            // The C ABI renders the normal offset alone (ADR 0026).
+            shadow_depth_bias: Default::default(),
         };
         config.plan().map_err(invalid)?;
         Ok(config)

@@ -10,17 +10,51 @@
 //! tones.
 //!
 //! Mounted by the `wxsl.motion_blur` effect, whose two declared inputs
-//! are this file's two bindings. The tap count is a `const` — the
-//! kernel's shape is the effect's structure, not its tuning surface, and
-//! the same argument bloom's thirteen taps made; `strength` is a
-//! parameter of the descriptor (ADR 0042).
+//! are this file's two bindings. The taps follow the smear's length, at
+//! least one per pixel; `strength` and `isolate` are parameters of the
+//! descriptor (ADR 0042).
 
 @group(3) @binding(0) var color_image: texture_2d<f32>;
 @group(3) @binding(1) var velocity_image: texture_2d<f32>;
 
-/// How many samples the smear averages, current pixel included. Odd, so
-/// the unblurred centre is one of them.
-const TAPS: i32 = 8;
+/// How far a tap's motion may stray from the pixel's to count whole, and
+/// to count at all: by length, in octaves, and by direction, as one less
+/// the cosine. By ratio rather than difference, the road's own motion,
+/// which perspective stretches fast near the camera, stays in.
+const OCTAVES_FROM: f32 = 1.0;
+const OCTAVES_TO: f32 = 2.0;
+const TURN_FROM: f32 = 0.15;
+const TURN_TO: f32 = 0.4;
+
+/// The share of a tap moving by `moved` in the smear of a pixel moving
+/// by `own`.
+fn kinship(own: vec2f, moved: vec2f) -> f32 {
+    let reach = max(length(own), 1e-6);
+    let length_moved = max(length(moved), 1e-6);
+    let octaves = abs(log2(length_moved / reach));
+    let turn = 1.0 - dot(own, moved) / (reach * length_moved);
+    return (1.0 - smoothstep(OCTAVES_FROM, OCTAVES_TO, octaves))
+        * (1.0 - smoothstep(TURN_FROM, TURN_TO, turn));
+}
+
+/// The longest smear, in uv: a bound on what a slow frame's motion asks
+/// of the taps.
+const MAX_SMEAR: f32 = 0.4;
+
+/// Limit the cost of very long exposures. Below this limit, sample at
+/// least once per pixel so fine highlights do not form echoes.
+const MAX_TAPS: i32 = 256;
+
+/// Bilinear radiance at `point`, in pixels.
+fn sample_color(point: vec2f, last: vec2i) -> vec3f {
+    let base = vec2i(floor(point));
+    let blend = fract(point);
+    let a = textureLoad(color_image, clamp(base, vec2i(0), last), 0).rgb;
+    let b = textureLoad(color_image, clamp(base + vec2i(1, 0), vec2i(0), last), 0).rgb;
+    let c = textureLoad(color_image, clamp(base + vec2i(0, 1), vec2i(0), last), 0).rgb;
+    let d = textureLoad(color_image, clamp(base + vec2i(1, 1), vec2i(0), last), 0).rgb;
+    return mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+}
 
 @vertex
 fn motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -34,21 +68,42 @@ fn motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f
 @fragment
 fn motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let size = vec2f(textureDimensions(color_image));
-    let uv = position.xy / size;
+    let last = vec2i(size) - vec2i(1);
     let pixel = vec2i(position.xy);
 
     // Walk *backwards* along the motion: where this fragment's light came
     // from during the frame, which is the smear a shutter would record.
     // Halved because the velocity is per frame and a shutter shows half
     // the way back and half the way forward around the sample point.
-    let motion = textureLoad(velocity_image, pixel, 0).xy * 0.5 * params.strength;
+    let own = textureLoad(velocity_image, pixel, 0).xy;
+    let unclamped = own * 0.5 * params.strength;
+    let motion = unclamped * min(1.0, MAX_SMEAR / max(length(unclamped), 1e-9));
+    let taps = clamp(i32(ceil(length(motion * size))) + 1, 2, MAX_TAPS);
 
     var sum = textureLoad(color_image, pixel, 0).rgb;
-    for (var tap = 1; tap < TAPS; tap++) {
-        let fraction = f32(tap) / f32(TAPS - 1);
-        let sample_uv = clamp(uv - motion * fraction, vec2f(0.0), vec2f(1.0));
-        let sample_pixel = vec2i(sample_uv * size);
-        sum += textureLoad(color_image, sample_pixel, 0).rgb;
+    var weight = 1.0;
+    // How far back the path stays in the frame, as a share of it. Off the
+    // frame nothing is known, and a tap clamped to the edge would slide
+    // along it and gather whatever the edge row holds; the share that
+    // does not fit behind is taken ahead instead, so the smear keeps its
+    // length and its line.
+    let path = motion * size;
+    let here = vec2f(pixel);
+    let behind = select((vec2f(last) - here) / max(-path, vec2f(1e-6)), here / max(path, vec2f(1e-6)), path > vec2f(0.0));
+    let ahead = max(1.0 - min(min(behind.x, behind.y), 1.0), 0.0);
+    for (var tap = 1; tap < taps; tap++) {
+        let fraction = f32(tap) / f32(taps - 1) - ahead;
+        let point = here - path * fraction;
+        if (any(point < vec2f(0.0)) || any(point > vec2f(last))) {
+            continue;
+        }
+        // Under `isolate`, a tap that does not move as this pixel does is
+        // something else in front of it, whose light never crossed this
+        // pixel: what the camera follows leaves no trail behind it.
+        let moved = textureLoad(velocity_image, vec2i(round(point)), 0).xy;
+        let accept = mix(1.0, kinship(own, moved), params.isolate);
+        sum += sample_color(point, last) * accept;
+        weight += accept;
     }
-    return vec4f(sum / f32(TAPS), 1.0);
+    return vec4f(sum / weight, 1.0);
 }

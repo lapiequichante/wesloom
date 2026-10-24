@@ -198,6 +198,17 @@ second spelling of the same wire is a document that cannot be checked.
   smoothed by the clamp, not resolved by it, and trails for a few
   frames by design. Variance clipping or a change-detection channel is
   the escalation, and it lands with a consumer that needs it.
+* Motion blur is no longer eight fixed taps: it takes the drive demo's
+  gather, at least one bilinear tap per pixel of smear (256 at most),
+  taking ahead what of its path does not fit behind in the frame,
+  rather than clamping to the edge, whose row a clamped tap would smear
+  along. Its `isolate` parameter (0 by default) leaves out taps that
+  moved otherwise than the pixel, for a camera that follows what is in
+  front of it. Its smear is capped at 0.4 of the frame (`MAX_SMEAR`).
+* `screen_motion` starts the motion of a point that was behind the near
+  plane last frame where its clip segment crosses that plane. A slow
+  frame under a camera backing away from the road had a negative `w`
+  there, and a vector pointing anywhere.
 * If this changes, also update `AGENTS.md` (the stage bullet, the
   effects bullet, the gallery list), `docs/architecture.md`, and the
   glossary's *Velocity* entry.

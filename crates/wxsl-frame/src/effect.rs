@@ -1380,12 +1380,20 @@ pub const MOTION_BLUR: Effect = Effect {
         },
     ],
     outputs: &[],
-    parameters: &[EffectParameter {
-        name: "strength",
-        // 1 is a full frame's motion smeared across the exposure; 0 is
-        // the image exactly as it was.
-        default: Value::F32(1.0),
-    }],
+    parameters: &[
+        EffectParameter {
+            name: "strength",
+            // 1 is a full frame's motion smeared across the exposure; 0 is
+            // the image exactly as it was.
+            default: Value::F32(1.0),
+        },
+        EffectParameter {
+            name: "isolate",
+            // 1 leaves out taps that moved otherwise than the pixel, for a
+            // camera that follows what is in front; 0 gathers them all.
+            default: Value::F32(0.0),
+        },
+    ],
     shader: EffectShader::Source {
         path: MOTION_BLUR_MODULE,
         wxsl: include_str!("../shaders/motion_blur.wxsl"),

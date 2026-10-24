@@ -152,8 +152,20 @@ fn velocity_surface_context(vertex: VelocityOut) -> SurfaceContext {
 // `y` points up and this ABI's uv points down. Guarded against a `w` the
 // numerical edges of the frustum can hand over — a velocity is a
 // difference of fractions, and one wild texel smears a whole resolve.
+//
+// A point that was behind the near plane last frame (a slow frame, a
+// camera backing away from the road under it) has no screen position
+// there: its clip `w` is negative and the fraction flips. The motion
+// starts instead where the clip segment crosses the near plane (`z = 0`),
+// the frame's motion as far as it was seen, in its direction. The
+// segment runs between two cameras' clips, so the crossing is the point's
+// as nearly as the camera moved in a straight line.
 fn screen_motion(current: vec4f, previous: vec4f) -> vec2f {
+    var start = previous;
+    if (previous.z < 0.0) {
+        start = mix(current, previous, current.z / max(current.z - previous.z, 1e-9));
+    }
     let now = current.xy / max(current.w, 1e-5);
-    let before = previous.xy / max(previous.w, 1e-5);
+    let before = start.xy / max(start.w, 1e-5);
     return (now - before) * vec2f(0.5, -0.5);
 }
