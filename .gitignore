@@ -16,6 +16,7 @@
 
 # for the ressources that can easily be computed : 
 /screenshots
+*.color.prt
 
 # Editor/OS cruft
 .vscode/
@@ -23,3 +24,4 @@
 *.swp
 .DS_Store
 Thumbs.db
+

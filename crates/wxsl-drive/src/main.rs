@@ -30,6 +30,8 @@
 //! `Space` pauses, `Esc` quits. The `car color` slider (or `--paint NAME`)
 //! repaints the body: a flaked hornet yellow, a metallic red, a smooth
 //! clear-coated blue, white, matte black and an iridescent pearl. The
+//! `window color` slider (or `--glass NAME`) tints the windows: the file's
+//! own panes, smoked, me_car's iridescent film or a teal mirror. The
 //! `neons` slider (or `--neon NAME`) lights an underglow all around the car:
 //! off, yellow (the paint's orange), red, blue or white, its light on the
 //! road baked once, dimmer the brighter the sky. The
@@ -104,13 +106,13 @@ use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
-      [--paint NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--blur-quality off|fast|good] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
+      [--paint NAME] [--glass NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--blur-quality off|fast|good] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
-        occlusion on the road and on itself, its paint, its neons, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its windows, its neons, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
         drag elsewhere looks around the car, right-drag turns the camera (right double-click
         straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
@@ -154,6 +156,7 @@ const ENVIRONMENT: &str = "environment";
 const GROUND_AO: &str = "ground AO";
 const CAR_AO: &str = "car AO";
 const PAINT: &str = "car color";
+const GLASS: &str = "window color";
 const NEON: &str = "neons";
 const VIEW: &str = "view";
 const SHADOWS: &str = "shadows";
@@ -253,6 +256,8 @@ struct Options {
     zoom: f32,
     /// The body paint, an index into [`car::PAINTS`].
     paint: f32,
+    /// The windows' look, an index into [`car::GLASSES`].
+    glass: f32,
     /// The underglow, an index into [`neon::NEONS`].
     neon: f32,
     /// The `view` slider's start: 0 shades, then one per [`debug_views`].
@@ -309,6 +314,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         pitch: 0.0,
         zoom: 1.0,
         paint: 0.0,
+        glass: 0.0,
         neon: 3.0,
         view: 0.0,
         profile: false,
@@ -323,7 +329,7 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         ui: false,
         frames: 4,
         size: (1600, 900),
-        car: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/glb/me_car/me_car.glb"),
+        car: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/glb/me_car/moi.glb"),
         shadow_car: Some(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../resources/glb/me_car_opt/me_car_opt.glb"),
@@ -371,6 +377,17 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     .ok_or_else(|| {
                         let names: Vec<&str> = car::PAINTS.iter().map(|paint| paint.name).collect();
                         format!("--paint is one of: {}", names.join(", "))
+                    })? as f32;
+            }
+            "--glass" => {
+                let name = value()?;
+                options.glass = car::GLASSES
+                    .iter()
+                    .position(|glass| glass.name == name)
+                    .ok_or_else(|| {
+                        let names: Vec<&str> =
+                            car::GLASSES.iter().map(|glass| glass.name).collect();
+                        format!("--glass is one of: {}", names.join(", "))
                     })? as f32;
             }
             "--neon" => {
@@ -532,6 +549,13 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             |value| car::PAINTS[value.round() as usize].name.to_string(),
         ),
         Slider::new(
+            GLASS,
+            0.0,
+            (car::GLASSES.len() - 1) as f32,
+            options.glass,
+            |value| car::GLASSES[value.round() as usize].name.to_string(),
+        ),
+        Slider::new(
             NEON,
             0.0,
             (neon::NEONS.len() - 1) as f32,
@@ -628,6 +652,8 @@ struct Drive {
     rotation: Vec2,
     /// The paint last put on the car.
     paint: Option<usize>,
+    /// The windows' look last set.
+    glass: Option<usize>,
     /// The debug view the car's materials are compiled for, 0 shading.
     shown_view: i32,
     /// The motion blur the frame installed has, with its passes, if any.
@@ -714,6 +740,7 @@ impl Drive {
             zoom: 1.0,
             rotation: Vec2::ZERO,
             paint: None,
+            glass: None,
             shown_view: 0,
             motion_blur: Some(Blur::Fast),
             fxaa: true,
@@ -856,6 +883,7 @@ impl Drive {
             self.car.set_lights_on(gpu, self.day.lights_on)?;
             self.car_ao = None;
             self.paint = None;
+            self.glass = None;
             self.shown_view = shown;
         }
         let paint = panel.value(PAINT).round() as usize;
@@ -863,6 +891,11 @@ impl Drive {
             self.car
                 .set_paint(gpu, &mut self.renderer, &car::PAINTS[paint])?;
             self.paint = Some(paint);
+        }
+        let glass = panel.value(GLASS).round() as usize;
+        if self.glass != Some(glass) {
+            self.car.set_glass(gpu, &car::GLASSES[glass])?;
+            self.glass = Some(glass);
         }
         let car_ao = panel.value(CAR_AO);
         if self.car_ao != Some(car_ao) {

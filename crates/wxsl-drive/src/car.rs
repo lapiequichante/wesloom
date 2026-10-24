@@ -151,6 +151,8 @@ pub struct Car {
     /// The paint's flakes ([`crate::flakes`]), for the car itself; the
     /// shadow's stand-in keeps the file's.
     flakes: Option<wgpu::TextureView>,
+    /// The windows' materials.
+    windows: Vec<usize>,
 }
 
 /// A wheel: where its axle is, its radius, whether it steers, and the
@@ -473,6 +475,126 @@ pub const PAINTS: [Paint; 6] = [
     },
 ];
 
+/// The materials of the windows the `window color` slider tints: the side
+/// windows and the windscreen, not the lamps' glass.
+const GLASS_MATERIALS: &[&str] = &["Windows", "Glass"];
+
+/// The headlights' cover glass, which the windows' clear look replaces
+/// too (moi.glb tints it orange); the slider leaves it clear.
+const LAMP_GLASS: &[&str] = &["Glass.front"];
+
+/// The surface fields a window look sets and the parameters feeding them,
+/// wired when the file has none: the tint and coverage, the share let
+/// through, the IOR and a thin film. The glass is thin-walled and drawn in
+/// the refraction tier (ADR 0093), which reads these from the surface
+/// whatever the lighting model, so a look is bindings only, never a
+/// recompile.
+const GLASS_PARAMS: [(&str, &str); 6] = [
+    ("base_color", "base_color_factor"),
+    ("transmission", "transmission_factor"),
+    ("ior", "ior"),
+    ("iridescence_strength", "iridescence_factor"),
+    ("iridescence_ior", "iridescence_ior"),
+    ("iridescence_thickness", "iridescence_thickness"),
+];
+
+/// A look for the windows.
+pub struct Glass {
+    pub name: &'static str,
+    /// The tint, its coverage (alpha), the share of light let through and
+    /// the IOR.
+    pub body: ([f32; 4], f32, f32),
+    /// A thin film: its IOR and thickness in nm.
+    pub iridescence: Option<(f32, f32)>,
+}
+
+impl Glass {
+    /// Its [`GLASS_PARAMS`] values.
+    fn values(&self) -> [Value; 6] {
+        let (tint, transmission, ior) = self.body;
+        let (film_ior, thickness) = self.iridescence.unwrap_or((1.3, 300.0));
+        let film = if self.iridescence.is_some() { 1.0 } else { 0.0 };
+        [
+            Value::Vec4(tint),
+            Value::F32(transmission),
+            Value::F32(ior),
+            Value::F32(film),
+            Value::F32(film_ior),
+            Value::F32(thickness),
+        ]
+    }
+}
+
+/// The looks the `window color` slider steps through. The first is the
+/// windows' and the headlights' glass at load: a faint blue-green, as
+/// float glass is seen through, letting most light through.
+pub const GLASSES: [Glass; 4] = [
+    Glass {
+        name: "transparent",
+        body: ([0.86, 0.95, 0.92, 1.0], 0.92, 1.5),
+        iridescence: None,
+    },
+    Glass {
+        name: "smoked",
+        body: ([0.1, 0.1, 0.11, 1.0], 1.0, 1.5),
+        iridescence: None,
+    },
+    // me_car.glb's windows' film over a darker, less clear pane.
+    Glass {
+        name: "iridescent",
+        body: ([0.3, 0.3, 0.32, 1.0], 0.8, 1.5),
+        iridescence: Some((1.8, 330.0)),
+    },
+    // A dark, dense pane under a thinner film: a mirrored visor's teal.
+    Glass {
+        name: "teal mirror",
+        body: ([0.2, 0.2, 0.2, 1.0], 1.0, 2.6),
+        iridescence: Some((2.0, 280.0)),
+    },
+];
+
+/// Give each window and headlight glass material in `imported` every
+/// [`GLASS_PARAMS`] parameter, its value the first look's, so that it is
+/// also what a recompile restores; the windows' material indices.
+fn glass_params(
+    imported: &mut ImportedScene,
+    registry: &NodeRegistry,
+) -> Result<Vec<usize>, Box<dyn Error>> {
+    let mut windows = Vec::new();
+    for (index, entry) in imported.scene.materials.iter_mut().enumerate() {
+        let window = GLASS_MATERIALS.contains(&entry.name.as_str());
+        if !window && !LAMP_GLASS.contains(&entry.name.as_str()) {
+            continue;
+        }
+        let graph = &mut entry.graph;
+        let [surface] = graph.surface_outputs(registry)[..] else {
+            return Err(format!("{}: one surface output expected", entry.name).into());
+        };
+        for ((field, name), value) in GLASS_PARAMS.into_iter().zip(GLASSES[0].values()) {
+            let present = graph.nodes().find(|(_, node)| {
+                node.def == "param.value"
+                    && node.settings.get("name").map(String::as_str) == Some(name)
+            });
+            if let Some((node, _)) = present {
+                graph.set_param(node, "value", value);
+                continue;
+            }
+            let node = graph.add(
+                Node::new("param.value")
+                    .with_setting("name", name)
+                    .with_param("value", value),
+            );
+            graph
+                .wire(registry, (node, "out"), (surface, field))
+                .map_err(|error| format!("{}: {error}", entry.name))?;
+        }
+        if window {
+            windows.push(index);
+        }
+    }
+    Ok(windows)
+}
+
 /// Turn the clear-coated paint `entry` into a thin-film one: the
 /// iridescent model, its film fed by parameters, the thickness mixed from
 /// `iridescence_thickness_min` (sides) to `iridescence_thickness` (top) by
@@ -763,6 +885,7 @@ impl Car {
             .map(wxsl::render::gltf::mesh_data)
             .collect();
         let prt = attach_prt(&mut imported, &mut meshes, path)?;
+        let windows = glass_params(&mut imported, &crate::world::registry())?;
         let paint = imported
             .scene
             .materials
@@ -859,6 +982,7 @@ impl Car {
             prt_strength: 1.0,
             paint,
             flakes,
+            windows,
         })
     }
 
@@ -992,13 +1116,27 @@ impl Car {
         Ok(())
     }
 
+    /// Give the windows the look `glass`.
+    pub fn set_glass(&mut self, gpu: &GpuContext, glass: &Glass) -> Result<(), Box<dyn Error>> {
+        for &material in &self.windows {
+            let Some(bindings) = self.resources.bindings_mut(material) else {
+                continue;
+            };
+            for ((_, name), value) in GLASS_PARAMS.into_iter().zip(glass.values()) {
+                bindings.set(name, value)?;
+            }
+        }
+        self.resources.upload(&gpu.device, &gpu.queue)?;
+        Ok(())
+    }
+
     /// Show the surface debug view `view` (ADR 0085) on every material,
     /// or shade again for 0: each is recompiled under the view's macro, as
     /// the editor's scene mode does, and its bone texture bound again. The
     /// lenses' glow, the bone frame, the paint and the PRT strength are
     /// parameters, which go back to their defaults: set them again
     /// ([`Car::set_lights_on`], [`Car::animate`], [`Car::set_paint`],
-    /// [`Car::set_prt_strength`]).
+    /// [`Car::set_glass`], [`Car::set_prt_strength`]).
     pub fn set_debug_view(
         &mut self,
         gpu: &GpuContext,
