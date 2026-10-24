@@ -12,11 +12,9 @@
 //! part swaying on its springs, whose bright edge would otherwise streak
 //! down the road.
 //!
-//! The car's shadow on the road moves with the car, not with the road:
-//! smeared with the road, it would wash out into a pale band along the
-//! car. So what is smeared is the frame divided by the share of the
-//! road's light the car leaves it (`car_shadow.wxsl`), and that share
-//! multiplies the result back, unblurred.
+//! Only the car's PRT ground occlusion moves with the car. Its isolated
+//! factor is divided out before the gather and restored afterwards.
+//! Normal-map lighting and world shadows remain in the gathered colour.
 
 @group(3) @binding(0) var color_image: texture_2d<f32>;
 @group(3) @binding(1) var velocity_image: texture_2d<f32>;
@@ -26,7 +24,7 @@
 /// division would only lift noise.
 const DARKEST: f32 = 0.02;
 
-/// The frame at `pixel`, the car's shadow divided out.
+/// The frame at `pixel`, the car's contact occlusion divided out.
 fn unshadowed(pixel: vec2i) -> vec3f {
     let shadow = max(textureLoad(shadow_image, pixel, 0).r, DARKEST);
     return textureLoad(color_image, pixel, 0).rgb / shadow;
@@ -37,8 +35,20 @@ fn unshadowed(pixel: vec2i) -> vec3f {
 const APART_FROM: f32 = 0.3;
 const APART_TO: f32 = 0.6;
 
-/// How many samples the smear averages, current pixel included.
-const TAPS: i32 = 12;
+/// Limit the cost of very long exposures. Below this limit, sample at
+/// least once per pixel so fine normal-map highlights do not form echoes.
+const MAX_TAPS: i32 = 256;
+
+/// Bilinear radiance, dividing out occlusion before interpolation.
+fn sample_color(point: vec2f, last: vec2i) -> vec3f {
+    let base = vec2i(floor(point));
+    let blend = fract(point);
+    let a = unshadowed(clamp(base, vec2i(0), last));
+    let b = unshadowed(clamp(base + vec2i(1, 0), vec2i(0), last));
+    let c = unshadowed(clamp(base + vec2i(0, 1), vec2i(0), last));
+    let d = unshadowed(clamp(base + vec2i(1, 1), vec2i(0), last));
+    return mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+}
 
 @vertex
 fn drive_motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -51,22 +61,24 @@ fn drive_motion_blur_vs(@builtin(vertex_index) index: u32) -> @builtin(position)
 @fragment
 fn drive_motion_blur_fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let size = vec2f(textureDimensions(color_image));
-    let uv = position.xy / size;
+    let last = vec2i(size) - vec2i(1);
     let pixel = vec2i(position.xy);
     let own = textureLoad(velocity_image, pixel, 0).xy;
-    // Half the frame's motion each way of the sample point, as a shutter.
+    // Half the frame's motion back along its trajectory, as a shutter.
     let motion = own * 0.5 * params.strength;
     let reach = length(own);
+    let taps = clamp(i32(ceil(length(motion * size))) + 1, 2, MAX_TAPS);
 
     var sum = unshadowed(pixel);
     var weight = 1.0;
-    for (var tap = 1; tap < TAPS; tap++) {
-        let fraction = f32(tap) / f32(TAPS - 1);
-        let sample_pixel = vec2i(clamp(uv - motion * fraction, vec2f(0.0), vec2f(1.0)) * size);
+    for (var tap = 1; tap < taps; tap++) {
+        let fraction = f32(tap) / f32(taps - 1);
+        let point = clamp(vec2f(pixel) - motion * size * fraction, vec2f(0.0), vec2f(last));
+        let sample_pixel = vec2i(round(point));
         let moved = textureLoad(velocity_image, sample_pixel, 0).xy;
         let apart = length(moved - own) / max(reach, 1e-6);
         let accept = 1.0 - smoothstep(APART_FROM, APART_TO, apart);
-        sum += unshadowed(sample_pixel) * accept;
+        sum += sample_color(point, last) * accept;
         weight += accept;
     }
     let shadow = max(textureLoad(shadow_image, pixel, 0).r, DARKEST);

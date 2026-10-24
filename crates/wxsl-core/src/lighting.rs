@@ -2328,7 +2328,7 @@ mod tests {
             .unwrap();
         let pbr = DEFAULT_MODELS[DEFAULT_MODEL_ID as usize];
         let single = lighting_pass_source(&LightingSet::single(sheen), &[]);
-        assert!(single.contains("+ ambient_sheen(surface, ctx, model_extra)"));
+        assert!(single.contains("var lit = ambient_sheen(surface, ctx, model_extra)"));
         let switch = lighting_pass_source(&LightingSet::new([pbr, sheen]).unwrap(), &[]);
         assert!(switch.contains("case 7u: { return ambient_sheen(surface, ctx, model_data); }"));
         assert!(switch.contains("case 2u: { return default_ambient(surface, ctx); }"));

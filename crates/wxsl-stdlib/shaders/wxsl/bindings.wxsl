@@ -259,7 +259,20 @@ fn sample_light(index: u32, world_position: vec3f) -> LightSample {
 }
 
 fn sample_light_at(index: u32, sample: u32, world_position: vec3f) -> LightSample {
-    return sample_light_value(scene.lights[index], sample, world_position);
+    let light = scene.lights[index];
+    // A disc is never local, so its branch stays out of
+    // `sample_light_value`, which the light grid's loop shares: there, on
+    // Metal, it darkened every clustered light although no disc reaches it.
+    if light.kind == LIGHT_KIND_DISC {
+        let lobe = SpecularLobe(vec3f(0.0, 1.0, 0.0), 1.0, vec3f(0.0, 1.0, 0.0));
+        let setup = light_value_setup(light, 32u, world_position, lobe);
+        if setup.count == 0u {
+            var out: LightSample;
+            return out;
+        }
+        return sample_rectangle(setup, sample);
+    }
+    return sample_light_value(light, sample, world_position);
 }
 
 // A Cauchy distribution truncated to [-1, 1], centred on `centre` with
@@ -746,13 +759,6 @@ fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> Light
         return sample_tube(light_value_setup(light, 16u, world_position, lobe), sample);
     }
     var out: LightSample;
-    if light.kind == LIGHT_KIND_DISC {
-        let setup = light_value_setup(light, 32u, world_position, lobe);
-        if setup.count == 0u {
-            return out;
-        }
-        return sample_rectangle(setup, sample);
-    }
     if light.kind == LIGHT_KIND_DIRECTIONAL {
         out.direction = normalize(light.position_or_direction);
         out.radiance = light.color * light.intensity;

@@ -43,7 +43,7 @@ typedef struct WxslLightUniform {
     float spot_inner_cos;
     uint32_t cookie_layer;
     float penumbra;
-    float _padding3;
+    uint32_t shadow_taps;
 } WxslLightUniform;
 WXSL_LAYOUT_ASSERT(sizeof(WxslLightUniform) == 112, "LightUniform size");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, position_or_direction) == 0, "LightUniform.position_or_direction offset");
@@ -63,7 +63,7 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_outer_cos) == 92, "LightUnifo
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, spot_inner_cos) == 96, "LightUniform.spot_inner_cos offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, cookie_layer) == 100, "LightUniform.cookie_layer offset");
 WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, penumbra) == 104, "LightUniform.penumbra offset");
-WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, _padding3) == 108, "LightUniform._padding3 offset");
+WXSL_LAYOUT_ASSERT(offsetof(WxslLightUniform, shadow_taps) == 108, "LightUniform.shadow_taps offset");
 typedef struct WxslShadowTileUniform {
     float rect[4];
     float view_proj[4][4];
@@ -208,6 +208,6 @@ WXSL_LAYOUT_ASSERT(offsetof(WxslUiViewport, _pad0) == 8, "UiViewport._pad0 offse
 #define WXSL_BINDING_ENVIRONMENT_SPECULAR 10u
 #define WXSL_BINDING_ENVIRONMENT_SAMPLER 7u
 #define WXSL_BINDING_PREVIOUS_INSTANCES 8u
-#define WXSL_HOST_LAYOUT_ID "11592943187734273029"
+#define WXSL_HOST_LAYOUT_ID "1204204306205604500"
 #undef WXSL_LAYOUT_ASSERT
 #endif

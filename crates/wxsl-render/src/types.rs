@@ -572,7 +572,11 @@ pub fn depth_stencil(state: PassState) -> Option<wgpu::DepthStencilState> {
         depth_write_enabled: Some(state.depth_write),
         depth_compare: Some(state.depth_compare.to_wgpu()),
         stencil: Default::default(),
-        bias: Default::default(),
+        bias: wgpu::DepthBiasState {
+            constant: state.depth_bias.constant,
+            slope_scale: state.depth_bias.slope_scale,
+            clamp: state.depth_bias.clamp,
+        },
     })
 }
 

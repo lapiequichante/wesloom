@@ -29,8 +29,8 @@ use wxsl_core::scene::TagExpr;
 
 use crate::graph::FrameGraph;
 use crate::pass::{
-    Attachment, DepthAttachment, DrawSource, Extent, PassDesc, PassState, PassView, Read,
-    ResourceDesc, ResourceId, ViewportRect, DEPTH_FORMAT,
+    Attachment, DepthAttachment, DepthBias, DrawSource, Extent, PassDesc, PassState, PassView,
+    Read, ResourceDesc, ResourceId, ViewportRect, DEPTH_FORMAT,
 };
 use crate::types::{Color, CompareFunction, TextureFormat, TextureUsages};
 
@@ -162,6 +162,10 @@ pub struct PipelineConfig {
     /// The tiles scale with it (`abi::shadow_tile_in`); the frame's
     /// `Environment::shadow_atlas_size` must match.
     pub shadow_atlas_size: u32,
+    /// The depth offset a document pipeline's shadow passes draw with,
+    /// none by default: the normal offset alone (ADR 0026). A slope term
+    /// keeps a far cascade's coarse texels off their own receivers.
+    pub shadow_depth_bias: DepthBias,
 }
 
 impl PipelineConfig {
@@ -175,6 +179,7 @@ impl PipelineConfig {
             macros: MacroSet::new(),
             profile: crate::profile::Profile::FULL,
             shadow_atlas_size: abi::SHADOW_ATLAS_SIZE,
+            shadow_depth_bias: DepthBias::NONE,
         }
     }
 
@@ -773,6 +778,7 @@ mod tests {
                         macros: wxsl_core::macros::MacroSet::new(),
                         profile: Default::default(),
                         shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
+                        shadow_depth_bias: Default::default(),
                     })
                     .schedule()
                     .unwrap_or_else(|error| panic!("{pipeline} at {width}x{height}: {error}"));

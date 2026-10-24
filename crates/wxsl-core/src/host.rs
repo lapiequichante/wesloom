@@ -128,7 +128,9 @@ pub fn structures() -> Vec<Structure> {
                 // lies on: 0 straddling it, 1 outside the shadow
                 // (ADR 0105).
                 field("penumbra", "penumbra", F32),
-                field("_padding3", "_pad3", F32),
+                // How many times the base taps a soft shadow's search
+                // and filter take: 1, 2 or 4 (ADR 0098).
+                field("shadow_taps", "shadow_taps", U32),
             ],
         },
         Structure {

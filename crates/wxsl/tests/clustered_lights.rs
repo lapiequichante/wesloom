@@ -214,3 +214,82 @@ fn a_thousand_local_lights_light_only_their_reach() {
     let between = Vec3::new(-4.0 + spacing * 4.0, 0.0, -4.0 + spacing * 4.0);
     assert_eq!(pixel(&lit, between), pixel(&dark, between));
 }
+
+// Moving a drive lamp between the uniform and clustered lists must not
+// change its contribution, even with overlapping cones and varying cells.
+#[test]
+fn profiled_spots_match_between_grid_and_uniform() {
+    let Some(gpu) = pollster::block_on(GpuContext::headless()).ok() else {
+        return;
+    };
+    let mut scene = Scene::new(gpu);
+    use wxsl::render::wgpu;
+    let profiles = scene.gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("spot profiles"),
+        size: wgpu::Extent3d {
+            width: 2,
+            height: 1,
+            depth_or_array_layers: 2,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    scene.gpu.queue.write_texture(
+        profiles.as_image_copy(),
+        &[255; 16],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(8),
+            rows_per_image: Some(1),
+        },
+        profiles.size(),
+    );
+    let view = profiles.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    scene
+        .renderer
+        .set_light_cookies(&scene.gpu.device, Some(&view));
+    for pipeline in [StockPipeline::Forward, StockPipeline::Deferred] {
+        scene.renderer.set_pipeline(pipeline);
+        for profiled in [false, true] {
+            for mixed in [false, true] {
+                let mut lights = [-2.0, 2.0]
+                    .map(|x| {
+                        let light = Light::spot(
+                            Vec3::new(x, 3.0, 0.0),
+                            Vec3::NEG_Y,
+                            0.8,
+                            1.3,
+                            Vec3::ONE,
+                            8.0,
+                        )
+                        .with_range(10.0);
+                        if profiled {
+                            light.with_profile(1)
+                        } else {
+                            light
+                        }
+                    })
+                    .to_vec();
+                if mixed {
+                    // One uniform light beside locals, with a varying cell
+                    // count where the small point light reaches the receiver.
+                    lights.push(Light::directional(Vec3::Y, Vec3::ONE, 0.1));
+                    lights.push(
+                        Light::point(Vec3::new(0.0, 0.3, 0.0), Vec3::ONE, 0.05).with_range(0.7),
+                    );
+                }
+                let uniform = scene.render(&environment(lights.clone(), false));
+                let clustered = scene.render(&environment(lights, true));
+                let gap = largest_difference(&uniform, &clustered);
+                assert!(gap <= 1, "{pipeline:?}, profile {profiled}, mixed {mixed}: clustered spots differ by {gap}");
+            }
+        }
+    }
+}

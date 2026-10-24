@@ -478,7 +478,11 @@ impl Compiler<'_> {
                 .with_viewport(ViewportRect::square(tile.x, tile.y, tile.edge))
                 // Two-sided: the usual cases are an alpha-tested leaf and a
                 // displaced surface, neither of them closed.
-                .with_state(PassState::OPAQUE.with_cull_mode(None)),
+                .with_state(
+                    PassState::OPAQUE
+                        .with_cull_mode(None)
+                        .with_depth_bias(self.config.shadow_depth_bias),
+                ),
             );
         }
         Ok(())

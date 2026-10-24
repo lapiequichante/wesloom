@@ -32,19 +32,15 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let far = camera.inverse_view_proj * ndc;
     let view = normalize(far.xyz / far.w - camera.position);
     let angle = acos(clamp(dot(view, normalize(params.direction.xyz)), -1.0, 1.0));
-    // Before any branch: a derivative needs its neighbours.
+    // Keep the whole disc evaluation uniform. On Metal, an early return
+    // for occluded pixels can invalidate fwidth in neighbouring sky
+    // pixels even when the derivative precedes the branch in WGSL.
     let edge = fwidth(angle);
     let depth = textureSampleLevel(depth_image, point_sampler, uv, 0.0).x;
-    if all(params.radiance.rgb <= vec3f(0.0)) || depth < 1.0 {
-        return vec4f(0.0);
-    }
     let inside = 1.0 - smoothstep(params.radius - edge, params.radius + edge, angle);
-    if inside <= 0.0 {
-        return vec4f(0.0);
-    }
     let across = min(angle / params.radius, 1.0);
     let mu = sqrt(1.0 - across * across);
     let limb = 1.0 - 0.6 * (1.0 - mu);
     let radiance = params.radiance.rgb * (limb * inside * scene.exposure * scene.environment_scale);
-    return vec4f(radiance, 0.0);
+    return vec4f(select(vec3f(0.0), radiance, depth >= 1.0), 0.0);
 }

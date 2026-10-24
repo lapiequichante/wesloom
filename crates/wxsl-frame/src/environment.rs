@@ -217,6 +217,9 @@ pub struct Light {
     pub radius: f32,
     /// Which side of the hard edge a soft shadow's penumbra lies on.
     pub penumbra: Penumbra,
+    /// How many times the base taps a soft shadow's blocker search and
+    /// filter take: 1, 2 or 4. More is less grain, at that cost.
+    pub shadow_taps: u32,
     /// Direction away from a spotlight, normalized by its constructor.
     pub spot_direction: Vec3,
     /// Inner cone half-angle in radians, fully illuminated.
@@ -317,6 +320,7 @@ impl Light {
         area_v: Vec3::ZERO,
         radius: 0.0,
         penumbra: Penumbra::Inside,
+        shadow_taps: 1,
         spot_direction: Vec3::NEG_Y,
         spot_inner_angle: 0.4,
         spot_outer_angle: 0.7,
@@ -607,6 +611,13 @@ impl Light {
         self
     }
 
+    /// Take `scale` times the base taps in a soft shadow: 1, 2 or 4.
+    pub fn with_shadow_taps(mut self, scale: u32) -> Self {
+        assert!(matches!(scale, 1 | 2 | 4), "shadow taps scale by 1, 2 or 4");
+        self.shadow_taps = scale;
+        self
+    }
+
     /// Draw this light's shadow from the draws `casters` matches only.
     pub fn with_shadow_casters(mut self, casters: TagExpr) -> Self {
         self.shadow_casters = casters;
@@ -889,7 +900,7 @@ impl Light {
                 Penumbra::Inside => 0.0,
                 Penumbra::Outside => 1.0,
             },
-            _padding3: 0.0,
+            shadow_taps: self.shadow_taps,
         }
     }
 }

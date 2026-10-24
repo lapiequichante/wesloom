@@ -84,16 +84,6 @@ pub fn registry() -> NodeRegistry {
         .0
 }
 
-/// The tag on the asphalt near the car drawn again without shadows, by
-/// the pass that finds the car's shadow on the road (`pipeline`) and by
-/// no other.
-pub const UNSHADOWED_TAG: &str = "unshadowed";
-/// How near the car the asphalt is drawn again: past where its shadow
-/// and occlusion reach; and the pieces it is cut into for it, small, so
-/// that only the road around the car is shaded twice.
-const UNSHADOWED_REACH: f32 = 20.0;
-const UNSHADOWED_CHUNK: f32 = 10.0;
-
 /// A material and its bindings.
 pub struct Surface {
     pub material: Material,
@@ -319,10 +309,6 @@ pub struct World {
     /// One per [`Kind`], in [`Kind::ALL`]'s order.
     kinds: Vec<Mesh>,
     surfaces: Vec<Surface>,
-    /// The asphalt without shadows, drawn near the car (`UNSHADOWED_TAG`),
-    /// and the asphalt in [`UNSHADOWED_CHUNK`] pieces with their bounds.
-    unshadowed: Surface,
-    unshadowed_meshes: Vec<(Mesh, (Vec3, Vec3))>,
     /// The far lamps' sprites.
     halos: Halos,
     /// The lenses' glow and the screen's height last set.
@@ -451,18 +437,6 @@ impl World {
                 Surface::new(gpu, renderer, graph, registry, tags)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut unshadowed = Surface::with_config(
-            gpu,
-            renderer,
-            &graphs[ASPHALT],
-            registry,
-            &MaterialConfig {
-                cast_shadow: false,
-                receive_shadow: false,
-                ..MaterialConfig::default()
-            }
-            .with_tags(Tags::from_iter([UNSHADOWED_TAG])),
-        )?;
         let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/textures");
         for (surface, textures, sampler) in [
             (ASPHALT, &ROAD_TEXTURES[..], ROAD_SAMPLER),
@@ -484,33 +458,18 @@ impl World {
                     Ok((*slot, load_texture(gpu, &folder.join(file), *srgb)?))
                 })
                 .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-            // The unshadowed asphalt reads the asphalt's own.
-            let mut targets = vec![&mut surfaces[surface].bindings];
-            if surface == ASPHALT {
-                targets.push(&mut unshadowed.bindings);
+            let bindings = &mut surfaces[surface].bindings;
+            for (slot, texture) in &textures {
+                bindings.set_texture(slot, texture)?;
             }
-            for bindings in targets {
-                for (slot, texture) in &textures {
-                    bindings.set_texture(slot, texture)?;
-                }
-                bindings.set_sampler(sampler, &filter)?;
-            }
+            bindings.set_sampler(sampler, &filter)?;
         }
         surfaces[CONCRETE]
             .bindings
             .set_texture(CONCRETE_METAL, &black_texel(gpu))?;
-        for surface in surfaces.iter_mut().chain([&mut unshadowed]) {
+        for surface in &mut surfaces {
             surface.bindings.upload(device, &gpu.queue)?;
         }
-        let unshadowed_meshes = chunks(&road_meshes.asphalt, UNSHADOWED_CHUNK)
-            .into_iter()
-            .map(|(piece, bounds)| {
-                (
-                    Mesh::upload(device, "drive unshadowed asphalt", &piece),
-                    bounds,
-                )
-            })
-            .collect();
         let meshes = [
             ("drive asphalt", &road_meshes.asphalt, ASPHALT),
             ("drive concrete", &road_meshes.concrete, CONCRETE),
@@ -546,8 +505,6 @@ impl World {
                 .map(|kind| Mesh::upload(device, kind.label(), &kind.mesh()))
                 .collect(),
             surfaces,
-            unshadowed,
-            unshadowed_meshes,
             buildings,
             seeds,
             lamps,
@@ -621,16 +578,6 @@ impl World {
         }
         draws.extend(self.halos.draws());
         draws
-    }
-
-    /// The asphalt within reach of `car`, again without shadows: what the
-    /// car's shadow on the road is measured against (`UNSHADOWED_TAG`).
-    pub fn unshadowed_draws(&self, car: Vec3) -> Vec<DrawItem<'_>> {
-        self.unshadowed_meshes
-            .iter()
-            .filter(|(_, (min, max))| car.clamp(*min, *max).distance(car) <= UNSHADOWED_REACH)
-            .map(|(mesh, (min, max))| self.unshadowed.item(mesh).with_bounds(*min, *max))
-            .collect()
     }
 }
 

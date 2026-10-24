@@ -54,3 +54,7 @@ surfaces it lights, which is where an emitter's size matters most.
   and spot window now goes through `range_window` too, unchanged.
 - The device test is `a_disc_light_lights_like_its_point_from_one_side_within_its_range`
   in `crates/wxsl/tests/shadows.rs`.
+- A disc is sampled by `sample_light_at`, never by `sample_light_value`,
+  which the light grid's loop shares (ADR 0076). With the disc branch in
+  it, every clustered light came out dark on Metal, although no disc is
+  ever local (`clustered_lights`).

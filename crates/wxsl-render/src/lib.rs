@@ -122,8 +122,8 @@ pub use library::ShaderLibrary;
 pub use material::Material;
 pub use mesh::{AttributeValues, Mesh, MeshData, MeshKind, Vertex};
 pub use pass::{
-    Attachment, DepthAttachment, Dimension, DrawSource, Extent, PassDesc, PassKind, PassState,
-    Persistence, Policy, Read, ResourceDesc, ResourceId,
+    Attachment, DepthAttachment, DepthBias, Dimension, DrawSource, Extent, PassDesc, PassKind,
+    PassState, Persistence, Policy, Read, ResourceDesc, ResourceId,
 };
 pub use pipeline::{PipelineConfig, StockPipeline, TargetConfig};
 pub use pipeline_doc::{compile as compile_pipeline, document_registry, PipelineError};

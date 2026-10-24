@@ -920,6 +920,18 @@ impl Drive {
                 light.casts_shadow = false;
             }
         }
+        // The shadow quality's x2 and x4 also take two and four times the
+        // soft shadows' taps, for less grain.
+        let taps = if self.quality >= 4.0 {
+            4
+        } else if self.quality >= 2.0 {
+            2
+        } else {
+            1
+        };
+        for light in &mut lights {
+            light.shadow_taps = taps;
+        }
         if panel.value(SHADOWS) < 0.5 {
             // Hard: no source size, so each shadow is one PCF lookup
             // rather than a blocker search and a wide filter (ADR 0098).
@@ -997,12 +1009,6 @@ impl Drive {
                 "strength",
                 Value::F32(panel.value(BLUR)),
             )?;
-            for item in self
-                .world
-                .unshadowed_draws(transform.transform_point3(Vec3::ZERO))
-            {
-                draws.push(item);
-            }
         }
         for item in self.car.draws(transform, previous_transform) {
             draws.push(item);

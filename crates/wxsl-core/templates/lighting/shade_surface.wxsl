@@ -6,7 +6,10 @@ fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
 @if(!wxsl_debug_normals)
 fn ${SHADE_FN}(surface: ${SURFACE}, ctx: ${CONTEXT}${SHADING_PARAMS}) -> vec4f {
     let normal = normalize(surface.normal);
-${EXTRA_DECL}    var lit = vec3f(0.0);
+${EXTRA_DECL}    // Ambient occlusion attenuates the environment, not direct light.
+    // Evaluate IBL before the varying light loops. On Metal, sampling it
+    // afterwards can produce bright speckles in otherwise rough surfaces.
+    var lit = ${AMBIENT_CALL} * saturate(surface.occlusion);
     let light_count = min(scene.light_count, WXSL_MAX_LIGHTS);
     let lobe = specular_lobe(normal, ctx.view_direction, surface.roughness);
     for (var index = 0u; index < light_count; index = index + 1u) {
@@ -53,14 +56,6 @@ ${EXTRA_DECL}    var lit = vec3f(0.0);
         lit = lit + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS});
     }
 
-    // Ambient stands in for everything the light loop cannot see,
-    // so it is what ambient occlusion attenuates. The environment BRDF
-    // comes from the frame's baked table, which is why the ambient
-    // specular knows about grazing angles and roughness rather than
-    // approximating both (ADR 0039).
-    lit = lit
-        + ${AMBIENT_CALL}
-        * saturate(surface.occlusion);
     lit = lit + surface.emissive;
 
     // Linear radiance, exposed but neither curved nor encoded: the

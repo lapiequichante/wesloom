@@ -151,6 +151,7 @@ fn the_deferred_document_follows_the_lighting_set_like_the_hand_built_one() {
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
         shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
+        shadow_depth_bias: Default::default(),
     };
     let document = stock_document(StockPipeline::Deferred);
     let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -172,6 +173,7 @@ fn a_feature_channel_joins_the_compiled_gbuffer() {
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
         shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
+        shadow_depth_bias: Default::default(),
     };
     let document = stock_document(StockPipeline::Deferred);
     let compiled = compile(&document, &make_registry(), &effects(), &config).expect("compiles");
@@ -205,6 +207,7 @@ fn a_feature_channel_joins_the_compiled_gbuffer() {
         macros: wxsl_core::macros::MacroSet::new(),
         profile: Default::default(),
         shadow_atlas_size: wxsl_core::abi::SHADOW_ATLAS_SIZE,
+        shadow_depth_bias: Default::default(),
     };
     match compile(
         &stock_document(StockPipeline::Deferred),

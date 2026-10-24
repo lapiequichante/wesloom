@@ -490,6 +490,64 @@ pub struct PassState {
     pub depth_format: Option<TextureFormat>,
     /// Blend state of every colour target, or `None` for opaque writes.
     pub blend: Option<BlendState>,
+    /// The rasterizer's offset of the depth written, none but in a shadow
+    /// pass asked for one (`PipelineConfig::shadow_depth_bias`).
+    pub depth_bias: DepthBias,
+}
+
+/// A rasterizer depth offset: `constant` steps of the depth format's
+/// precision, plus `slope_scale` times the triangle's depth slope per
+/// texel, at most `clamp` (0 for unclamped).
+///
+/// In a shadow pass the slope term grows with the texel a cascade covers,
+/// which the world-space normal offset in `shadow.wxsl` does not: it keeps
+/// a far cascade's coarse texels off the receivers they are drawn from
+/// (ADR 0026).
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub struct DepthBias {
+    /// Steps of the depth format's precision.
+    pub constant: i32,
+    /// Times the triangle's largest depth slope per texel.
+    pub slope_scale: f32,
+    /// The largest offset, in depth; 0 leaves it unclamped.
+    pub clamp: f32,
+}
+
+impl DepthBias {
+    /// No offset.
+    pub const NONE: DepthBias = DepthBias {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    };
+
+    /// `slope_scale` times the depth slope, with one step of precision.
+    pub const fn slope(slope_scale: f32) -> DepthBias {
+        DepthBias {
+            constant: 1,
+            slope_scale,
+            clamp: 0.0,
+        }
+    }
+}
+
+// By bits, so a pipeline cache key can hold one.
+impl PartialEq for DepthBias {
+    fn eq(&self, other: &Self) -> bool {
+        self.constant == other.constant
+            && self.slope_scale.to_bits() == other.slope_scale.to_bits()
+            && self.clamp.to_bits() == other.clamp.to_bits()
+    }
+}
+
+impl Eq for DepthBias {}
+
+impl std::hash::Hash for DepthBias {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.constant.hash(state);
+        self.slope_scale.to_bits().hash(state);
+        self.clamp.to_bits().hash(state);
+    }
 }
 
 impl PassState {
@@ -500,6 +558,7 @@ impl PassState {
         depth_write: true,
         depth_format: Some(DEPTH_FORMAT),
         blend: None,
+        depth_bias: DepthBias::NONE,
     };
 
     /// A fullscreen pass: no culling, no depth attachment at all.
@@ -509,6 +568,7 @@ impl PassState {
         depth_write: false,
         depth_format: None,
         blend: None,
+        depth_bias: DepthBias::NONE,
     };
 
     /// The same state with a different depth format.
@@ -526,6 +586,12 @@ impl PassState {
     /// The same state with a different cull mode.
     pub fn with_cull_mode(mut self, cull_mode: Option<Face>) -> Self {
         self.cull_mode = cull_mode;
+        self
+    }
+
+    /// The same state with a depth offset.
+    pub fn with_depth_bias(mut self, bias: DepthBias) -> Self {
+        self.depth_bias = bias;
         self
     }
 

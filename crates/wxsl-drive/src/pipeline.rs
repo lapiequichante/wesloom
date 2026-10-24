@@ -15,11 +15,10 @@
 //!
 //! Under the car, before the background, a pass multiplies the road by
 //! the car's occlusion: the ground grid's PRT bake lit by the car's probe
-//! (`car_ground`), drawn by no other pass. The road near the car is then
-//! drawn again without shadows, and the share of its light the shaded
-//! road kept is what the motion blur leaves unblurred: the car's shadow
-//! and occlusion move with the car, not with the road
-//! (`shaders/car_shadow.wxsl`). Another then adds the neons'
+//! (`car_ground`), drawn by no other pass. The same grid writes the
+//! occlusion factor directly for the motion blur to leave in place. Road
+//! normals and world shadows stay in the colour that is blurred.
+//! Another then adds the neons'
 //! baked light (`neon`), and a third the far lamps' halos (`halo`); the
 //! probe captures neither.
 //!
@@ -52,8 +51,8 @@ use wxsl::render::effect::{
     EffectParameter, EffectShader,
 };
 use wxsl::render::pass::{
-    Attachment, DepthAttachment, DrawSource, Extent, Load, PassDesc, PassKind, PassState, Policy,
-    Read, ResourceDesc, ResourceId,
+    Attachment, DepthAttachment, DepthBias, DrawSource, Extent, Load, PassDesc, PassKind,
+    PassState, Policy, Read, ResourceDesc, ResourceId,
 };
 use wxsl::render::types::{
     BlendComponent, BlendFactor, BlendOperation, BlendState, Color, CompareFunction, TextureFormat,
@@ -65,12 +64,13 @@ use crate::halo::HALO_TAG;
 use crate::lights::{CAR_SHADOW_TAG, CAR_TAG};
 use crate::neon::NEON_TAG;
 use crate::sky::{SKY, SKY_HEIGHT, SKY_PASS, SKY_WIDTH};
-use crate::world::UNSHADOWED_TAG;
 
 /// The pass the lens' numbers go to.
 const DOF_CIRCLES: &str = "drive dof circles";
 /// The widest blur disc, in pixels.
 const MAX_COC: f32 = 20.0;
+/// The shadow passes' slope-scaled depth offset, in depth slopes.
+const SHADOW_SLOPE_BIAS: f32 = 1.0;
 /// The motion blur's pass label, which `strength` is set on.
 pub const MOTION_BLUR: &str = "motion blur";
 /// The sky's environment cubes: the edge of the radiance and specular
@@ -164,7 +164,7 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
         EffectInput {
             name: "shadow",
             kind: EffectInputKind::Image,
-            description: "The share of the road's light the car leaves it, left unblurred.",
+            description: "The car's PRT ground occlusion, left unblurred.",
             history: 0,
         },
     ],
@@ -180,45 +180,10 @@ const MOTION_BLUR_EFFECT: Effect = Effect {
     downlevel: Downlevel::Portable,
 };
 
-/// The car's shadow target, wired into the motion blur by the document,
-/// and the passes that fill it: the road near the car without shadows,
-/// then the share of its light the shaded road kept.
+/// The car's ground occlusion, written directly by its PRT grid.
+/// World shadows and normal-map lighting must not enter this factor.
 const CAR_SHADOW: &str = "car shadow";
-const UNSHADOWED: &str = "drive unshadowed road";
 const CAR_SHADOW_PASS: &str = "drive car shadow";
-
-/// The share of the road's light the car leaves it
-/// (`shaders/car_shadow.wxsl`).
-const CAR_SHADOW_EFFECT: Effect = Effect {
-    id: "drive.car_shadow",
-    label: "car shadow",
-    description: "The share of the road's light its shadows leave it, from the road drawn with and without them.",
-    kind: EffectKind::Screen {
-        vertex_entry: "drive_car_shadow_vs",
-        fragment_entry: "drive_car_shadow_fs",
-    },
-    inputs: &[
-        EffectInput {
-            name: "shaded",
-            kind: EffectInputKind::Image,
-            description: "The road as shaded, the car's occlusion on it.",
-            history: 0,
-        },
-        EffectInput {
-            name: "unshadowed",
-            kind: EffectInputKind::Image,
-            description: "The road near the car without shadows; alpha 0 elsewhere.",
-            history: 0,
-        },
-    ],
-    outputs: &[],
-    parameters: &[],
-    shader: EffectShader::Source {
-        path: "package::drive::car_shadow",
-        wxsl: include_str!("../shaders/car_shadow.wxsl"),
-    },
-    downlevel: Downlevel::Portable,
-};
 
 /// The pass that multiplies the road under the car by its occlusion.
 const GROUND: &str = "drive car ground";
@@ -479,7 +444,6 @@ pub fn add_effects(renderer: &mut Renderer) -> Result<(), Box<dyn Error>> {
         ibl::PROBE_FACE,
         SKY,
         MOTION_BLUR_EFFECT,
-        CAR_SHADOW_EFFECT,
         FOG_EFFECT,
         GRADE_EFFECT,
         ABERRATION_EFFECT,
@@ -659,6 +623,10 @@ pub fn install(
     let document = motion_blur_document(renderer, deferred, motion_blur)?;
     // The renderer's own: its lighting set shapes the G-buffer.
     let mut config = renderer.pipeline_config().clone();
+    // The sun's far cascades cover metres a texel: the slope term keeps
+    // the road off its own texels there, which 5 cm of normal offset
+    // cannot.
+    config.shadow_depth_bias = DepthBias::slope(SHADOW_SLOPE_BIAS);
     if quality > 0.0 {
         config.shadow_atlas_size = (abi::SHADOW_ATLAS_SIZE as f32 * quality) as u32;
     }
@@ -797,27 +765,31 @@ pub fn install(
         )
         .with_environment(probe.diffuse, probe.specular),
     );
-    // The car's shadow and occlusion on the road, for the motion blur to
-    // leave in place, read before the neons and the car are drawn over it.
+    // Preserve only the car's contact occlusion. A ratio of shaded and
+    // unshadowed road would also restore world shadows and normal detail
+    // after the blur. The PRT grid already outputs the isolated factor.
     if motion_blur {
-        let unshadowed = graph.resource(hdr(UNSHADOWED));
-        graph.pass(
-            PassDesc::geometry(
-                UNSHADOWED,
-                DrawSource::Scene(TagExpr::tag(UNSHADOWED_TAG)),
-                MaterialStage::FORWARD_LIT,
-            )
-            .with_color(clear(unshadowed))
-            .with_depth(DepthAttachment::load(depth))
-            .with_state(PassState::OPAQUE.with_depth_test(CompareFunction::LessEqual, false)),
-        );
         let car_shadow = graph
             .resource_by_label(CAR_SHADOW)
             .ok_or("the frame has no car shadow target")?;
         graph.pass(
-            PassDesc::screen(CAR_SHADOW_PASS, CAR_SHADOW_EFFECT.id)
-                .with_color(clear(car_shadow))
-                .with_reads([Read::current(shaded), Read::current(unshadowed)]),
+            PassDesc::geometry(
+                CAR_SHADOW_PASS,
+                DrawSource::Scene(TagExpr::tag(GROUND_TAG)),
+                MaterialStage::FORWARD_LIT,
+            )
+            .with_color(Attachment::clear(
+                car_shadow,
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            ))
+            .with_depth(DepthAttachment::load(depth))
+            .with_state(PassState::OPAQUE.with_depth_test(CompareFunction::LessEqual, false))
+            .with_environment(probe.diffuse, probe.specular),
         );
     }
     graph.pass(add_pass(NEON.into(), NEON_TAG, shaded, depth));
@@ -994,19 +966,18 @@ pub fn install(
         );
     }
     // The car's stand-in is drawn by the shadow passes and by no other,
-    // the ground grid, the neons, the halos and the unshadowed road by
+    // the ground grid, the neons and the halos by
     // their own passes alone.
     let hidden = TagExpr::tag(CAR_SHADOW_TAG).not();
     let grid = TagExpr::tag(GROUND_TAG)
         .or(TagExpr::tag(NEON_TAG))
         .or(TagExpr::tag(HALO_TAG))
-        .or(TagExpr::tag(UNSHADOWED_TAG))
         .not();
     for index in 0..graph.passes().len() {
         let Some(pass) = graph.pass_mut(index) else {
             continue;
         };
-        if [GROUND, NEON, LAMP_HALOS, UNSHADOWED].contains(&pass.label.as_str()) {
+        if [GROUND, CAR_SHADOW_PASS, NEON, LAMP_HALOS].contains(&pass.label.as_str()) {
             continue;
         }
         if let PassKind::Geometry {
@@ -1171,6 +1142,10 @@ pub fn set_lens(
 }
 
 #[cfg(test)]
+#[path = "motion_blur_tests.rs"]
+mod motion_blur_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1208,6 +1183,20 @@ mod tests {
                 1.0,
             )
             .unwrap();
+            let contact = renderer
+                .render_graph()
+                .passes()
+                .iter()
+                .find(|pass| pass.label == CAR_SHADOW_PASS)
+                .unwrap();
+            let PassKind::Geometry {
+                source: DrawSource::Scene(tags),
+                ..
+            } = &contact.kind
+            else {
+                panic!("contact occlusion must come from the PRT grid, not the shaded road");
+            };
+            assert_eq!(*tags, TagExpr::tag(GROUND_TAG));
             (
                 renderer.pass_param(&rays, "rays"),
                 renderer.pass_param(&combine, "strength"),

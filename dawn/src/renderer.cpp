@@ -1084,6 +1084,10 @@ struct Renderer::Impl {
       depth.format = format(pass.at("state").at("depth_format"));
       depth.depthCompare = compare(pass.at("state").at("depth_compare"));
       depth.depthWriteEnabled = pass.at("state").at("depth_write").get<bool>();
+      const auto &bias = pass.at("state").at("depth_bias");
+      depth.depthBias = bias.at("constant").get<int32_t>();
+      depth.depthBiasSlopeScale = bias.at("slope_scale").get<float>();
+      depth.depthBiasClamp = bias.at("clamp").get<float>();
       descriptor.depthStencil = &depth;
     }
     descriptor.primitive.topology = gpu::PrimitiveTopology::TriangleList;
