@@ -9,11 +9,11 @@
   "audio": "../../../resources/music/wxsl.mp3",
   "at": 0.0,
   "keys": [
-    {"t": 33.5, "speed": 6, "time of day": 16.0, "tonemap": "WXSL", "headlights": "off", "car color": "yellow", "window color": "iridescent", "neons": "off", "look": -1.9, "pitch": -0.15, "zoom": 0.65, "turn": -0.25, "tilt": 0.1, "fov": 50, "aperture": 4, "focus": 1, "motion blur": 0.15, "environment": 0, "ground AO": 0.8, "car AO": 0.8},
+    {"t": 33.5, "speed": 6, "time of day": 16.0, "tonemap": "WXSL", "headlights": "off", "car color": "yellow", "window color": "iridescent", "neons": "off", "look": -1.9, "pitch": -0.15, "zoom": 0.65, "turn": -0.25, "tilt": 0.1, "fov": 50, "aperture": 4, "focus": 1, "motion blur": 0.15, "environment": 0, "ground AO": 0.8, "car AO": 0.8, "shadows": "soft (outset)"},
     {"t": 37.21, "ease": "smooth", "look": -1.5, "zoom": 0.4},
     {"t": 37.21, "ease": "step", "look": 2.2, "pitch": -0.12, "zoom": 0.6, "turn": 0.1, "tilt": 0.1},
     {"t": 40.5, "ease": "smooth", "look": 2.6, "pitch": -0.12, "zoom": 0.32},
-    {"t": 40.5, "ease": "step", "headlights": "on", "speed": 6, "look": -1.7, "pitch": -0.1, "zoom": 0.55, "turn": -0.35, "tilt": 0.06},
+    {"t": 40.5, "ease": "step", "headlights": "on", "shadows": "soft (inset)", "speed": 6, "look": -1.7, "pitch": -0.1, "zoom": 0.55, "turn": -0.35, "tilt": 0.06},
     {"t": 43.0, "speed": 78},
     {"t": 43.25, "speed": 78},
     {"t": 45.6, "speed": 128},

@@ -40,7 +40,9 @@
 //! the rest a forward pass can show; `--view NAME` picks one for a
 //! screenshot. The frame is forward. Shadows are hard by default; the `shadows` slider (or
 //! `--soft-shadows`) gives the lights their source size back, for
-//! contact-hardening penumbrae at a higher shading cost. The `fxaa` slider
+//! contact-hardening penumbrae at a higher shading cost, either inset
+//! (straddling the hard edge) or outset (outside it, as `--soft-shadows`
+//! starts). The `fxaa` slider
 //! (or `--no-fxaa`) turns the anti-aliasing off, to compare; the
 //! `reflections` slider (or `--ssr coarse|medium|fine`) adds screen-space
 //! reflections, the finer the costlier but the thinner what they catch
@@ -100,7 +102,7 @@ use winit::window::{Window, WindowId};
 use wxsl::core::lighting::{DebugStage, DebugView, LightingSet, DEFAULT_MODELS, OVERDRAW_VIEW};
 use wxsl::core::Value;
 use wxsl::render::effect::ssr::Quality;
-use wxsl::render::environment::LocalProbe;
+use wxsl::render::environment::{LocalProbe, Penumbra};
 use wxsl::render::{
     Camera, DrawList, Environment, GpuContext, OffscreenTarget, RenderRequest, Renderer,
     ShaderLibrary, TargetConfig,
@@ -179,7 +181,11 @@ const HEADLIGHTS: &str = "headlights";
 /// the hour.
 const HEADLIGHT_MODES: [&str; 3] = ["auto", "off", "on"];
 const VIEW: &str = "view";
+/// The lights' shadows: [`SHADOW_MODES`].
 const SHADOWS: &str = "shadows";
+/// Hard, or soft with every light's penumbra straddling the hard edge
+/// (inset) or wholly outside it (outset) (ADR 0105).
+const SHADOW_MODES: [&str; 3] = ["hard", "soft (inset)", "soft (outset)"];
 const FXAA: &str = "fxaa";
 /// Screen-space reflections: off, then one step per [`SSR_QUALITIES`].
 const SSR: &str = "reflections";
@@ -620,9 +626,9 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
         Slider::new(
             SHADOWS,
             0.0,
-            1.0,
-            if options.soft_shadows { 1.0 } else { 0.0 },
-            |value| if value >= 0.5 { "soft" } else { "hard" }.to_string(),
+            (SHADOW_MODES.len() - 1) as f32,
+            if options.soft_shadows { 2.0 } else { 0.0 },
+            |value| SHADOW_MODES[value.round() as usize].to_string(),
         ),
         Slider::new(
             FXAA,
@@ -1029,12 +1035,24 @@ impl Drive {
         for light in &mut lights {
             light.shadow_taps = taps;
         }
-        if panel.value(SHADOWS) < 0.5 {
+        match panel.value(SHADOWS).round() as usize {
             // Hard: no source size, so each shadow is one PCF lookup
             // rather than a blocker search and a wide filter (ADR 0098).
             // Only a tube shades with its radius, and the drive has none.
-            for light in &mut lights {
-                light.radius = 0.0;
+            0 => {
+                for light in &mut lights {
+                    light.radius = 0.0;
+                }
+            }
+            mode => {
+                let side = if mode == 1 {
+                    Penumbra::Inside
+                } else {
+                    Penumbra::Outside
+                };
+                for light in &mut lights {
+                    light.penumbra = side;
+                }
             }
         }
         let environment = Environment {
