@@ -658,15 +658,18 @@ fn lamp_parts(lamp: &Lamp, steel: &mut MeshData, glow: &mut MeshData) -> [Vec3; 
             Vec3::new(road::ARM_REACH * 2.0 + 0.6, 0.14, 0.14),
         ),
     );
-    lamp.heads.map(|head| {
-        // The housing, a little wider than the lens, hangs from the arm.
-        road::push_box(
-            steel,
-            basis(head + Vec3::Y * (HOUSING_BOTTOM + HOUSING.y * 0.5), HOUSING),
-        );
-        let lens = head + Vec3::Y * (HOUSING_BOTTOM - halo::LENS.y * 0.5);
-        road::push_box(glow, basis(lens, halo::LENS));
-        lens
+    let tilt = crate::lights::LAMP_TILT;
+    [(lamp.heads[0], -tilt), (lamp.heads[1], tilt)].map(|(head, tilt)| {
+        // The housing, a little wider than the lens, hangs from the arm,
+        // tilted towards its street side as its light is.
+        let hung = basis(head, Vec3::ONE) * Mat4::from_rotation_z(tilt);
+        let part = |height: f32, size: Vec3| {
+            hung * Mat4::from_translation(Vec3::Y * height) * Mat4::from_scale(size)
+        };
+        road::push_box(steel, part(HOUSING_BOTTOM + HOUSING.y * 0.5, HOUSING));
+        let lens = HOUSING_BOTTOM - halo::LENS.y * 0.5;
+        road::push_box(glow, part(lens, halo::LENS));
+        hung.transform_point3(Vec3::Y * lens)
     })
 }
 

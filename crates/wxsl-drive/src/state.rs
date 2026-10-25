@@ -53,7 +53,7 @@ pub struct Saved {
 }
 
 /// Sliders the drive no longer has, which older states still hold.
-const RETIRED: [&str; 1] = ["lens flare"];
+const RETIRED: [&str; 3] = ["lens flare", "time scale", "body pitch"];
 
 impl Saved {
     /// Set `panel`'s sliders to the saved values; a label the panel does not

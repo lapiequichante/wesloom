@@ -41,8 +41,10 @@ const PIER_SPACING: f32 = 36.0;
 pub const LAMP_SPACING: f32 = 36.0;
 /// How high the lamp heads hang above the deck.
 pub const LAMP_HEIGHT: f32 = 10.0;
-/// How far each arm reaches over its carriageway.
-pub const ARM_REACH: f32 = INNER_EDGE + LANE_WIDTH;
+/// How far each arm reaches over its carriageway: over its inner shoulder,
+/// short of its lanes' middle, which its head is tilted towards
+/// (`lights::LAMP_TILT`) so the light falls on a car aslant.
+pub const ARM_REACH: f32 = 1.2;
 /// The height every point of the loop is lifted by, over the hills.
 const LIFT: f32 = 20.0;
 

@@ -871,6 +871,11 @@ pub fn abi_macros() -> Vec<MacroDef> {
             "Attenuate each light by the shadow map it casts into.",
         ),
         MacroDef::new(
+            FEATURE_INSIDE_PENUMBRA,
+            MacroValue::Flag(false),
+            "Soften the shadows this surface receives across their hard edge, whatever side the light puts its penumbra on.",
+        ),
+        MacroDef::new(
             FEATURE_RELATIVE_TO_EYE,
             MacroValue::Flag(false),
             "Measure world-space positions from the camera rather than the origin.",
@@ -897,6 +902,17 @@ pub const FEATURE_DEBUG_NORMALS: &str = "wxsl_debug_normals";
 /// the lookup at all — and so the two paths agree, since the deferred
 /// lighting pass is compiled against the same macro set.
 pub const FEATURE_RECEIVE_SHADOWS: &str = "wxsl_receive_shadows";
+/// Feature flag: the shadows a surface receives soften across their hard
+/// edge (see [`abi_macros`]).
+///
+/// A receiver's say over a light's `Penumbra::Outside` (ADR 0105): an
+/// outside penumbra keeps a shadow's inside dark, which a ground wants
+/// under what stands on it, but a curved body the light grazes shadows
+/// itself along every fold and lip, and its recesses go black. A material
+/// with the flag reads every light's penumbra as inside. Like
+/// [`FEATURE_RECEIVE_SHADOWS`] a flag rather than a uniform; forward only,
+/// since the deferred lighting pass is compiled once for every material.
+pub const FEATURE_INSIDE_PENUMBRA: &str = "wxsl_inside_penumbra";
 /// Feature flag: world space is measured from the camera (see
 /// [`abi_macros`]).
 ///

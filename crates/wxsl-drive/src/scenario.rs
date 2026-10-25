@@ -21,10 +21,8 @@
 //! `start`.
 //!
 //! In a scenario `speed` is the car's own speed rather than the one it
-//! heads for, and `time scale` how fast the world goes, 0 freezing it
-//! while the camera still moves. Where the car is follows from both,
-//! integrated from `start`, so any frame renders on its own and the same
-//! at any frame rate. A camera property that steps is a cut: the frame
+//! heads for. Where the car is follows from it, integrated from `start`,
+//! so any frame renders on its own and the same at any frame rate. A camera property that steps is a cut: the frame
 //! after it has no motion blur from the camera's jump.
 
 use std::collections::BTreeMap;
@@ -285,17 +283,16 @@ impl Timeline {
         values
     }
 
-    /// Where the car is at `t`, from `at` metres at `start`: its speed and
-    /// the world's time scale integrated since, `baseline`'s where no key
-    /// sets them.
+    /// Where the car is at `t`, from `at` metres at `start`: its speed
+    /// integrated since, `baseline`'s where no key sets it.
     pub fn motion(&self, start: f32, at: f32, t: f32, baseline: &Values) -> Motion {
-        let property = |name: &str, t: f32| {
-            self.value(name, t)
-                .or_else(|| baseline.get(name).copied())
+        let speed = |t: f32| {
+            self.value(crate::SPEED, t)
+                .or_else(|| baseline.get(crate::SPEED).copied())
                 .unwrap_or(1.0)
+                .max(0.0)
+                / 3.6
         };
-        let speed = |t: f32| property(crate::SPEED, t).max(0.0) / 3.6;
-        let scale = |t: f32| property(crate::TIME_SCALE, t).max(0.0);
         let steps = ((t - start) / STEP).ceil().max(1.0);
         let h = (t - start).max(0.0) / steps;
         let mut motion = Motion {
@@ -304,22 +301,22 @@ impl Timeline {
             time: start,
             ..Motion::default()
         };
-        let mut before = (start, speed(start), scale(start));
+        let mut before = speed(start);
         for step in 1..=steps as u32 {
             let now = start + h * step as f32;
-            let (speed, scale) = (speed(now), scale(now));
+            let speed = speed(now);
             // Trapezoids, so that the frame rate does not move the car.
-            let travel = 0.5 * (before.1 * before.2 + speed * scale) * h;
+            let travel = 0.5 * (before + speed) * h;
             motion.s += travel;
             motion.odometer += travel;
-            motion.time += 0.5 * (before.2 + scale) * h;
+            motion.time = now;
             if h > 0.0 {
-                motion.acceleration = (speed - before.1) / h;
+                motion.acceleration = (speed - before) / h;
             }
-            let settle = (scale * h / crate::SPRING_LAG).min(1.0);
+            let settle = (h / crate::SPRING_LAG).min(1.0);
             motion.sprung += (motion.acceleration - motion.sprung) * settle;
             motion.speed = Some(speed);
-            before = (now, speed, scale);
+            before = speed;
         }
         motion
     }
@@ -356,9 +353,6 @@ mod tests {
         Panel::new(vec![
             Slider::new(crate::SPEED, 0.0, 260.0, 100.0, |value| {
                 format!("{value:.0} km/h")
-            }),
-            Slider::new(crate::TIME_SCALE, 0.0, 2.0, 1.0, |value| {
-                format!("×{value:.2}")
             }),
             Slider::new("car color", 0.0, 2.0, 0.0, |value| {
                 ["yellow", "red", "blue"][value.round() as usize].to_string()
@@ -425,8 +419,7 @@ mod tests {
         let scenario = scenario(serde_json::json!([
             { "t": 10, "speed": 36 },
             { "t": 12, "speed": 72 },
-            { "t": 13, "time scale": 1 },
-            { "t": 13.5, "ease": "step", "time scale": 0 },
+            { "t": 13.5, "ease": "step", "speed": 0 },
         ]));
         let timeline = Timeline::new(&scenario, &panel()).unwrap();
         let baseline = Values::new();
@@ -436,12 +429,12 @@ mod tests {
         assert!((at.s - 130.0).abs() < 1e-2, "{}", at.s);
         assert!((at.acceleration - 5.0).abs() < 1e-2);
         assert_eq!(at.speed, Some(20.0));
-        // Frozen from 13.5 s: the car and the world's time stay put.
-        let frozen = motion(13.5);
+        // Stopped from 13.5 s: the car stays put while the world's time
+        // goes on.
+        let stopped = motion(13.5);
         let later = motion(19.0);
-        assert!((later.s - frozen.s).abs() < 1e-3);
-        assert!((later.time - frozen.time).abs() < 1e-3);
-        assert!((frozen.time - 13.5).abs() < 1e-2);
+        assert!((later.s - stopped.s).abs() < 1e-3);
+        assert!((later.time - 19.0).abs() < 1e-2);
         // The same frame, reached in any number of steps.
         assert!((motion(11.0).s - 112.5).abs() < 1e-2);
         assert_eq!(motion(10.0).s, 100.0);

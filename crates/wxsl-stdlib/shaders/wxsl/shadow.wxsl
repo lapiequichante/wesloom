@@ -38,6 +38,11 @@ const WXSL_SHADOW_MIXED: f32 = 4.0;
 // then as wide as a centred one (ADR 0105).
 const WXSL_SHADOW_OUTSIDE_SCALE: f32 = 2.0;
 
+// Whether the surface reads every light's penumbra as inside, whatever
+// side the light puts it on (`abi::FEATURE_INSIDE_PENUMBRA`): a body that
+// shadows itself along its folds, which an outside penumbra blackens.
+@macro const wxsl_inside_penumbra: bool = false;
+
 // Keep in sync with SHADOW_CASCADE_BLEND in environment.rs.
 const WXSL_SHADOW_CASCADE_BLEND: f32 = 0.1;
 
@@ -142,7 +147,9 @@ fn shadow_factor_at(
     // A rectangle's softness is its own quadrature (ADR 0072); for the
     // other kinds `radius` is the source's size (ADR 0098).
     let source_radius = select(light.radius, 0.0, light.kind == LIGHT_KIND_RECTANGLE);
-    let outside = light.penumbra > 0.5;
+    var outside = light.penumbra > 0.5;
+    @if(wxsl_inside_penumbra)
+    outside = false;
     let taps = clamp(i32(light.shadow_taps), 1, WXSL_SHADOW_MAX_TAP_SCALE);
     let shadow = sample_shadow_tile(tile_index, absolute, world_normal, n_dot_l,
         light.shadow_normal_bias, source_radius, outside, taps);

@@ -68,7 +68,7 @@
 //! With `--record DIR` it renders every frame at the file's rate and size
 //! as `DIR/frame-NNNNN.png` and prints the ffmpeg line that makes the
 //! video. The `headlights` slider turns the car's lights off or on
-//! whatever the hour, and `time scale` slows or freezes the world.
+//! whatever the hour.
 
 mod car;
 mod car_ground;
@@ -127,15 +127,12 @@ const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [-
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
-        occlusion on the road and on itself, its paint, its windows, its neons, its headlights, the time scale, how much its body pitches, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its windows, its neons, its headlights, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
         drag elsewhere looks around the car, right-drag turns the camera (right double-click
         straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
-/// How fast the world goes: the car, its wheels and the shaders' time; 0
-/// freezes it, the camera still free.
-const TIME_SCALE: &str = "time scale";
 /// The car's best acceleration and braking, m/s².
 const ACCELERATION: f32 = 4.5;
 const BRAKING: f32 = 9.0;
@@ -146,9 +143,6 @@ const SPEED_GAIN: f32 = 1.5;
 const BRAKE_LIGHT: (f32, f32) = (0.5, 3.0);
 /// How long the body takes to settle into a pitch, seconds.
 const SPRING_LAG: f32 = 0.25;
-/// How much the body pitches for its acceleration, times the car's own:
-/// more to see it squat and dive on camera.
-const BODY_PITCH: &str = "body pitch";
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 /// The blur's [`pipeline::BLURS`]: off, the gather along each pixel's
@@ -533,8 +527,6 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
         Slider::new(SPEED, 0.0, 260.0, options.speed, |value| {
             format!("{value:.0} km/h")
         }),
-        Slider::new(TIME_SCALE, 0.0, 2.0, 1.0, |value| format!("×{value:.2}")),
-        Slider::new(BODY_PITCH, 0.0, 5.0, 1.0, |value| format!("×{value:.1}")),
         Slider::new(HOUR, 0.0, 24.0, options.hour, |value| {
             let minutes = (value * 60.0).round() as u32 % (24 * 60);
             format!("{:02}:{:02}", minutes / 60, minutes % 60)
@@ -826,7 +818,6 @@ impl Drive {
     }
 
     fn advance(&mut self, panel: &Panel, dt: f32) {
-        let dt = dt * panel.value(TIME_SCALE);
         let motion = &mut self.motion;
         // Towards the slider's speed, easing in near it, within what the
         // car can do; the first frame starts at it.
@@ -975,13 +966,7 @@ impl Drive {
         // a tighter one to the right.
         let bend = self.world.road.curvature(s);
         let curvature = bend / (1.0 + bend * road::LANE);
-        self.car.animate(
-            gpu,
-            time,
-            odometer,
-            curvature,
-            sprung * panel.value(BODY_PITCH),
-        )?;
+        self.car.animate(gpu, time, odometer, curvature, sprung)?;
 
         let road = &self.world.road;
         let frame = road.frame(s);

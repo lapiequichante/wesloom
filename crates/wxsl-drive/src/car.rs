@@ -17,9 +17,10 @@ use std::path::Path;
 use glam::{Mat4, Vec2, Vec3};
 use wxsl::asset::{BoneTexture, ImportedScene, BONE_FRAME_PARAM, BONE_TEXTURE_SLOT};
 use wxsl::core::graph::{Graph, Node, NodeId};
+use wxsl::core::macros::MacroValue;
 use wxsl::core::node::{NodeRegistry, ValueType};
-use wxsl::core::scene::{MaterialEntry, MeshSource};
-use wxsl::core::Value;
+use wxsl::core::scene::{MaterialEntry, MeshSource, TAG_TRANSPARENT};
+use wxsl::core::{abi, Value};
 use wxsl::render::mesh::MeshData;
 use wxsl::render::scene::SceneImage;
 use wxsl::render::{DrawItem, GpuContext, Renderer};
@@ -115,8 +116,12 @@ pub struct Car {
     /// Whether it has glass, which the frame draws in the refraction tier.
     pub refractive: bool,
     wheels: Vec<Wheel>,
-    /// The materials of the headlights' lenses, which glow at night.
+    /// The materials of the headlights' lenses, which glow at night
+    /// through `drive.headlight_glow`'s hot spots.
     lenses: Vec<usize>,
+    /// The headlights' materials the file gives an emission, and that
+    /// emission.
+    heads: Vec<(usize, [f32; 3])>,
     /// The headlights' centres in the car's space, left then right, when
     /// the file has them.
     headlights: Option<[Vec3; 2]>,
@@ -172,20 +177,39 @@ struct Wheel {
     parts: Vec<(usize, Mat4, Mat4, bool)>,
 }
 
-/// The materials of me_car's headlights, which the file leaves unlit.
+/// The materials of me_car's headlights.
 const LENS_MATERIALS: &[&str] = &["Headlight", "hl inside", "ll shell"];
-/// The parameter their glow is, and its radiance at night at an optic's
-/// middle: half again the street lamps' own.
+/// `name` without the `.NNN` Blender adds to a copied material's.
+fn unsuffixed(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((base, digits))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => name,
+    }
+}
+
+/// The parameter their glow is, when the file leaves them unlit, and its
+/// radiance at night at an optic's middle: half again the street lamps'
+/// own.
 const LENS_GLOW: &str = "headlight_glow";
 const LENS_RADIANCE: f32 = 350.0;
+/// The headlights' emission at night when the file gives them one, as a
+/// multiple of the file's.
+const HEAD_GLOW: f32 = 300.0;
 
-/// Give the headlights' materials an emission the night can turn up: a
-/// `headlight_glow` parameter, the radiance at the middle of each optic,
-/// through `drive.headlight_glow`'s hot spots into their surface's
-/// `emissive`, which the file leaves unwired. They cast no shadow, so the
-/// beam, starting just ahead of the glass, is never caught by its edge.
-/// Their indices.
-fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Error>> {
+/// Give the headlights' materials an emission the night can turn up. When
+/// the file gives some of them an emission of their own (moi.glb's `hl
+/// inside`, an emissive map of its reflectors and LEDs), that is what
+/// glows, scaled at night by [`Car::set_lights_on`], and the others stay
+/// unlit. Otherwise each gets a `headlight_glow` parameter, the radiance
+/// at the middle of each optic, through `drive.headlight_glow`'s hot
+/// spots into its surface's `emissive`. None casts a shadow, so the beam,
+/// starting just ahead of the glass, is never caught by its edge. Every
+/// headlight material's index, then those given the hot spots.
+fn light_lenses(imported: &mut ImportedScene) -> Result<(Vec<usize>, Vec<usize>), Box<dyn Error>> {
     use wxsl::core::graph::SocketRef;
     let surface = |graph: &Graph| {
         graph
@@ -199,16 +223,25 @@ fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Erro
         .iter()
         .enumerate()
         .filter(|(_, material)| {
-            LENS_MATERIALS.contains(&material.name.as_str())
-                && surface(&material.graph).is_some_and(|output| {
-                    material
-                        .graph
-                        .edge_into(&SocketRef::new(output, "emissive"))
-                        .is_none()
-                })
+            LENS_MATERIALS.contains(&unsuffixed(&material.name))
+                && surface(&material.graph).is_some()
         })
         .map(|(index, _)| index)
         .collect();
+    let authored = lenses.iter().any(|&index| {
+        let graph = &imported.scene.materials[index].graph;
+        surface(graph).is_some_and(|output| {
+            graph
+                .edge_into(&SocketRef::new(output, "emissive"))
+                .is_some()
+        })
+    });
+    for &index in &lenses {
+        imported.scene.materials[index].config.cast_shadow = false;
+    }
+    if authored {
+        return Ok((lenses, Vec::new()));
+    }
     // The optics' middles on the glass, the two headlights told apart
     // about the middle of the four, and how wide one optic is: a quarter
     // of a headlight's box across.
@@ -234,7 +267,6 @@ fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Erro
         let to_object = world.inverse();
         let scale = world.transform_vector3(Vec3::X).length().max(1e-6);
         let material = &mut imported.scene.materials[index];
-        material.config.cast_shadow = false;
         let name = material.name.clone();
         let graph = &mut material.graph;
         let output = surface(graph).expect("filtered on its surface output");
@@ -269,7 +301,7 @@ fn light_lenses(imported: &mut ImportedScene) -> Result<Vec<usize>, Box<dyn Erro
         wire(graph, (position, "out"), (spots, "position"))?;
         wire(graph, (spots, "out"), (output, "emissive"))?;
     }
-    Ok(lenses)
+    Ok((lenses.clone(), lenses))
 }
 
 /// The box of each lamp of `materials`, left then right, in the file's
@@ -374,7 +406,7 @@ const PAINT_MATERIAL: &str = "Paint 1 Carmine";
 const FLAKES_SLOT: &str = "normal_texture";
 /// How many times the generated flakes repeat across the body's uv, where
 /// the file's 128² map repeats 80 times.
-const FLAKES_REPEAT: f32 = 8.0;
+const FLAKES_REPEAT: f32 = 7.0;
 
 /// Repeat `entry`'s normal map `repeat` times across its uv. The import
 /// bakes `KHR_texture_transform`'s rotation and scale into the rows of two
@@ -593,6 +625,36 @@ fn glass_params(
         }
     }
     Ok(windows)
+}
+
+/// Draw `imported`'s alpha-blended materials, moi.glb's headlight shell
+/// among them, in the refraction tier: the frame has no blended tier, so
+/// they would be drawn opaque and hide what is behind them. Letting no
+/// light through, their alpha is all the cover the tier gives them, which
+/// is a blend.
+fn transparent_as_glass(
+    imported: &mut ImportedScene,
+    registry: &NodeRegistry,
+) -> Result<(), Box<dyn Error>> {
+    for entry in &mut imported.scene.materials {
+        if !entry.config.tags.remove(TAG_TRANSPARENT) {
+            continue;
+        }
+        entry.config.tags.insert(wxsl::asset::TAG_REFRACTIVE);
+        let graph = &mut entry.graph;
+        let [surface] = graph.surface_outputs(registry)[..] else {
+            return Err(format!("{}: one surface output expected", entry.name).into());
+        };
+        let node = graph.add(
+            Node::new("param.value")
+                .with_setting("name", "transmission_factor")
+                .with_param("value", Value::F32(0.0)),
+        );
+        graph
+            .wire(registry, (node, "out"), (surface, "transmission"))
+            .map_err(|error| format!("{}: {error}", entry.name))?;
+    }
+    Ok(())
 }
 
 /// Turn the clear-coated paint `entry` into a thin-film one: the
@@ -877,7 +939,17 @@ impl Car {
         path: &Path,
         flakes: Option<wgpu::TextureView>,
     ) -> Result<Self, Box<dyn Error>> {
-        let lenses = light_lenses(&mut imported)?;
+        let (lamps, lenses) = light_lenses(&mut imported)?;
+        transparent_as_glass(&mut imported, &crate::world::registry())?;
+        // The lamps' outside penumbra keeps the road dark under the car but
+        // blackens the body's recesses under its own lips: the body reads
+        // it as inside.
+        for entry in &mut imported.scene.materials {
+            entry
+                .config
+                .macros
+                .set(abi::FEATURE_INSIDE_PENUMBRA, MacroValue::Flag(false)); //Flag(true) pour des inset shadows
+        }
         let refractive = refractive(&imported);
         let mut meshes: Vec<MeshData> = imported
             .meshes
@@ -928,7 +1000,7 @@ impl Car {
         let to_car = |[left, right]: [Vec3; 2]| {
             [align.transform_point3(left), align.transform_point3(right)]
         };
-        let head_boxes = lamp_boxes(&imported, &lenses, center);
+        let head_boxes = lamp_boxes(&imported, &lamps, center);
         let headlights = head_boxes.map(|boxes| to_car(lamp_centers(boxes, true)));
         let optics = head_boxes.map(|boxes| {
             optic_middles(boxes, OPTIC_DEPTH).map(|optic| align.transform_point3(optic))
@@ -950,18 +1022,28 @@ impl Car {
             .collect();
         let tail_lights =
             lamp_boxes(&imported, &tails, center).map(|boxes| to_car(lamp_centers(boxes, false)));
-        let tails = tails
-            .into_iter()
-            .filter_map(
-                |material| match resources.bindings_mut(material)?.get(EMISSIVE_PARAM)? {
-                    Value::Vec3(emission) => Some((material, emission)),
-                    _ => None,
-                },
-            )
-            .collect();
+        let mut emissions = |materials: Vec<usize>| -> Vec<(usize, [f32; 3])> {
+            materials
+                .into_iter()
+                .filter_map(|material| {
+                    match resources.bindings_mut(material)?.get(EMISSIVE_PARAM)? {
+                        Value::Vec3(emission) => Some((material, emission)),
+                        _ => None,
+                    }
+                })
+                .collect()
+        };
+        let tails = emissions(tails);
+        let heads = emissions(
+            lamps
+                .into_iter()
+                .filter(|material| !lenses.contains(material))
+                .collect(),
+        );
         Ok(Car {
             align,
             lenses,
+            heads,
             headlights,
             optics,
             optic_radius,
@@ -996,6 +1078,14 @@ impl Car {
         for &material in &self.lenses {
             if let Some(bindings) = self.resources.bindings_mut(material) {
                 bindings.set(LENS_GLOW, Value::Vec3([LENS_RADIANCE * lights_on; 3]))?;
+            }
+        }
+        for &(material, emission) in &self.heads {
+            if let Some(bindings) = self.resources.bindings_mut(material) {
+                bindings.set(
+                    EMISSIVE_PARAM,
+                    Value::Vec3(emission.map(|channel| channel * HEAD_GLOW * lights_on)),
+                )?;
             }
         }
         self.set_tail_glow(gpu, (lights_on, self.tail_glow.1))

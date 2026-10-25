@@ -34,11 +34,13 @@ const LAMP_INTENSITY: f32 = 6500.0;
 const LAMP_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.58);
 pub const LAMP_RANGE: f32 = 26.0;
 /// A lamp head's tilt from straight down towards its street side, as
-/// roadway luminaires are mounted. It also orients the profile: an axis
+/// roadway luminaires are mounted: from the arm's end it aims at the
+/// middle of its carriageway, between its two lanes. It also orients the
+/// profile: an axis
 /// this far from vertical puts C = 0 along the road and C = 90° across it,
 /// towards the street side (`light_profile` in `bindings.wxsl`), where a
 /// vertical one would fix C = 0 to world -x.
-const LAMP_TILT: f32 = 10.0 * std::f32::consts::PI / 180.0;
+pub const LAMP_TILT: f32 = 21.0 * std::f32::consts::PI / 180.0;
 /// A lamp's cone from straight down: wide enough that everything up to a
 /// car's roof within its range is inside, so it is a spot with one shadow
 /// tile rather than a point light's six. Its profile reaches 80°, but
@@ -480,9 +482,18 @@ mod tests {
         use crate::road::{LAMP_HEIGHT, LAMP_SPACING};
         let height = LAMP_HEIGHT - 0.2;
         assert!(height + crate::terrain::CLEARANCE >= LAMP_RANGE);
-        // Halfway along, at the far edge of its carriageway.
-        let midway = Vec3::new(LAMP_SPACING * 0.5, height, 6.1).length();
+        // Halfway along, at the outer edge of its lanes.
+        use crate::road::{ARM_REACH, INNER_EDGE, LANE_WIDTH};
+        let across = INNER_EDGE + LANE_WIDTH * 2.0 - ARM_REACH;
+        let midway = Vec3::new(LAMP_SPACING * 0.5, height, across).length();
         assert!(midway < LAMP_RANGE * 0.85, "{midway} m");
+    }
+
+    #[test]
+    fn a_lamp_aims_between_its_two_lanes() {
+        use crate::road::{ARM_REACH, INNER_EDGE, LAMP_HEIGHT, LANE_WIDTH};
+        let lands = ARM_REACH + (LAMP_HEIGHT - 0.2) * LAMP_TILT.tan();
+        assert!((lands - (INNER_EDGE + LANE_WIDTH)).abs() < 0.1, "{lands} m");
     }
 
     #[test]
