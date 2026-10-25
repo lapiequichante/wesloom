@@ -1650,7 +1650,9 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let size = state.window.inner_size();
+        // The frame's own size: mid-resize, the window's can already differ
+        // from the surface's until `Resized` reconfigures it.
+        let size = frame.texture.size();
         let rendered = match self.player.as_mut() {
             Some(player) => {
                 player.tick();
