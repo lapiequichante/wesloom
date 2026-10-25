@@ -1326,6 +1326,7 @@ impl Car {
                 .map(|optics| optics.map(|optic| tilt.transform_point3(optic))),
             optic_radius: self.optic_radius,
             tail_glow: self.tail_emission() / TAIL_GLOW,
+            head_glow: self.tail_glow.0,
         }
     }
 

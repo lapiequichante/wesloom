@@ -250,6 +250,8 @@ The ADR named on each line holds the reasoning.
 - `crates/wxsl-drive/` is the drive demo: me_car on a procedural motorway
   viaduct past a procedural city, with sliders for speed and the hour
   (`cargo run -p wxsl-drive --release`, `--help` for screenshots).
+  `--scenario` plays keyframed animations from `crates/wxsl-drive/scenarios/`,
+  and `--record DIR` renders them frame by frame for ffmpeg.
 - `resources/glb/`: Khronos sample models and their licenses.
 - `cargo run -p wxsl-prt --release -- <model.glb>` bakes the PRT sidecars
   (`<model>.gray.prt`, `<model>.color.prt`) the `viewer` picks up.

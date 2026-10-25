@@ -60,6 +60,15 @@
 //! motion) as `screenshots/state-NNN.json`; `--state FILE` starts there,
 //! and with `--screenshot` renders that frame at that size, after the one
 //! before it so the motion blur matches.
+//!
+//! `--scenario FILE` animates the sliders and the camera from a JSON file
+//! of keyframes in seconds (`scenario`), such as
+//! `crates/wxsl-drive/scenarios/long-take.json`: the window plays it to
+//! its music through ffplay, and `K` keys what was changed while paused.
+//! With `--record DIR` it renders every frame at the file's rate and size
+//! as `DIR/frame-NNNNN.png` and prints the ffmpeg line that makes the
+//! video. The `headlights` slider turns the car's lights off or on
+//! whatever the hour, and `time scale` slows or freezes the world.
 
 mod car;
 mod car_ground;
@@ -70,6 +79,7 @@ mod lights;
 mod neon;
 mod pipeline;
 mod road;
+mod scenario;
 mod sky;
 mod state;
 mod terrain;
@@ -108,16 +118,24 @@ const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [-
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
       [--paint NAME] [--glass NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--blur-quality off|fast|good] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
+      [--scenario file.json [--record DIR [--from S] [--to S]]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
+--scenario: play a scenario's keyframes, to the music, in the window (Space plays and pauses,
+        Left/Right step a frame, a second with Shift, Home goes back to the start, K keys what the
+        sliders and the camera changed at that time into the file); with --record, record its frames
+        to DIR/frame-NNNNN.png at its fps and size, from S to S seconds into the music
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
-        occlusion on the road and on itself, its paint, its windows, its neons, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its windows, its neons, its headlights, the time scale, how much its body pitches, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
         drag elsewhere looks around the car, right-drag turns the camera (right double-click
         straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
 
 const SPEED: &str = "speed";
+/// How fast the world goes: the car, its wheels and the shaders' time; 0
+/// freezes it, the camera still free.
+const TIME_SCALE: &str = "time scale";
 /// The car's best acceleration and braking, m/s².
 const ACCELERATION: f32 = 4.5;
 const BRAKING: f32 = 9.0;
@@ -128,6 +146,9 @@ const SPEED_GAIN: f32 = 1.5;
 const BRAKE_LIGHT: (f32, f32) = (0.5, 3.0);
 /// How long the body takes to settle into a pitch, seconds.
 const SPRING_LAG: f32 = 0.25;
+/// How much the body pitches for its acceleration, times the car's own:
+/// more to see it squat and dive on camera.
+const BODY_PITCH: &str = "body pitch";
 const HOUR: &str = "time of day";
 const BLUR: &str = "motion blur";
 /// The blur's [`pipeline::BLURS`]: off, the gather along each pixel's
@@ -158,6 +179,11 @@ const CAR_AO: &str = "car AO";
 const PAINT: &str = "car color";
 const GLASS: &str = "window color";
 const NEON: &str = "neons";
+/// The car's headlights and tail lights: [`HEADLIGHT_MODES`].
+const HEADLIGHTS: &str = "headlights";
+/// On with the street lamps, as the hour has them, or off or on whatever
+/// the hour.
+const HEADLIGHT_MODES: [&str; 3] = ["auto", "off", "on"];
 const VIEW: &str = "view";
 const SHADOWS: &str = "shadows";
 const FXAA: &str = "fxaa";
@@ -184,6 +210,8 @@ const QUALITY: &str = "quality";
 /// scale, 0 turning both off; x4 is the largest atlas a pipeline may ask
 /// for, 8192².
 const QUALITIES: [f32; 5] = [0.0, 0.5, 1.0, 2.0, 4.0];
+/// How far above the road the camera stays, metres.
+const CAMERA_CLEARANCE: f32 = 0.3;
 /// How long a second right click may wait to be a double click.
 const DOUBLE_CLICK: f32 = 0.4;
 /// The fog's density per metre at the ground, at the `fog` slider's 1:
@@ -290,6 +318,13 @@ struct Options {
     shadow_car: Option<PathBuf>,
     /// A saved state to start from.
     state: Option<Saved>,
+    /// A scenario to play and edit, or with `record`, to record.
+    scenario: Option<PathBuf>,
+    /// Where to record the scenario's frames.
+    record: Option<PathBuf>,
+    /// Part of the scenario to record, seconds into the music.
+    from: Option<f32>,
+    to: Option<f32>,
 }
 
 fn parse_options() -> Result<Options, Box<dyn Error>> {
@@ -336,6 +371,10 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         )
         .filter(|path| path.exists()),
         state: None,
+        scenario: None,
+        record: None,
+        from: None,
+        to: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -469,6 +508,10 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                 options.size = (saved.width, saved.height);
                 options.state = Some(saved);
             }
+            "--scenario" => options.scenario = Some(PathBuf::from(value()?)),
+            "--record" => options.record = Some(PathBuf::from(value()?)),
+            "--from" => options.from = Some(value()?.parse()?),
+            "--to" => options.to = Some(value()?.parse()?),
             "--size" => {
                 let text = value()?;
                 let (width, height) = text.split_once('x').ok_or("--size is WxH")?;
@@ -490,6 +533,8 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
         Slider::new(SPEED, 0.0, 260.0, options.speed, |value| {
             format!("{value:.0} km/h")
         }),
+        Slider::new(TIME_SCALE, 0.0, 2.0, 1.0, |value| format!("×{value:.2}")),
+        Slider::new(BODY_PITCH, 0.0, 5.0, 1.0, |value| format!("×{value:.1}")),
         Slider::new(HOUR, 0.0, 24.0, options.hour, |value| {
             let minutes = (value * 60.0).round() as u32 % (24 * 60);
             format!("{:02}:{:02}", minutes / 60, minutes % 60)
@@ -563,6 +608,13 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             |value| neon::NEONS[value.round() as usize].name.to_string(),
         ),
         Slider::new(
+            HEADLIGHTS,
+            0.0,
+            (HEADLIGHT_MODES.len() - 1) as f32,
+            0.0,
+            |value| HEADLIGHT_MODES[value.round() as usize].to_string(),
+        ),
+        Slider::new(
             VIEW,
             0.0,
             debug_views().len() as f32,
@@ -632,6 +684,8 @@ struct Drive {
     underglow: neon::Underglow,
     /// The PRT strength last set on the car's materials.
     car_ao: Option<f32>,
+    /// How lit the car's lights were last set, 0 to 1.
+    car_lights: Option<f32>,
     /// Where the car is and how it goes; its speed follows the slider
     /// within [`ACCELERATION`] and [`BRAKING`].
     motion: Motion,
@@ -728,6 +782,7 @@ impl Drive {
             ground,
             underglow,
             car_ao: None,
+            car_lights: None,
             motion: Motion {
                 s: at,
                 ..Motion::default()
@@ -771,6 +826,7 @@ impl Drive {
     }
 
     fn advance(&mut self, panel: &Panel, dt: f32) {
+        let dt = dt * panel.value(TIME_SCALE);
         let motion = &mut self.motion;
         // Towards the slider's speed, easing in near it, within what the
         // car can do; the first frame starts at it.
@@ -873,18 +929,26 @@ impl Drive {
             }
             self.renderer.invalidate_bakes();
             self.world.set_lights_on(gpu, self.day.lights_on)?;
-            self.car.set_lights_on(gpu, self.day.lights_on)?;
             self.baked_hour = Some(hour);
         }
         self.world.set_screen_height(gpu, height)?;
         let shown = debug_view(panel.value(VIEW)).map_or(0, |view| view.id);
         if shown != self.shown_view {
             self.car.set_debug_view(gpu, &mut self.renderer, shown)?;
-            self.car.set_lights_on(gpu, self.day.lights_on)?;
+            self.car_lights = None;
             self.car_ao = None;
             self.paint = None;
             self.glass = None;
             self.shown_view = shown;
+        }
+        let car_lights = match HEADLIGHT_MODES[panel.value(HEADLIGHTS).round() as usize] {
+            "off" => 0.0,
+            "on" => 1.0,
+            _ => self.day.lights_on,
+        };
+        if self.car_lights != Some(car_lights) {
+            self.car.set_lights_on(gpu, car_lights)?;
+            self.car_lights = Some(car_lights);
         }
         let paint = panel.value(PAINT).round() as usize;
         if self.paint != Some(paint) {
@@ -911,7 +975,13 @@ impl Drive {
         // a tighter one to the right.
         let bend = self.world.road.curvature(s);
         let curvature = bend / (1.0 + bend * road::LANE);
-        self.car.animate(gpu, time, odometer, curvature, sprung)?;
+        self.car.animate(
+            gpu,
+            time,
+            odometer,
+            curvature,
+            sprung * panel.value(BODY_PITCH),
+        )?;
 
         let road = &self.world.road;
         let frame = road.frame(s);
@@ -925,6 +995,10 @@ impl Drive {
         offset = Mat4::from_rotation_y(self.orbit.x).transform_vector3(offset);
         let side = offset.cross(Vec3::Y).normalize_or(Vec3::X);
         offset = Mat4::from_axis_angle(side, self.orbit.y).transform_vector3(offset) * self.zoom;
+        // Never under the deck: the eye stays above the road's plane at the
+        // car, however low the view is pitched.
+        let height = (target + offset - frame.at(road::LANE, 0.0)).dot(frame.up);
+        offset += frame.up * (CAMERA_CLEARANCE - height).max(0.0);
         // The turn, from the eye: yaw about the vertical, then pitch about
         // the camera's right.
         let mut look = Mat3::from_rotation_y(self.rotation.x) * -offset;
@@ -1225,6 +1299,134 @@ fn screenshot(options: &Options, file: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Every slider and the camera, by [`scenario`]'s names.
+fn values(panel: &Panel, drive: &Drive) -> scenario::Values {
+    let mut values: scenario::Values = state::sliders(panel);
+    let camera = [
+        drive.orbit.x,
+        drive.orbit.y,
+        drive.zoom,
+        drive.rotation.x,
+        drive.rotation.y,
+    ];
+    for (name, value) in scenario::CAMERA.into_iter().zip(camera) {
+        values.insert(name.to_string(), value);
+    }
+    values
+}
+
+/// Set the sliders and the camera to `values`.
+fn set_values(values: &scenario::Values, panel: &mut Panel, drive: &mut Drive) {
+    for slider in &mut panel.sliders {
+        if let Some(value) = values.get(slider.label) {
+            slider.value = value.clamp(slider.min, slider.max);
+        }
+    }
+    let camera = |name: &str, default: f32| values.get(name).copied().unwrap_or(default);
+    drive.orbit = Vec2::new(
+        camera("look", drive.orbit.x),
+        camera("pitch", drive.orbit.y),
+    );
+    drive.zoom = camera("zoom", drive.zoom).max(0.05);
+    drive.rotation = Vec2::new(
+        camera("turn", drive.rotation.x),
+        camera("tilt", drive.rotation.y),
+    );
+}
+
+/// Put the drive where `timeline` has it at `t`: the sliders, the camera
+/// and the car's motion.
+fn seek(
+    scenario: &scenario::Scenario,
+    timeline: &scenario::Timeline,
+    baseline: &scenario::Values,
+    t: f32,
+    panel: &mut Panel,
+    drive: &mut Drive,
+) {
+    set_values(&timeline.at(t, baseline), panel, drive);
+    let mut motion = timeline.motion(scenario.start, scenario.at, t, baseline);
+    motion.s = motion.s.rem_euclid(drive.world.road.length());
+    drive.motion = motion;
+}
+
+/// Record `file`'s scenario as `directory/frame-NNNNN.png`, numbered from
+/// its start, and print how ffmpeg makes the video.
+fn record(options: &Options, file: &Path, directory: &Path) -> Result<(), Box<dyn Error>> {
+    let scenario = scenario::Scenario::load(file)?;
+    let mut panel = sliders(options)?;
+    let timeline = scenario::Timeline::new(&scenario, &panel)?;
+    let [width, height] = scenario.size;
+    let gpu = pollster::block_on(GpuContext::headless())?;
+    let target = OffscreenTarget::new(&gpu.device, width, height);
+    let mut drive = Drive::new(
+        &gpu,
+        TargetConfig::new(width, height, target.format()),
+        &options.car,
+        options.shadow_car.as_deref(),
+        scenario.at,
+    )?;
+    let baseline = values(&panel, &drive);
+    std::fs::create_dir_all(directory)?;
+    let fps = scenario.fps;
+    let from = options.from.unwrap_or(scenario.start).max(scenario.start);
+    let to = options.to.unwrap_or(scenario.end).min(scenario.end);
+    let first = ((from - scenario.start) * fps).round() as u32;
+    let last = ((to - scenario.start) * fps).ceil() as u32;
+    let started = Instant::now();
+    let mut drawn: Option<(f32, f32)> = None;
+    // The first frame twice: once for the bakes and for the velocity pass
+    // to measure against, which a frozen world leaves still.
+    for (pass, index) in std::iter::once(first).chain(first..last).enumerate() {
+        let t = scenario.start + index as f32 / fps;
+        seek(&scenario, &timeline, &baseline, t, &mut panel, &mut drive);
+        let time = drive.motion.time;
+        let dt = drawn.map_or(0.0, |(_, drawn)| time - drawn);
+        if drawn.is_some_and(|(before, _)| timeline.cuts(before, t)) {
+            drive.previous = None;
+        }
+        drawn = Some((t, time));
+        drive.draw(&gpu, target.view(), (width, height), &panel, dt)?;
+        gpu.wait();
+        if pass == 0 {
+            continue;
+        }
+        let pixels = target.read_rgba8(&gpu.device, &gpu.queue);
+        image::save_buffer(
+            directory.join(format!("frame-{index:05}.png")),
+            &pixels,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        let done = index + 1 - first;
+        if done % 25 == 0 || index + 1 == last {
+            let elapsed = started.elapsed().as_secs_f32();
+            println!(
+                "{t:.2} s, frame {done}/{}, {:.0} ms a frame",
+                last - first,
+                elapsed * 1000.0 / done as f32
+            );
+        }
+    }
+    let audio = scenario
+        .audio(file)
+        .map(|audio| {
+            format!(
+                " -ss {} -i {} -map 0:v -map 1:a -c:a libmp3lame -b:a 320k -shortest",
+                scenario.start + first as f32 / fps,
+                audio.display()
+            )
+        })
+        .unwrap_or_default();
+    println!(
+        "ffmpeg -framerate {fps} -start_number {first} -i {}/frame-%05d.png{audio} -c:v libx264 -preset slow -crf 16 -pix_fmt yuv420p {}.mp4",
+        directory.display(),
+        directory.display()
+    );
+    Ok(())
+}
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -1234,6 +1436,130 @@ struct State {
     readable: bool,
     drive: Drive,
     overlay: ui::Overlay,
+}
+
+/// A scenario played in the window, to its music, and keyed there.
+struct Player {
+    file: PathBuf,
+    scenario: scenario::Scenario,
+    timeline: scenario::Timeline,
+    /// The sliders and the camera the scenario's keys go over.
+    baseline: scenario::Values,
+    /// Seconds into the music.
+    t: f32,
+    /// When it started playing, and from where.
+    playing: Option<(Instant, f32)>,
+    /// The music, played by ffplay from `t`.
+    audio: Option<std::process::Child>,
+    /// When the last frame drawn was, and the world's time then, for the
+    /// velocity pass.
+    drawn: Option<(f32, f32)>,
+    /// The sliders and the camera are still to be put where `t` has them.
+    stale: bool,
+}
+
+impl Player {
+    fn new(file: &Path, panel: &Panel, drive: &Drive) -> Result<Self, Box<dyn Error>> {
+        let scenario = scenario::Scenario::load(file)?;
+        let timeline = scenario::Timeline::new(&scenario, panel)?;
+        Ok(Player {
+            file: file.to_path_buf(),
+            t: scenario.start,
+            scenario,
+            timeline,
+            baseline: values(panel, drive),
+            playing: None,
+            audio: None,
+            drawn: None,
+            stale: true,
+        })
+    }
+
+    fn toggle(&mut self) {
+        if self.playing.is_some() {
+            self.pause();
+            return;
+        }
+        if self.t >= self.scenario.end {
+            self.t = self.scenario.start;
+        }
+        self.playing = Some((Instant::now(), self.t));
+        let audio = self.scenario.audio(&self.file);
+        self.audio = audio.and_then(|audio| {
+            std::process::Command::new("ffplay")
+                .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "-ss"])
+                .arg(self.t.to_string())
+                .arg(&audio)
+                .stdin(std::process::Stdio::null())
+                .spawn()
+                .map_err(|error| eprintln!("cannot play {}: {error}", audio.display()))
+                .ok()
+        });
+    }
+
+    fn pause(&mut self) {
+        self.playing = None;
+        if let Some(mut audio) = self.audio.take() {
+            let _ = audio.kill();
+            let _ = audio.wait();
+        }
+    }
+
+    /// Go to `t`, paused, without a velocity from where it was.
+    fn seek(&mut self, t: f32) {
+        self.pause();
+        self.t = t.clamp(self.scenario.start, self.scenario.end);
+        self.stale = true;
+        self.drawn = None;
+    }
+
+    /// Follow the clock while playing, up to the end.
+    fn tick(&mut self) {
+        let Some((since, from)) = self.playing else {
+            return;
+        };
+        self.t = from + since.elapsed().as_secs_f32();
+        if self.t >= self.scenario.end {
+            self.t = self.scenario.end;
+            self.pause();
+        }
+        self.stale = true;
+    }
+
+    /// Key, at the frame nearest `t`, every slider and camera value that
+    /// differs from the scenario's there, and save the file.
+    fn key(&mut self, panel: &Panel, drive: &Drive) -> Result<String, Box<dyn Error>> {
+        let fps = self.scenario.fps;
+        let t = (self.t * fps).round() / fps;
+        let wanted = self.timeline.at(t, &self.baseline);
+        let changes: std::collections::BTreeMap<String, scenario::Setting> = values(panel, drive)
+            .into_iter()
+            .filter(|(name, value)| {
+                wanted
+                    .get(name)
+                    .is_none_or(|wanted| (wanted - value).abs() > 1e-4)
+            })
+            .map(|(name, value)| {
+                let setting = scenario::setting(panel, &name, value);
+                (name, setting)
+            })
+            .collect();
+        if changes.is_empty() {
+            return Ok(format!("nothing changed at {t:.2} s"));
+        }
+        let names: Vec<&str> = changes.keys().map(String::as_str).collect();
+        let message = format!("keyed {} at {t:.2} s", names.join(", "));
+        self.scenario.set(t, changes);
+        self.timeline = scenario::Timeline::new(&self.scenario, panel)?;
+        self.scenario.save(&self.file)?;
+        Ok(message)
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        self.pause();
+    }
 }
 
 struct App {
@@ -1259,6 +1585,10 @@ struct App {
     save: bool,
     /// What the last capture did, and when, for the status line.
     captured: Option<(String, Instant)>,
+    /// The scenario being played, with `--scenario`.
+    player: Option<Player>,
+    /// Shift is down: the arrows step a second.
+    shift: bool,
 }
 
 impl App {
@@ -1291,6 +1621,9 @@ impl App {
             self.options.shadow_car.as_deref(),
             self.options.at,
         )?;
+        if let Some(file) = &self.options.scenario {
+            self.player = Some(Player::new(file, &self.panel, &drive)?);
+        }
         if let Some(saved) = &self.options.state {
             drive.orbit = Vec2::from_array(saved.orbit);
             drive.zoom = saved.zoom;
@@ -1333,14 +1666,48 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = state.window.inner_size();
-        let dt = if self.paused { 0.0 } else { elapsed };
-        if let Err(error) = state.drive.frame(
-            &state.gpu,
-            &view,
-            (size.width, size.height),
-            &self.panel,
-            dt,
-        ) {
+        let rendered = match self.player.as_mut() {
+            Some(player) => {
+                player.tick();
+                if std::mem::take(&mut player.stale) {
+                    seek(
+                        &player.scenario,
+                        &player.timeline,
+                        &player.baseline,
+                        player.t,
+                        &mut self.panel,
+                        &mut state.drive,
+                    );
+                }
+                let time = state.drive.motion.time;
+                let dt = player.drawn.map_or(0.0, |(_, drawn)| time - drawn);
+                if player
+                    .drawn
+                    .is_none_or(|(before, _)| player.timeline.cuts(before, player.t))
+                {
+                    state.drive.previous = None;
+                }
+                player.drawn = Some((player.t, time));
+                state.drive.draw(
+                    &state.gpu,
+                    &view,
+                    (size.width, size.height),
+                    &self.panel,
+                    dt,
+                )
+            }
+            None => {
+                let dt = if self.paused { 0.0 } else { elapsed };
+                state.drive.frame(
+                    &state.gpu,
+                    &view,
+                    (size.width, size.height),
+                    &self.panel,
+                    dt,
+                )
+            }
+        };
+        if let Err(error) = rendered {
             eprintln!("cannot render: {error}");
         }
         // Before the sliders are drawn over it.
@@ -1369,12 +1736,24 @@ impl App {
             Some((message, at)) if at.elapsed().as_secs_f32() < 4.0 => format!(" · {message}"),
             _ => String::new(),
         };
-        let status = format!(
-            "{:.0} fps · {:.2} km into the loop{}{captured}",
-            self.fps,
-            state.drive.motion.s / 1000.0,
-            if self.paused { " · paused" } else { "" }
-        );
+        let status = match &self.player {
+            Some(player) => format!(
+                "{:.0} fps · {:.2} s{}{captured}",
+                self.fps,
+                player.t,
+                if player.playing.is_some() {
+                    ""
+                } else {
+                    " · paused"
+                }
+            ),
+            None => format!(
+                "{:.0} fps · {:.2} km into the loop{}{captured}",
+                self.fps,
+                state.drive.motion.s / 1000.0,
+                if self.paused { " · paused" } else { "" }
+            ),
+        };
         if let Err(error) = state.overlay.render(
             &state.gpu.device,
             &state.gpu.queue,
@@ -1589,19 +1968,46 @@ impl ApplicationHandler for App {
                     state.drive.zoom = (state.drive.zoom * 0.9f32.powf(lines)).clamp(0.3, 40.0);
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state: ElementState::Pressed,
-                        repeat: false,
+                        repeat,
                         ..
                     },
                 ..
-            } => match code {
-                KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
-                KeyCode::Space => self.paused = !self.paused,
-                KeyCode::KeyR => {
+            } => match (code, self.player.as_mut()) {
+                (KeyCode::ArrowLeft | KeyCode::ArrowRight, Some(player)) => {
+                    let step = if self.shift {
+                        1.0
+                    } else {
+                        1.0 / player.scenario.fps
+                    };
+                    let sign = if code == KeyCode::ArrowLeft {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    player.seek(player.t + sign * step);
+                }
+                _ if repeat => {}
+                (KeyCode::Escape | KeyCode::KeyQ, _) => event_loop.exit(),
+                (KeyCode::Space, Some(player)) => player.toggle(),
+                (KeyCode::Space, None) => self.paused = !self.paused,
+                (KeyCode::Home, Some(player)) => player.seek(player.scenario.start),
+                (KeyCode::KeyK, Some(player)) => {
+                    let message = match self.state.as_ref() {
+                        Some(state) => player
+                            .key(&self.panel, &state.drive)
+                            .unwrap_or_else(|error| format!("cannot key: {error}")),
+                        None => return,
+                    };
+                    println!("{message}");
+                    self.captured = Some((message, Instant::now()));
+                }
+                (KeyCode::KeyR, _) => {
                     if let Some(state) = self.state.as_mut() {
                         state.drive.orbit = Vec2::ZERO;
                         state.drive.zoom = 1.0;
@@ -1626,6 +2032,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(file) = options.screenshot.clone() {
         return screenshot(&options, &file);
     }
+    if let (Some(file), Some(directory)) = (&options.scenario, &options.record) {
+        return record(&options, file, directory);
+    }
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1643,6 +2052,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         capture: false,
         save: false,
         captured: None,
+        player: None,
+        shift: false,
     };
     event_loop.run_app(&mut app)?;
     match app.error {

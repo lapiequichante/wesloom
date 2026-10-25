@@ -36,6 +36,11 @@ impl Slider {
         }
     }
 
+    /// How `value` reads on this slider.
+    pub fn reading(&self, value: f32) -> String {
+        (self.format)(value)
+    }
+
     fn fraction(&self) -> f32 {
         (self.value - self.min) / (self.max - self.min)
     }
@@ -218,7 +223,7 @@ impl Overlay {
                 0.0,
                 Color::rgb(0.82, 0.84, 0.9),
             ));
-            let value = (slider.format)(slider.value);
+            let value = slider.reading(slider.value);
             texts.push((
                 value,
                 Vec2::new(row.max.x, row.min.y),

@@ -184,6 +184,9 @@ pub struct CarLamps {
     pub tail: [Vec3; 2],
     /// How bright the tail lights are: 1 at night, more braking.
     pub tail_glow: f32,
+    /// How bright the headlights are: 0 off, 1 on, which follows the
+    /// hour unless the `headlights` slider says otherwise.
+    pub head_glow: f32,
 }
 
 /// How near a lamp head, of either carriageway, must be to the car for its
@@ -248,7 +251,7 @@ pub fn lights(
         key.shadow_distance = 500.0;
         key.shadow_normal_bias = 0.05;
     }
-    if day.lights_on <= 0.0 {
+    if day.lights_on <= 0.0 && car_lamps.head_glow <= 0.0 {
         return vec![key];
     }
     let mut lights = Vec::new();
@@ -277,7 +280,7 @@ pub fn lights(
                 1.0 - smoothstep(LAMP_SHADOW_NEAR, LAMP_SHADOW_FAR, head.0.distance(at)),
             )
         })
-        .filter(|(_, shadow)| *shadow > 0.0)
+        .filter(|(_, shadow)| *shadow > 0.0 && day.lights_on > 0.0)
         .collect();
     // Nearest first, so the lamps over the car get the larger tiles.
     near.sort_by(|a, b| a.0 .0.distance(at).total_cmp(&b.0 .0.distance(at)));
@@ -301,7 +304,7 @@ pub fn lights(
             35f32.to_radians(),
             55f32.to_radians(),
             HEADLIGHT_COLOR,
-            HEADLIGHT_INTENSITY * day.lights_on,
+            HEADLIGHT_INTENSITY * car_lamps.head_glow,
         )
         .with_profile(HEADLIGHT_LAYER)
         .with_range(HEADLIGHT_RANGE)
@@ -355,7 +358,7 @@ pub fn lights(
                     forward,
                     radius,
                     HEADLIGHT_COLOR,
-                    radiance * day.lights_on,
+                    radiance * car_lamps.head_glow,
                 )
                 .with_range(OPTIC_RANGE),
             );
@@ -364,7 +367,7 @@ pub fn lights(
 
     // The lamps within reach of what the camera sees well; the light grid
     // bins them (ADR 0076).
-    for lamp_at in lamps {
+    for lamp_at in lamps.iter().filter(|_| day.lights_on > 0.0) {
         if lamp_at.foot.distance(eye) > 700.0 {
             continue;
         }
@@ -412,11 +415,19 @@ mod tests {
             optics: None,
             optic_radius: 0.0,
             tail_glow: 1.0,
+            head_glow: 1.0,
         };
         let eye = lamps[0].foot;
-        let day = lights(&DayLight::at(12.0), &lamps, Mat4::IDENTITY, &car, eye);
+        let off = CarLamps {
+            head_glow: 0.0,
+            ..car
+        };
+        let day = lights(&DayLight::at(12.0), &lamps, Mat4::IDENTITY, &off, eye);
         assert_eq!(day.len(), 1);
         assert!(day[0].casts_shadow);
+        // Headlights on by day: the car's lights and the sun, no lamps.
+        let lit = lights(&DayLight::at(12.0), &lamps, Mat4::IDENTITY, &car, eye);
+        assert_eq!(lit.len(), 5);
         let night = lights(&DayLight::at(23.0), &lamps, Mat4::IDENTITY, &car, eye);
         assert!(night.len() > 10);
         assert!(night
@@ -443,6 +454,7 @@ mod tests {
             optics: None,
             optic_radius: 0.0,
             tail_glow: 1.0,
+            head_glow: 1.0,
         };
         // Dusk: the lamps on and the sun still casting.
         let dusk = (0..240)
@@ -491,6 +503,7 @@ mod tests {
             optics: None,
             optic_radius: 0.0,
             tail_glow: 1.0,
+            head_glow: 1.0,
         };
         let night = DayLight::at(23.0);
         let road = crate::road::Road::new();
@@ -529,6 +542,7 @@ mod tests {
             optics: None,
             optic_radius: 0.0,
             tail_glow: 1.0,
+            head_glow: 1.0,
         };
         let head = lamps[1].heads[0];
         let night = DayLight::at(23.0);
