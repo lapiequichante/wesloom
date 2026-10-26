@@ -3,7 +3,8 @@
 // A building's facade from world space and its own seed: floors and window
 // columns on every wall, whichever way it faces, curtain-wall glass on
 // some buildings and punched windows on the rest, lit rooms in yellow,
-// orange, white and blue, neon bands on some towers, and dark roofs. `seed` is the
+// orange, white and blue, each behind one of `rooms`' photographs, neon
+// bands on some towers, and dark roofs. `seed` is the
 // building's, in 0..1; `lights_on` is 0 by day and 1 at night. Window
 // edges are settled by the pixel's footprint, and fade to their average
 // far away, so this is a fragment-stage node.
@@ -17,6 +18,8 @@ struct Facade {
 }
 
 fn facade(
+    rooms: texture_2d<f32>, // 10×10 photographs of lit windows, grey.
+    samp: sampler,
     world: vec3f,     // World position, metres. @default 0.0, 0.0, 0.0
     normal: vec3f,    // World normal. @default 0.0, 0.0, 1.0
     seed: f32,        // The building's own value, 0..1. @default 0.5
@@ -45,6 +48,8 @@ fn facade(
     let index = floor(grid);
     let local = fract(grid);
     let pixel = fwidth(grid);
+    let grid_dx = dpdx(grid);
+    let grid_dy = dpdy(grid);
     let soft = max(pixel, vec2f(0.001));
     // Curtain walls are nearly all glass; the rest have punched windows.
     let glass = step(0.62, fract(seed * 23.0));
@@ -85,12 +90,25 @@ fn facade(
     let blind = smoothstep(1.0 - drawn - soft.y, 1.0 - drawn + soft.y, height);
     let inside = (0.7 + 0.6 * height) * mix(1.0, 0.55, blind);
     let brightness = (0.25 + 0.9 * dim * dim) * mix(inside, 1.0, far);
+    // The room behind the pane: one of the 100 photographs, the pane
+    // cropped from its cell's frame. Its glass averages 0.1, so ×10 keeps
+    // the city as bright on average. Sampled with the grid's own
+    // gradients, which a cell's edge does not break.
+    let photo = floor(hash13(vec3f(index, seed * 53.0 + wall + 7.0)) * 100.0);
+    let cell = vec2f(photo % 10.0, floor(photo / 10.0));
+    let opening = vec2f(1.0 - 2.0 * edge.x, top - edge.y);
+    let pane = clamp((local - edge) / opening, vec2f(0.0), vec2f(1.0));
+    let crop_min = vec2f(0.15, 0.13);
+    let crop_size = vec2f(0.72, 0.8);
+    let at = (cell + crop_min + vec2f(pane.x, 1.0 - pane.y) * crop_size) / 10.0;
+    let scale = crop_size / (10.0 * opening) * vec2f(1.0, -1.0);
+    let view = textureSampleGrad(rooms, samp, at, grid_dx * scale, grid_dy * scale).r * 10.0;
 
     // Concrete and glass: dark, the glass glossy enough to mirror the sky.
     let concrete = mix(vec3f(0.025, 0.025, 0.03), vec3f(0.05, 0.048, 0.046), tint);
     out.base_color = mix(concrete, vec3f(0.015, 0.018, 0.022), window);
     out.roughness = mix(0.75, 0.12, window);
-    out.emissive = room_color * (window * lit * brightness * 0.5 * lights_on);
+    out.emissive = room_color * (window * lit * brightness * mix(view, 1.0, far) * 0.5 * lights_on);
 
     // Neon: a band every few storeys on some towers, a stripe up the
     // corners of others. Each is box-filtered over the pixel's footprint,

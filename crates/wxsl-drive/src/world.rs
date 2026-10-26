@@ -235,6 +235,11 @@ const CONCRETE_TEXTURES: [(&str, &str, bool); 3] = [
 const CONCRETE_METAL: &str = "concrete_metal";
 const CONCRETE_SAMPLER: &str = "concrete_sampler";
 
+/// The lit rooms' photographs behind the facades' windows, a 10×10 grid
+/// under `resources/textures/`.
+const ROOMS: (&str, &str) = ("facade_rooms", "windows.png");
+const ROOMS_SAMPLER: &str = "facade_rooms_sampler";
+
 /// `drive.textured` over the mesh's metric uv, reading the four textures
 /// named by `slots` through `sampler`, a copy every `tile` metres.
 fn textured_graph(
@@ -416,7 +421,16 @@ impl World {
                 "facade",
                 "drive.facade",
                 &[("world", "world_position"), ("normal", "world_normal")],
-                &[],
+                &[
+                    Resource::Texture {
+                        socket: "rooms",
+                        slot: ROOMS.0,
+                    },
+                    Resource::Sampler {
+                        socket: "samp",
+                        slot: ROOMS_SAMPLER,
+                    },
+                ],
                 &[],
                 &[(LIGHTS_ON, Value::F32(1.0))],
                 &[(city::SEED, ValueType::F32)],
@@ -467,6 +481,19 @@ impl World {
         surfaces[CONCRETE]
             .bindings
             .set_texture(CONCRETE_METAL, &black_texel(gpu))?;
+        let rooms = load_texture(gpu, &folder.join(ROOMS.1), true)?;
+        let rooms_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(ROOMS_SAMPLER),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..Default::default()
+        });
+        surfaces[FACADE].bindings.set_texture(ROOMS.0, &rooms)?;
+        surfaces[FACADE]
+            .bindings
+            .set_sampler(ROOMS_SAMPLER, &rooms_sampler)?;
         for surface in &mut surfaces {
             surface.bindings.upload(device, &gpu.queue)?;
         }
