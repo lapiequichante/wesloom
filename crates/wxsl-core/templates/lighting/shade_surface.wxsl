@@ -27,6 +27,11 @@ ${EXTRA_DECL}    // Ambient occlusion attenuates the environment, not direct lig
         let setup = light_setup(index, ctx.world_position, lobe);
         for (var sample = 0u; sample < setup.count; sample = sample + 1u) {
             let light = sample_light_setup(setup, sample, ctx.world_position);
+            // Nothing reaches this point (out of range, outside the cone or
+            // the profile): no shadow lookup to pay for.
+            if all(light.radiance == vec3f(0.0)) {
+                continue;
+            }
             // Declared unconditionally and overwritten under the flag,
             // because a `let` inside an `@if` is removed along with it.
             // The shadow's bias and receiver plane follow the geometry's
@@ -53,6 +58,11 @@ ${EXTRA_DECL}    // Ambient occlusion attenuates the environment, not direct lig
     for (var item = 0u; item < span.y; item = item + 1u) {
         let local = light_grid_word(span.x + item);
         let light = sample_light_value(local_light(local), 0u, ctx.world_position);
+        // Binned by its range's sphere: a spot's pixels outside its cone
+        // land here too, with nothing to shade.
+        if all(light.radiance == vec3f(0.0)) {
+            continue;
+        }
         lit = lit + ${DISPATCH_FN}(surface, ctx, light${DISPATCH_ARGS});
     }
 

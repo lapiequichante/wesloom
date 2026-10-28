@@ -768,37 +768,45 @@ fn sample_light_value(light: Light, sample: u32, world_position: vec3f) -> Light
     let distance_squared = max(dot(offset, offset), 1e-4);
     out.direction = offset / sqrt(distance_squared);
     var weight = 1.0;
-    if light.kind == LIGHT_KIND_RECTANGLE {
-        // Tensor-product Gauss weights integrate the [-1,1]² emitter.
-        let area_normal = cross(light.area_u, light.area_v);
-        weight = max(dot(area_normal, -out.direction), 0.0)
-            * AREA_WEIGHTS[sample % 4u] * AREA_WEIGHTS[sample / 4u];
-    }
     var cookie = vec3f(1.0);
-    if light.kind == LIGHT_KIND_SPOT {
-        let forward = normalize(light.spot_direction);
-        let cone_cos = dot(forward, -out.direction);
-        weight = smoothstep(light.spot_outer_cos, light.spot_inner_cos, cone_cos);
-        if light.cookie_layer != 0xffffffffu {
-            if weight <= 0.0 || light.cookie_layer >= textureNumLayers(light_cookies) {
-                weight = 0.0;
-            } else {
-                let up = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
-                let right = normalize(cross(forward, up));
-                let vertical = cross(right, forward);
-                let tan_outer = sqrt(1.0 - light.spot_outer_cos * light.spot_outer_cos) / light.spot_outer_cos;
-                let uv = vec2f(dot(-out.direction, right), -dot(-out.direction, vertical))
-                    / (cone_cos * tan_outer) * 0.5 + vec2f(0.5);
-                let mask = textureSampleLevel(light_cookies, environment_lut_sampler, uv, i32(light.cookie_layer), 0.0);
-                cookie = mask.rgb * mask.a;
+    switch u32(light.kind) {
+        case u32(LIGHT_KIND_RECTANGLE) {
+            // Tensor-product Gauss weights integrate the [-1,1]² emitter.
+            let area_normal = cross(light.area_u, light.area_v);
+            weight = max(dot(area_normal, -out.direction), 0.0)
+                * AREA_WEIGHTS[sample % 4u] * AREA_WEIGHTS[sample / 4u];
+        }
+        case u32(LIGHT_KIND_SPOT) {
+            let forward = normalize(light.spot_direction);
+            let cone_cos = dot(forward, -out.direction);
+            weight = range_window(light, distance_squared)
+                * smoothstep(light.spot_outer_cos, light.spot_inner_cos, cone_cos);
+            if weight > 0.0 && light.cookie_layer != 0xffffffffu {
+                if light.cookie_layer >= textureNumLayers(light_cookies) {
+                    weight = 0.0;
+                } else {
+                    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
+                    let right = normalize(cross(forward, up));
+                    let vertical = cross(right, forward);
+                    let tan_outer = sqrt(1.0 - light.spot_outer_cos * light.spot_outer_cos) / light.spot_outer_cos;
+                    let uv = vec2f(dot(-out.direction, right), -dot(-out.direction, vertical))
+                        / (cone_cos * tan_outer) * 0.5 + vec2f(0.5);
+                    let mask = textureSampleLevel(light_cookies, environment_lut_sampler, uv, i32(light.cookie_layer), 0.0);
+                    cookie = mask.rgb * mask.a;
+                }
             }
         }
+        default {
+            weight = range_window(light, distance_squared);
+        }
+    }
+    // Out of range or outside the cone: no light, and no profile to read
+    // for it.
+    if weight <= 0.0 {
+        return out;
     }
     if light.profile_layer != 0xffffffffu && (light.kind == LIGHT_KIND_SPOT || light.kind == LIGHT_KIND_POINT) {
         weight = weight * light_profile(light, -out.direction);
-    }
-    if light.kind != LIGHT_KIND_RECTANGLE {
-        weight = weight * range_window(light, distance_squared);
     }
     out.radiance = light.color * light.intensity * weight * cookie / distance_squared;
     return out;

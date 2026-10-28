@@ -279,6 +279,7 @@ pub const wxsl_core::abi::ENCODE_NORMAL_FN: &str
 pub const wxsl_core::abi::ENVIRONMENT_LUT_SIZE: u32
 pub const wxsl_core::abi::FACING_CONTEXT_FN: &str
 pub const wxsl_core::abi::FEATURE_DEBUG_NORMALS: &str
+pub const wxsl_core::abi::FEATURE_INSIDE_PENUMBRA: &str
 pub const wxsl_core::abi::FEATURE_INSTANCE_TEXTURE: &str
 pub const wxsl_core::abi::FEATURE_PREVIOUS_FRAME: &str
 pub const wxsl_core::abi::FEATURE_RECEIVE_SHADOWS: &str

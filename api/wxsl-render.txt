@@ -2,6 +2,7 @@ pub mod wxsl_render
 pub use wxsl_render::Attachment
 pub use wxsl_render::Camera
 pub use wxsl_render::DepthAttachment
+pub use wxsl_render::DepthBias
 pub use wxsl_render::Dimension
 pub use wxsl_render::Downlevel
 pub use wxsl_render::DrawSource

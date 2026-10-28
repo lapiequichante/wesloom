@@ -58,6 +58,7 @@ fn plan(format: wxsl::render::wgpu::TextureFormat, own_cubes: bool) -> RenderGra
         8,
         6,
         64,
+        Policy::PerFrame,
     );
     let depth = graph.resource(ResourceDesc::color("depth", DEPTH_FORMAT));
     let mut mirror = PassDesc::geometry(

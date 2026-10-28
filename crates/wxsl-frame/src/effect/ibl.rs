@@ -289,12 +289,16 @@ pub fn append_filtered_bake(
     )
 }
 
-/// Capture a local probe every frame from `Environment::probe` (ADR 0102):
-/// six forward passes from its views drawing `draws`, each composited by
-/// [`PROBE_FACE`] over `environment` (a radiance cube in the frame
-/// environment's units) into its cube face, then filtered and convolved as
-/// [`append_filtered_bake`] does, each texel from `samples` importance
-/// samples rather than the bake's quadrature. Register [`PROBE_FACE`] beside that bake's effects.
+/// Capture a local probe from `Environment::probe` (ADR 0102), every pass
+/// on `policy`: six forward passes from its views drawing `draws`, each
+/// composited by [`PROBE_FACE`] over `environment` (a radiance cube in the
+/// frame environment's units) into its cube face, then filtered and
+/// convolved as [`append_filtered_bake`] does, each texel from `samples`
+/// importance samples rather than the bake's quadrature. Register
+/// [`PROBE_FACE`] beside that bake's effects. Under a policy other than
+/// `PerFrame` (`OnDemand` for a probe the application refreshes every few
+/// frames), the faces are persistent too, as a skipping pass's targets
+/// must be (ADR 0035).
 /// A pass binds the outputs with `PassDesc::with_environment`, which needs
 /// the specular cube to have the frame maps' mip count.
 #[allow(clippy::too_many_arguments)]
@@ -307,6 +311,7 @@ pub fn append_probe(
     diffuse_size: u32,
     specular_mips: u32,
     samples: u32,
+    policy: Policy,
 ) -> BakeOutputs {
     append_bake_inner(
         graph,
@@ -317,7 +322,7 @@ pub fn append_probe(
             diffuse_size,
             specular_mips,
             filtered: true,
-            policy: Policy::PerFrame,
+            policy,
             samples: Some(samples),
         },
     )
@@ -431,7 +436,16 @@ fn append_bake_inner(
                 ));
             }
             Source::Probe { draws, environment } => {
-                probe_face(graph, draws, *environment, first, label, cube_size, face);
+                probe_face(
+                    graph,
+                    draws,
+                    *environment,
+                    first,
+                    label,
+                    cube_size,
+                    face,
+                    policy,
+                );
             }
         }
         let mut pass = face_pass(
@@ -476,6 +490,7 @@ fn append_bake_inner(
 
 /// Face `face` of a local probe into layer `face` of `cube`: `draws`
 /// forward-lit from the probe view, then composited over `environment`.
+#[allow(clippy::too_many_arguments)]
 fn probe_face(
     graph: &mut FrameGraph,
     draws: &TagExpr,
@@ -484,19 +499,27 @@ fn probe_face(
     label: &str,
     size: u32,
     face: u32,
+    policy: Policy,
 ) {
     let view = PassView::Probe { face };
     let extent = Extent::Fixed {
         width: size,
         height: size,
     };
-    let color = graph.resource(
+    let stable = |desc: ResourceDesc| {
+        if policy == Policy::PerFrame {
+            desc
+        } else {
+            desc.persistent(0)
+        }
+    };
+    let color = graph.resource(stable(
         ResourceDesc::color(format!("{label} face {face}"), TextureFormat::Rgba16Float)
             .with_extent(extent),
-    );
-    let depth = graph.resource(
+    ));
+    let depth = graph.resource(stable(
         ResourceDesc::color(format!("{label} face depth {face}"), DEPTH_FORMAT).with_extent(extent),
-    );
+    ));
     graph.pass(
         PassDesc::geometry(
             format!("{label} face {face}"),
@@ -506,7 +529,8 @@ fn probe_face(
         .with_view(view)
         .with_color(Attachment::clear(color, Color::BLACK))
         .with_depth(DepthAttachment::clear(depth, 1.0))
-        .with_state(PassState::OPAQUE),
+        .with_state(PassState::OPAQUE)
+        .with_policy(policy),
     );
     graph.pass(
         PassDesc::screen(format!("{label} capture {face}"), PROBE_FACE.id)
@@ -516,7 +540,8 @@ fn probe_face(
                 Read::current(depth),
                 Read::current(environment),
             ])
-            .with_color(Attachment::clear(cube, Color::BLACK).with_layer(face)),
+            .with_color(Attachment::clear(cube, Color::BLACK).with_layer(face))
+            .with_policy(policy),
     );
 }
 
@@ -642,7 +667,17 @@ mod tests {
         let sky = append_filtered_bake(&mut graph, hdr, "sky", 16, 4, 5);
         graph.declare_environment_maps(sky.diffuse, sky.specular);
         let draws = TagExpr::parse("!car").unwrap();
-        let probe = append_probe(&mut graph, draws, sky.radiance, "probe", 16, 4, 5, 64);
+        let probe = append_probe(
+            &mut graph,
+            draws,
+            sky.radiance,
+            "probe",
+            16,
+            4,
+            5,
+            64,
+            Policy::PerFrame,
+        );
         let car = |environment: Option<[ResourceId; 2]>| {
             let mut pass = PassDesc::geometry(
                 "car",
@@ -688,6 +723,7 @@ mod tests {
             4,
             3,
             64,
+            Policy::PerFrame,
         );
         graph_short.pass(car(Some([short.diffuse, short.specular])));
         let error = graph_short.schedule().unwrap_err().to_string();
@@ -695,10 +731,47 @@ mod tests {
         // And it replaces the frame's maps, so those have to exist.
         let mut bare = FrameGraph::new(TextureFormat::Rgba8Unorm);
         let radiance = bare.resource(ResourceDesc::imported("sky", TextureFormat::Rgba16Float));
-        let probe = append_probe(&mut bare, TagExpr::Never, radiance, "probe", 16, 4, 5, 64);
+        let probe = append_probe(
+            &mut bare,
+            TagExpr::Never,
+            radiance,
+            "probe",
+            16,
+            4,
+            5,
+            64,
+            Policy::PerFrame,
+        );
         bare.pass(car(Some([probe.diffuse, probe.specular])));
         let error = bare.schedule().unwrap_err().to_string();
         assert!(error.contains("does not declare"), "{error}");
+    }
+
+    #[test]
+    fn an_on_demand_probe_writes_only_stable_storage() {
+        let mut graph = FrameGraph::new(TextureFormat::Rgba8Unorm);
+        let hdr = graph.resource(ResourceDesc::imported("HDR", TextureFormat::Rgba32Float));
+        let sky = append_filtered_bake(&mut graph, hdr, "sky", 16, 4, 5);
+        graph.declare_environment_maps(sky.diffuse, sky.specular);
+        let draws = TagExpr::parse("!car").unwrap();
+        append_probe(
+            &mut graph,
+            draws,
+            sky.radiance,
+            "probe",
+            16,
+            4,
+            5,
+            64,
+            Policy::OnDemand,
+        );
+        // The scheduler refuses a skipping pass that writes a transient.
+        graph.schedule().unwrap();
+        for pass in graph.passes() {
+            if pass.label.starts_with("probe") {
+                assert_eq!(pass.policy, Policy::OnDemand, "{}", pass.label);
+            }
+        }
     }
 
     #[test]

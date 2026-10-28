@@ -74,6 +74,11 @@ frame's.
 - A per-frame probe at 128² with eight mips is about 160 small passes:
   six forward passes, six composites, the source chain, and six diffuse
   and 48 GGX faces. The drive pays it every frame.
+- Amended: `append_probe` takes the policy its passes run on. Under any
+  but `PerFrame` its faces are persistent, as a skipping pass's targets
+  must be (ADR 0035). The drive runs its probe `OnDemand` and marks it
+  every N frames, its `probe every` slider; the car reflects the last
+  capture in between.
 - Its forward passes see the camera's light grid. A local light binned
   only outside the camera's frustum does not reach the probe. A uniform
   light (the sun, the moon, the shadowed lamps, the headlights) does.

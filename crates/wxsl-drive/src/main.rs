@@ -55,6 +55,10 @@
 //! `quality` slider (or `--quality x0|x0.5|x1|x2|x4`) scales the car's probe
 //! and the shadow atlas from 128² and 2048²; x0 turns both off, the car
 //! then reflecting the sky alone. The
+//! `probe every` slider (or `--probe-every N`) refreshes it every N frames.
+//! In the window, the `resolution` slider (or `--resolution X`) renders
+//! the frame at X times the window's pixels, scaled to it under the
+//! sliders. The
 //! `screenshot` button under the sliders saves the next frame, without
 //! them, as the first free `screenshots/drive-NNN.png` under the working
 //! directory. The `save state` button beside it saves what the frame is
@@ -113,12 +117,13 @@ use car_ground::CarGround;
 use pipeline::Blur;
 use sky::DayLight;
 use state::{Motion, Saved};
-use ui::{Panel, Slider};
+use ui::{Column, Panel, Slider};
 use world::World;
 
 const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [--focus PCT] [--aberration PCT] [--tonemap NAME] [--saturation S] [--fov DEG] [--fog F]
       [--exposure EV] [--environment EV] [--ground-ao A] [--car-ao A] [--at METRES] [--look RADIANS] [--pitch RADIANS] [--zoom Z]
       [--paint NAME] [--glass NAME] [--neon NAME] [--view NAME] [--soft-shadows] [--no-fxaa] [--ssr off|coarse|medium|fine] [--halo NAME] [--blur-quality off|fast|good] [--ray-length X] [--ray-opacity X] [--quality x0|x0.5|x1|x2|x4]
+      [--probe-every N] [--resolution X]
       [--screenshot out.png [--ui] [--frames N] [--profile]] [--state state.json]
       [--scenario file.json [--record DIR [--from S] [--to S]]]
       [--size WxH] [--car file.glb] [--shadow-car file.glb|none]
@@ -129,7 +134,8 @@ const USAGE: &str = "drive [--hour H] [--speed KMH] [--blur B] [--aperture F] [-
 --state: start from a saved state (its sliders, view, motion and size; a --size after it wins);
         with --screenshot, render that frame, after the one before it for the motion blur
 window: the sliders set speed, hour, motion blur, aperture, focus, chromatic aberration, tonemap, saturation, field of view, fog, exposure, the environment's intensity, the car's
-        occlusion on the road and on itself, its paint, its windows, its neons, its headlights, its debug view, hard or soft shadows, FXAA, the screen-space reflections and the probe and shadow resolution; the screenshot button saves
+        occlusion on the road and on itself, its paint, its windows, its neons, its headlights, its debug view, hard or soft shadows, FXAA, the screen-space reflections, the probe and shadow resolution, the probe's refresh
+        and the window's render resolution; the screenshot button saves
         the frame to screenshots/drive-NNN.png, save state the scene to screenshots/state-NNN.json;
         drag elsewhere looks around the car, right-drag turns the camera (right double-click
         straightens it), scroll zooms, R recentres, Space pauses, Esc quits";
@@ -206,6 +212,20 @@ const DEFAULT_GLARE: pipeline::Glare = pipeline::Glare {
 const RAY_LENGTH: &str = "ray length";
 const RAY_OPACITY: &str = "ray opacity";
 const QUALITY: &str = "quality";
+const PROBE_EVERY: &str = "probe every";
+const RESOLUTION: &str = "resolution";
+/// The sliders in the panel's right column, how well the frame renders;
+/// the others, what it shows, are in the left one.
+const QUALITY_SLIDERS: [&str; 8] = [
+    BLUR_QUALITY,
+    VIEW,
+    SHADOWS,
+    FXAA,
+    SSR,
+    QUALITY,
+    PROBE_EVERY,
+    RESOLUTION,
+];
 /// The `quality` slider's steps: the probe's and the shadow atlas's
 /// scale, 0 turning both off; x4 is the largest atlas a pipeline may ask
 /// for, 8192².
@@ -307,6 +327,10 @@ struct Options {
     ray_opacity: f32,
     /// The `quality` slider's start, an index into [`QUALITIES`].
     quality: f32,
+    /// The `probe every` slider's start, frames.
+    probe_every: f32,
+    /// The `resolution` slider's start, times the window's pixels.
+    resolution: f32,
     screenshot: Option<PathBuf>,
     /// Draw the sliders into the screenshot too.
     ui: bool,
@@ -360,6 +384,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
         ray_length: 1.0,
         ray_opacity: 1.0,
         quality: 3.0,
+        probe_every: 1.0,
+        resolution: 1.0,
         screenshot: None,
         ui: false,
         frames: 4,
@@ -494,6 +520,8 @@ fn parse_options() -> Result<Options, Box<dyn Error>> {
                     .ok_or("--quality is one of x0, x0.5, x1, x2, x4")?
                     as f32;
             }
+            "--probe-every" => options.probe_every = value()?.parse()?,
+            "--resolution" => options.resolution = value()?.parse()?,
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--ui" => options.ui = true,
             "--frames" => options.frames = value()?.parse::<u32>()?.max(3),
@@ -662,7 +690,25 @@ fn sliders(options: &Options) -> Result<Panel, Box<dyn Error>> {
             options.quality,
             |value| format!("x{}", QUALITIES[value.round() as usize]),
         ),
+        Slider::new(
+            PROBE_EVERY,
+            1.0,
+            10.0,
+            options.probe_every,
+            |value| match value.round() as u32 {
+                1 => "every frame".to_string(),
+                frames => format!("{frames} frames"),
+            },
+        ),
+        Slider::new(RESOLUTION, 0.1, 2.0, options.resolution, |value| {
+            format!("×{value:.2}")
+        }),
     ]);
+    for slider in &mut panel.sliders {
+        if QUALITY_SLIDERS.contains(&slider.label) {
+            slider.column = Column::Quality;
+        }
+    }
     if let Some(saved) = &options.state {
         saved.apply_sliders(&mut panel)?;
     }
@@ -722,6 +768,8 @@ struct Drive {
     tonemap: usize,
     /// The probe and shadow scale the frame installed has.
     quality: f32,
+    /// Frames until the probe is refreshed, 0 for this one.
+    probe_wait: u32,
 }
 
 impl Drive {
@@ -802,6 +850,7 @@ impl Drive {
             glare: DEFAULT_GLARE,
             tonemap: 0,
             quality: 1.0,
+            probe_wait: 0,
         })
     }
 
@@ -917,7 +966,15 @@ impl Drive {
             self.quality = quality;
             // The new frame's sky and environment maps start unbaked.
             self.baked_hour = None;
+            self.probe_wait = 0;
         }
+        // The probe's passes are on demand: refreshed every N frames, the
+        // car reflecting the last capture in between.
+        if self.probe_wait == 0 {
+            pipeline::refresh_probe(&mut self.renderer);
+            self.probe_wait = panel.value(PROBE_EVERY).round().max(1.0) as u32;
+        }
+        self.probe_wait -= 1;
         let hour = panel.value(HOUR);
         if self.baked_hour != Some(hour) {
             self.day = DayLight::at(hour);
@@ -1439,6 +1496,12 @@ struct State {
     readable: bool,
     drive: Drive,
     overlay: ui::Overlay,
+    /// The size the renderer renders at: the window's, times `resolution`.
+    rendered: (u32, u32),
+    /// Where a frame at another size than the window's renders, and what
+    /// scales it to the window.
+    scaled: Option<wgpu::Texture>,
+    blitter: wgpu::util::TextureBlitter,
 }
 
 /// A scenario played in the window, to its music, and keyed there.
@@ -1634,6 +1697,9 @@ impl App {
             drive.motion = saved.motion;
         }
         let overlay = ui::Overlay::new(&gpu.device, &drive.library)?;
+        let blitter = wgpu::util::TextureBlitterBuilder::new(&gpu.device, format)
+            .sample_type(wgpu::FilterMode::Linear)
+            .build();
         let mut state = State {
             window,
             surface,
@@ -1642,6 +1708,9 @@ impl App {
             readable,
             drive,
             overlay,
+            rendered: (0, 0),
+            scaled: None,
+            blitter,
         };
         configure_surface(&mut state, size.width, size.height);
         println!("adapter: {}", state.gpu.adapter.get_info().name);
@@ -1671,6 +1740,48 @@ impl App {
         // The frame's own size: mid-resize, the window's can already differ
         // from the surface's until `Resized` reconfigures it.
         let size = frame.texture.size();
+        let scale = self.panel.value(RESOLUTION);
+        let (width, height) = (
+            ((size.width as f32 * scale).round() as u32).max(1),
+            ((size.height as f32 * scale).round() as u32).max(1),
+        );
+        if state.rendered != (width, height) {
+            state
+                .drive
+                .renderer
+                .resize(&state.gpu.device, width, height);
+            state.rendered = (width, height);
+        }
+        // At the window's size the frame renders into it directly.
+        let full = (width, height) == (size.width, size.height);
+        if full {
+            state.scaled = None;
+        } else if state
+            .scaled
+            .as_ref()
+            .is_none_or(|texture| (texture.width(), texture.height()) != (width, height))
+        {
+            state.scaled = Some(state.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("drive scaled frame"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: state.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }));
+        }
+        let window_view = view;
+        let view = match &state.scaled {
+            Some(texture) => texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            None => window_view.clone(),
+        };
         let rendered = match self.player.as_mut() {
             Some(player) => {
                 player.tick();
@@ -1693,27 +1804,37 @@ impl App {
                     state.drive.previous = None;
                 }
                 player.drawn = Some((player.t, time));
-                state.drive.draw(
-                    &state.gpu,
-                    &view,
-                    (size.width, size.height),
-                    &self.panel,
-                    dt,
-                )
+                state
+                    .drive
+                    .draw(&state.gpu, &view, (width, height), &self.panel, dt)
             }
             None => {
                 let dt = if self.paused { 0.0 } else { elapsed };
-                state.drive.frame(
-                    &state.gpu,
-                    &view,
-                    (size.width, size.height),
-                    &self.panel,
-                    dt,
-                )
+                state
+                    .drive
+                    .frame(&state.gpu, &view, (width, height), &self.panel, dt)
             }
         };
         if let Err(error) = rendered {
             eprintln!("cannot render: {error}");
+        }
+        let view = window_view;
+        if !full {
+            let mut encoder =
+                state
+                    .gpu
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("drive scale"),
+                    });
+            let scaled = state.scaled.as_ref().expect("a scaled frame");
+            state.blitter.copy(
+                &state.gpu.device,
+                &mut encoder,
+                &scaled.create_view(&wgpu::TextureViewDescriptor::default()),
+                &view,
+            );
+            state.gpu.queue.submit([encoder.finish()]);
         }
         // Before the sliders are drawn over it.
         if std::mem::take(&mut self.capture) {
@@ -1775,11 +1896,13 @@ impl App {
     }
 
     fn layout(&self) -> ui::Layout {
-        let scale = self
-            .state
-            .as_ref()
-            .map_or(1.0, |state| state.window.scale_factor() as f32);
-        ui::layout(self.panel.sliders.len(), scale)
+        let (width, scale) = self.state.as_ref().map_or((0.0, 1.0), |state| {
+            (
+                state.window.inner_size().width as f32,
+                state.window.scale_factor() as f32,
+            )
+        });
+        ui::layout(&self.panel, width, scale)
     }
 }
 
@@ -1876,10 +1999,7 @@ fn configure_surface(state: &mut State, width: u32, height: u32) {
             view_formats: vec![],
         },
     );
-    state
-        .drive
-        .renderer
-        .resize(&state.gpu.device, width, height);
+    // The renderer follows on the next frame, at the resolution's scale.
 }
 
 impl ApplicationHandler for App {
@@ -1915,8 +2035,11 @@ impl ApplicationHandler for App {
             } => {
                 if state == ElementState::Pressed {
                     let layout = self.layout();
-                    self.capture |= layout.screenshot.contains(self.cursor);
-                    self.save |= layout.save.contains(self.cursor);
+                    let on = |button: Option<wxsl::render::ui::Rect>| {
+                        button.is_some_and(|b| b.contains(self.cursor))
+                    };
+                    self.capture |= on(layout.screenshot);
+                    self.save |= on(layout.save);
                     self.looking = !self.panel.press(self.cursor, &layout);
                 } else {
                     self.panel.release();
@@ -1929,7 +2052,7 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 if state == ElementState::Pressed {
-                    self.turning = !self.layout().panel.contains(self.cursor);
+                    self.turning = !self.layout().contains(self.cursor);
                     let now = Instant::now();
                     let double = self
                         .right_click

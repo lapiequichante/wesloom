@@ -1,5 +1,92 @@
 pub mod wxsl_frame
 pub mod wxsl_frame::effect
+pub mod wxsl_frame::effect::glare
+pub enum wxsl_frame::effect::glare::Flare
+pub wxsl_frame::effect::glare::Flare::Anamorphic
+pub wxsl_frame::effect::glare::Flare::Aperture
+pub wxsl_frame::effect::glare::Flare::Ghosts
+impl wxsl_frame::effect::glare::Flare
+pub const wxsl_frame::effect::glare::Flare::ALL: [wxsl_frame::effect::glare::Flare; 3]
+pub fn wxsl_frame::effect::glare::Flare::name(self) -> &'static str
+impl core::clone::Clone for wxsl_frame::effect::glare::Flare
+pub fn wxsl_frame::effect::glare::Flare::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::glare::Flare
+impl core::cmp::PartialEq for wxsl_frame::effect::glare::Flare
+pub fn wxsl_frame::effect::glare::Flare::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::glare::Flare
+pub fn wxsl_frame::effect::glare::Flare::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::glare::Flare
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::glare::Flare
+impl core::marker::Freeze for wxsl_frame::effect::glare::Flare
+impl core::marker::Send for wxsl_frame::effect::glare::Flare
+impl core::marker::Sync for wxsl_frame::effect::glare::Flare
+impl core::marker::Unpin for wxsl_frame::effect::glare::Flare
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::glare::Flare
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::glare::Flare
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::glare::Flare
+pub enum wxsl_frame::effect::glare::Star
+pub wxsl_frame::effect::glare::Star::Anamorphic
+pub wxsl_frame::effect::glare::Star::Cross
+pub wxsl_frame::effect::glare::Star::Hexagonal
+pub wxsl_frame::effect::glare::Star::Starburst
+impl wxsl_frame::effect::glare::Star
+pub const wxsl_frame::effect::glare::Star::ALL: [wxsl_frame::effect::glare::Star; 4]
+pub fn wxsl_frame::effect::glare::Star::name(self) -> &'static str
+pub fn wxsl_frame::effect::glare::Star::ray_parameter(self, &str) -> core::option::Option<f32>
+impl core::clone::Clone for wxsl_frame::effect::glare::Star
+pub fn wxsl_frame::effect::glare::Star::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::glare::Star
+impl core::cmp::PartialEq for wxsl_frame::effect::glare::Star
+pub fn wxsl_frame::effect::glare::Star::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::glare::Star
+pub fn wxsl_frame::effect::glare::Star::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::glare::Star
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::glare::Star
+impl core::marker::Freeze for wxsl_frame::effect::glare::Star
+impl core::marker::Send for wxsl_frame::effect::glare::Star
+impl core::marker::Sync for wxsl_frame::effect::glare::Star
+impl core::marker::Unpin for wxsl_frame::effect::glare::Star
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::glare::Star
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::glare::Star
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::glare::Star
+pub struct wxsl_frame::effect::glare::Lens
+pub wxsl_frame::effect::glare::Lens::flare: core::option::Option<wxsl_frame::effect::glare::Flare>
+pub wxsl_frame::effect::glare::Lens::star: core::option::Option<wxsl_frame::effect::glare::Star>
+pub wxsl_frame::effect::glare::Lens::threshold: f32
+impl core::clone::Clone for wxsl_frame::effect::glare::Lens
+pub fn wxsl_frame::effect::glare::Lens::clone(&self) -> Self
+impl core::cmp::PartialEq for wxsl_frame::effect::glare::Lens
+pub fn wxsl_frame::effect::glare::Lens::eq(&self, &Self) -> bool
+impl core::fmt::Debug for wxsl_frame::effect::glare::Lens
+pub fn wxsl_frame::effect::glare::Lens::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::glare::Lens
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::glare::Lens
+impl core::marker::Freeze for wxsl_frame::effect::glare::Lens
+impl core::marker::Send for wxsl_frame::effect::glare::Lens
+impl core::marker::Sync for wxsl_frame::effect::glare::Lens
+impl core::marker::Unpin for wxsl_frame::effect::glare::Lens
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::glare::Lens
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::glare::Lens
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::glare::Lens
+pub const wxsl_frame::effect::glare::ADD: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::CELLS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::EXTRACT: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::FLARE: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::GHOSTS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::STARBURST: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::glare::STARBURST_SPRITES: u32
+pub const wxsl_frame::effect::glare::STREAK: wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::glare::append(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::effect::glare::Lens, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_add(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, [f32; 3], f32, alloc::string::String) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_extract(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, f32, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_flare(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::effect::glare::Flare, f32, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_hexagon(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, f32, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_star(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::effect::glare::Star, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::append_streak(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, f32, u32, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::glare::flare_label(&str) -> alloc::string::String
+pub fn wxsl_frame::effect::glare::light_label(&str) -> alloc::string::String
+pub fn wxsl_frame::effect::glare::star_label(&str) -> alloc::string::String
+pub fn wxsl_frame::effect::glare::threshold_parameters(&str, f32) -> [(alloc::string::String, &'static str, wxsl_core::node::Value); 2]
 pub mod wxsl_frame::effect::ibl
 pub struct wxsl_frame::effect::ibl::BakeOutputs
 pub wxsl_frame::effect::ibl::BakeOutputs::diffuse: wxsl_frame::pass::ResourceId
@@ -26,7 +113,7 @@ pub const wxsl_frame::effect::ibl::SPECULAR: wxsl_frame::effect::Effect
 pub fn wxsl_frame::effect::ibl::append_background(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str) -> wxsl_frame::pass::ResourceId
 pub fn wxsl_frame::effect::ibl::append_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
 pub fn wxsl_frame::effect::ibl::append_filtered_bake(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, &str, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
-pub fn wxsl_frame::effect::ibl::append_probe(&mut wxsl_frame::graph::FrameGraph, wxsl_core::scene::TagExpr, wxsl_frame::pass::ResourceId, &str, u32, u32, u32, u32) -> wxsl_frame::effect::ibl::BakeOutputs
+pub fn wxsl_frame::effect::ibl::append_probe(&mut wxsl_frame::graph::FrameGraph, wxsl_core::scene::TagExpr, wxsl_frame::pass::ResourceId, &str, u32, u32, u32, u32, wxsl_frame::pass::Policy) -> wxsl_frame::effect::ibl::BakeOutputs
 pub mod wxsl_frame::effect::refraction
 pub enum wxsl_frame::effect::refraction::Quality
 pub wxsl_frame::effect::refraction::Quality::Layered
@@ -52,13 +139,64 @@ impl core::marker::Unpin for wxsl_frame::effect::refraction::Quality
 impl core::marker::UnsafeUnpin for wxsl_frame::effect::refraction::Quality
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::refraction::Quality
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::refraction::Quality
+pub struct wxsl_frame::effect::refraction::Optics
+pub wxsl_frame::effect::refraction::Optics::color: wxsl_frame::pass::ResourceId
+pub wxsl_frame::effect::refraction::Optics::normals: wxsl_frame::pass::ResourceId
+pub wxsl_frame::effect::refraction::Optics::optics: wxsl_frame::pass::ResourceId
+impl core::clone::Clone for wxsl_frame::effect::refraction::Optics
+pub fn wxsl_frame::effect::refraction::Optics::clone(&self) -> Self
+impl core::fmt::Debug for wxsl_frame::effect::refraction::Optics
+pub fn wxsl_frame::effect::refraction::Optics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::refraction::Optics
+impl core::marker::Freeze for wxsl_frame::effect::refraction::Optics
+impl core::marker::Send for wxsl_frame::effect::refraction::Optics
+impl core::marker::Sync for wxsl_frame::effect::refraction::Optics
+impl core::marker::Unpin for wxsl_frame::effect::refraction::Optics
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::refraction::Optics
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::refraction::Optics
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::refraction::Optics
 pub const wxsl_frame::effect::refraction::BOUNDS: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::COMPOSE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::COMPOSE_DEPTH: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::RESOLVE: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::refraction::SCENE_DEPTH: wxsl_frame::effect::Effect
 pub fn wxsl_frame::effect::refraction::append(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::refraction::append_optics(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32, wxsl_frame::effect::refraction::Quality) -> wxsl_frame::effect::refraction::Optics
 pub fn wxsl_frame::effect::refraction::append_with_quality(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, &str, u32, wxsl_frame::effect::refraction::Quality) -> wxsl_frame::pass::ResourceId
+pub mod wxsl_frame::effect::ssr
+pub enum wxsl_frame::effect::ssr::Quality
+pub wxsl_frame::effect::ssr::Quality::Coarse
+pub wxsl_frame::effect::ssr::Quality::Fine
+pub wxsl_frame::effect::ssr::Quality::Medium
+impl wxsl_frame::effect::ssr::Quality
+pub fn wxsl_frame::effect::ssr::Quality::parameters(self) -> [(&'static str, wxsl_core::node::Value); 3]
+impl core::clone::Clone for wxsl_frame::effect::ssr::Quality
+pub fn wxsl_frame::effect::ssr::Quality::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::effect::ssr::Quality
+impl core::cmp::PartialEq for wxsl_frame::effect::ssr::Quality
+pub fn wxsl_frame::effect::ssr::Quality::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::effect::ssr::Quality
+pub fn wxsl_frame::effect::ssr::Quality::default() -> Self
+impl core::fmt::Debug for wxsl_frame::effect::ssr::Quality
+pub fn wxsl_frame::effect::ssr::Quality::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for wxsl_frame::effect::ssr::Quality
+impl core::marker::StructuralPartialEq for wxsl_frame::effect::ssr::Quality
+impl core::marker::Freeze for wxsl_frame::effect::ssr::Quality
+impl core::marker::Send for wxsl_frame::effect::ssr::Quality
+impl core::marker::Sync for wxsl_frame::effect::ssr::Quality
+impl core::marker::Unpin for wxsl_frame::effect::ssr::Quality
+impl core::marker::UnsafeUnpin for wxsl_frame::effect::ssr::Quality
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::effect::ssr::Quality
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::effect::ssr::Quality
+pub const wxsl_frame::effect::ssr::GLASS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::ssr::SSR: wxsl_frame::effect::Effect
+pub fn wxsl_frame::effect::ssr::append(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, [wxsl_frame::pass::ResourceId; 2], wxsl_frame::effect::ssr::Quality, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::ssr::append_glass(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::effect::refraction::Optics, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, wxsl_frame::effect::ssr::Quality, &str) -> wxsl_frame::pass::ResourceId
+pub fn wxsl_frame::effect::ssr::gbuffer(&mut wxsl_frame::graph::FrameGraph, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>, &str) -> core::result::Result<[wxsl_frame::pass::ResourceId; 2], alloc::string::String>
+pub mod wxsl_frame::effect::sun
+pub const wxsl_frame::effect::sun::SUN: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::sun::SUN_RADIUS: f32
+pub fn wxsl_frame::effect::sun::append(&mut wxsl_frame::graph::FrameGraph, wxsl_frame::pass::ResourceId, wxsl_frame::pass::ResourceId, f32, &str)
 pub enum wxsl_frame::effect::Downlevel
 pub wxsl_frame::effect::Downlevel::Fragment
 pub wxsl_frame::effect::Downlevel::Fragment::fragment_entry: &'static str
@@ -110,6 +248,11 @@ pub wxsl_frame::effect::EffectKind::Compute::workgroups: [u32; 3]
 pub wxsl_frame::effect::EffectKind::Screen
 pub wxsl_frame::effect::EffectKind::Screen::fragment_entry: &'static str
 pub wxsl_frame::effect::EffectKind::Screen::vertex_entry: &'static str
+pub wxsl_frame::effect::EffectKind::Sprites
+pub wxsl_frame::effect::EffectKind::Sprites::fragment_entry: &'static str
+pub wxsl_frame::effect::EffectKind::Sprites::instances: u32
+pub wxsl_frame::effect::EffectKind::Sprites::vertex_entry: &'static str
+pub wxsl_frame::effect::EffectKind::Sprites::vertices: u32
 impl core::clone::Clone for wxsl_frame::effect::EffectKind
 pub fn wxsl_frame::effect::EffectKind::clone(&self) -> Self
 impl core::cmp::Eq for wxsl_frame::effect::EffectKind
@@ -334,6 +477,11 @@ pub const wxsl_frame::effect::LUT_VIEW: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::LUT_VIEW_MODULE: &str
 pub const wxsl_frame::effect::MOTION_BLUR: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::MOTION_BLUR_MODULE: &str
+pub const wxsl_frame::effect::MOTION_NEIGHBORS: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::MOTION_NEIGHBORS_MODULE: &str
+pub const wxsl_frame::effect::MOTION_TILES: wxsl_frame::effect::Effect
+pub const wxsl_frame::effect::MOTION_TILES_MODULE: &str
+pub const wxsl_frame::effect::MOTION_TILES_SCALE: &str
 pub const wxsl_frame::effect::PEEL_BOUNDS: wxsl_frame::effect::Effect
 pub const wxsl_frame::effect::PEEL_BOUNDS_MODULE: &str
 pub const wxsl_frame::effect::PEEL_COMPOSITE: wxsl_frame::effect::Effect
@@ -385,7 +533,7 @@ impl core::cmp::Eq for wxsl_frame::environment::Penumbra
 impl core::cmp::PartialEq for wxsl_frame::environment::Penumbra
 pub fn wxsl_frame::environment::Penumbra::eq(&self, &Self) -> bool
 impl core::default::Default for wxsl_frame::environment::Penumbra
-pub fn wxsl_frame::environment::Penumbra::default() -> wxsl_frame::environment::Penumbra
+pub fn wxsl_frame::environment::Penumbra::default() -> Self
 impl core::fmt::Debug for wxsl_frame::environment::Penumbra
 pub fn wxsl_frame::environment::Penumbra::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for wxsl_frame::environment::Penumbra
@@ -573,6 +721,7 @@ pub wxsl_frame::environment::Light::shadow_distance: f32
 pub wxsl_frame::environment::Light::shadow_extent: f32
 pub wxsl_frame::environment::Light::shadow_near: f32
 pub wxsl_frame::environment::Light::shadow_normal_bias: f32
+pub wxsl_frame::environment::Light::shadow_taps: u32
 pub wxsl_frame::environment::Light::spot_direction: glam::f32::vec3::Vec3
 pub wxsl_frame::environment::Light::spot_inner_angle: f32
 pub wxsl_frame::environment::Light::spot_outer_angle: f32
@@ -599,6 +748,7 @@ pub fn wxsl_frame::environment::Light::with_profile(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_range(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_shadow_casters(self, wxsl_core::scene::TagExpr) -> Self
 pub fn wxsl_frame::environment::Light::with_shadow_near(self, f32) -> Self
+pub fn wxsl_frame::environment::Light::with_shadow_taps(self, u32) -> Self
 pub fn wxsl_frame::environment::Light::with_source_radius(self, f32) -> Self
 pub fn wxsl_frame::environment::Light::with_static_shadow(self, glam::f32::neon::mat4::Mat4) -> Self
 impl core::clone::Clone for wxsl_frame::environment::Light
@@ -625,6 +775,7 @@ pub wxsl_frame::environment::LightUniform::profile_layer: u32
 pub wxsl_frame::environment::LightUniform::radius: f32
 pub wxsl_frame::environment::LightUniform::range: f32
 pub wxsl_frame::environment::LightUniform::shadow_normal_bias: f32
+pub wxsl_frame::environment::LightUniform::shadow_taps: u32
 pub wxsl_frame::environment::LightUniform::spot_direction: [f32; 3]
 pub wxsl_frame::environment::LightUniform::spot_inner_cos: f32
 pub wxsl_frame::environment::LightUniform::spot_outer_cos: f32
@@ -903,6 +1054,7 @@ pub fn wxsl_frame::graph::FrameGraph::resource_desc(&self, wxsl_frame::pass::Res
 pub fn wxsl_frame::graph::FrameGraph::resources(&self) -> &[wxsl_frame::pass::ResourceDesc]
 pub fn wxsl_frame::graph::FrameGraph::schedule(&self) -> core::result::Result<wxsl_frame::graph::Schedule, wxsl_frame::graph::ScheduleError>
 pub fn wxsl_frame::graph::FrameGraph::set_environment_scale(&mut self, f32)
+pub fn wxsl_frame::graph::FrameGraph::set_gbuffer_layout(&mut self, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>)
 pub fn wxsl_frame::graph::FrameGraph::shadow_maps(&self) -> core::option::Option<wxsl_frame::pass::ResourceId>
 pub fn wxsl_frame::graph::FrameGraph::stepped(&self, usize, core::option::Option<(wxsl_frame::pass::ResourceId, &str)>) -> core::result::Result<wxsl_frame::graph::FrameGraph, wxsl_frame::graph::ScheduleError>
 pub fn wxsl_frame::graph::FrameGraph::with_gbuffer_layout(self, alloc::vec::Vec<wxsl_core::abi::GBufferTarget>) -> Self
@@ -1397,6 +1549,34 @@ impl core::marker::Unpin for wxsl_frame::pass::DepthAttachment
 impl core::marker::UnsafeUnpin for wxsl_frame::pass::DepthAttachment
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::DepthAttachment
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::DepthAttachment
+pub struct wxsl_frame::pass::DepthBias
+pub wxsl_frame::pass::DepthBias::clamp: f32
+pub wxsl_frame::pass::DepthBias::constant: i32
+pub wxsl_frame::pass::DepthBias::slope_scale: f32
+impl wxsl_frame::pass::DepthBias
+pub const wxsl_frame::pass::DepthBias::NONE: wxsl_frame::pass::DepthBias
+pub const fn wxsl_frame::pass::DepthBias::slope(f32) -> wxsl_frame::pass::DepthBias
+impl core::clone::Clone for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::clone(&self) -> Self
+impl core::cmp::Eq for wxsl_frame::pass::DepthBias
+impl core::cmp::PartialEq for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::eq(&self, &Self) -> bool
+impl core::default::Default for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::default() -> Self
+impl core::fmt::Debug for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::hash<H: core::hash::Hasher>(&self, &mut H)
+impl core::marker::Copy for wxsl_frame::pass::DepthBias
+impl serde_core::ser::Serialize for wxsl_frame::pass::DepthBias
+pub fn wxsl_frame::pass::DepthBias::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for wxsl_frame::pass::DepthBias
+impl core::marker::Send for wxsl_frame::pass::DepthBias
+impl core::marker::Sync for wxsl_frame::pass::DepthBias
+impl core::marker::Unpin for wxsl_frame::pass::DepthBias
+impl core::marker::UnsafeUnpin for wxsl_frame::pass::DepthBias
+impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::DepthBias
+impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::DepthBias
 pub struct wxsl_frame::pass::PassDesc
 pub wxsl_frame::pass::PassDesc::color: alloc::vec::Vec<wxsl_frame::pass::Attachment>
 pub wxsl_frame::pass::PassDesc::depth: core::option::Option<wxsl_frame::pass::DepthAttachment>
@@ -1448,6 +1628,7 @@ impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::PassDesc
 pub struct wxsl_frame::pass::PassState
 pub wxsl_frame::pass::PassState::blend: core::option::Option<wxsl_frame::types::BlendState>
 pub wxsl_frame::pass::PassState::cull_mode: core::option::Option<wxsl_frame::types::Face>
+pub wxsl_frame::pass::PassState::depth_bias: wxsl_frame::pass::DepthBias
 pub wxsl_frame::pass::PassState::depth_compare: wxsl_frame::types::CompareFunction
 pub wxsl_frame::pass::PassState::depth_format: core::option::Option<wxsl_frame::types::TextureFormat>
 pub wxsl_frame::pass::PassState::depth_write: bool
@@ -1457,6 +1638,7 @@ pub const wxsl_frame::pass::PassState::OPAQUE: wxsl_frame::pass::PassState
 pub fn wxsl_frame::pass::PassState::sides(self, bool) -> impl core::iter::traits::iterator::Iterator<Item = wxsl_frame::pass::PassState> + core::clone::Clone
 pub fn wxsl_frame::pass::PassState::with_blend(self, wxsl_frame::types::BlendState) -> Self
 pub fn wxsl_frame::pass::PassState::with_cull_mode(self, core::option::Option<wxsl_frame::types::Face>) -> Self
+pub fn wxsl_frame::pass::PassState::with_depth_bias(self, wxsl_frame::pass::DepthBias) -> Self
 pub fn wxsl_frame::pass::PassState::with_depth_format(self, core::option::Option<wxsl_frame::types::TextureFormat>) -> Self
 pub fn wxsl_frame::pass::PassState::with_depth_test(self, wxsl_frame::types::CompareFunction, bool) -> Self
 impl core::clone::Clone for wxsl_frame::pass::PassState
@@ -1594,6 +1776,7 @@ impl core::marker::Unpin for wxsl_frame::pass::ViewportRect
 impl core::marker::UnsafeUnpin for wxsl_frame::pass::ViewportRect
 impl core::panic::unwind_safe::RefUnwindSafe for wxsl_frame::pass::ViewportRect
 impl core::panic::unwind_safe::UnwindSafe for wxsl_frame::pass::ViewportRect
+pub const wxsl_frame::pass::ADDITIVE: wxsl_frame::types::BlendState
 pub const wxsl_frame::pass::ALPHA_OVER: wxsl_frame::types::BlendState
 pub const wxsl_frame::pass::DEPTH_FORMAT: wxsl_frame::types::TextureFormat
 pub const wxsl_frame::pass::MAX_BLEND: wxsl_frame::types::BlendState
@@ -1642,6 +1825,7 @@ pub wxsl_frame::pipeline::PipelineConfig::lighting: wxsl_core::lighting::Lightin
 pub wxsl_frame::pipeline::PipelineConfig::macros: wxsl_core::macros::MacroSet
 pub wxsl_frame::pipeline::PipelineConfig::profile: wxsl_frame::profile::Profile
 pub wxsl_frame::pipeline::PipelineConfig::shadow_atlas_size: u32
+pub wxsl_frame::pipeline::PipelineConfig::shadow_depth_bias: wxsl_frame::pass::DepthBias
 pub wxsl_frame::pipeline::PipelineConfig::target: wxsl_frame::pipeline::TargetDesc
 impl wxsl_frame::pipeline::PipelineConfig
 pub fn wxsl_frame::pipeline::PipelineConfig::gbuffer_layout(&self) -> alloc::vec::Vec<wxsl_core::abi::GBufferTarget>

@@ -843,6 +843,8 @@ pub fn install(
             DIFFUSE_SIZE,
             SPECULAR_MIPS,
             PROBE_SAMPLES,
+            // Refreshed every few frames by `refresh_probe`.
+            Policy::OnDemand,
         );
         fog_probe(&mut graph, probe_size, maps.radiance)?;
         ProbeMaps {
@@ -1126,18 +1128,39 @@ fn fog_probe(
             (pass.view, pass.reads[0].resource, pass.reads[1].resource)
         };
         let label = probe_fog(face);
+        // Kept between refreshes, as the probe's faces are.
         let fogged = graph.resource(
-            ResourceDesc::color(label.clone(), TextureFormat::Rgba16Float).with_extent(
-                Extent::Fixed {
+            ResourceDesc::color(label.clone(), TextureFormat::Rgba16Float)
+                .with_extent(Extent::Fixed {
                     width: size,
                     height: size,
-                },
-            ),
+                })
+                .persistent(0),
         );
-        graph.pass(fog_pass(&label, fogged, [color, depth, sky]).with_view(view));
+        graph.pass(
+            fog_pass(&label, fogged, [color, depth, sky])
+                .with_view(view)
+                .with_policy(Policy::OnDemand),
+        );
         graph.pass_mut(capture).ok_or("probe capture")?.reads[0] = Read::current(fogged);
     }
     Ok(())
+}
+
+/// Run the car's probe on the next frame: its capture, fog and filtering
+/// are on demand, so that it can be refreshed every few frames.
+pub fn refresh_probe(renderer: &mut Renderer) {
+    let fog = format!("{FOG} {PROBE}");
+    let labels: Vec<String> = renderer
+        .render_graph()
+        .passes()
+        .iter()
+        .filter(|pass| pass.label.starts_with(PROBE) || pass.label.starts_with(&fog))
+        .map(|pass| pass.label.clone())
+        .collect();
+    for label in &labels {
+        renderer.mark_pass(label);
+    }
 }
 
 /// The fog pass of the probe's `face`.
